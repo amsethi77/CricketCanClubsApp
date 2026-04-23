@@ -1,0 +1,73 @@
+#cloud-config
+package_update: true
+package_upgrade: true
+packages:
+  - git
+  - nginx
+  - python3-pip
+  - python3-venv
+
+write_files:
+  - path: /etc/systemd/system/cricketcanclubs.service
+    permissions: "0644"
+    owner: root:root
+    content: |
+      [Unit]
+      Description=CricketCanClubs FastAPI service
+      After=network.target
+
+      [Service]
+      User=cricket
+      Group=cricket
+      WorkingDirectory=/opt/CricketCanClubsApp
+      Environment=PYTHONUNBUFFERED=1
+      ExecStart=/opt/CricketCanClubsApp/.venv/bin/python /opt/CricketCanClubsApp/app/main.py
+      Restart=always
+      RestartSec=5
+
+      [Install]
+      WantedBy=multi-user.target
+
+  - path: /etc/nginx/sites-available/cricketcanclubs
+    permissions: "0644"
+    owner: root:root
+    content: |
+      server {
+        listen 80 default_server;
+        listen [::]:80 default_server;
+        server_name _;
+        client_max_body_size 50m;
+
+        location / {
+          proxy_pass http://127.0.0.1:8091;
+          proxy_http_version 1.1;
+          proxy_set_header Host $host;
+          proxy_set_header X-Real-IP $remote_addr;
+          proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+          proxy_set_header X-Forwarded-Proto $scheme;
+          proxy_set_header Upgrade $http_upgrade;
+          proxy_set_header Connection "upgrade";
+        }
+      }
+
+runcmd:
+  - [bash, -lc, "id cricket >/dev/null 2>&1 || useradd --create-home --shell /bin/bash cricket"]
+  - [bash, -lc, "mkdir -p /srv/cricket-data/data /srv/cricket-data/uploads /srv/cricket-data/duplicates /opt/CricketCanClubsApp"]
+  - [bash, -lc, "if [ -b /dev/disk/azure/scsi1/lun0 ] && ! blkid /dev/disk/azure/scsi1/lun0 >/dev/null 2>&1; then mkfs.ext4 -F /dev/disk/azure/scsi1/lun0; fi"]
+  - [bash, -lc, "UUID=$(blkid -s UUID -o value /dev/disk/azure/scsi1/lun0 2>/dev/null || true); if [ -n \"$UUID\" ] && ! grep -q '/srv/cricket-data' /etc/fstab; then echo \"UUID=$UUID /srv/cricket-data ext4 defaults,nofail 0 2\" >> /etc/fstab; fi"]
+  - [bash, -lc, "mount -a || true"]
+  - [bash, -lc, "if [ ! -d /opt/CricketCanClubsApp/.git ]; then git clone --depth 1 __REPO_URL__ /opt/CricketCanClubsApp; fi"]
+  - [bash, -lc, "if [ -f /opt/CricketCanClubsApp/app/data/seed.json ] && [ ! -f /srv/cricket-data/data/seed.json ]; then cp /opt/CricketCanClubsApp/app/data/seed.json /srv/cricket-data/data/seed.json; fi"]
+  - [bash, -lc, "rm -rf /opt/CricketCanClubsApp/app/data /opt/CricketCanClubsApp/app/uploads /opt/CricketCanClubsApp/app/duplicates"]
+  - [bash, -lc, "ln -sfn /srv/cricket-data/data /opt/CricketCanClubsApp/app/data"]
+  - [bash, -lc, "ln -sfn /srv/cricket-data/uploads /opt/CricketCanClubsApp/app/uploads"]
+  - [bash, -lc, "ln -sfn /srv/cricket-data/duplicates /opt/CricketCanClubsApp/app/duplicates"]
+  - [bash, -lc, "python3 -m venv /opt/CricketCanClubsApp/.venv"]
+  - [bash, -lc, "/opt/CricketCanClubsApp/.venv/bin/pip install --upgrade pip"]
+  - [bash, -lc, "cd /opt/CricketCanClubsApp && /opt/CricketCanClubsApp/.venv/bin/pip install -r requirements.txt"]
+  - [bash, -lc, "chown -R cricket:cricket /opt/CricketCanClubsApp /srv/cricket-data"]
+  - [bash, -lc, "ln -sf /etc/nginx/sites-available/cricketcanclubs /etc/nginx/sites-enabled/cricketcanclubs"]
+  - [bash, -lc, "rm -f /etc/nginx/sites-enabled/default"]
+  - [bash, -lc, "systemctl daemon-reload"]
+  - [bash, -lc, "systemctl enable nginx cricketcanclubs"]
+  - [bash, -lc, "systemctl restart nginx cricketcanclubs || (systemctl start nginx && systemctl start cricketcanclubs)"]
