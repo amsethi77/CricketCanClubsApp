@@ -1,0 +1,536 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <title>Heartlake Cricket Club</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800&family=Fraunces:opsz,wght@9..144,500;9..144,700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/assets/styles.css?v=20260422q" />
+  </head>
+  <body>
+    <div class="page-shell">
+      <header class="page-topbar">
+        <nav class="top-nav">
+          <a href="/dashboard" aria-current="page">Dashboard</a>
+          <a href="/clubs">Clubs</a>
+          <a href="/season-setup">Season setup</a>
+          <a href="/player-availability">Availability</a>
+          <a href="/player-profile">Profile</a>
+        </nav>
+        <div class="topbar-actions">
+          <a class="secondary-button" href="/signout">Sign out</a>
+        </div>
+      </header>
+      <header class="hero">
+        <div class="hero-copy">
+          <p id="heroEyebrow" class="eyebrow">Club Matchday Hub</p>
+          <h1>Scheduling, scoring, archives, and player coordination.</h1>
+          <p class="lede">
+            Start local with Heartlake, then turn it into an iPhone app.
+          </p>
+          <div id="focusClubBadge" class="hero-badge">Primary club: Heartlake Cricket Club</div>
+          <div class="hero-actions">
+            <select id="activeMatchSelect"></select>
+            <a id="whatsappLink" class="primary-link" href="#" target="_blank" rel="noreferrer">Open WhatsApp for selected match</a>
+          </div>
+        </div>
+        <aside class="hero-side">
+          <div class="mini-stat">
+            <span>Season</span>
+            <strong id="seasonLabel">Loading...</strong>
+          </div>
+          <div class="mini-stat">
+            <span>Next Match</span>
+            <strong id="nextMatchLabel">Loading...</strong>
+          </div>
+          <div class="mini-stat">
+            <span>AI Mode</span>
+            <strong id="llmLabel">Loading...</strong>
+          </div>
+        </aside>
+      </header>
+
+      <div id="statusBanner" class="status-banner" hidden></div>
+
+      <section class="panel onboarding-panel">
+        <div class="three-column-grid">
+          <div class="stack-card">
+            <div class="panel-head compact-head">
+              <div>
+                <p class="section-kicker">Registration</p>
+                <h2>Register with mobile or email</h2>
+              </div>
+            </div>
+            <form id="viewerProfileForm" class="form-grid">
+              <input id="viewerDisplayNameInput" type="text" placeholder="Your name" />
+              <input id="viewerMobileInput" type="tel" placeholder="Mobile number" />
+              <input id="viewerEmailInput" type="email" placeholder="Email address" />
+              <select id="primaryClubSelect"></select>
+              <button class="primary-button wide" type="submit">Save profile and primary club</button>
+            </form>
+          </div>
+
+          <div class="stack-card">
+            <div class="panel-head compact-head">
+              <div>
+                <p class="section-kicker">Player Search</p>
+                <h2>Search player, stats, and follow</h2>
+              </div>
+            </div>
+            <input id="landingPlayerSearchInput" type="search" placeholder="Search player by name, alias, or full name" />
+            <div id="landingPlayerResults" class="detail-stack"></div>
+          </div>
+        </div>
+
+        <div class="three-column-grid landing-highlights">
+          <div class="stack-card">
+            <div class="panel-head compact-head">
+              <div>
+                <p class="section-kicker">Upcoming Events</p>
+                <h2>What is coming next</h2>
+              </div>
+            </div>
+            <div id="landingEvents" class="detail-stack"></div>
+          </div>
+          <div class="stack-card">
+            <div class="panel-head compact-head">
+              <div>
+                <p class="section-kicker">Upcoming Matches</p>
+                <h2>Main-club fixtures</h2>
+              </div>
+            </div>
+            <div id="landingMatches" class="detail-stack"></div>
+          </div>
+          <div class="stack-card">
+            <div class="panel-head compact-head">
+              <div>
+                <p class="section-kicker">Club Stats</p>
+                <h2>Focused club snapshot</h2>
+              </div>
+            </div>
+            <div id="landingClubStats" class="summary-grid compact-summary-grid"></div>
+          </div>
+        </div>
+      </section>
+
+      <nav class="quick-nav">
+        <a href="#match-center">Match Center</a>
+        <a href="#setup">Setup</a>
+        <a href="#scoring">Scoring</a>
+        <a href="#availability">Availability</a>
+        <a href="#performance">Performance</a>
+        <a href="#player-profile">Player Profile</a>
+        <a href="#teams">Teams</a>
+        <a href="#commentary">Commentary</a>
+        <a href="#squad">Squad</a>
+        <a href="#schedule">Schedule</a>
+        <a href="#archive">Archive</a>
+        <a href="#assistant">Assistant</a>
+      </nav>
+
+      <main class="dashboard">
+        <section class="panel stat-panel">
+          <div id="summaryGrid" class="summary-grid"></div>
+        </section>
+
+        <section id="match-center" class="panel match-center">
+          <div class="panel-head">
+            <div>
+              <p class="section-kicker">Match Center</p>
+              <h2 id="matchCenterHeading">Selected club match center</h2>
+            </div>
+          </div>
+          <div id="selectedMatchSnapshot" class="match-snapshot"></div>
+          <div class="split-grid">
+            <div>
+              <h3 id="selectedScorecardTitle">Online scorecard</h3>
+              <div id="selectedScorecard" class="detail-stack"></div>
+            </div>
+            <div>
+              <h3 id="selectedAvailabilityTitle">Confirmed availability</h3>
+              <div id="selectedAvailability" class="availability-stack"></div>
+            </div>
+          </div>
+          <div class="split-grid">
+            <div>
+              <h3>Player performances</h3>
+              <div id="selectedPerformances" class="detail-stack"></div>
+            </div>
+            <div>
+              <h3>Commentary log</h3>
+              <div id="selectedCommentary" class="detail-stack"></div>
+            </div>
+          </div>
+        </section>
+
+        <section id="setup" class="panel setup-panel">
+          <div class="panel-head">
+            <div>
+              <p class="section-kicker">Setup</p>
+              <h2>Match setup and status</h2>
+            </div>
+          </div>
+          <form id="detailsForm" class="form-grid">
+            <input id="captainInput" type="text" placeholder="Heartlake captain" />
+            <input id="venueInput" type="text" placeholder="Venue" />
+            <input id="matchTypeInput" type="text" placeholder="Match type" />
+            <input id="scheduledTimeInput" type="text" placeholder="Start time" />
+            <input id="oversInput" type="text" placeholder="Overs" />
+            <input id="tossWinnerInput" type="text" placeholder="Toss winner" />
+            <input id="tossDecisionInput" type="text" placeholder="Toss decision" />
+            <input id="weatherInput" type="text" placeholder="Weather" />
+            <input id="umpiresInput" type="text" placeholder="Umpires" />
+            <input id="scorerInput" type="text" placeholder="Scorer" />
+            <input id="whatsappThreadInput" type="text" placeholder="WhatsApp thread name" />
+            <select id="matchStatusInput">
+              <option>Scheduled</option>
+              <option>Live</option>
+              <option>Completed</option>
+            </select>
+            <textarea id="matchNotesInput" rows="3" placeholder="Match notes"></textarea>
+            <button class="primary-button wide" type="submit">Save match setup</button>
+          </form>
+        </section>
+
+        <section id="scoring" class="panel scoring-panel">
+          <div class="panel-head">
+            <div>
+              <p class="section-kicker">Scoring</p>
+              <h2>Live score and offline recovery</h2>
+            </div>
+          </div>
+          <form id="scoreForm" class="form-grid">
+            <input id="heartlakeRunsInput" type="text" placeholder="Heartlake runs" />
+            <input id="heartlakeWicketsInput" type="text" placeholder="Heartlake wickets" />
+            <input id="heartlakeOversInput" type="text" placeholder="Heartlake overs" />
+            <input id="opponentRunsInput" type="text" placeholder="Opponent runs" />
+            <input id="opponentWicketsInput" type="text" placeholder="Opponent wickets" />
+            <input id="opponentOversInput" type="text" placeholder="Opponent overs" />
+            <input id="resultInput" type="text" placeholder="Result" />
+            <textarea id="liveSummaryInput" rows="3" placeholder="Live summary or scoring notes"></textarea>
+            <button class="primary-button wide" type="submit">Update online scorecard</button>
+          </form>
+          <div class="scorebook-shell">
+            <div class="scorebook-column">
+              <div class="panel-head compact-head">
+                <div>
+                  <p class="section-kicker">Scorebook</p>
+                  <h3>11 batters and 11 bowlers per innings</h3>
+                </div>
+                <div class="toolbar-actions">
+                  <select id="scorebookInningsSelect">
+                    <option value="1">Innings 1</option>
+                    <option value="2">Innings 2</option>
+                  </select>
+                </div>
+              </div>
+              <form id="scorebookSetupForm" class="form-grid">
+                <input id="scorebookBattingTeamInput" type="text" placeholder="Batting team" />
+                <input id="scorebookBowlingTeamInput" type="text" placeholder="Bowling team" />
+                <input id="scorebookOversLimitInput" type="number" min="1" placeholder="Overs limit" />
+                <input id="scorebookTargetRunsInput" type="number" min="0" placeholder="Target runs (innings 2)" />
+                <select id="scorebookStatusInput">
+                  <option>Not started</option>
+                  <option>Live</option>
+                  <option>Completed</option>
+                </select>
+                <div class="wide scorebook-slot-shell">
+                  <div>
+                    <h4>Batters</h4>
+                    <div id="scorebookBatters" class="scorebook-slot-grid"></div>
+                  </div>
+                  <div>
+                    <h4>Bowlers</h4>
+                    <div id="scorebookBowlers" class="scorebook-slot-grid"></div>
+                  </div>
+                </div>
+                <button class="secondary-button wide" type="submit">Save innings setup</button>
+              </form>
+            </div>
+            <div class="scorebook-column">
+              <div class="panel-head compact-head">
+                <div>
+                  <p class="section-kicker">Ball By Ball</p>
+                  <h3>Persisted locally for live and offline recovery</h3>
+                </div>
+              </div>
+              <form id="scorebookBallForm" class="form-grid">
+                <input id="scorebookOverNumberInput" type="number" min="1" placeholder="Over" />
+                <input id="scorebookBallNumberInput" type="number" min="1" max="8" placeholder="Ball" />
+                <input id="scorebookStrikerInput" type="text" placeholder="Striker" />
+                <input id="scorebookNonStrikerInput" type="text" placeholder="Non striker" />
+                <input id="scorebookBowlerInput" type="text" placeholder="Bowler" />
+                <input id="scorebookRunsBatInput" type="number" min="0" placeholder="Runs off bat" />
+                <select id="scorebookExtrasTypeInput">
+                  <option value="none">No extras</option>
+                  <option value="wide">Wide</option>
+                  <option value="no_ball">No ball</option>
+                  <option value="bye">Bye</option>
+                  <option value="leg_bye">Leg bye</option>
+                </select>
+                <input id="scorebookExtrasRunsInput" type="number" min="0" placeholder="Extras runs" />
+                <select id="scorebookWicketInput">
+                  <option value="false">No wicket</option>
+                  <option value="true">Wicket</option>
+                </select>
+                <input id="scorebookWicketTypeInput" type="text" placeholder="Wicket type" />
+                <input id="scorebookWicketPlayerInput" type="text" placeholder="Out batter" />
+                <input id="scorebookFielderInput" type="text" placeholder="Fielder for catches" />
+                <textarea id="scorebookBallCommentaryInput" rows="3" class="wide" placeholder="Ball commentary"></textarea>
+                <button class="primary-button wide" type="submit">Log delivery</button>
+              </form>
+              <div id="scorebookSummary" class="player-summary-grid"></div>
+              <div id="scorebookRecentBalls" class="player-history"></div>
+            </div>
+          </div>
+        </section>
+
+        <section id="availability" class="panel availability-panel">
+          <div class="panel-head">
+            <div>
+              <p class="section-kicker">Availability</p>
+              <h2>Players availability tracking</h2>
+            </div>
+          </div>
+          <form id="availabilityForm" class="form-grid">
+            <select id="availabilityPlayerSelect"></select>
+            <select id="availabilityStatusSelect">
+              <option value="available">Available</option>
+              <option value="maybe">Maybe</option>
+              <option value="unavailable">Unavailable</option>
+            </select>
+            <input id="availabilityNoteInput" type="text" placeholder="Note e.g. bringing guests" />
+            <button class="secondary-button" type="submit">Update availability</button>
+          </form>
+          <div id="availabilityMatrix" class="matrix-wrap"></div>
+        </section>
+
+        <section id="performance" class="panel performance-panel">
+          <div class="panel-head">
+            <div>
+              <p class="section-kicker">Performance</p>
+              <h2>Player scores and wickets</h2>
+            </div>
+            <div class="toolbar-actions">
+              <select id="rankingYearSelect"></select>
+            </div>
+          </div>
+          <form id="performanceForm" class="form-grid">
+            <select id="performancePlayerSelect"></select>
+            <input id="performanceRunsInput" type="number" placeholder="Runs" />
+            <input id="performanceBallsInput" type="number" placeholder="Balls" />
+            <input id="performanceWicketsInput" type="number" placeholder="Wickets" />
+            <input id="performanceCatchesInput" type="number" placeholder="Catches" />
+            <input id="performanceFoursInput" type="number" placeholder="Fours" />
+            <input id="performanceSixesInput" type="number" placeholder="Sixes" />
+            <textarea id="performanceNotesInput" rows="3" placeholder="Performance notes"></textarea>
+            <button class="secondary-button wide" type="submit">Add player performance</button>
+          </form>
+          <div id="playerLeaderboard" class="leaderboard"></div>
+        </section>
+
+        <section id="player-profile" class="panel player-profile-panel">
+          <div class="panel-head">
+            <div>
+              <p class="section-kicker">Player Profile</p>
+              <h2>Individual player page and match history</h2>
+            </div>
+          </div>
+          <div class="player-toolbar">
+            <select id="playerProfileSelect"></select>
+            <input id="playerSearchInput" type="text" placeholder="Search player by short name or full name" />
+          </div>
+          <div id="playerIdentity" class="player-identity"></div>
+          <form id="playerEditForm" class="form-grid">
+            <input id="editPlayerName" name="name" type="text" placeholder="Player name" />
+            <input id="editPlayerFullName" name="full_name" type="text" placeholder="Full name" />
+            <input id="editPlayerAliases" name="aliases" type="text" placeholder="Aliases, comma separated" />
+            <select id="editPlayerTeamName" name="team_name"></select>
+            <input id="editPlayerTeamMemberships" name="team_memberships" type="text" class="wide" placeholder="All team memberships, comma separated" />
+            <input id="editPlayerAge" name="age" type="number" placeholder="Age" />
+            <input id="editPlayerRole" name="role" type="text" placeholder="Role" />
+            <input id="editPlayerBattingStyle" name="batting_style" type="text" placeholder="Batting style" />
+            <input id="editPlayerBowlingStyle" name="bowling_style" type="text" placeholder="Bowling style" />
+            <input id="editPlayerJerseyNumber" name="jersey_number" type="text" placeholder="Jersey number" />
+            <input id="editPlayerPhone" name="phone" type="text" placeholder="Mobile number" />
+            <input id="editPlayerEmail" name="email" type="email" placeholder="Email" />
+            <input id="editPlayerPictureUrl" name="picture_url" type="text" placeholder="Picture URL" />
+            <textarea id="editPlayerNotes" name="notes" rows="3" class="wide" placeholder="Player notes"></textarea>
+            <button class="secondary-button wide" type="submit">Update player profile</button>
+          </form>
+          <div id="playerSeasonSummary" class="player-summary-grid"></div>
+          <div>
+            <h3>Reviewed historical archive data</h3>
+            <div id="playerPendingHistory" class="player-history"></div>
+          </div>
+          <div>
+            <h3>Match-by-match history</h3>
+            <div id="playerMatchHistory" class="player-history"></div>
+          </div>
+        </section>
+
+        <section id="teams" class="panel teams-panel">
+          <div class="panel-head">
+            <div>
+              <p class="section-kicker">Teams</p>
+              <h2>Players grouped by team</h2>
+            </div>
+          </div>
+          <div class="team-toolbar">
+            <select id="teamProfileSelect"></select>
+          </div>
+          <div id="teamSummary" class="team-summary-grid"></div>
+          <div class="split-grid">
+            <div>
+              <h3>Team roster</h3>
+              <div id="teamRoster" class="member-list"></div>
+            </div>
+            <div>
+              <h3>Team player scoreboard</h3>
+              <div id="teamPlayerScores" class="leaderboard"></div>
+            </div>
+          </div>
+        </section>
+
+        <section id="commentary" class="panel commentary-panel">
+          <div class="panel-head">
+            <div>
+              <p class="section-kicker">Commentary</p>
+              <h2>Live voice and text commentary</h2>
+            </div>
+          </div>
+          <form id="commentaryForm" class="form-grid">
+            <select id="commentaryMode">
+              <option value="text">Text commentary</option>
+              <option value="voice">Voice transcript</option>
+            </select>
+            <textarea id="commentaryText" rows="5" placeholder="Type commentary or paste the speech-to-text transcript here"></textarea>
+            <div class="voice-tools wide">
+              <button id="startVoiceCommentary" class="secondary-button" type="button">Start mic transcript</button>
+              <button id="stopVoiceCommentary" class="secondary-button" type="button">Stop mic</button>
+            </div>
+            <button class="primary-button wide" type="submit">Save commentary to match</button>
+          </form>
+        </section>
+
+        <section id="squad" class="panel squad-panel">
+          <div class="panel-head">
+            <div>
+              <p class="section-kicker">Squad</p>
+              <h2>Team members and profile creation</h2>
+            </div>
+          </div>
+          <div id="memberList" class="member-list"></div>
+          <form id="memberForm" class="form-grid">
+            <input name="name" type="text" placeholder="Player name" required />
+            <input name="full_name" type="text" placeholder="Full name" />
+            <input name="aliases" type="text" placeholder="Aliases, comma separated" />
+            <select name="team_name" id="memberTeamSelect"></select>
+            <input name="team_memberships" id="memberTeamMemberships" type="text" class="wide" placeholder="All team memberships, comma separated" />
+            <input name="age" type="number" placeholder="Age" required />
+            <input name="role" type="text" placeholder="Role" required />
+            <input name="batting_style" type="text" placeholder="Batting style" />
+            <input name="bowling_style" type="text" placeholder="Bowling style" />
+            <input name="jersey_number" type="text" placeholder="Jersey number" />
+            <input name="phone" type="text" placeholder="Mobile number (unique)" required />
+            <input name="email" type="email" placeholder="Email" />
+            <input name="picture_url" type="text" placeholder="Picture URL" />
+            <textarea name="notes" rows="3" placeholder="Player profile notes"></textarea>
+            <button class="secondary-button wide" type="submit">Create team profile</button>
+          </form>
+        </section>
+
+        <section id="schedule" class="panel season-panel">
+          <div class="panel-head">
+            <div>
+              <p class="section-kicker">Schedule</p>
+              <h2>Season schedule and visiting teams</h2>
+            </div>
+          </div>
+          <div id="scheduleBoard" class="schedule-board"></div>
+          <div id="visitingTeams" class="visiting-grid"></div>
+        </section>
+
+        <section id="archive" class="panel archive-panel">
+          <div class="panel-head">
+            <div>
+              <p class="section-kicker">Archive</p>
+              <h2>Upload scorecard image and recover online score</h2>
+            </div>
+            <button id="resetScoresButton" class="secondary-button" type="button">Reset score data</button>
+          </div>
+          <form id="uploadForm" class="form-grid">
+            <input id="uploadSeason" type="text" placeholder="Season label" />
+            <input id="uploadFile" type="file" accept="image/*" required />
+            <button class="primary-button" type="submit">Upload scorecard image</button>
+          </form>
+          <div class="archive-toolbar">
+            <input id="archiveSearchInput" type="text" placeholder="Find old scorecards by player, team, file, or notes" />
+            <input id="archiveDateInput" type="date" />
+            <select id="archiveYearSelect">
+              <option value="">All years</option>
+            </select>
+            <button id="archiveClearFilters" class="secondary-button" type="button">Clear archive filters</button>
+          </div>
+          <div id="archiveSearchSummary" class="archive-search-summary"></div>
+          <form id="archiveImportForm" class="form-grid">
+            <select id="archiveImportSelect"></select>
+            <textarea
+              id="archiveImportText"
+              class="wide"
+              rows="8"
+              placeholder="Paste ChatGPT extracted JSON or structured scorecard text here"
+            ></textarea>
+            <button class="secondary-button wide" type="submit">Import pasted extraction</button>
+          </form>
+          <div id="archiveList" class="archive-list"></div>
+          <div>
+            <h3>Duplicate review</h3>
+            <div id="duplicateList" class="archive-list"></div>
+          </div>
+          <div>
+            <h3>Extracted scorecards</h3>
+            <div id="archiveScorecards" class="archive-scorecards"></div>
+          </div>
+          <form id="archiveApplyForm" class="form-grid">
+            <select id="archiveSelect"></select>
+            <input id="archiveHeartlakeRunsInput" type="text" placeholder="Heartlake runs" />
+            <input id="archiveHeartlakeWicketsInput" type="text" placeholder="Heartlake wickets" />
+            <input id="archiveHeartlakeOversInput" type="text" placeholder="Heartlake overs" />
+            <input id="archiveOpponentRunsInput" type="text" placeholder="Opponent runs" />
+            <input id="archiveOpponentWicketsInput" type="text" placeholder="Opponent wickets" />
+            <input id="archiveOpponentOversInput" type="text" placeholder="Opponent overs" />
+            <input id="archiveResultInput" type="text" placeholder="Recovered result" />
+            <textarea id="archiveSourceNoteInput" rows="3" placeholder="Notes about this offline sync"></textarea>
+            <button class="secondary-button wide" type="submit">Apply archive draft to selected match</button>
+          </form>
+        </section>
+
+        <section id="assistant" class="panel ai-panel">
+          <div class="panel-head">
+            <div>
+              <p class="section-kicker">Assistant</p>
+              <h2>Free LLM style open queries</h2>
+            </div>
+          </div>
+          <div id="chatMessages" class="chat-messages">
+            <div class="message assistant">
+              Ask about scorecards, player availability, commentary, archive uploads, or who should be captain.
+            </div>
+          </div>
+          <form id="chatForm" class="chat-form">
+            <input id="chatInput" type="text" placeholder="Ask the Heartlake website about stored data" />
+            <button class="primary-button" type="submit">Ask</button>
+          </form>
+        </section>
+      </main>
+    </div>
+    <script src="/assets/app.js?v=20260422q"></script>
+  </body>
+</html>

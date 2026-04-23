@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Register · Heartlake Clubs</title>
+    <link rel="stylesheet" href="/assets/styles.css?v=20260422g" />
+  </head>
+  <body>
+    <div class="page-shell">
+      <section class="panel onboarding-panel">
+        <div class="stack-card">
+          <p class="section-kicker">Registration</p>
+          <h1>Create a local account</h1>
+          <p class="lede">Register as a player or club admin with mobile or email, then choose your primary club.</p>
+          <div id="registerStatus" class="status-banner" hidden></div>
+          <form id="registerForm" class="form-grid">
+            <input id="registerDisplayName" type="text" placeholder="Display name" required />
+            <input id="registerMobile" type="tel" placeholder="Mobile number" />
+            <input id="registerEmail" type="email" placeholder="Email address" />
+            <input id="registerPassword" type="password" placeholder="Password" required />
+            <select id="registerRole">
+              <option value="player">Player</option>
+              <option value="club_admin">Club admin</option>
+            </select>
+            <select id="registerClub"></select>
+            <div id="registerMemberRow" class="wide">
+              <select id="registerMember"></select>
+            </div>
+            <button class="primary-button wide" type="submit">Register and continue</button>
+          </form>
+          <a class="primary-link" href="/signin">Already have an account? Sign in</a>
+        </div>
+      </section>
+    </div>
+    <script src="/assets/multipage.js?v=20260422g"></script>
+    <script src="/assets/register.js?v=20260422g"></script>
+  </body>
+</html>

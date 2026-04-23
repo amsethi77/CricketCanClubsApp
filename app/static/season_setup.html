@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Season Setup · Heartlake Clubs</title>
+    <link rel="stylesheet" href="/assets/styles.css?v=20260422q" />
+  </head>
+  <body>
+    <div class="page-shell">
+      <header class="page-topbar">
+        <nav class="top-nav">
+          <a href="/dashboard">Dashboard</a>
+          <a href="/clubs">Clubs</a>
+          <a href="/season-setup" aria-current="page">Season setup</a>
+          <a href="/player-availability">Availability</a>
+          <a href="/player-profile">Profile</a>
+        </nav>
+        <div class="topbar-actions">
+          <a class="primary-link" href="/clubs">Back to club selection</a>
+          <a class="secondary-button" href="/signout">Sign out</a>
+        </div>
+      </header>
+      <section class="panel onboarding-panel">
+        <div class="stack-card">
+          <p class="section-kicker">Season Setup</p>
+          <h1 id="seasonSetupTitle">Club season setup</h1>
+          <p id="seasonSetupSummary" class="lede">Create fixtures for 2026, 2027, and beyond.</p>
+          <div id="seasonStatus" class="status-banner" hidden></div>
+          <form id="seasonSetupForm" class="form-grid">
+            <input id="seasonYear" type="number" min="2024" placeholder="Season year" required />
+            <input id="fixtureDate" type="date" required />
+            <input id="fixtureDateLabel" type="text" placeholder="Date label e.g. June 7th" required />
+            <input id="fixtureOpponent" type="text" placeholder="Opponent club" required />
+            <input id="fixtureVenue" type="text" placeholder="Venue" />
+            <input id="fixtureType" type="text" placeholder="Match type" />
+            <input id="fixtureTime" type="text" placeholder="Start time" />
+            <input id="fixtureOvers" type="text" placeholder="Overs" />
+            <button class="primary-button wide" type="submit">Add fixture</button>
+          </form>
+          <div class="inline-actions">
+            <label class="stack-field" for="seasonFilter">
+              <span>Show season</span>
+              <select id="seasonFilter"></select>
+            </label>
+          </div>
+          <div id="seasonFixtures" class="detail-stack"></div>
+          <a class="primary-link" href="/clubs">Back to club selection</a>
+        </div>
+      </section>
+    </div>
+    <script src="/assets/multipage.js?v=20260422q"></script>
+    <script src="/assets/season_setup.js?v=20260422q"></script>
+  </body>
+</html>

@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Player Profile · Heartlake Clubs</title>
+    <link rel="stylesheet" href="/assets/styles.css?v=20260422q" />
+  </head>
+  <body>
+    <div class="page-shell">
+      <header class="page-topbar">
+        <nav class="top-nav">
+          <a href="/dashboard">Dashboard</a>
+          <a href="/clubs">Clubs</a>
+          <a href="/season-setup">Season setup</a>
+          <a href="/player-availability">Availability</a>
+          <a href="/player-profile" aria-current="page">Profile</a>
+        </nav>
+        <div class="topbar-actions">
+          <a class="primary-link" href="/clubs">Back to club selection</a>
+          <a class="secondary-button" href="/signout">Sign out</a>
+        </div>
+      </header>
+      <section class="panel onboarding-panel">
+        <div class="stack-card">
+          <p class="section-kicker">Player Profile</p>
+          <h1 id="playerProfileTitle">Your player profile</h1>
+          <p id="playerProfileSummary" class="lede">Set up your details for the selected club.</p>
+          <div id="playerProfileStatus" class="status-banner" hidden></div>
+          <div class="form-grid compact-grid">
+            <input id="profileClubSearch" type="search" placeholder="Search your clubs" />
+            <select id="profileClubSelect"></select>
+            <button id="profileClubSwitch" class="secondary-button wide" type="button">Switch selected club</button>
+          </div>
+          <form id="playerProfileForm" class="form-grid">
+            <input id="profileFullName" type="text" placeholder="Full name" />
+            <input id="profileAge" type="number" min="0" placeholder="Age" />
+            <input id="profilePhone" type="tel" placeholder="Mobile number" />
+            <input id="profileEmail" type="email" placeholder="Email address" />
+            <input id="profileRole" type="text" placeholder="Role" />
+            <input id="profileBattingStyle" type="text" placeholder="Batting style" />
+            <input id="profileBowlingStyle" type="text" placeholder="Bowling style" />
+            <input id="profileAliases" type="text" placeholder="Aliases, comma separated" />
+            <input id="profileTeams" type="text" placeholder="Team memberships, comma separated" />
+            <select id="profilePrimaryClub"></select>
+            <textarea id="profileNotes" placeholder="Notes"></textarea>
+            <button class="primary-button wide" type="submit">Save player profile</button>
+          </form>
+          <div id="playerMemberships" class="detail-stack"></div>
+          <a class="primary-link" href="/player-availability">Open player availability</a>
+          <a class="primary-link" href="/clubs">Back to club selection</a>
+        </div>
+      </section>
+    </div>
+    <script src="/assets/multipage.js?v=20260422q"></script>
+    <script src="/assets/player_profile.js?v=20260422q"></script>
+  </body>
+</html>

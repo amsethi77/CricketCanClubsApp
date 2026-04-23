@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+.DS_Store
+.venv/
+venv/
+env/
+
+app/data/heartlake.db
+app/data/*.db
+app/data/*_cache.json
+app/uploads/
+app/duplicates/

@@ -1,0 +1,934 @@
+{
+  "club": {
+    "name": "Heartlake Cricket Club",
+    "short_name": "Heartlake",
+    "city": "Brampton",
+    "season": "2026 Summer Season",
+    "home_ground": "Heartlake Grounds",
+    "whatsapp_number": "14165550123",
+    "about": "Community-first cricket club app for fixtures, scoring, availability, commentary, and AI-assisted match operations."
+  },
+  "members": [
+    {
+      "id": "amit-s",
+      "name": "Amit S",
+      "full_name": "Amit Sethi",
+      "team_name": "Heartlake",
+      "age": 36,
+      "role": "Captain / Batter",
+      "batting_style": "Right-hand bat",
+      "bowling_style": "Right-arm medium",
+      "picture": "AS",
+      "notes": "Reliable organizer and top-order anchor.",
+      "phone": "",
+      "email": "",
+      "picture_url": "",
+      "jersey_number": ""
+    },
+    {
+      "id": "imran",
+      "name": "Imran",
+      "team_name": "Heartlake",
+      "age": 34,
+      "role": "All-Rounder",
+      "batting_style": "Right-hand bat",
+      "bowling_style": "Right-arm fast-medium",
+      "picture": "IM",
+      "notes": "Often brings extra guest players.",
+      "phone": "",
+      "email": "",
+      "picture_url": "",
+      "jersey_number": ""
+    },
+    {
+      "id": "checkley",
+      "name": "Checkley",
+      "team_name": "Heartlake",
+      "age": 41,
+      "role": "Senior Batter",
+      "batting_style": "Right-hand bat",
+      "bowling_style": "Occasional off-spin",
+      "picture": "CH",
+      "notes": "Experienced stabilizer in the middle order.",
+      "phone": "",
+      "email": "",
+      "picture_url": "",
+      "jersey_number": ""
+    },
+    {
+      "id": "john",
+      "name": "John",
+      "team_name": "Heartlake",
+      "age": 32,
+      "role": "Wicket Keeper",
+      "batting_style": "Left-hand bat",
+      "bowling_style": "N/A",
+      "picture": "JO",
+      "notes": "Primary keeper and energy player.",
+      "phone": "",
+      "email": "",
+      "picture_url": "",
+      "jersey_number": ""
+    },
+    {
+      "id": "ravi",
+      "name": "Ravi",
+      "team_name": "Heartlake",
+      "age": 29,
+      "role": "Bowling All-Rounder",
+      "batting_style": "Right-hand bat",
+      "bowling_style": "Left-arm spin",
+      "picture": "RA",
+      "notes": "Control bowler for middle overs.",
+      "phone": "",
+      "email": "",
+      "picture_url": "",
+      "jersey_number": ""
+    },
+    {
+      "id": "steve",
+      "name": "Steve",
+      "team_name": "Heartlake",
+      "age": 38,
+      "role": "Finisher",
+      "batting_style": "Right-hand bat",
+      "bowling_style": "Right-arm seam",
+      "picture": "ST",
+      "notes": "Strong late-order hitter.",
+      "phone": "",
+      "email": "",
+      "picture_url": "",
+      "jersey_number": ""
+    }
+  ],
+  "fixtures": [
+    {
+      "id": "2026-06-07-carl",
+      "date": "2026-06-07",
+      "date_label": "June 7th",
+      "opponent": "Carl XI",
+      "visiting_team": "Carl XI",
+      "heartlake_captain": "",
+      "availability": [
+        "Amit S",
+        "Imran (bringing 2 guests)",
+        "Checkley",
+        "John",
+        "Ravi",
+        "Steve"
+      ],
+      "heartlake_score": "",
+      "opponent_score": "",
+      "result": "TBD",
+      "status": "Scheduled",
+      "commentary": [],
+      "details": {
+        "venue": "Heartlake Grounds",
+        "match_type": "T20 Friendly",
+        "scheduled_time": "10:00 AM",
+        "overs": "20",
+        "toss_winner": "",
+        "toss_decision": "",
+        "weather": "",
+        "umpires": "",
+        "scorer": "",
+        "whatsapp_thread": "",
+        "notes": ""
+      },
+      "scorecard": {
+        "heartlake_runs": "",
+        "heartlake_wickets": "",
+        "heartlake_overs": "",
+        "opponent_runs": "",
+        "opponent_wickets": "",
+        "opponent_overs": "",
+        "result": "TBD",
+        "live_summary": ""
+      },
+      "availability_statuses": {
+        "Amit S": "available",
+        "Imran": "available",
+        "Checkley": "available",
+        "John": "available",
+        "Ravi": "available",
+        "Steve": "available"
+      },
+      "availability_notes": {
+        "Imran": "bringing 2 guests"
+      },
+      "performances": []
+    },
+    {
+      "id": "2026-06-14-imran",
+      "date": "2026-06-14",
+      "date_label": "June 14th",
+      "opponent": "Imran XI",
+      "visiting_team": "Imran XI",
+      "heartlake_captain": "",
+      "availability": [
+        "Amit S",
+        "Checkley",
+        "John",
+        "Ravi",
+        "Steve"
+      ],
+      "heartlake_score": "",
+      "opponent_score": "",
+      "result": "TBD",
+      "status": "Scheduled",
+      "commentary": [],
+      "details": {
+        "venue": "Heartlake Grounds",
+        "match_type": "T20 Friendly",
+        "scheduled_time": "10:00 AM",
+        "overs": "20",
+        "toss_winner": "",
+        "toss_decision": "",
+        "weather": "",
+        "umpires": "",
+        "scorer": "",
+        "whatsapp_thread": "",
+        "notes": ""
+      },
+      "scorecard": {
+        "heartlake_runs": "",
+        "heartlake_wickets": "",
+        "heartlake_overs": "",
+        "opponent_runs": "",
+        "opponent_wickets": "",
+        "opponent_overs": "",
+        "result": "TBD",
+        "live_summary": ""
+      },
+      "availability_statuses": {
+        "Amit S": "available",
+        "Imran": "unavailable",
+        "Checkley": "available",
+        "John": "available",
+        "Ravi": "available",
+        "Steve": "available"
+      },
+      "availability_notes": {},
+      "performances": []
+    },
+    {
+      "id": "2026-06-21-eugene",
+      "date": "2026-06-21",
+      "date_label": "June 21st",
+      "opponent": "Eugene XI",
+      "visiting_team": "Eugene XI",
+      "heartlake_captain": "",
+      "availability": [
+        "Amit S",
+        "Imran (bringing 2 guests)",
+        "Checkley",
+        "John",
+        "Ravi",
+        "Steve"
+      ],
+      "heartlake_score": "",
+      "opponent_score": "",
+      "result": "TBD",
+      "status": "Scheduled",
+      "commentary": [],
+      "details": {
+        "venue": "Heartlake Grounds",
+        "match_type": "T20 Friendly",
+        "scheduled_time": "10:00 AM",
+        "overs": "20",
+        "toss_winner": "",
+        "toss_decision": "",
+        "weather": "",
+        "umpires": "",
+        "scorer": "",
+        "whatsapp_thread": "",
+        "notes": ""
+      },
+      "scorecard": {
+        "heartlake_runs": "",
+        "heartlake_wickets": "",
+        "heartlake_overs": "",
+        "opponent_runs": "",
+        "opponent_wickets": "",
+        "opponent_overs": "",
+        "result": "TBD",
+        "live_summary": ""
+      },
+      "availability_statuses": {
+        "Amit S": "available",
+        "Imran": "available",
+        "Checkley": "available",
+        "John": "available",
+        "Ravi": "available",
+        "Steve": "available"
+      },
+      "availability_notes": {
+        "Imran": "bringing 2 guests"
+      },
+      "performances": []
+    },
+    {
+      "id": "2026-06-28-horace",
+      "date": "2026-06-28",
+      "date_label": "June 28th",
+      "opponent": "Horace XI",
+      "visiting_team": "Horace XI",
+      "heartlake_captain": "",
+      "availability": [
+        "Amit S",
+        "Imran (bringing 2 guests)",
+        "Checkley",
+        "John",
+        "Ravi",
+        "Steve"
+      ],
+      "heartlake_score": "",
+      "opponent_score": "",
+      "result": "TBD",
+      "status": "Scheduled",
+      "commentary": [],
+      "details": {
+        "venue": "Heartlake Grounds",
+        "match_type": "T20 Friendly",
+        "scheduled_time": "10:00 AM",
+        "overs": "20",
+        "toss_winner": "",
+        "toss_decision": "",
+        "weather": "",
+        "umpires": "",
+        "scorer": "",
+        "whatsapp_thread": "",
+        "notes": ""
+      },
+      "scorecard": {
+        "heartlake_runs": "",
+        "heartlake_wickets": "",
+        "heartlake_overs": "",
+        "opponent_runs": "",
+        "opponent_wickets": "",
+        "opponent_overs": "",
+        "result": "TBD",
+        "live_summary": ""
+      },
+      "availability_statuses": {
+        "Amit S": "available",
+        "Imran": "available",
+        "Checkley": "available",
+        "John": "available",
+        "Ravi": "available",
+        "Steve": "available"
+      },
+      "availability_notes": {
+        "Imran": "bringing 2 guests"
+      },
+      "performances": []
+    },
+    {
+      "id": "2026-07-05-imran",
+      "date": "2026-07-05",
+      "date_label": "July 5th",
+      "opponent": "Imran XI",
+      "visiting_team": "Imran XI",
+      "heartlake_captain": "",
+      "availability": [
+        "Amit S",
+        "Checkley",
+        "John",
+        "Ravi",
+        "Steve"
+      ],
+      "heartlake_score": "",
+      "opponent_score": "",
+      "result": "TBD",
+      "status": "Scheduled",
+      "commentary": [],
+      "details": {
+        "venue": "Heartlake Grounds",
+        "match_type": "T20 Friendly",
+        "scheduled_time": "10:00 AM",
+        "overs": "20",
+        "toss_winner": "",
+        "toss_decision": "",
+        "weather": "",
+        "umpires": "",
+        "scorer": "",
+        "whatsapp_thread": "",
+        "notes": ""
+      },
+      "scorecard": {
+        "heartlake_runs": "",
+        "heartlake_wickets": "",
+        "heartlake_overs": "",
+        "opponent_runs": "",
+        "opponent_wickets": "",
+        "opponent_overs": "",
+        "result": "TBD",
+        "live_summary": ""
+      },
+      "availability_statuses": {
+        "Amit S": "available",
+        "Imran": "unavailable",
+        "Checkley": "available",
+        "John": "available",
+        "Ravi": "available",
+        "Steve": "available"
+      },
+      "availability_notes": {},
+      "performances": []
+    },
+    {
+      "id": "2026-07-12-carl",
+      "date": "2026-07-12",
+      "date_label": "July 12th",
+      "opponent": "Carl XI",
+      "visiting_team": "Carl XI",
+      "heartlake_captain": "",
+      "availability": [
+        "Imran (bringing 2 guests)",
+        "Checkley",
+        "John",
+        "Ravi",
+        "Steve"
+      ],
+      "heartlake_score": "",
+      "opponent_score": "",
+      "result": "TBD",
+      "status": "Scheduled",
+      "commentary": [],
+      "details": {
+        "venue": "Heartlake Grounds",
+        "match_type": "T20 Friendly",
+        "scheduled_time": "10:00 AM",
+        "overs": "20",
+        "toss_winner": "",
+        "toss_decision": "",
+        "weather": "",
+        "umpires": "",
+        "scorer": "",
+        "whatsapp_thread": "",
+        "notes": ""
+      },
+      "scorecard": {
+        "heartlake_runs": "",
+        "heartlake_wickets": "",
+        "heartlake_overs": "",
+        "opponent_runs": "",
+        "opponent_wickets": "",
+        "opponent_overs": "",
+        "result": "TBD",
+        "live_summary": ""
+      },
+      "availability_statuses": {
+        "Amit S": "unavailable",
+        "Imran": "available",
+        "Checkley": "available",
+        "John": "available",
+        "Ravi": "available",
+        "Steve": "available"
+      },
+      "availability_notes": {
+        "Imran": "bringing 2 guests"
+      },
+      "performances": []
+    },
+    {
+      "id": "2026-07-19-imran",
+      "date": "2026-07-19",
+      "date_label": "July 19th",
+      "opponent": "Imran XI",
+      "visiting_team": "Imran XI",
+      "heartlake_captain": "",
+      "availability": [
+        "Checkley",
+        "John",
+        "Ravi",
+        "Steve"
+      ],
+      "heartlake_score": "",
+      "opponent_score": "",
+      "result": "TBD",
+      "status": "Scheduled",
+      "commentary": [],
+      "details": {
+        "venue": "Heartlake Grounds",
+        "match_type": "T20 Friendly",
+        "scheduled_time": "10:00 AM",
+        "overs": "20",
+        "toss_winner": "",
+        "toss_decision": "",
+        "weather": "",
+        "umpires": "",
+        "scorer": "",
+        "whatsapp_thread": "",
+        "notes": ""
+      },
+      "scorecard": {
+        "heartlake_runs": "",
+        "heartlake_wickets": "",
+        "heartlake_overs": "",
+        "opponent_runs": "",
+        "opponent_wickets": "",
+        "opponent_overs": "",
+        "result": "TBD",
+        "live_summary": ""
+      },
+      "availability_statuses": {
+        "Amit S": "unavailable",
+        "Imran": "unavailable",
+        "Checkley": "available",
+        "John": "available",
+        "Ravi": "available",
+        "Steve": "available"
+      },
+      "availability_notes": {},
+      "performances": []
+    },
+    {
+      "id": "2026-07-26-imran",
+      "date": "2026-07-26",
+      "date_label": "July 26th",
+      "opponent": "Imran XI",
+      "visiting_team": "Imran XI",
+      "heartlake_captain": "",
+      "availability": [
+        "Checkley",
+        "John",
+        "Ravi",
+        "Steve"
+      ],
+      "heartlake_score": "",
+      "opponent_score": "",
+      "result": "TBD",
+      "status": "Scheduled",
+      "commentary": [],
+      "details": {
+        "venue": "Heartlake Grounds",
+        "match_type": "T20 Friendly",
+        "scheduled_time": "10:00 AM",
+        "overs": "20",
+        "toss_winner": "",
+        "toss_decision": "",
+        "weather": "",
+        "umpires": "",
+        "scorer": "",
+        "whatsapp_thread": "",
+        "notes": ""
+      },
+      "scorecard": {
+        "heartlake_runs": "",
+        "heartlake_wickets": "",
+        "heartlake_overs": "",
+        "opponent_runs": "",
+        "opponent_wickets": "",
+        "opponent_overs": "",
+        "result": "TBD",
+        "live_summary": ""
+      },
+      "availability_statuses": {
+        "Amit S": "unavailable",
+        "Imran": "unavailable",
+        "Checkley": "available",
+        "John": "available",
+        "Ravi": "available",
+        "Steve": "available"
+      },
+      "availability_notes": {},
+      "performances": []
+    },
+    {
+      "id": "2026-08-09-horace",
+      "date": "2026-08-09",
+      "date_label": "August 9th",
+      "opponent": "Horace XI",
+      "visiting_team": "Horace XI",
+      "heartlake_captain": "",
+      "availability": [
+        "Amit S",
+        "Imran (bringing 2 guests)",
+        "Checkley",
+        "John",
+        "Ravi",
+        "Steve"
+      ],
+      "heartlake_score": "",
+      "opponent_score": "",
+      "result": "TBD",
+      "status": "Scheduled",
+      "commentary": [],
+      "details": {
+        "venue": "Heartlake Grounds",
+        "match_type": "T20 Friendly",
+        "scheduled_time": "10:00 AM",
+        "overs": "20",
+        "toss_winner": "",
+        "toss_decision": "",
+        "weather": "",
+        "umpires": "",
+        "scorer": "",
+        "whatsapp_thread": "",
+        "notes": ""
+      },
+      "scorecard": {
+        "heartlake_runs": "",
+        "heartlake_wickets": "",
+        "heartlake_overs": "",
+        "opponent_runs": "",
+        "opponent_wickets": "",
+        "opponent_overs": "",
+        "result": "TBD",
+        "live_summary": ""
+      },
+      "availability_statuses": {
+        "Amit S": "available",
+        "Imran": "available",
+        "Checkley": "available",
+        "John": "available",
+        "Ravi": "available",
+        "Steve": "available"
+      },
+      "availability_notes": {
+        "Imran": "bringing 2 guests"
+      },
+      "performances": []
+    },
+    {
+      "id": "2026-08-16-eugene",
+      "date": "2026-08-16",
+      "date_label": "August 16th",
+      "opponent": "Eugene XI",
+      "visiting_team": "Eugene XI",
+      "heartlake_captain": "",
+      "availability": [
+        "Amit S",
+        "Imran (bringing 2 guests)",
+        "Checkley",
+        "John",
+        "Ravi",
+        "Steve"
+      ],
+      "heartlake_score": "",
+      "opponent_score": "",
+      "result": "TBD",
+      "status": "Scheduled",
+      "commentary": [],
+      "details": {
+        "venue": "Heartlake Grounds",
+        "match_type": "T20 Friendly",
+        "scheduled_time": "10:00 AM",
+        "overs": "20",
+        "toss_winner": "",
+        "toss_decision": "",
+        "weather": "",
+        "umpires": "",
+        "scorer": "",
+        "whatsapp_thread": "",
+        "notes": ""
+      },
+      "scorecard": {
+        "heartlake_runs": "",
+        "heartlake_wickets": "",
+        "heartlake_overs": "",
+        "opponent_runs": "",
+        "opponent_wickets": "",
+        "opponent_overs": "",
+        "result": "TBD",
+        "live_summary": ""
+      },
+      "availability_statuses": {
+        "Amit S": "available",
+        "Imran": "available",
+        "Checkley": "available",
+        "John": "available",
+        "Ravi": "available",
+        "Steve": "available"
+      },
+      "availability_notes": {
+        "Imran": "bringing 2 guests"
+      },
+      "performances": []
+    },
+    {
+      "id": "2026-08-23-carl",
+      "date": "2026-08-23",
+      "date_label": "August 23rd",
+      "opponent": "Carl XI",
+      "visiting_team": "Carl XI",
+      "heartlake_captain": "",
+      "availability": [
+        "Amit S",
+        "Imran (bringing 2 guests)",
+        "Checkley",
+        "John",
+        "Ravi",
+        "Steve"
+      ],
+      "heartlake_score": "",
+      "opponent_score": "",
+      "result": "TBD",
+      "status": "Scheduled",
+      "commentary": [],
+      "details": {
+        "venue": "Heartlake Grounds",
+        "match_type": "T20 Friendly",
+        "scheduled_time": "10:00 AM",
+        "overs": "20",
+        "toss_winner": "",
+        "toss_decision": "",
+        "weather": "",
+        "umpires": "",
+        "scorer": "",
+        "whatsapp_thread": "",
+        "notes": ""
+      },
+      "scorecard": {
+        "heartlake_runs": "",
+        "heartlake_wickets": "",
+        "heartlake_overs": "",
+        "opponent_runs": "",
+        "opponent_wickets": "",
+        "opponent_overs": "",
+        "result": "TBD",
+        "live_summary": ""
+      },
+      "availability_statuses": {
+        "Amit S": "available",
+        "Imran": "available",
+        "Checkley": "available",
+        "John": "available",
+        "Ravi": "available",
+        "Steve": "available"
+      },
+      "availability_notes": {
+        "Imran": "bringing 2 guests"
+      },
+      "performances": []
+    },
+    {
+      "id": "2026-08-30-horace",
+      "date": "2026-08-30",
+      "date_label": "August 30th",
+      "opponent": "Horace XI",
+      "visiting_team": "Horace XI",
+      "heartlake_captain": "",
+      "availability": [
+        "Amit S",
+        "Imran (bringing 2 guests)",
+        "Checkley",
+        "John",
+        "Ravi",
+        "Steve"
+      ],
+      "heartlake_score": "",
+      "opponent_score": "",
+      "result": "TBD",
+      "status": "Scheduled",
+      "commentary": [],
+      "details": {
+        "venue": "Heartlake Grounds",
+        "match_type": "T20 Friendly",
+        "scheduled_time": "10:00 AM",
+        "overs": "20",
+        "toss_winner": "",
+        "toss_decision": "",
+        "weather": "",
+        "umpires": "",
+        "scorer": "",
+        "whatsapp_thread": "",
+        "notes": ""
+      },
+      "scorecard": {
+        "heartlake_runs": "",
+        "heartlake_wickets": "",
+        "heartlake_overs": "",
+        "opponent_runs": "",
+        "opponent_wickets": "",
+        "opponent_overs": "",
+        "result": "TBD",
+        "live_summary": ""
+      },
+      "availability_statuses": {
+        "Amit S": "available",
+        "Imran": "available",
+        "Checkley": "available",
+        "John": "available",
+        "Ravi": "available",
+        "Steve": "available"
+      },
+      "availability_notes": {
+        "Imran": "bringing 2 guests"
+      },
+      "performances": []
+    },
+    {
+      "id": "2026-09-06-imran",
+      "date": "2026-09-06",
+      "date_label": "September 6th",
+      "opponent": "Imran XI",
+      "visiting_team": "Imran XI",
+      "heartlake_captain": "",
+      "availability": [
+        "Amit S",
+        "Checkley",
+        "John",
+        "Ravi",
+        "Steve"
+      ],
+      "heartlake_score": "",
+      "opponent_score": "",
+      "result": "TBD",
+      "status": "Scheduled",
+      "commentary": [],
+      "details": {
+        "venue": "Heartlake Grounds",
+        "match_type": "T20 Friendly",
+        "scheduled_time": "10:00 AM",
+        "overs": "20",
+        "toss_winner": "",
+        "toss_decision": "",
+        "weather": "",
+        "umpires": "",
+        "scorer": "",
+        "whatsapp_thread": "",
+        "notes": ""
+      },
+      "scorecard": {
+        "heartlake_runs": "",
+        "heartlake_wickets": "",
+        "heartlake_overs": "",
+        "opponent_runs": "",
+        "opponent_wickets": "",
+        "opponent_overs": "",
+        "result": "TBD",
+        "live_summary": ""
+      },
+      "availability_statuses": {
+        "Amit S": "available",
+        "Imran": "unavailable",
+        "Checkley": "available",
+        "John": "available",
+        "Ravi": "available",
+        "Steve": "available"
+      },
+      "availability_notes": {},
+      "performances": []
+    },
+    {
+      "id": "2026-09-13-imran",
+      "date": "2026-09-13",
+      "date_label": "September 13th",
+      "opponent": "Imran XI",
+      "visiting_team": "Imran XI",
+      "heartlake_captain": "",
+      "availability": [
+        "Checkley",
+        "John",
+        "Ravi",
+        "Steve"
+      ],
+      "heartlake_score": "",
+      "opponent_score": "",
+      "result": "TBD",
+      "status": "Scheduled",
+      "commentary": [],
+      "details": {
+        "venue": "Heartlake Grounds",
+        "match_type": "T20 Friendly",
+        "scheduled_time": "10:00 AM",
+        "overs": "20",
+        "toss_winner": "",
+        "toss_decision": "",
+        "weather": "",
+        "umpires": "",
+        "scorer": "",
+        "whatsapp_thread": "",
+        "notes": ""
+      },
+      "scorecard": {
+        "heartlake_runs": "",
+        "heartlake_wickets": "",
+        "heartlake_overs": "",
+        "opponent_runs": "",
+        "opponent_wickets": "",
+        "opponent_overs": "",
+        "result": "TBD",
+        "live_summary": ""
+      },
+      "availability_statuses": {
+        "Amit S": "unavailable",
+        "Imran": "unavailable",
+        "Checkley": "available",
+        "John": "available",
+        "Ravi": "available",
+        "Steve": "available"
+      },
+      "availability_notes": {},
+      "performances": []
+    },
+    {
+      "id": "2026-09-20-imran",
+      "date": "2026-09-20",
+      "date_label": "September 20th",
+      "opponent": "Imran XI",
+      "visiting_team": "Imran XI",
+      "heartlake_captain": "",
+      "availability": [
+        "Amit S",
+        "Checkley",
+        "John",
+        "Ravi",
+        "Steve"
+      ],
+      "heartlake_score": "",
+      "opponent_score": "",
+      "result": "TBD",
+      "status": "Scheduled",
+      "commentary": [],
+      "details": {
+        "venue": "Heartlake Grounds",
+        "match_type": "T20 Friendly",
+        "scheduled_time": "10:00 AM",
+        "overs": "20",
+        "toss_winner": "",
+        "toss_decision": "",
+        "weather": "",
+        "umpires": "",
+        "scorer": "",
+        "whatsapp_thread": "",
+        "notes": ""
+      },
+      "scorecard": {
+        "heartlake_runs": "",
+        "heartlake_wickets": "",
+        "heartlake_overs": "",
+        "opponent_runs": "",
+        "opponent_wickets": "",
+        "opponent_overs": "",
+        "result": "TBD",
+        "live_summary": ""
+      },
+      "availability_statuses": {
+        "Amit S": "available",
+        "Imran": "unavailable",
+        "Checkley": "available",
+        "John": "available",
+        "Ravi": "available",
+        "Steve": "available"
+      },
+      "availability_notes": {},
+      "performances": []
+    }
+  ],
+  "archive_uploads": [],
+  "teams": [
+    {
+      "name": "Heartlake",
+      "type": "club",
+      "display_name": "Heartlake Cricket Club"
+    }
+  ],
+  "insights": {
+    "free_llm_mode": "heuristic",
+    "ocr_status": "ready for uploaded scorecard images",
+    "voice_commentary_status": "manual transcript capture enabled"
+  }
+}

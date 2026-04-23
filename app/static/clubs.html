@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Select Club · Heartlake Clubs</title>
+    <link rel="stylesheet" href="/assets/styles.css?v=20260422r" />
+  </head>
+  <body>
+    <div class="page-shell">
+      <header class="page-topbar">
+        <nav class="top-nav">
+          <a href="/dashboard">Dashboard</a>
+          <a href="/clubs" aria-current="page">Clubs</a>
+          <a href="/season-setup">Season setup</a>
+          <a href="/player-availability">Availability</a>
+          <a href="/player-profile">Profile</a>
+        </nav>
+        <div class="topbar-actions">
+          <a id="dashboardLink" class="primary-link" href="/dashboard">Open club dashboard</a>
+          <button id="signOutButton" class="secondary-button" type="button">Sign out</button>
+        </div>
+      </header>
+      <section class="panel onboarding-panel">
+        <div class="stack-card">
+          <p class="section-kicker">Club Selection</p>
+          <h1 id="clubsGreeting">Signed in</h1>
+          <p id="selectedClubSummary" class="lede">Choose your current club. Your primary club is the default.</p>
+          <div id="clubsStatus" class="status-banner" hidden></div>
+          <form id="clubSearchForm" class="toolbar-actions">
+            <input id="clubSearchInput" type="search" placeholder="Search clubs by name, short name, or season" />
+            <button id="clubSearchButton" class="primary-button" type="submit">Search clubs</button>
+            <div id="clubsSearchSummary" class="archive-search-summary"></div>
+          </form>
+          <h2 class="section-heading">Available clubs</h2>
+          <div id="clubsList" class="detail-stack"></div>
+          <div class="inline-actions">
+            <a id="seasonSetupLink" class="primary-link" href="/season-setup">Season setup</a>
+            <a id="playerAvailabilityLink" class="primary-link" href="/player-availability">Player availability</a>
+            <a id="playerProfileLink" class="primary-link" href="/player-profile">Player profile</a>
+          </div>
+        </div>
+      </section>
+    </div>
+    <script src="/assets/multipage.js?v=20260422r"></script>
+    <script src="/assets/clubs.js?v=20260422r"></script>
+  </body>
+</html>

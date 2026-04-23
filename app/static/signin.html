@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Sign In · Heartlake Clubs</title>
+    <link rel="stylesheet" href="/assets/styles.css?v=20260422k" />
+  </head>
+  <body>
+    <div class="page-shell">
+      <section class="panel onboarding-panel">
+        <div class="stack-card">
+          <p class="section-kicker">Sign In</p>
+          <h1>Multi-club access</h1>
+          <p class="lede">Sign in with mobile or email and password, or use your saved player mobile/email for quick access. Add player name only if needed.</p>
+          <div id="signinStatus" class="status-banner" hidden></div>
+          <form id="signinForm" class="form-grid" method="post" action="/signin/quick">
+            <input id="signinIdentifier" name="identifier" type="text" placeholder="Mobile or email" required />
+            <input id="signinPassword" name="password" type="password" placeholder="Password" />
+            <input id="signinPlayerName" name="player_name" type="text" placeholder="Player name for quick access" />
+            <button class="primary-button wide" type="submit">Sign in</button>
+          </form>
+          <a class="primary-link" href="/register">Create an account</a>
+        </div>
+      </section>
+    </div>
+    <script src="/assets/multipage.js?v=20260422k"></script>
+    <script src="/assets/signin.js?v=20260422k"></script>
+  </body>
+</html>

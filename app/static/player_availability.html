@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Player Availability · Heartlake Clubs</title>
+    <link rel="stylesheet" href="/assets/styles.css?v=20260422q" />
+  </head>
+  <body>
+    <div class="page-shell">
+      <header class="page-topbar">
+        <nav class="top-nav">
+          <a href="/dashboard">Dashboard</a>
+          <a href="/clubs">Clubs</a>
+          <a href="/season-setup">Season setup</a>
+          <a href="/player-availability" aria-current="page">Availability</a>
+          <a href="/player-profile">Profile</a>
+        </nav>
+        <div class="topbar-actions">
+          <a class="primary-link" href="/clubs">Back to club selection</a>
+          <a class="secondary-button" href="/signout">Sign out</a>
+        </div>
+      </header>
+      <section class="panel onboarding-panel">
+        <div class="stack-card">
+          <p class="section-kicker">Availability</p>
+          <h1 id="availabilityPageTitle">Player availability</h1>
+          <p id="availabilityPageSummary" class="lede">Update your availability after signing in.</p>
+          <div id="playerAvailabilityStatus" class="status-banner" hidden></div>
+          <div class="form-grid compact-grid">
+            <input id="availabilityClubSearch" type="search" placeholder="Search your clubs" />
+            <select id="availabilityClubSelect"></select>
+            <button id="availabilityClubSwitch" class="secondary-button wide" type="button">Switch selected club</button>
+          </div>
+          <form id="seasonOutlookForm" class="form-grid">
+            <select id="seasonOutlookStatus" name="status">
+              <option value="">Overall availability for selected club</option>
+              <option value="available">Available most weeks</option>
+              <option value="maybe">Occasional / maybe</option>
+              <option value="unavailable">Unavailable this season</option>
+            </select>
+            <input id="seasonOutlookNote" name="note" type="text" placeholder="Club-level note for this season" />
+            <button class="secondary-button wide" type="submit">Save club outlook</button>
+          </form>
+          <div id="playerFixtures" class="detail-stack"></div>
+          <a class="primary-link" href="/player-profile">Open player profile</a>
+          <a class="primary-link" href="/clubs">Back to club selection</a>
+        </div>
+      </section>
+    </div>
+    <script src="/assets/multipage.js?v=20260422q"></script>
+    <script src="/assets/player_availability.js?v=20260422q"></script>
+  </body>
+</html>
