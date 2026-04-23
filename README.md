@@ -114,6 +114,9 @@ This section captures the user requirements in the order they were given and ref
 71. Let players provide their own availability after login.
 72. Make season setup year-aware so multiple future seasons can coexist without replacing the current running season.
 73. Keep player-availability updates focused on the selected club and its active season.
+74. Commit the codebase to GitHub before deployment.
+75. Create an Azure deployment plan for a VM-first release in Subscription 1, Canada Central.
+76. Do not lose runtime data; keep a checked-in JSON snapshot / recovery export strategy alongside the live database, uploads, and duplicate-review files.
 
 ## Current behavior summary
 
@@ -125,9 +128,12 @@ This section captures the user requirements in the order they were given and ref
 - The selected primary club drives the landing-page focus for upcoming events, upcoming matches, and club stats.
 - The app now includes dedicated multi-page flows for `Registration`, `Sign In`, `Club Selection`, `Season Setup`, `Player Availability`, and the club `Dashboard`.
 - Club selection shows the selected or primary club first and keeps the rest selectable.
+- The club dashboard is now club-focused and removes the in-page club picker so it reflects the selected club only.
 - Season setup stores fixtures with their own season year so `2026` and `2027` schedules can coexist.
 - Player availability is shown against the selected club's active season fixtures after login.
 - The local UI is designed as the web baseline before a later native iPhone app conversion.
+- The repo now has an Azure VM deployment plan checked in under `.azure/plan.md` and deployment artifacts under `infra/`.
+- Runtime data such as SQLite, uploads, duplicates, and cache files are treated as server data, while JSON snapshots are kept as the recovery source in Git.
 
 ## Run locally
 
