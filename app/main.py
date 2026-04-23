@@ -1,6 +1,7 @@
 import hashlib
 import json
 import html
+import os
 import re
 import secrets
 import sqlite3
@@ -2093,4 +2094,9 @@ def apply_archive(upload_id: str, request: ArchiveApplyRequest, focus_club_id: s
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run("main:app", host="127.0.0.1", port=8091, log_level="info")
+    uvicorn.run(
+        "main:app",
+        host="0.0.0.0",
+        port=int(os.getenv("PORT", os.getenv("WEBSITES_PORT", "8091"))),
+        log_level="info",
+    )

@@ -1,26 +1,24 @@
-# Azure VM Deployment Notes
+# Azure App Service Deployment Notes
 
 This template provisions:
-- Linux VM
-- Standard public IP
-- NSG for SSH/HTTP/HTTPS
-- Managed data disk for SQLite, uploads, and duplicate-review files
-- cloud-init bootstrap to clone and run the app behind Nginx
+- Linux App Service plan
+- Linux Web App
+- App settings for persistent SQLite/uploads/duplicates storage
 
 ## Inputs
 - `location`: `Canada Central`
-- `sshPublicKey`: your SSH public key
-- `allowedSshSource`: your trusted IP/CIDR
-- `repoUrl`: GitHub repo URL for `CricketCanClubsApp`
+- `namePrefix`: resource prefix for the App Service resources
+- `webAppName`: the final App Service name
 
 ## Data Safety
-Runtime files are stored on the attached data disk mounted at `/srv/cricket-data`:
-- `data/`
+Runtime files are stored in App Service persistent storage under `/home/site/heartlake`:
+- `heartlake.db`
+- `store_cache.json`
+- `dashboard_cache.json`
 - `uploads/`
 - `duplicates/`
 
-The bootstrap copies `seed.json` to the runtime data disk on first boot if needed.
-
 ## Notes
-- If the GitHub repo is private, the clone step will need repository access or a deploy key.
-- The VM size defaults to `Standard_B2ms`; increase it if you later move heavier OCR/LLM workloads onto the server.
+- GitHub Actions should deploy on push to `main`.
+- The workflow will use the App Service publish profile secret.
+- If OCR/LLM workloads stay local-only, the App Service stays lightweight for the web app itself.

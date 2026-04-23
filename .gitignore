@@ -10,3 +10,4 @@ app/data/*.db
 app/data/*_cache.json
 app/uploads/
 app/duplicates/
+infra/main.json

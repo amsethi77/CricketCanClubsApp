@@ -18,13 +18,15 @@ import httpx
 
 BASE_DIR = Path(__file__).resolve().parent
 REPO_DIR = BASE_DIR.parent
-DATA_FILE = BASE_DIR / "data" / "seed.json"
-DATABASE_FILE = BASE_DIR / "data" / "heartlake.db"
-CACHE_FILE = BASE_DIR / "data" / "store_cache.json"
-DASHBOARD_CACHE_FILE = BASE_DIR / "data" / "dashboard_cache.json"
-UPLOAD_DIR = BASE_DIR / "uploads"
-DUPLICATE_DIR = BASE_DIR / "duplicates"
+DATA_ROOT = Path(os.getenv("HEARTLAKE_DATA_ROOT", str(BASE_DIR / "data")))
+DATA_FILE = Path(os.getenv("HEARTLAKE_SEED_FILE", str(BASE_DIR / "data" / "seed.json")))
+DATABASE_FILE = Path(os.getenv("HEARTLAKE_DATABASE_FILE", str(DATA_ROOT / "heartlake.db")))
+CACHE_FILE = Path(os.getenv("HEARTLAKE_CACHE_FILE", str(DATA_ROOT / "store_cache.json")))
+DASHBOARD_CACHE_FILE = Path(os.getenv("HEARTLAKE_DASHBOARD_CACHE_FILE", str(DATA_ROOT / "dashboard_cache.json")))
+UPLOAD_DIR = Path(os.getenv("HEARTLAKE_UPLOAD_DIR", str(DATA_ROOT / "uploads")))
+DUPLICATE_DIR = Path(os.getenv("HEARTLAKE_DUPLICATE_DIR", str(DATA_ROOT / "duplicates")))
 VISION_OCR_SCRIPT = REPO_DIR / "tools" / "vision_ocr.swift"
+DATA_ROOT.mkdir(parents=True, exist_ok=True)
 UPLOAD_DIR.mkdir(exist_ok=True)
 DUPLICATE_DIR.mkdir(exist_ok=True)
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".heic", ".heif", ".webp"}
