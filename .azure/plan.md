@@ -1,7 +1,7 @@
 # Azure Deployment Plan - CricketCanClubsApp
 
 ## Status
-Ready for Validation
+Validated
 
 ## Goal
 Deploy the Heartlake / CricketCanClubs club website to Azure App Service with GitHub Actions, while preserving the current FastAPI app, SQLite persistence, static UI, archive uploads, and club-scoped workflows.
@@ -114,3 +114,8 @@ Deploy the Heartlake / CricketCanClubs club website to Azure App Service with Gi
 
 ## Approval Needed
 This plan is ready for review. After approval, proceed to validation and infrastructure generation.
+
+## Validation Proof
+- `python3 -m compileall app` — passed; all Python modules under `app/` compiled successfully.
+- `az bicep build --file infra/main.bicep` — passed; Bicep template compiled successfully.
+- `git diff --check` — passed; no whitespace or patch-format issues in the working tree.

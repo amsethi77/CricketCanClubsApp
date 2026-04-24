@@ -88,7 +88,7 @@ resource webApp 'Microsoft.Web/sites@2023-12-01' = {
       http20Enabled: true
       minTlsVersion: '1.2'
       linuxFxVersion: pythonVersion
-      appCommandLine: 'python -m uvicorn app.main:app --host 0.0.0.0 --port 8000'
+      appCommandLine: 'bash -lc "cd /home/site/wwwroot && python -m pip install --user fastapi==0.114.0 uvicorn==0.24.0 httpx==0.26.0 python-multipart==0.0.9 && python -m uvicorn app.main:app --host 0.0.0.0 --port 8000"'
       appSettings: appSettings
     }
   }

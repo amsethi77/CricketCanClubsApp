@@ -9,6 +9,7 @@ const primaryClubSelect = document.getElementById("profilePrimaryClub");
 const clubSearchInput = document.getElementById("profileClubSearch");
 const clubSelect = document.getElementById("profileClubSelect");
 const clubSwitchButton = document.getElementById("profileClubSwitch");
+const genderSelect = document.getElementById("profileGender");
 
 let payload = null;
 
@@ -31,7 +32,7 @@ function renderMemberships() {
         (club) => `
           <article class="detail-card">
             <strong>${club.club_name}</strong>
-            <p>${(club.teams || []).join(", ") || "No teams listed"}</p>
+            <p>${(club.teams || []).filter((team) => team && team !== club.club_name).join(", ") || "No teams listed"}</p>
           </article>
         `
       )
@@ -58,6 +59,7 @@ function fillForm() {
   title.textContent = `${member.full_name || member.name} profile`;
   summary.textContent = `Selected club: ${payload.club.name}`;
   document.getElementById("profileFullName").value = member.full_name || "";
+  genderSelect.value = member.gender || "";
   document.getElementById("profileAge").value = member.age || "";
   document.getElementById("profilePhone").value = member.phone || "";
   document.getElementById("profileEmail").value = member.email || "";
@@ -65,7 +67,10 @@ function fillForm() {
   document.getElementById("profileBattingStyle").value = member.batting_style || "";
   document.getElementById("profileBowlingStyle").value = member.bowling_style || "";
   document.getElementById("profileAliases").value = (member.aliases || []).join(", ");
-  document.getElementById("profileTeams").value = (member.team_memberships || []).map((item) => item.team_name || item).join(", ");
+  document.getElementById("profileTeams").value = (member.team_memberships || [])
+    .filter((item) => (item.team_type || "") !== "club")
+    .map((item) => item.team_name || item)
+    .join(", ");
   document.getElementById("profileNotes").value = member.notes || "";
   primaryClubSelect.innerHTML = optionMarkup(payload.clubs || [], "id", (club) => club.name);
   primaryClubSelect.value = payload.club.id || payload.user.current_club_id || payload.user.primary_club_id || "";
@@ -85,6 +90,7 @@ form.addEventListener("submit", async (event) => {
       "/api/player/profile",
       {
         full_name: document.getElementById("profileFullName").value.trim(),
+        gender: genderSelect.value,
         age: Number(document.getElementById("profileAge").value || 0),
         phone: document.getElementById("profilePhone").value.trim(),
         email: document.getElementById("profileEmail").value.trim(),

@@ -58,6 +58,21 @@ async function postJson(url, payload, authenticated = false) {
   });
 }
 
+async function putJson(url, payload, authenticated = false) {
+  return apiJson(url, {
+    method: "PUT",
+    headers: authenticated ? authHeaders({ "Content-Type": "application/json" }) : { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+}
+
+async function deleteJson(url, authenticated = false) {
+  return apiJson(url, {
+    method: "DELETE",
+    headers: authenticated ? authHeaders() : undefined,
+  });
+}
+
 async function authMe() {
   return getJson("/api/auth/me", true);
 }
@@ -84,6 +99,31 @@ function optionMarkup(items, valueKey, labelFn) {
     .join("");
 }
 
+async function syncAdminOnlyElements() {
+  const nodes = document.querySelectorAll("[data-admin-only]");
+  if (!nodes.length) {
+    return;
+  }
+  try {
+    const auth = await authMe();
+    const permissions = auth?.user?.permissions || [];
+    const isAdmin = permissions.includes("view_admin") || permissions.includes("manage_club") || permissions.includes("manage_scorecards") || permissions.includes("manage_players");
+    nodes.forEach((node) => {
+      node.hidden = !isAdmin;
+    });
+  } catch {
+    nodes.forEach((node) => {
+      node.hidden = true;
+    });
+  }
+}
+
+if (document.readyState === "loading") {
+  document.addEventListener("DOMContentLoaded", syncAdminOnlyElements);
+} else {
+  syncAdminOnlyElements();
+}
+
 window.HeartlakePages = {
   getAuthToken,
   setAuthToken,
@@ -91,8 +131,11 @@ window.HeartlakePages = {
   setPrimaryClubId,
   getJson,
   postJson,
+  putJson,
+  deleteJson,
   authMe,
   requireAuth,
   signOut,
   optionMarkup,
+  syncAdminOnlyElements,
 };

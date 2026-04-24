@@ -14,11 +14,12 @@ const savedChatHistory = (() => {
 
 const state = {
   dashboard: null,
+  isAdmin: false,
   selectedMatchId: null,
   selectedPlayerName: null,
   selectedTeamName: null,
   selectedFocusClubId: getCookieValue("heartlakePrimaryClubId") || window.localStorage.getItem("heartlakePrimaryClubId") || null,
-  selectedRankingYear: null,
+  selectedSeasonYear: null,
   expandedLists: (() => {
     try {
       return JSON.parse(window.sessionStorage.getItem("heartlakeExpandedLists") || "{}");
@@ -43,6 +44,7 @@ const elements = {
   statusBanner: document.getElementById("statusBanner"),
   seasonLabel: document.getElementById("seasonLabel"),
   nextMatchLabel: document.getElementById("nextMatchLabel"),
+  seasonModeLabel: document.getElementById("seasonModeLabel"),
   llmLabel: document.getElementById("llmLabel"),
   heroEyebrow: document.getElementById("heroEyebrow"),
   focusClubBadge: document.getElementById("focusClubBadge"),
@@ -121,6 +123,7 @@ const elements = {
   scorebookSummary: document.getElementById("scorebookSummary"),
   scorebookRecentBalls: document.getElementById("scorebookRecentBalls"),
   availabilityForm: document.getElementById("availabilityForm"),
+  availabilitySaveButton: document.getElementById("availabilitySaveButton"),
   availabilityPlayerSelect: document.getElementById("availabilityPlayerSelect"),
   availabilityStatusSelect: document.getElementById("availabilityStatusSelect"),
   availabilityNoteInput: document.getElementById("availabilityNoteInput"),
@@ -142,6 +145,7 @@ const elements = {
   playerEditForm: document.getElementById("playerEditForm"),
   editPlayerName: document.getElementById("editPlayerName"),
   editPlayerFullName: document.getElementById("editPlayerFullName"),
+  editPlayerGender: document.getElementById("editPlayerGender"),
   editPlayerAliases: document.getElementById("editPlayerAliases"),
   editPlayerTeamName: document.getElementById("editPlayerTeamName"),
   editPlayerTeamMemberships: document.getElementById("editPlayerTeamMemberships"),
@@ -205,15 +209,19 @@ const elements = {
 window.sessionStorage.setItem("heartlakeChatSessionId", state.chatSessionId);
 
 async function getJson(url) {
-  const response = await fetch(url);
+  const token = window.localStorage.getItem("heartlakeAuthToken") || getCookieValue("heartlakeAuthToken") || "";
+  const response = await fetch(url, {
+    headers: token ? { "X-Auth-Token": token } : undefined,
+  });
   if (!response.ok) throw new Error("Request failed");
   return response.json();
 }
 
 async function postJson(url, payload) {
+  const token = window.localStorage.getItem("heartlakeAuthToken") || getCookieValue("heartlakeAuthToken") || "";
   const response = await fetch(url, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: token ? { "Content-Type": "application/json", "X-Auth-Token": token } : { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   });
   if (!response.ok) {
@@ -278,11 +286,11 @@ function renderLimitedCollection(items, { key, renderItem, emptyMessage, limit =
 }
 
 function statsByPlayer() {
-  return Object.fromEntries((state.dashboard?.player_stats || []).map((item) => [item.player_name, item]));
+  return Object.fromEntries((state.dashboard?.all_player_stats || state.dashboard?.player_stats || []).map((item) => [item.player_name, item]));
 }
 
 function combinedStatsByPlayer() {
-  return Object.fromEntries((state.dashboard?.combined_player_stats || []).map((item) => [item.player_name, item]));
+  return Object.fromEntries((state.dashboard?.all_combined_player_stats || state.dashboard?.combined_player_stats || []).map((item) => [item.player_name, item]));
 }
 
 function displayPlayerName(member) {
@@ -364,7 +372,8 @@ function currentMatch() {
 }
 
 function currentPlayer() {
-  return state.dashboard.members.find((member) => member.name === state.selectedPlayerName) || state.dashboard.members[0] || null;
+  const members = state.dashboard.all_members || state.dashboard.members || [];
+  return members.find((member) => member.name === state.selectedPlayerName) || members[0] || null;
 }
 
 function currentTeam() {
@@ -451,7 +460,7 @@ function populateMatchSelects(fixtures) {
   elements.activeMatchSelect.disabled = !fixtures.length;
 }
 
-function populatePlayerSelects(members) {
+function populatePlayerSelects(members, allMembers = members) {
   const options = members
     .map((member) => {
       const aliasText = (member.aliases || []).length ? ` · ${(member.aliases || []).join(", ")}` : "";
@@ -460,13 +469,13 @@ function populatePlayerSelects(members) {
     .join("");
   elements.availabilityPlayerSelect.innerHTML = options;
   elements.performancePlayerSelect.innerHTML = options;
-  elements.playerProfileSelect.innerHTML = members
+  elements.playerProfileSelect.innerHTML = allMembers
     .map((member) => {
       const label = member.full_name ? `${member.name} (${member.full_name})` : member.name;
       return `<option value="${member.name}">${label}</option>`;
     })
     .join("");
-  elements.playerProfileSelect.value = state.selectedPlayerName;
+  elements.playerProfileSelect.value = state.selectedPlayerName || allMembers[0]?.name || members[0]?.name || "";
 }
 
 function populateTeamSelect(teams) {
@@ -487,6 +496,9 @@ function syncPlayerEditForm(player) {
   }
   elements.editPlayerName.value = player.name || "";
   elements.editPlayerFullName.value = player.full_name || "";
+  if (elements.editPlayerGender) {
+    elements.editPlayerGender.value = player.gender || "";
+  }
   elements.editPlayerAliases.value = (player.aliases || []).join(", ");
   elements.editPlayerTeamName.value = player.team_name || "Heartlake";
   elements.editPlayerTeamMemberships.value = (player.team_memberships || [])
@@ -507,6 +519,7 @@ function syncPlayerEditForm(player) {
 function playerMembershipSummary(player) {
   const teamNames = [...new Set(
     (player.team_memberships || [])
+      .filter((membership) => typeof membership !== "object" || (membership.team_type || "") !== "club")
       .map((membership) => (typeof membership === "string" ? membership : membership.team_name || membership.display_name || ""))
       .filter(Boolean)
   )];
@@ -551,6 +564,20 @@ function archiveVariantLabel(upload) {
     return "";
   }
   return `${count} sibling file variant${count === 1 ? "" : "s"} folded into this scorecard family`;
+}
+
+function archiveReviewStatus(item) {
+  const status = String(item?.status || "").trim().toLowerCase();
+  if (status.includes("approved") || status.includes("applied")) {
+    return "Approved";
+  }
+  if (status.includes("pending")) {
+    return "Pending review";
+  }
+  if (status.includes("review")) {
+    return "Pending review";
+  }
+  return item?.status || "Pending review";
 }
 
 function archiveFiltersActive() {
@@ -731,7 +758,7 @@ function renderFollowedPlayers(items) {
     renderItem: (item) => `
       <article class="detail-card clickable-card" data-player="${item.player_name}">
         <strong>${item.full_name || item.player_name}</strong>
-        <p>${item.team_name || "No primary team"} · ${item.matches || 0} matches</p>
+        <p>${item.matches || 0} matches</p>
         <small>${item.runs || 0} runs · ${item.wickets || 0} wickets · ${item.catches || 0} catches</small>
       </article>
     `,
@@ -766,7 +793,7 @@ function renderClubSearchResults() {
 function renderLandingPlayerResults() {
   const query = elements.landingPlayerSearchInput.value.trim().toLowerCase();
   const statMap = combinedStatsByPlayer();
-  const members = state.dashboard?.members || [];
+  const members = state.dashboard?.all_members || state.dashboard?.members || [];
   const filtered = !query
     ? []
     : members.filter((member) => {
@@ -782,7 +809,7 @@ function renderLandingPlayerResults() {
           return `
             <article class="detail-card">
               <strong>${displayPlayerName(member)}</strong>
-              <p>${member.team_name || "No primary team"} · ${stats.matches || 0} matches</p>
+              <p>${stats.matches || 0} matches</p>
               <small>${stats.runs || 0} runs · ${stats.wickets || 0} wickets · ${stats.catches || 0} catches</small>
               <div class="inline-actions">
                 <button class="secondary-button" type="button" data-player-jump="${member.name}">Open profile</button>
@@ -1027,7 +1054,7 @@ function renderMembers(members) {
           ${avatar}
           <div>
             <h3>${displayName}</h3>
-            <p>${member.team_name || "Heartlake"} · ${member.role} · Age ${member.age || "TBD"} · Jersey ${member.jersey_number || "--"}</p>
+            <p>${member.role} · Age ${member.age || "TBD"} · Jersey ${member.jersey_number || "--"}</p>
             <p>${member.batting_style || "Batting style TBD"} / ${member.bowling_style || "Bowling style TBD"}</p>
             <p class="member-stats">${storedRuns} stored runs · ${stats.wickets} wickets · ${stats.matches} applied matches</p>
             <small>${pending.runs ? `${stats.runs} confirmed + ${pending.runs} reviewed historical archive runs` : `${stats.runs} confirmed runs`}</small>
@@ -1071,8 +1098,16 @@ function renderVisitingTeams(teams) {
 }
 
 function renderAvailabilityMatrix(board, fixtures) {
-  const head = fixtures.map((match) => `<th>${match.date_label}</th>`).join("");
-  const rows = board
+  const activeClubId = state.selectedFocusClubId || state.dashboard?.focus_club?.id || state.dashboard?.club?.id || "";
+  const scopedFixtures = activeClubId ? fixtures.filter((match) => (match.club_id || "") === activeClubId) : fixtures;
+  const scopedBoard = board?.map((row) => ({
+    ...row,
+    by_match: activeClubId
+      ? row.by_match.filter((item) => scopedFixtures.some((match) => match.id === item.match_id))
+      : row.by_match,
+  }));
+  const head = scopedFixtures.map((match) => `<th>${match.date_label}</th>`).join("");
+  const rows = scopedBoard
     .map((row) => {
       const cells = row.by_match.map((item) => `<td>${statusBadge(item.status)}</td>`).join("");
       return `<tr><th>${row.player_name}</th>${cells}</tr>`;
@@ -1094,15 +1129,15 @@ function formatMetric(value, decimals = 2) {
 }
 
 function populateRankingYearSelect(dashboard) {
-  const years = dashboard.ranking_years || [];
-  const defaultYear = dashboard.default_ranking_year || years[years.length - 1] || "";
-  if (!state.selectedRankingYear || !years.includes(state.selectedRankingYear)) {
-    state.selectedRankingYear = defaultYear;
+  const years = dashboard.season_years || dashboard.ranking_years || [];
+  const defaultYear = dashboard.selected_season_year || dashboard.default_season_year || dashboard.default_ranking_year || years[0] || "";
+  if (!state.selectedSeasonYear || !years.includes(state.selectedSeasonYear)) {
+    state.selectedSeasonYear = defaultYear;
   }
   elements.rankingYearSelect.innerHTML = years
     .map((year) => `<option value="${year}">${year}</option>`)
     .join("");
-  elements.rankingYearSelect.value = state.selectedRankingYear || "";
+  elements.rankingYearSelect.value = state.selectedSeasonYear || "";
 }
 
 function renderRankingSection(title, rows, renderer, emptyMessage) {
@@ -1126,22 +1161,19 @@ function renderRankingSection(title, rows, renderer, emptyMessage) {
 }
 
 function renderLeaderboard() {
-  const selectedYear = state.selectedRankingYear || state.dashboard.default_ranking_year || "";
-  const yearBundle = (state.dashboard.rankings_by_year || {})[selectedYear] || {};
-  const battingRows = yearBundle.batting_rankings || state.dashboard.batting_rankings || [];
-  const bowlingRows = yearBundle.bowling_rankings || state.dashboard.bowling_rankings || [];
-  const fieldingRows = yearBundle.fielding_rankings || state.dashboard.fielding_rankings || [];
+  const selectedYear = state.selectedSeasonYear || state.dashboard.selected_season_year || state.dashboard.default_season_year || "";
+  const battingRows = state.dashboard.batting_rankings || [];
+  const bowlingRows = state.dashboard.bowling_rankings || [];
+  const fieldingRows = state.dashboard.fielding_rankings || [];
 
   const battingSection = renderRankingSection(
     selectedYear ? `Batting Rankings · ${selectedYear}` : "Batting Rankings",
     battingRows,
     (item) => {
-      const member = state.dashboard.members.find((player) => player.name === item.player_name);
-      const teamName = member?.team_name || "Heartlake";
       return `
         <article class="leader-card clickable-card" data-player="${item.player_name}">
           <strong>#${item.rank} ${item.player_name}</strong>
-          <p>${teamName} · ${item.matches} stored matches · ${item.runs} stored runs</p>
+          <p>${item.matches} stored matches · ${item.runs} stored runs</p>
           <p>${item.runs} stored runs · Avg ${formatMetric(item.batting_average)} · SR ${formatMetric(item.strike_rate)}</p>
           <small>${item.balls ? `${item.runs} off ${item.balls} balls` : "Strike rate waiting for ball data"}</small>
         </article>
@@ -1181,13 +1213,52 @@ function renderLeaderboard() {
   elements.playerLeaderboard.innerHTML = `${battingSection}${bowlingSection}${fieldingSection}`;
 }
 
+function currentViewerProfilePayload(selectedSeasonYear = state.selectedSeasonYear || "") {
+  return {
+    display_name: elements.viewerDisplayNameInput.value.trim() || state.dashboard?.viewer_profile?.display_name || "",
+    mobile: elements.viewerMobileInput.value.trim() || state.dashboard?.viewer_profile?.mobile || "",
+    email: elements.viewerEmailInput.value.trim() || state.dashboard?.viewer_profile?.email || "",
+    primary_club_id: elements.primaryClubSelect.value || state.dashboard?.viewer_profile?.primary_club_id || "",
+    selected_season_year: selectedSeasonYear || state.dashboard?.selected_season_year || "",
+  };
+}
+
+function setLiveSeasonMode(isLiveSeason, selectedYear) {
+  const lockedMessage = `Viewing ${selectedYear} season. Live scheduling, scoring, availability, and commentary are disabled for historical seasons.`;
+  const activeMessage = `Viewing ${selectedYear} season. Live scheduling, scoring, availability, and commentary are enabled.`;
+  if (elements.seasonModeLabel) {
+    elements.seasonModeLabel.textContent = isLiveSeason ? "Live operations enabled" : "Historical season view";
+  }
+  document.querySelectorAll("[data-live-only]").forEach((section) => {
+    section.classList.toggle("live-locked", !isLiveSeason);
+    section.dataset.liveMode = isLiveSeason ? "live" : "historical";
+    const controls = section.querySelectorAll("input, select, textarea, button");
+    controls.forEach((control) => {
+      if (isLiveSeason) {
+        control.disabled = false;
+      } else if (!control.closest(".archive-toolbar") && !control.closest(".archive-list") && !control.closest(".archive-scorecards")) {
+        control.disabled = true;
+      }
+    });
+    let note = section.querySelector(".mode-note");
+    if (!note) {
+      note = document.createElement("p");
+      note.className = "mode-note";
+      section.querySelector(".panel-head")?.insertAdjacentElement("afterend", note);
+    }
+    note.textContent = isLiveSeason ? activeMessage : lockedMessage;
+  });
+}
+
 function getPlayerAvailabilitySummary(playerName) {
   return state.dashboard.availability_board.find((row) => row.player_name === playerName);
 }
 
 function getPlayerSeasonProfile(playerName) {
-  const player = state.dashboard.members.find((member) => member.name === playerName);
-  const combinedRecord = state.dashboard.combined_player_stats.find((item) => item.player_name === playerName) || {
+  const members = state.dashboard.all_members || state.dashboard.members || [];
+  const player = members.find((member) => member.name === playerName);
+  const combinedRecords = state.dashboard.combined_player_stats || state.dashboard.all_combined_player_stats || [];
+  const combinedRecord = combinedRecords.find((item) => item.player_name === playerName) || {
     batting_average: 0,
     strike_rate: 0,
     batting_innings: 0,
@@ -1195,7 +1266,8 @@ function getPlayerSeasonProfile(playerName) {
   };
   const availability = getPlayerAvailabilitySummary(playerName);
   const membershipSummary = playerMembershipSummary(player || {});
-  const pending = state.dashboard.player_pending_stats.find((item) => item.player_name === playerName) || {
+  const pendingRecords = state.dashboard.player_pending_stats || state.dashboard.all_player_pending_stats || [];
+  const pending = pendingRecords.find((item) => item.player_name === playerName) || {
     player_name: playerName,
     runs: 0,
     wickets: 0,
@@ -1211,7 +1283,8 @@ function getPlayerSeasonProfile(playerName) {
   let fours = 0;
   let sixes = 0;
 
-  state.dashboard.fixtures.forEach((match) => {
+  const fixtures = state.dashboard.fixtures || state.dashboard.all_fixtures || [];
+  fixtures.forEach((match) => {
     const entries = (match.performances || []).filter((item) => item.player_name === playerName);
     if (!entries.length) {
       return;
@@ -1236,6 +1309,7 @@ function getPlayerSeasonProfile(playerName) {
     sixes += totals.sixes;
     appearances.push({
       matchId: match.id,
+      clubName: match.club_name || match.details?.club_name || state.dashboard.focus_club?.name || state.dashboard.club?.name || "Club",
       dateLabel: match.date_label,
       opponent: match.opponent,
       status: match.status,
@@ -1319,7 +1393,7 @@ function renderPlayerProfile() {
         <div class="avatar-fallback profile-avatar">${player.picture}</div>
         <div>
           <h3>${displayName}</h3>
-          <p>${player.team_name || "Heartlake"} · ${player.role} · Age ${player.age || "TBD"}</p>
+          <p>${player.gender || "Gender TBD"} · ${player.role} · Age ${player.age || "TBD"}</p>
           <p>${player.batting_style || "Batting style TBD"} / ${player.bowling_style || "Bowling style TBD"}</p>
           <small>Clubs: ${clubsLabel}</small>
           <small>Teams: ${teamsLabel}</small>
@@ -1374,7 +1448,7 @@ function renderPlayerProfile() {
     renderItem: (item) => `
       <article class="history-card">
         <div>
-          <strong>${item.dateLabel} vs ${item.opponent}</strong>
+          <strong>${item.clubName} · ${item.dateLabel} vs ${item.opponent}</strong>
           <p>${item.runs} runs off ${item.balls} · ${item.wickets} wickets · ${item.catches} catches</p>
           <small>${item.result}</small>
         </div>
@@ -1397,10 +1471,8 @@ function renderArchive(uploads) {
       <article class="archive-card">
         <div>
           <strong>${item.file_name}</strong>
-          <p>${item.extracted_summary}</p>
-          <small>${item.status} · ${item.confidence || "Review"} · ${item.season || ARCHIVE_SEASON_LABEL} · ${item.created_at}</small>
-          <small>Archive date: ${archiveDateLabel(item) || "Unknown"} · Source: ${item.archive_date_source || "pending"}</small>
-          ${archiveVariantLabel(item) ? `<small>${archiveVariantLabel(item)}</small>` : ""}
+          <p>Status: ${archiveReviewStatus(item)}</p>
+          <small>${item.season || ARCHIVE_SEASON_LABEL} · ${item.created_at}</small>
         </div>
         ${item.preview_url ? `<a class="inline-link" href="${item.preview_url}" target="_blank" rel="noreferrer">Open image</a>` : ""}
       </article>
@@ -1520,82 +1592,20 @@ function renderArchiveScorecards(uploads) {
     key: `archive-scorecards-${elements.archiveSearchInput.value.trim()}-${elements.archiveDateInput.value}-${elements.archiveYearSelect.value}`,
     emptyMessage: `<p class="empty-state">${uploads.length ? "No extracted scorecards match the current archive filters." : "No extracted scorecards are available yet."}</p>`,
     renderItem: (item) => {
-          const draft = item.draft_scorecard || {};
-          const reviewJson = JSON.stringify(archiveReviewPayload(item), null, 2);
-          const isImported = item.ocr_engine === "manual-import";
-          const isApplied = item.status === "Applied to match";
-          const linkedMatch = state.dashboard.fixtures.find((match) => match.id === item.match_id);
-          const matchLabel = linkedMatch ? `${linkedMatch.date_label} vs ${linkedMatch.opponent}` : item.file_name;
-          const playerLines = (item.suggested_performances || []).length
-            ? `
-              <div class="scorecard-player-list">
-                ${(item.suggested_performances || [])
-                  .slice(0, 6)
-                  .map(
-                    (entry) => `
-                      <div class="scorecard-player-line">
-                        <span>${entry.player_name}</span>
-                        <strong>${entry.runs || 0}</strong>
-                        <small>${entry.balls ? `${entry.balls} balls` : entry.confidence || "OCR"}</small>
-                      </div>
-                    `
-                  )
-                  .join("")}
-              </div>
-            `
-            : `<p class="empty-state">No player-level OCR suggestions were detected for this image yet.</p>`;
           return `
             <article class="scorecard-card">
               <div class="scorecard-head">
                 <div>
-                  <strong>${matchLabel}</strong>
+                  <strong>${item.file_name}</strong>
                   <p>${item.file_name} · ${item.season || ARCHIVE_SEASON_LABEL}</p>
-                  <small>Archive date: ${archiveDateLabel(item) || "Unknown"} · Source: ${item.archive_date_source || "pending"}</small>
-                  ${archiveVariantLabel(item) ? `<small>${archiveVariantLabel(item)}</small>` : ""}
+                  <small>Archive date: ${archiveDateLabel(item) || "Unknown"}</small>
                 </div>
-                <div class="archive-actions">
-                  <button class="secondary-button archive-load-button" type="button" data-archive-extract="${item.id}">Extract this scorecard</button>
-                  <button class="secondary-button archive-load-button" type="button" data-archive-load="${item.id}">Use extracted scorecard</button>
-                  <button class="secondary-button archive-load-button" type="button" data-archive-review-json="${item.id}">Load review JSON</button>
-                </div>
+                <span class="status-pill ${archiveReviewStatus(item) === "Approved" ? "yes" : "maybe"}">${archiveReviewStatus(item)}</span>
               </div>
-              <div class="scorecard-board">
-                <div class="score-line">
-                  <span>${focusClubShortName()}</span>
-                  <strong>${draft.heartlake_runs || "--"}/${draft.heartlake_wickets || "--"}</strong>
-                  <small>${draft.heartlake_overs || "--"} overs</small>
-                </div>
-                <div class="score-line">
-                  <span>Opponent</span>
-                  <strong>${draft.opponent_runs || "--"}/${draft.opponent_wickets || "--"}</strong>
-                  <small>${draft.opponent_overs || "--"} overs</small>
-                </div>
-              </div>
-              <p class="scorecard-result">${draft.result || "Pending review"}</p>
+              <p class="scorecard-result">${archiveReviewStatus(item) === "Approved" ? "Stored in the database" : "Waiting for admin review"}</p>
               <div class="scorecard-notes">
-                <small>${item.status} · ${item.confidence || "Review"} · ${item.created_at}</small>
-                <p>${item.extracted_summary}</p>
-                ${item.ocr_pipeline ? `<small>${item.ocr_pipeline}</small>` : ""}
+                <small>${item.created_at}</small>
               </div>
-              ${
-                isImported || isApplied
-                  ? `<div class="persisted-note">This reviewed scorecard is persisted in the database${isApplied ? " and has been applied to a match" : ""}.</div>`
-                  : `<div class="persisted-note warning-note">This is still a draft. Review before applying.</div>`
-              }
-              <div class="review-block">
-                <h4>Review Table</h4>
-                ${archiveReviewTable(item)}
-              </div>
-              <details class="ocr-details">
-                <summary>Show review JSON</summary>
-                <pre>${reviewJson}</pre>
-              </details>
-              ${
-                item.raw_extracted_text
-                  ? `<details class="ocr-details"><summary>${isImported ? "Show imported source JSON" : "Show raw OCR text (noisy source text)"}</summary><pre>${item.raw_extracted_text}</pre></details>`
-                  : `<p class="empty-state">This scorecard has not been extracted yet. Use "Extract this scorecard" to process it.</p>`
-              }
-              ${playerLines}
             </article>
           `;
         },
@@ -1625,9 +1635,23 @@ function renderTeamPage() {
   if (!team) {
     return;
   }
-  const roster = state.dashboard.members.filter((member) => (member.team_name || "Heartlake") === team.name);
-  const rosterNames = new Set(roster.map((member) => member.name));
-  const scoreRows = state.dashboard.player_stats.filter((item) => rosterNames.has(item.player_name));
+  const clubName = focusClubName();
+  const clubRankingBundle = state.dashboard.club_rankings?.[clubName] || {};
+  const rosterRows = clubRankingBundle.player_stats || [];
+  const playerMap = new Map((state.dashboard.all_members || state.dashboard.members || []).map((member) => [member.name, member]));
+  const roster = rosterRows.map((item) => playerMap.get(item.player_name) || {
+    name: item.player_name,
+    full_name: "",
+    picture: item.player_name ? item.player_name.slice(0, 2).toUpperCase() : "PL",
+    role: "Player",
+    age: "",
+    jersey_number: "",
+    batting_style: "",
+    bowling_style: "",
+    notes: "",
+    team_name: clubName,
+  });
+  const scoreRows = rosterRows;
   const pendingMap = Object.fromEntries((state.dashboard.player_pending_stats || []).map((item) => [item.player_name, item]));
   const fixtureInfo = state.dashboard.visiting_teams.find((item) => item.name === team.name);
 
@@ -1656,7 +1680,7 @@ function renderTeamPage() {
               ${member.picture_url ? `<img class="avatar-image" src="${member.picture_url}" alt="${member.name}" />` : `<div class="avatar-fallback">${member.picture}</div>`}
               <div>
                 <h3>${displayName}</h3>
-                <p>${member.role} · Age ${member.age || "TBD"} · ${member.team_name || "Heartlake"}</p>
+                <p>${member.role} · Age ${member.age || "TBD"}</p>
                 <p class="member-stats">${storedRuns} stored runs · ${stats.wickets} wickets · ${stats.matches} applied matches</p>
                 <small>${pending.runs ? `${stats.runs} confirmed + ${pending.runs} reviewed historical archive runs` : `${stats.runs} confirmed runs`}</small>
                 <small>${member.notes || "No profile notes yet."}</small>
@@ -1711,11 +1735,24 @@ function updateWhatsappLink(match) {
 
 function renderDashboard(dashboard) {
   state.dashboard = dashboard;
+  const permissions = dashboard.user?.permissions || [];
+  state.isAdmin = permissions.includes("view_admin") || permissions.includes("manage_club") || permissions.includes("manage_scorecards") || permissions.includes("manage_players");
+  if (elements.uploadForm) elements.uploadForm.hidden = true;
+  if (elements.resetScoresButton) elements.resetScoresButton.hidden = true;
+  if (elements.archiveImportForm) elements.archiveImportForm.hidden = true;
+  if (elements.archiveApplyForm) elements.archiveApplyForm.hidden = true;
   state.selectedFocusClubId = dashboard.focus_club?.id || dashboard.viewer_profile?.primary_club_id || state.selectedFocusClubId;
   if (state.selectedFocusClubId) {
     window.localStorage.setItem("heartlakePrimaryClubId", state.selectedFocusClubId);
     document.cookie = `heartlakePrimaryClubId=${encodeURIComponent(state.selectedFocusClubId)}; path=/; samesite=lax`;
   }
+  state.selectedSeasonYear = dashboard.selected_season_year || dashboard.default_season_year || state.selectedSeasonYear;
+  if (state.selectedSeasonYear) {
+    window.localStorage.setItem("heartlakeSelectedSeasonYear", state.selectedSeasonYear);
+    document.cookie = `heartlakeSelectedSeasonYear=${encodeURIComponent(state.selectedSeasonYear)}; path=/; samesite=lax`;
+  }
+  const currentYear = String(new Date().getFullYear());
+  setLiveSeasonMode(String(state.selectedSeasonYear || "").trim() === currentYear, state.selectedSeasonYear || currentYear);
   if (!state.selectedMatchId || !dashboard.fixtures.some((match) => match.id === state.selectedMatchId)) {
     state.selectedMatchId = dashboard.upcoming_match.id;
   }
@@ -1735,7 +1772,7 @@ function renderDashboard(dashboard) {
   elements.uploadSeason.value = elements.uploadSeason.value || ARCHIVE_SEASON_LABEL;
   renderViewerProfile(dashboard);
   populateMatchSelects(dashboard.fixtures);
-  populatePlayerSelects(dashboard.members);
+  populatePlayerSelects(dashboard.members, dashboard.all_members || dashboard.members || []);
   populateTeamSelect(dashboard.teams || []);
   populateArchiveSelect(dashboard.archive_uploads);
   populateArchiveYearSelect(dashboard.archive_uploads);
@@ -1784,9 +1821,15 @@ elements.teamProfileSelect.addEventListener("change", () => {
   renderDashboard(state.dashboard);
 });
 
-elements.rankingYearSelect.addEventListener("change", () => {
-  state.selectedRankingYear = elements.rankingYearSelect.value;
-  renderLeaderboard();
+elements.rankingYearSelect.addEventListener("change", async () => {
+  state.selectedSeasonYear = elements.rankingYearSelect.value;
+  const dashboard = await runAction(
+    () => postJson("/api/viewer-profile", currentViewerProfilePayload(state.selectedSeasonYear)),
+    "Season updated."
+  );
+  if (dashboard) {
+    renderDashboard(dashboard);
+  }
 });
 
 elements.playerSearchInput.addEventListener("input", () => {
@@ -1808,12 +1851,7 @@ elements.playerSearchInput.addEventListener("input", () => {
 
 elements.viewerProfileForm.addEventListener("submit", async (event) => {
   event.preventDefault();
-  const payload = {
-    display_name: elements.viewerDisplayNameInput.value.trim(),
-    mobile: elements.viewerMobileInput.value.trim(),
-    email: elements.viewerEmailInput.value.trim(),
-    primary_club_id: elements.primaryClubSelect.value,
-  };
+  const payload = currentViewerProfilePayload(state.selectedSeasonYear);
   const dashboard = await runAction(
     () => postJson("/api/viewer-profile", payload),
     "Primary club and local profile saved."
@@ -1824,12 +1862,7 @@ elements.viewerProfileForm.addEventListener("submit", async (event) => {
 });
 
 elements.primaryClubSelect.addEventListener("change", async () => {
-  const payload = {
-    display_name: elements.viewerDisplayNameInput.value.trim(),
-    mobile: elements.viewerMobileInput.value.trim(),
-    email: elements.viewerEmailInput.value.trim(),
-    primary_club_id: elements.primaryClubSelect.value,
-  };
+  const payload = currentViewerProfilePayload(state.selectedSeasonYear);
   const dashboard = await runAction(
     () => postJson("/api/viewer-profile", payload),
     "Primary club updated."
@@ -1950,12 +1983,12 @@ elements.scorebookBallForm.addEventListener("submit", async (event) => {
   }
 });
 
-elements.availabilityForm.addEventListener("submit", async (event) => {
-  event.preventDefault();
+async function saveDashboardAvailability() {
   const payload = {
     player_name: elements.availabilityPlayerSelect.value,
     status: elements.availabilityStatusSelect.value,
     note: elements.availabilityNoteInput.value,
+    club_id: state.selectedFocusClubId || currentMatch().club_id || "",
   };
   const dashboard = await runAction(
     () => postJson(`/api/matches/${state.selectedMatchId}/availability`, payload),
@@ -1965,7 +1998,26 @@ elements.availabilityForm.addEventListener("submit", async (event) => {
     renderDashboard(dashboard);
     elements.availabilityNoteInput.value = "";
   }
+}
+
+window.HeartlakeDashboard = {
+  saveDashboardAvailability,
+};
+
+elements.availabilityForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  await saveDashboardAvailability();
 });
+
+async function autoSaveDashboardAvailability() {
+  if (!elements.availabilityPlayerSelect.value || !elements.availabilityStatusSelect.value) {
+    return;
+  }
+  await saveDashboardAvailability();
+}
+
+elements.availabilityStatusSelect.addEventListener("change", autoSaveDashboardAvailability);
+elements.availabilityPlayerSelect.addEventListener("change", autoSaveDashboardAvailability);
 
 elements.performanceForm.addEventListener("submit", async (event) => {
   event.preventDefault();
@@ -2028,6 +2080,7 @@ elements.playerEditForm.addEventListener("submit", async (event) => {
   const payload = {
     name: elements.editPlayerName.value.trim(),
     full_name: elements.editPlayerFullName.value.trim(),
+    gender: elements.editPlayerGender ? elements.editPlayerGender.value : "",
     aliases: elements.editPlayerAliases.value,
     team_name: elements.editPlayerTeamName.value,
     team_memberships: elements.editPlayerTeamMemberships.value,

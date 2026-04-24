@@ -1,0 +1,15 @@
+{
+  "name": "cricketcanclubs-app",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "build:css": "tailwindcss -i ./app/static/tailwind-source.css -o ./app/static/tailwind.css --minify",
+    "watch:css": "tailwindcss -i ./app/static/tailwind-source.css -o ./app/static/tailwind.css --watch"
+  },
+  "devDependencies": {
+    "autoprefixer": "^10.4.20",
+    "postcss": "^8.4.49",
+    "tailwindcss": "^3.4.17"
+  }
+}

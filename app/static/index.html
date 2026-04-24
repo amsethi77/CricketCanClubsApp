@@ -11,7 +11,8 @@
       href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800&family=Fraunces:opsz,wght@9..144,500;9..144,700&display=swap"
       rel="stylesheet"
     />
-    <link rel="stylesheet" href="/assets/styles.css?v=20260422q" />
+    <link rel="stylesheet" href="/assets/styles.css?v=20260423b" />
+    <link rel="stylesheet" href="/assets/tailwind.css?v=20260423c" />
   </head>
   <body>
     <div class="page-shell">
@@ -22,6 +23,7 @@
           <a href="/season-setup">Season setup</a>
           <a href="/player-availability">Availability</a>
           <a href="/player-profile">Profile</a>
+          <a href="/admin-center" data-admin-only hidden>Admin center</a>
         </nav>
         <div class="topbar-actions">
           <a class="secondary-button" href="/signout">Sign out</a>
@@ -44,10 +46,15 @@
           <div class="mini-stat">
             <span>Season</span>
             <strong id="seasonLabel">Loading...</strong>
+            <select id="rankingYearSelect" class="season-select"></select>
           </div>
           <div class="mini-stat">
             <span>Next Match</span>
             <strong id="nextMatchLabel">Loading...</strong>
+          </div>
+          <div class="mini-stat">
+            <span>Season Mode</span>
+            <strong id="seasonModeLabel">Loading...</strong>
           </div>
           <div class="mini-stat">
             <span>AI Mode</span>
@@ -169,7 +176,7 @@
           </div>
         </section>
 
-        <section id="setup" class="panel setup-panel">
+        <section id="setup" class="panel setup-panel" data-live-only>
           <div class="panel-head">
             <div>
               <p class="section-kicker">Setup</p>
@@ -198,7 +205,7 @@
           </form>
         </section>
 
-        <section id="scoring" class="panel scoring-panel">
+        <section id="scoring" class="panel scoring-panel" data-live-only>
           <div class="panel-head">
             <div>
               <p class="section-kicker">Scoring</p>
@@ -291,7 +298,7 @@
           </div>
         </section>
 
-        <section id="availability" class="panel availability-panel">
+        <section id="availability" class="panel availability-panel" data-live-only>
           <div class="panel-head">
             <div>
               <p class="section-kicker">Availability</p>
@@ -306,19 +313,18 @@
               <option value="unavailable">Unavailable</option>
             </select>
             <input id="availabilityNoteInput" type="text" placeholder="Note e.g. bringing guests" />
-            <button class="secondary-button" type="submit">Update availability</button>
+            <button id="availabilitySaveButton" class="secondary-button" type="submit">
+              Update availability
+            </button>
           </form>
           <div id="availabilityMatrix" class="matrix-wrap"></div>
         </section>
 
-        <section id="performance" class="panel performance-panel">
+        <section id="performance" class="panel performance-panel" data-live-only>
           <div class="panel-head">
             <div>
               <p class="section-kicker">Performance</p>
               <h2>Player scores and wickets</h2>
-            </div>
-            <div class="toolbar-actions">
-              <select id="rankingYearSelect"></select>
             </div>
           </div>
           <form id="performanceForm" class="form-grid">
@@ -350,6 +356,11 @@
           <form id="playerEditForm" class="form-grid">
             <input id="editPlayerName" name="name" type="text" placeholder="Player name" />
             <input id="editPlayerFullName" name="full_name" type="text" placeholder="Full name" />
+            <select id="editPlayerGender" name="gender">
+              <option value="">Gender</option>
+              <option value="Male">Male</option>
+              <option value="Female">Female</option>
+            </select>
             <input id="editPlayerAliases" name="aliases" type="text" placeholder="Aliases, comma separated" />
             <select id="editPlayerTeamName" name="team_name"></select>
             <input id="editPlayerTeamMemberships" name="team_memberships" type="text" class="wide" placeholder="All team memberships, comma separated" />
@@ -398,7 +409,7 @@
           </div>
         </section>
 
-        <section id="commentary" class="panel commentary-panel">
+        <section id="commentary" class="panel commentary-panel" data-live-only>
           <div class="panel-head">
             <div>
               <p class="section-kicker">Commentary</p>
@@ -430,6 +441,11 @@
           <form id="memberForm" class="form-grid">
             <input name="name" type="text" placeholder="Player name" required />
             <input name="full_name" type="text" placeholder="Full name" />
+            <select name="gender">
+              <option value="">Gender</option>
+              <option value="Male">Male</option>
+              <option value="Female">Female</option>
+            </select>
             <input name="aliases" type="text" placeholder="Aliases, comma separated" />
             <select name="team_name" id="memberTeamSelect"></select>
             <input name="team_memberships" id="memberTeamMemberships" type="text" class="wide" placeholder="All team memberships, comma separated" />
@@ -463,9 +479,9 @@
               <p class="section-kicker">Archive</p>
               <h2>Upload scorecard image and recover online score</h2>
             </div>
-            <button id="resetScoresButton" class="secondary-button" type="button">Reset score data</button>
+            <button id="resetScoresButton" class="secondary-button" type="button" data-admin-only hidden>Reset score data</button>
           </div>
-          <form id="uploadForm" class="form-grid">
+          <form id="uploadForm" class="form-grid" data-admin-only hidden>
             <input id="uploadSeason" type="text" placeholder="Season label" />
             <input id="uploadFile" type="file" accept="image/*" required />
             <button class="primary-button" type="submit">Upload scorecard image</button>
@@ -479,7 +495,7 @@
             <button id="archiveClearFilters" class="secondary-button" type="button">Clear archive filters</button>
           </div>
           <div id="archiveSearchSummary" class="archive-search-summary"></div>
-          <form id="archiveImportForm" class="form-grid">
+          <form id="archiveImportForm" class="form-grid" data-admin-only hidden>
             <select id="archiveImportSelect"></select>
             <textarea
               id="archiveImportText"
@@ -498,7 +514,7 @@
             <h3>Extracted scorecards</h3>
             <div id="archiveScorecards" class="archive-scorecards"></div>
           </div>
-          <form id="archiveApplyForm" class="form-grid">
+          <form id="archiveApplyForm" class="form-grid" data-admin-only hidden>
             <select id="archiveSelect"></select>
             <input id="archiveHeartlakeRunsInput" type="text" placeholder="Heartlake runs" />
             <input id="archiveHeartlakeWicketsInput" type="text" placeholder="Heartlake wickets" />
@@ -531,6 +547,6 @@
         </section>
       </main>
     </div>
-    <script src="/assets/app.js?v=20260422q"></script>
+    <script src="/assets/app.js?v=20260423k"></script>
   </body>
 </html>

@@ -117,6 +117,18 @@ This section captures the user requirements in the order they were given and ref
 74. Commit the codebase to GitHub before deployment.
 75. Create an Azure deployment plan for a lightweight App Service release in Subscription 1, Canada Central using GitHub Actions.
 76. Do not lose runtime data; keep a checked-in JSON snapshot / recovery export strategy alongside the live database, uploads, and duplicate-review files.
+77. Add a `Male` / `Female` gender field to player profiles and make it persist in the database.
+78. Add a separate Admin Center with its own access rules for club administrators and superadmins.
+79. Keep uploaded scorecards in review until an admin reviews, edits, and approves them.
+80. Prevent players from editing other players' stats; players may update only their own profile and availability.
+81. Show scorecard status on the dashboard as `Pending review` or `Approved`, with approved scorecards moving into the database.
+82. Keep club dashboards club-local so rankings, squad, scorecards, fixtures, and match info only reflect the selected club.
+83. Keep player profiles cross-club so a player can show memberships, rankings, and match history across all clubs.
+84. Make the selected season drive the dashboard view, with `2026` as the default and historical seasons available from a dropdown.
+85. Disable live scheduling, scoring, availability, and commentary controls for historical seasons such as `2024` and `2025`.
+86. Use a modern Tailwind CSS + Node-based visual refresh for the web app.
+87. Make dashboard availability updates save reliably for the selected club and match.
+88. Ensure the dashboard and multipage flows always send the signed-in auth token with requests.
 
 ## Current behavior summary
 
@@ -134,6 +146,7 @@ This section captures the user requirements in the order they were given and ref
 - The local UI is designed as the web baseline before a later native iPhone app conversion.
 - The repo now has an Azure App Service deployment plan checked in under `.azure/plan.md`, App Service infrastructure under `infra/`, and a GitHub Actions workflow under `.github/workflows/deploy.yml`.
 - Runtime data such as SQLite, uploads, duplicates, and cache files are treated as server data, while JSON snapshots are kept as the recovery source in Git.
+- Dashboard availability now uses the signed-in auth token, and fixture/availability flows are tested against the live selected club rather than the default Heartlake club.
 
 ## Run locally
 

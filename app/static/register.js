@@ -25,6 +25,11 @@ async function loadOptions() {
     "name",
     (member) => `${member.full_name || member.name} · ${member.team_name || "No team"}`
   )}`;
+  const roles = (data.roles || []).filter((role) => role.role_name);
+  roleSelect.innerHTML = optionMarkup(roles, "role_name", (role) => role.display_name || role.role_name);
+  if (!roleSelect.value) {
+    roleSelect.value = "player";
+  }
 }
 
 roleSelect.addEventListener("change", syncRoleVisibility);

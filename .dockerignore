@@ -1,0 +1,10 @@
+.git
+.venv
+venv
+env
+app/data
+app/uploads
+app/duplicates
+__pycache__
+*.pyc
+infra/main.json

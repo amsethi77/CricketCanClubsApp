@@ -84,6 +84,7 @@ seasonOutlookForm.addEventListener("submit", async (event) => {
       {
         status: seasonOutlookStatus.value,
         note: seasonOutlookNote.value.trim(),
+        club_id: payload?.club?.id || "",
       },
       true
     );
@@ -105,6 +106,7 @@ fixturesList.addEventListener("submit", async (event) => {
         fixture_id: form.dataset.fixtureForm,
         status: form.elements.status.value,
         note: form.elements.note.value.trim(),
+        club_id: payload?.club?.id || "",
       },
       true
     );

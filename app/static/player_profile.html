@@ -4,7 +4,8 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Player Profile · Heartlake Clubs</title>
-    <link rel="stylesheet" href="/assets/styles.css?v=20260422q" />
+    <link rel="stylesheet" href="/assets/styles.css?v=20260423b" />
+    <link rel="stylesheet" href="/assets/tailwind.css?v=20260423c" />
   </head>
   <body>
     <div class="page-shell">
@@ -15,6 +16,7 @@
           <a href="/season-setup">Season setup</a>
           <a href="/player-availability">Availability</a>
           <a href="/player-profile" aria-current="page">Profile</a>
+          <a href="/admin-center" data-admin-only hidden>Admin center</a>
         </nav>
         <div class="topbar-actions">
           <a class="primary-link" href="/clubs">Back to club selection</a>
@@ -34,6 +36,11 @@
           </div>
           <form id="playerProfileForm" class="form-grid">
             <input id="profileFullName" type="text" placeholder="Full name" />
+            <select id="profileGender">
+              <option value="">Gender</option>
+              <option value="Male">Male</option>
+              <option value="Female">Female</option>
+            </select>
             <input id="profileAge" type="number" min="0" placeholder="Age" />
             <input id="profilePhone" type="tel" placeholder="Mobile number" />
             <input id="profileEmail" type="email" placeholder="Email address" />
@@ -52,7 +59,7 @@
         </div>
       </section>
     </div>
-    <script src="/assets/multipage.js?v=20260422q"></script>
-    <script src="/assets/player_profile.js?v=20260422q"></script>
+    <script src="/assets/multipage.js?v=20260423e"></script>
+    <script src="/assets/player_profile.js?v=20260423c"></script>
   </body>
 </html>

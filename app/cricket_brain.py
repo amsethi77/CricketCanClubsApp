@@ -629,6 +629,36 @@ def _combined_player_records(
     return records
 
 
+def _player_availability_by_club(store: dict[str, Any], player_name: str) -> list[dict[str, Any]]:
+    club_lookup = {str(club.get("id") or ""): str(club.get("name") or club.get("short_name") or "").strip() for club in store.get("clubs", []) or []}
+    grouped: dict[str, dict[str, int | str]] = {}
+    for match in store.get("fixtures", []):
+        status = str(match.get("availability_statuses", {}).get(player_name, "") or "").strip()
+        if not status:
+            continue
+        club_id = str(match.get("club_id") or "").strip()
+        club_name = club_lookup.get(club_id, str(match.get("club_name") or match.get("club") or club_id or "Unknown club").strip())
+        bucket = grouped.setdefault(
+            club_id or club_name.lower(),
+            {
+                "club_name": club_name or "Unknown club",
+                "available": 0,
+                "maybe": 0,
+                "unavailable": 0,
+                "no_response": 0,
+            },
+        )
+        if status == "available":
+            bucket["available"] = int(bucket["available"]) + 1
+        elif status == "maybe":
+            bucket["maybe"] = int(bucket["maybe"]) + 1
+        elif status == "unavailable":
+            bucket["unavailable"] = int(bucket["unavailable"]) + 1
+        else:
+            bucket["no_response"] = int(bucket["no_response"]) + 1
+    return sorted(grouped.values(), key=lambda item: (-int(item["available"]), -int(item["maybe"]), str(item["club_name"])))
+
+
 def _historical_batting_positions(store: dict[str, Any], player_name: str) -> list[dict[str, Any]]:
     positions: list[dict[str, Any]] = []
     for archive in store.get("archive_uploads", []):
@@ -1530,6 +1560,24 @@ def _heuristic_answer(question: str, store: dict[str, Any], history: list[dict[s
                 f"Live fixture records account for {matched_stats['runs']} runs, {matched_stats['wickets']} wickets, and {matched_stats['catches']} catches; "
                 f"confirmed historical scorecards account for {matched_pending['runs']} additional runs from {matched_pending['matches']} match(es)."
             )
+    elif matched_member and any(keyword in q for keyword in ["availability", "available", "maybe", "unavailable"]):
+        display_name = _display_name(matched_member)
+        club_availability = _player_availability_by_club(store, matched_member["name"])
+        if club_availability:
+            parts: list[str] = []
+            for item in club_availability:
+                club_label = item["club_name"]
+                if int(item["available"]) > 0:
+                    parts.append(f"{int(item['available'])} games available for {club_label}")
+                if int(item["maybe"]) > 0:
+                    parts.append(f"{int(item['maybe'])} game maybe for {club_label}")
+                if int(item["unavailable"]) > 0:
+                    parts.append(f"{int(item['unavailable'])} games unavailable for {club_label}")
+            if not parts:
+                parts.append("no recorded availability yet")
+            answer = f"{display_name}'s availability for {store['club'].get('season', 'the selected season')} is " + ", ".join(parts) + "."
+        else:
+            answer = f"No fixture availability is stored yet for {display_name} in {store['club'].get('name', 'this club')}."
     elif matched_member:
         display_name = _display_name(matched_member)
         if requested_clubs:

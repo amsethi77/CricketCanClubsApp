@@ -6,6 +6,7 @@ import re
 import secrets
 import sqlite3
 import uuid
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -40,6 +41,7 @@ try:
         member_initials,
         now_iso,
         normalize_scorebook_ball,
+        _resolve_archive_club,
         reset_score_data,
         resolve_member_name,
         save_store,
@@ -72,6 +74,7 @@ except ModuleNotFoundError:
         member_initials,
         now_iso,
         normalize_scorebook_ball,
+        _resolve_archive_club,
         reset_score_data,
         resolve_member_name,
         save_store,
@@ -88,6 +91,8 @@ app = FastAPI(
     version="0.2.0",
     description="Local website for club operations, scoring, availability, archive recovery, and AI-assisted queries.",
 )
+
+MIN_SEASON_SETUP_YEAR = 2026
 
 app.add_middleware(
     CORSMiddleware,
@@ -219,7 +224,7 @@ def _clubs_page_html(request: Request, search: str = "", focus_club_id: str = ""
         <meta charset="UTF-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1.0" />
         <title>Select Club · Heartlake Clubs</title>
-        <link rel="stylesheet" href="/assets/styles.css?v=20260422s" />
+        <link rel="stylesheet" href="/assets/styles.css?v=20260423b" />
       </head>
       <body>
         <div class="page-shell">
@@ -245,8 +250,8 @@ def _clubs_page_html(request: Request, search: str = "", focus_club_id: str = ""
             </div>
           </section>
         </div>
-        <script src="/assets/multipage.js?v=20260422s"></script>
-        <script src="/assets/clubs.js?v=20260422s"></script>
+        <script src="/assets/multipage.js?v=20260423d"></script>
+        <script src="/assets/clubs.js?v=20260423d"></script>
       </body>
     </html>
     """
@@ -262,6 +267,7 @@ def _clubs_page_html(request: Request, search: str = "", focus_club_id: str = ""
 class MemberCreateRequest(BaseModel):
     name: str
     full_name: str = ""
+    gender: str = ""
     team_name: str = "Heartlake"
     team_memberships: list[str] | str = []
     aliases: list[str] | str = []
@@ -279,6 +285,7 @@ class MemberCreateRequest(BaseModel):
 class MemberUpdateRequest(BaseModel):
     name: str | None = None
     full_name: str | None = None
+    gender: str | None = None
     team_name: str | None = None
     team_memberships: list[str] | str | None = None
     aliases: list[str] | str | None = None
@@ -313,6 +320,7 @@ class AvailabilityUpdateRequest(BaseModel):
     player_name: str
     status: str
     note: str = ""
+    club_id: str = ""
 
 
 class ScorecardUpdateRequest(BaseModel):
@@ -395,11 +403,16 @@ class ArchiveImportRequest(BaseModel):
     text: str
 
 
+class ArchiveReviewRequest(BaseModel):
+    text: str
+
+
 class ViewerProfileRequest(BaseModel):
     display_name: str = ""
     mobile: str = ""
     email: str = ""
     primary_club_id: str = ""
+    selected_season_year: str = ""
 
 
 class FollowPlayerRequest(BaseModel):
@@ -443,15 +456,18 @@ class PlayerAvailabilitySelfRequest(BaseModel):
     fixture_id: str
     status: str
     note: str = ""
+    club_id: str = ""
 
 
 class PlayerSeasonAvailabilityRequest(BaseModel):
     status: str
     note: str = ""
+    club_id: str = ""
 
 
 class PlayerSelfProfileRequest(BaseModel):
     full_name: str = ""
+    gender: str = ""
     age: int = 0
     role: str = ""
     batting_style: str = ""
@@ -484,6 +500,61 @@ def _auth_connection() -> sqlite3.Connection:
     return connection
 
 
+DEFAULT_ROLE_PERMISSIONS: dict[str, dict[str, str]] = {
+    "player": {},
+    "captain": {
+        "view_admin": "View admin center and club controls",
+        "manage_club": "Update club-level details",
+        "manage_fixtures": "Create and edit fixtures",
+    },
+    "club_admin": {
+        "view_admin": "View admin center and club controls",
+        "manage_club": "Update club-level details",
+        "manage_fixtures": "Create and edit fixtures",
+        "manage_scorecards": "Review and approve scorecards",
+        "manage_players": "Update player records",
+        "manage_roles": "Assign club roles",
+    },
+    "superadmin": {
+        "view_admin": "View admin center and club controls",
+        "manage_club": "Update club-level details",
+        "manage_fixtures": "Create and edit fixtures",
+        "manage_scorecards": "Review and approve scorecards",
+        "manage_players": "Update player records",
+        "manage_roles": "Assign club roles",
+    },
+}
+
+
+def _seed_role_catalog(connection: sqlite3.Connection) -> None:
+    existing = connection.execute("SELECT COUNT(*) FROM app_roles").fetchone()[0]
+    if existing:
+        return
+    now = now_iso()
+    for role_name, permissions in DEFAULT_ROLE_PERMISSIONS.items():
+        display_name = {
+            "player": "Player",
+            "captain": "Captain",
+            "club_admin": "Club admin",
+            "superadmin": "Superadmin",
+        }.get(role_name, role_name.replace("_", " ").title())
+        connection.execute(
+            """
+            INSERT INTO app_roles (role_name, display_name, description, created_at)
+            VALUES (?, ?, ?, ?)
+            """,
+            (role_name, display_name, f"Default {display_name.lower()} role", now),
+        )
+        for permission, description in permissions.items():
+            connection.execute(
+                """
+                INSERT INTO app_role_permissions (role_name, permission, description, created_at)
+                VALUES (?, ?, ?, ?)
+                """,
+                (role_name, permission, description, now),
+            )
+
+
 def ensure_auth_schema() -> None:
     with _auth_connection() as connection:
         connection.executescript(
@@ -511,6 +582,33 @@ def ensure_auth_schema() -> None:
               FOREIGN KEY (current_club_id) REFERENCES clubs(id) ON DELETE SET NULL
             );
 
+            CREATE TABLE IF NOT EXISTS app_roles (
+              role_name TEXT PRIMARY KEY,
+              display_name TEXT NOT NULL,
+              description TEXT,
+              created_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS app_role_permissions (
+              role_name TEXT NOT NULL,
+              permission TEXT NOT NULL,
+              description TEXT,
+              created_at TEXT NOT NULL,
+              PRIMARY KEY (role_name, permission),
+              FOREIGN KEY (role_name) REFERENCES app_roles(role_name) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS app_user_club_roles (
+              user_id INTEGER NOT NULL,
+              club_id TEXT NOT NULL,
+              role_name TEXT NOT NULL,
+              created_at TEXT NOT NULL,
+              PRIMARY KEY (user_id, club_id),
+              FOREIGN KEY (user_id) REFERENCES app_users(id) ON DELETE CASCADE,
+              FOREIGN KEY (club_id) REFERENCES clubs(id) ON DELETE CASCADE,
+              FOREIGN KEY (role_name) REFERENCES app_roles(role_name) ON DELETE RESTRICT
+            );
+
             CREATE TABLE IF NOT EXISTS app_player_season_availability (
               user_id INTEGER NOT NULL,
               club_id TEXT NOT NULL,
@@ -523,23 +621,113 @@ def ensure_auth_schema() -> None:
             );
             """
         )
+        _seed_role_catalog(connection)
 
 
 def _password_hash(password: str) -> str:
     return hashlib.sha256(password.encode("utf-8")).hexdigest()
 
 
+def _role_permissions(connection: sqlite3.Connection, role_name: str) -> set[str]:
+    rows = connection.execute(
+        "SELECT permission FROM app_role_permissions WHERE role_name = ?",
+        (role_name,),
+    ).fetchall()
+    return {str(row["permission"] or "").strip() for row in rows if str(row["permission"] or "").strip()}
+
+
+def _effective_role_name(user_row: sqlite3.Row, current_club_id: str = "") -> str:
+    role_name = str(user_row["role"] or "player").strip() or "player"
+    club_id = str(current_club_id or "").strip()
+    if not club_id:
+        return role_name
+    with _auth_connection() as connection:
+        row = connection.execute(
+            """
+            SELECT role_name
+            FROM app_user_club_roles
+            WHERE user_id = ? AND club_id = ?
+            """,
+            (int(user_row["id"]), club_id),
+        ).fetchone()
+        if row and row["role_name"]:
+            return str(row["role_name"]).strip() or role_name
+    return role_name
+
+
+def _user_permissions(user_row: sqlite3.Row, current_club_id: str = "") -> set[str]:
+    role_name = _effective_role_name(user_row, current_club_id)
+    with _auth_connection() as connection:
+        permissions = _role_permissions(connection, role_name)
+        if role_name == "superadmin":
+            permissions |= {
+                "view_admin",
+                "manage_club",
+                "manage_fixtures",
+                "manage_scorecards",
+                "manage_players",
+                "manage_roles",
+            }
+        return permissions
+
+
+def _role_catalog(connection: sqlite3.Connection) -> list[dict[str, Any]]:
+    rows = connection.execute(
+        """
+        SELECT role_name, display_name, description, created_at
+        FROM app_roles
+        ORDER BY CASE role_name
+          WHEN 'player' THEN 1
+          WHEN 'captain' THEN 2
+          WHEN 'club_admin' THEN 3
+          WHEN 'superadmin' THEN 4
+          ELSE 99
+        END, display_name
+        """
+    ).fetchall()
+    permissions_by_role = {
+        row["role_name"]: sorted(
+            permission_row["permission"]
+            for permission_row in connection.execute(
+                "SELECT permission FROM app_role_permissions WHERE role_name = ? ORDER BY permission",
+                (row["role_name"],),
+            ).fetchall()
+        )
+        for row in rows
+    }
+    return [
+        {
+            "role_name": row["role_name"],
+            "display_name": row["display_name"],
+            "description": row["description"] or "",
+            "permissions": permissions_by_role.get(row["role_name"], []),
+        }
+        for row in rows
+    ]
+
+
 def _auth_user_payload(user_row: sqlite3.Row, current_club_id: str = "") -> dict[str, Any]:
+    effective_role = _effective_role_name(user_row, current_club_id)
+    permissions = sorted(_user_permissions(user_row, current_club_id))
     return {
         "id": int(user_row["id"]),
         "display_name": user_row["display_name"] or "",
         "mobile": user_row["mobile"] or "",
         "email": user_row["email"] or "",
         "role": user_row["role"] or "player",
+        "effective_role": effective_role,
+        "permissions": permissions,
         "member_id": user_row["member_id"] or "",
         "primary_club_id": user_row["primary_club_id"] or "",
         "current_club_id": current_club_id or user_row["primary_club_id"] or "",
     }
+
+
+def _require_permission(token: str | None, permission: str) -> tuple[sqlite3.Row, str]:
+    user_row, current_club_id = _auth_user_from_token(token)
+    if permission not in _user_permissions(user_row, current_club_id):
+        raise HTTPException(status_code=403, detail="You do not have permission to perform this action.")
+    return user_row, current_club_id
 
 
 def _auth_user_from_token(token: str | None) -> tuple[sqlite3.Row, str]:
@@ -559,6 +747,30 @@ def _auth_user_from_token(token: str | None) -> tuple[sqlite3.Row, str]:
     if not row:
         raise HTTPException(status_code=401, detail="Session expired. Sign in again.")
     return row, row["current_club_id"] or row["primary_club_id"] or ""
+
+
+def _require_admin(token: str | None) -> tuple[sqlite3.Row, str]:
+    return _require_permission(token, "view_admin")
+
+
+def _touch_fixture_audit(match: dict[str, Any], user_row: sqlite3.Row, created: bool = False) -> None:
+    timestamp = now_iso()
+    user_id = int(user_row["id"])
+    if created and not match.get("created_by_user_id"):
+        match["created_by_user_id"] = user_id
+    if created and not match.get("created_at"):
+        match["created_at"] = timestamp
+    match["updated_by_user_id"] = user_id
+    match["updated_at"] = timestamp
+
+
+def _normalize_gender(value: str) -> str:
+    gender = str(value or "").strip().lower()
+    if gender in {"m", "male"}:
+        return "Male"
+    if gender in {"f", "female"}:
+        return "Female"
+    return ""
 
 
 def _club_choices(store: dict[str, Any]) -> list[dict[str, str]]:
@@ -941,6 +1153,113 @@ def signin_page() -> FileResponse:
     return _page_response("signin.html")
 
 
+def _admin_center_html(request: Request) -> HTMLResponse:
+    user_row, current_club_id = _auth_user_from_token(_auth_token_from_request(request))
+    if "view_admin" not in _user_permissions(user_row, current_club_id):
+        raise HTTPException(status_code=403, detail="Only club administrators can open the admin center.")
+    store = load_store()
+    club = _selected_club(store, current_club_id)
+    body = f"""
+    <!DOCTYPE html>
+    <html lang="en">
+      <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>Admin Center · Heartlake Clubs</title>
+        <link rel="stylesheet" href="/assets/styles.css?v=20260423b" />
+      </head>
+      <body>
+        <div class="page-shell">
+          <header class="page-topbar">
+            <nav class="top-nav">
+              <a href="/dashboard">Dashboard</a>
+              <a href="/clubs">Clubs</a>
+              <a href="/season-setup">Season setup</a>
+              <a href="/player-availability">Availability</a>
+              <a href="/player-profile">Profile</a>
+              <a href="/admin-center" aria-current="page">Admin center</a>
+            </nav>
+            <div class="topbar-actions">
+              <a class="primary-link" href="/dashboard">Back to dashboard</a>
+              <a class="secondary-button" href="/signout">Sign out</a>
+            </div>
+          </header>
+          <section class="panel onboarding-panel">
+            <div class="stack-card">
+              <p class="section-kicker">Admin Center</p>
+              <h1>{html.escape(club.get('name', 'Selected club'))} control room</h1>
+              <p class="lede">Select a club, review that club’s data, edit fixtures, and manage archives from one place.</p>
+              <div id="adminCenterStatus" class="status-banner" hidden></div>
+              <div class="summary-grid compact-summary-grid" id="adminClubStats"></div>
+              <div class="toolbar-actions">
+                <select id="adminClubSelect"></select>
+                <button id="adminLoadClubButton" class="secondary-button" type="button">Load club</button>
+              </div>
+              <div id="adminClubDetail" class="detail-stack"></div>
+            </div>
+
+            <div class="split-grid">
+              <div class="stack-card">
+                <div class="panel-head compact-head">
+                  <div>
+                    <p class="section-kicker">Fixtures</p>
+                    <h2>Fixture editor</h2>
+                  </div>
+                </div>
+                <form id="adminFixtureForm" class="form-grid">
+                  <input type="hidden" id="adminFixtureId" />
+                  <input id="adminFixtureDateLabel" type="text" placeholder="Date label" />
+                  <input id="adminFixtureDate" type="date" />
+                  <input id="adminFixtureOpponent" type="text" placeholder="Opponent" />
+                  <input id="adminFixtureVenue" type="text" placeholder="Venue" />
+                  <input id="adminFixtureType" type="text" placeholder="Match type" />
+                  <input id="adminFixtureTime" type="text" placeholder="Start time" />
+                  <input id="adminFixtureOvers" type="text" placeholder="Overs" />
+                  <input id="adminSeasonYear" type="number" placeholder="Season year" />
+                  <button class="primary-button wide" type="submit">Save fixture</button>
+                </form>
+                <div id="adminFixtureList" class="detail-stack"></div>
+              </div>
+              <div class="stack-card">
+                <div class="panel-head compact-head">
+                  <div>
+                    <p class="section-kicker">Archives</p>
+                    <h2>Review queue</h2>
+                  </div>
+                </div>
+                <div class="toolbar-actions">
+                  <input id="adminArchiveSearch" type="search" placeholder="Search archived scorecards" />
+                  <button id="adminRefreshButton" class="secondary-button" type="button">Refresh queue</button>
+                </div>
+                <div id="adminReviewQueue" class="detail-stack"></div>
+              </div>
+            </div>
+          </section>
+        </div>
+        <script src="/assets/multipage.js?v=20260423d"></script>
+        <script src="/assets/admin_center.js?v=20260423e"></script>
+      </body>
+    </html>
+    """
+    return HTMLResponse(
+        body,
+        headers={
+            "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+            "Pragma": "no-cache",
+        },
+    )
+
+
+@app.get("/admin-center")
+def admin_center_page(request: Request) -> HTMLResponse:
+    return _admin_center_html(request)
+
+
+@app.get("/admin")
+def admin_page_alias(request: Request) -> HTMLResponse:
+    return _admin_center_html(request)
+
+
 @app.get("/signin/quick")
 def signin_quick_page() -> HTMLResponse:
     return HTMLResponse(
@@ -1146,6 +1465,8 @@ def dashboard(request: Request, focus_club_id: str | None = None) -> dict[str, A
 @app.get("/api/auth/options")
 def auth_options() -> dict[str, Any]:
     store = load_store()
+    with _auth_connection() as connection:
+        roles = _role_catalog(connection)
     return {
         "clubs": _sorted_club_choices(store, str(store.get("viewer_profile", {}).get("primary_club_id") or "")),
         "members": [
@@ -1157,7 +1478,15 @@ def auth_options() -> dict[str, Any]:
             }
             for member in store.get("members", [])
         ],
+        "roles": roles,
     }
+
+
+@app.get("/api/auth/roles")
+def auth_roles() -> dict[str, Any]:
+    ensure_auth_schema()
+    with _auth_connection() as connection:
+        return {"roles": _role_catalog(connection)}
 
 
 @app.post("/api/auth/register")
@@ -1387,12 +1716,16 @@ def select_club(request: SelectClubRequest, x_auth_token: str | None = Header(de
 def update_viewer_profile(request: ViewerProfileRequest) -> dict[str, Any]:
     store = load_store()
     viewer_profile = dict(store.get("viewer_profile", {}))
+    selected_season_year = str(request.selected_season_year or viewer_profile.get("selected_season_year") or "").strip()
+    if not re.match(r"20\d{2}$", selected_season_year):
+        selected_season_year = str(datetime.utcnow().year)
     viewer_profile.update(
         {
             "display_name": request.display_name.strip(),
             "mobile": canonical_phone(request.mobile),
             "email": request.email.strip(),
             "primary_club_id": request.primary_club_id.strip() or viewer_profile.get("primary_club_id", ""),
+            "selected_season_year": selected_season_year,
         }
     )
     selected_club = next(
@@ -1431,8 +1764,14 @@ def season_setup_data(x_auth_token: str | None = Header(default=None)) -> dict[s
     club = _selected_club(store, current_club_id)
     scoped = scoped_store_for_club(store, club)
     fixtures = sorted(scoped.get("fixtures", []), key=lambda fixture: (str(fixture.get("date") or ""), str(fixture.get("opponent") or "")))
-    season_years = sorted({fixture_season_year(fixture) for fixture in fixtures if fixture_season_year(fixture)})
-    selected_year = club_season_year(club) or (season_years[-1] if season_years else "")
+    season_years = sorted(
+        {
+            fixture_season_year(fixture)
+            for fixture in fixtures
+            if fixture_season_year(fixture) and int(fixture_season_year(fixture)) >= MIN_SEASON_SETUP_YEAR
+        }
+    )
+    selected_year = season_years[-1] if season_years else str(MIN_SEASON_SETUP_YEAR)
     return {
         "user": _auth_user_payload(user_row, current_club_id),
         "club": club,
@@ -1445,18 +1784,23 @@ def season_setup_data(x_auth_token: str | None = Header(default=None)) -> dict[s
 
 @app.post("/api/season-setup/fixtures")
 def create_season_fixture(request: SeasonFixtureRequest, x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
-    user_row, current_club_id = _auth_user_from_token(x_auth_token)
-    if (user_row["role"] or "player") != "club_admin":
-        raise HTTPException(status_code=403, detail="Only club administrators can set up schedules.")
+    user_row, current_club_id = _require_permission(x_auth_token, "manage_fixtures")
     store = load_store()
     club = _selected_club(store, request.club_id or current_club_id)
-    season_label = f"{int(request.season_year)} Season"
+    season_year = int(request.season_year)
+    if season_year < MIN_SEASON_SETUP_YEAR:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Season setup is only available for {MIN_SEASON_SETUP_YEAR} and later.",
+        )
+    season_label = f"{season_year} Season"
+    created_at = now_iso()
 
     new_fixture = {
         "id": str(uuid.uuid4())[:8],
         "club_id": club.get("id", ""),
         "club_name": club.get("name", ""),
-        "season_year": str(int(request.season_year)),
+        "season_year": str(season_year),
         "season": season_label,
         "date": request.date,
         "date_label": request.date_label,
@@ -1471,6 +1815,8 @@ def create_season_fixture(request: SeasonFixtureRequest, x_auth_token: str | Non
         "result": "TBD",
         "status": "Scheduled",
         "commentary": [],
+        "created_at": created_at,
+        "updated_at": created_at,
         "details": {
             "venue": request.venue.strip(),
             "match_type": request.match_type.strip() or "Friendly",
@@ -1488,7 +1834,83 @@ def create_season_fixture(request: SeasonFixtureRequest, x_auth_token: str | Non
         "performances": [],
         "scorebook": default_match_scorebook({"opponent": request.opponent.strip(), "details": {"overs": request.overs.strip() or "20"}}),
     }
+    _touch_fixture_audit(new_fixture, user_row, created=True)
     store.setdefault("fixtures", []).append(new_fixture)
+    save_store(store)
+    return season_setup_data(x_auth_token)
+
+
+@app.put("/api/admin/clubs/{club_id}/fixtures/{fixture_id}")
+def update_season_fixture(
+    club_id: str,
+    fixture_id: str,
+    request: SeasonFixtureRequest,
+    x_auth_token: str | None = Header(default=None),
+) -> dict[str, Any]:
+    user_row, _ = _require_permission(x_auth_token, "manage_fixtures")
+    store = load_store()
+    club = _selected_club(store, club_id)
+    season_year = int(request.season_year)
+    if season_year < MIN_SEASON_SETUP_YEAR:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Season setup is only available for {MIN_SEASON_SETUP_YEAR} and later.",
+        )
+    fixture = next(
+        (
+            item
+            for item in store.get("fixtures", [])
+            if str(item.get("id") or "").strip() == fixture_id
+            and str(item.get("club_id") or "").strip() == str(club.get("id") or "").strip()
+        ),
+        None,
+    )
+    if fixture is None:
+        raise HTTPException(status_code=404, detail="Fixture not found.")
+    fixture.update(
+        {
+            "club_id": club.get("id", ""),
+            "club_name": club.get("name", ""),
+            "season_year": str(season_year),
+            "season": f"{season_year} Season",
+            "date": request.date,
+            "date_label": request.date_label,
+            "opponent": request.opponent.strip(),
+            "visiting_team": request.opponent.strip(),
+            "details": {
+                **(fixture.get("details") or {}),
+                "venue": request.venue.strip(),
+                "match_type": request.match_type.strip() or "Friendly",
+                "scheduled_time": request.scheduled_time.strip(),
+                "overs": request.overs.strip() or "20",
+            },
+        }
+    )
+    _touch_fixture_audit(fixture, user_row)
+    save_store(store)
+    return season_setup_data(x_auth_token)
+
+
+@app.delete("/api/admin/clubs/{club_id}/fixtures/{fixture_id}")
+def delete_season_fixture(
+    club_id: str,
+    fixture_id: str,
+    x_auth_token: str | None = Header(default=None),
+) -> dict[str, Any]:
+    _require_permission(x_auth_token, "manage_fixtures")
+    store = load_store()
+    club = _selected_club(store, club_id)
+    before = len(store.get("fixtures", []))
+    store["fixtures"] = [
+        item
+        for item in store.get("fixtures", [])
+        if not (
+            str(item.get("id") or "").strip() == fixture_id
+            and str(item.get("club_id") or "").strip() == str(club.get("id") or "").strip()
+        )
+    ]
+    if len(store.get("fixtures", [])) == before:
+        raise HTTPException(status_code=404, detail="Fixture not found.")
     save_store(store)
     return season_setup_data(x_auth_token)
 
@@ -1530,7 +1952,7 @@ def save_player_availability(request: PlayerAvailabilitySelfRequest, x_auth_toke
         match = get_match_or_404(store, request.fixture_id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
-    club = _selected_club(store, current_club_id)
+    club = _selected_club(store, request.club_id or current_club_id)
     if str(match.get("club_id") or "").strip() and str(match.get("club_id") or "").strip() != str(club.get("id") or "").strip():
         raise HTTPException(status_code=403, detail="This match is not in your selected club.")
     match["availability_statuses"][member["name"]] = request.status
@@ -1549,7 +1971,7 @@ def save_player_season_availability(
 ) -> dict[str, Any]:
     user_row, current_club_id = _auth_user_from_token(x_auth_token)
     store = load_store()
-    club = _selected_club(store, current_club_id)
+    club = _selected_club(store, request.club_id or current_club_id)
     with _auth_connection() as connection:
         connection.execute(
             """
@@ -1607,6 +2029,7 @@ def save_player_profile(request: PlayerSelfProfileRequest, x_auth_token: str | N
         updates["team_memberships"] = [team.strip() for team in updates["team_memberships"].split(",") if team.strip()]
     updates["email"] = str(updates.get("email", "") or "").strip()
     updates["full_name"] = str(updates.get("full_name", "") or "").strip()
+    updates["gender"] = _normalize_gender(updates.get("gender", ""))
     updates["role"] = str(updates.get("role", "") or "").strip()
     updates["batting_style"] = str(updates.get("batting_style", "") or "").strip()
     updates["bowling_style"] = str(updates.get("bowling_style", "") or "").strip()
@@ -1649,7 +2072,8 @@ def cache_status() -> dict[str, Any]:
 
 
 @app.post("/api/members")
-def create_member(request: MemberCreateRequest) -> dict[str, Any]:
+def create_member(request: MemberCreateRequest, x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
+    _require_permission(x_auth_token, "manage_players")
     store = load_store()
     phone = canonical_phone(request.phone)
     if phone and any(canonical_phone(member.get("phone", "")) == phone for member in store["members"]):
@@ -1664,6 +2088,7 @@ def create_member(request: MemberCreateRequest) -> dict[str, Any]:
         "id": str(uuid.uuid4())[:8],
         "name": request.name,
         "full_name": request.full_name,
+        "gender": _normalize_gender(request.gender),
         "team_name": request.team_name or "Heartlake",
         "team_memberships": team_memberships,
         "aliases": aliases,
@@ -1684,7 +2109,8 @@ def create_member(request: MemberCreateRequest) -> dict[str, Any]:
 
 
 @app.post("/api/members/{member_id}")
-def update_member(member_id: str, request: MemberUpdateRequest) -> dict[str, Any]:
+def update_member(member_id: str, request: MemberUpdateRequest, x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
+    _require_permission(x_auth_token, "manage_players")
     store = load_store()
     member = next((item for item in store["members"] if item.get("id") == member_id), None)
     if not member:
@@ -1702,6 +2128,8 @@ def update_member(member_id: str, request: MemberUpdateRequest) -> dict[str, Any
         updates["aliases"] = [alias.strip() for alias in updates["aliases"].split(",") if alias.strip()]
     if "team_memberships" in updates and isinstance(updates["team_memberships"], str):
         updates["team_memberships"] = [team.strip() for team in updates["team_memberships"].split(",") if team.strip()]
+    if "gender" in updates:
+        updates["gender"] = _normalize_gender(updates["gender"])
 
     previous_name = member.get("name", "")
     for key, value in updates.items():
@@ -1727,7 +2155,8 @@ def update_member(member_id: str, request: MemberUpdateRequest) -> dict[str, Any
 
 
 @app.post("/api/matches/{match_id}/details")
-def update_match_details(match_id: str, request: MatchDetailsRequest) -> dict[str, Any]:
+def update_match_details(match_id: str, request: MatchDetailsRequest, x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
+    user_row, _ = _require_permission(x_auth_token, "manage_fixtures")
     store = load_store()
     try:
         match = get_match_or_404(store, match_id)
@@ -1742,12 +2171,14 @@ def update_match_details(match_id: str, request: MatchDetailsRequest) -> dict[st
             match["status"] = value
         else:
             match["details"][key] = value
+    _touch_fixture_audit(match, user_row)
     save_store(store)
     return current_dashboard(load_store())
 
 
 @app.post("/api/matches/{match_id}/availability")
-def update_availability(match_id: str, request: AvailabilityUpdateRequest) -> dict[str, Any]:
+def update_availability(match_id: str, request: AvailabilityUpdateRequest, x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
+    user_row, _ = _require_permission(x_auth_token, "manage_fixtures")
     store = load_store()
     try:
         match = get_match_or_404(store, match_id)
@@ -1760,12 +2191,32 @@ def update_availability(match_id: str, request: AvailabilityUpdateRequest) -> di
         match["availability_notes"][player_name] = request.note.strip()
     else:
         match["availability_notes"].pop(player_name, None)
+    _touch_fixture_audit(match, user_row)
     save_store(store)
-    return current_dashboard(load_store())
+    with _auth_connection() as connection:
+        member = next((item for item in store.get("members", []) if item.get("name") == player_name), None)
+        if member:
+            connection.execute(
+                """
+                INSERT INTO fixture_availability (fixture_id, member_id, status, note)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(fixture_id, member_id) DO UPDATE SET
+                  status = excluded.status,
+                  note = excluded.note
+                """,
+                (
+                    match_id,
+                    member.get("id", ""),
+                    request.status,
+                    request.note.strip(),
+                ),
+            )
+    return current_dashboard(load_store(), request.club_id or match.get("club_id") or "")
 
 
 @app.post("/api/matches/{match_id}/scorecard")
-def update_scorecard(match_id: str, request: ScorecardUpdateRequest) -> dict[str, Any]:
+def update_scorecard(match_id: str, request: ScorecardUpdateRequest, x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
+    user_row, _ = _require_permission(x_auth_token, "manage_scorecards")
     store = load_store()
     try:
         match = get_match_or_404(store, match_id)
@@ -1778,12 +2229,14 @@ def update_scorecard(match_id: str, request: ScorecardUpdateRequest) -> dict[str
             match["status"] = value
         else:
             match["scorecard"][key] = value
+    _touch_fixture_audit(match, user_row)
     save_store(store)
     return current_dashboard(load_store())
 
 
 @app.post("/api/matches/{match_id}/performances")
-def add_performance(match_id: str, request: PerformanceCreateRequest) -> dict[str, Any]:
+def add_performance(match_id: str, request: PerformanceCreateRequest, x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
+    user_row, _ = _require_permission(x_auth_token, "manage_scorecards")
     store = load_store()
     try:
         match = get_match_or_404(store, match_id)
@@ -1806,12 +2259,14 @@ def add_performance(match_id: str, request: PerformanceCreateRequest) -> dict[st
             "archive_upload_id": "",
         }
     )
+    _touch_fixture_audit(match, user_row)
     save_store(store)
     return current_dashboard(load_store())
 
 
 @app.post("/api/matches/{match_id}/commentary")
-def add_commentary(match_id: str, request: CommentaryRequest) -> dict[str, Any]:
+def add_commentary(match_id: str, request: CommentaryRequest, x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
+    user_row, _ = _require_permission(x_auth_token, "manage_scorecards")
     store = load_store()
     try:
         match = get_match_or_404(store, match_id)
@@ -1826,12 +2281,14 @@ def add_commentary(match_id: str, request: CommentaryRequest) -> dict[str, Any]:
             "created_at": now_iso(),
         }
     )
+    _touch_fixture_audit(match, user_row)
     save_store(store)
     return current_dashboard(load_store())
 
 
 @app.post("/api/matches/{match_id}/scorebook/setup")
-def update_scorebook_setup(match_id: str, request: ScorebookSetupRequest) -> dict[str, Any]:
+def update_scorebook_setup(match_id: str, request: ScorebookSetupRequest, x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
+    user_row, _ = _require_permission(x_auth_token, "manage_scorecards")
     store = load_store()
     try:
         match = get_match_or_404(store, match_id)
@@ -1856,12 +2313,14 @@ def update_scorebook_setup(match_id: str, request: ScorebookSetupRequest) -> dic
         for slot in range(1, 12)
     ]
     sync_fixture_scorecard_from_scorebook(match)
+    _touch_fixture_audit(match, user_row)
     save_store(store)
     return current_dashboard(load_store())
 
 
 @app.post("/api/matches/{match_id}/scorebook/ball")
-def add_scorebook_ball(match_id: str, request: ScorebookBallRequest) -> dict[str, Any]:
+def add_scorebook_ball(match_id: str, request: ScorebookBallRequest, x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
+    user_row, _ = _require_permission(x_auth_token, "manage_scorecards")
     store = load_store()
     try:
         match = get_match_or_404(store, match_id)
@@ -1913,6 +2372,7 @@ def add_scorebook_ball(match_id: str, request: ScorebookBallRequest) -> dict[str
     if summary["wickets"] >= 10 or summary["legal_balls"] >= int(innings.get("overs_limit", 20) or 20) * 6:
         innings["status"] = "Completed"
     sync_fixture_scorecard_from_scorebook(match)
+    _touch_fixture_audit(match, user_row)
     save_store(store)
     return current_dashboard(load_store())
 
@@ -1928,9 +2388,12 @@ def chat(request: ChatRequest) -> dict[str, Any]:
 
 
 @app.post("/api/archive/reset-scores")
-def reset_scores() -> dict[str, Any]:
+def reset_scores(x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
+    user_row, _ = _require_permission(x_auth_token, "manage_scorecards")
     store = load_store()
     reset_score_data(store)
+    for match in store.get("fixtures", []):
+        _touch_fixture_audit(match, user_row)
     save_store(store)
     return {
         "message": "Confirmed player scores and archive extraction drafts were reset. You can now process scorecards one at a time.",
@@ -1939,7 +2402,8 @@ def reset_scores() -> dict[str, Any]:
 
 
 @app.post("/api/archive/{upload_id}/extract")
-def extract_archive(upload_id: str, focus_club_id: str | None = None) -> dict[str, Any]:
+def extract_archive(upload_id: str, focus_club_id: str | None = None, x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
+    _require_permission(x_auth_token, "manage_scorecards")
     store = load_store()
     try:
         extracted = extract_archive_by_id(store, upload_id)
@@ -1956,7 +2420,8 @@ def extract_archive(upload_id: str, focus_club_id: str | None = None) -> dict[st
 
 
 @app.post("/api/archive/{upload_id}/import-extraction")
-def import_archive_extraction(upload_id: str, request: ArchiveImportRequest, focus_club_id: str | None = None) -> dict[str, Any]:
+def import_archive_extraction(upload_id: str, request: ArchiveImportRequest, focus_club_id: str | None = None, x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
+    _require_permission(x_auth_token, "manage_scorecards")
     store = load_store()
     selected_club = _selected_club(store, focus_club_id)
     try:
@@ -1968,8 +2433,12 @@ def import_archive_extraction(upload_id: str, request: ArchiveImportRequest, foc
     upload["club_name"] = upload.get("club_name") or selected_club.get("name", "")
     imported = parse_imported_extraction(store, request.text)
     upload.update(imported)
+    inferred_club = _resolve_archive_club(upload, store.get("clubs", []))
+    if inferred_club:
+        upload["club_id"] = inferred_club.get("id", upload.get("club_id", ""))
+        upload["club_name"] = inferred_club.get("name", upload.get("club_name", ""))
     upload["ocr_processed_at"] = now_iso()
-    auto_register_players_from_archive(store, upload, club_id=upload.get("club_id", ""))
+    upload["status"] = "Pending review"
     save_store(store)
     refreshed = load_store()
     updated = get_archive_or_404(refreshed, upload_id)
@@ -1980,13 +2449,102 @@ def import_archive_extraction(upload_id: str, request: ArchiveImportRequest, foc
     }
 
 
+@app.post("/api/admin/archive/{upload_id}/review")
+def save_archive_review(upload_id: str, request: ArchiveReviewRequest, x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
+    user_row, current_club_id = _require_permission(x_auth_token, "manage_scorecards")
+    store = load_store()
+    try:
+        upload = get_archive_or_404(store, upload_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+    club = _selected_club(store, current_club_id)
+    upload["club_id"] = upload.get("club_id") or club.get("id", "")
+    upload["club_name"] = upload.get("club_name") or club.get("name", "")
+
+    raw_text = request.text.strip()
+    if not raw_text:
+        raise HTTPException(status_code=400, detail="Paste the reviewed scorecard JSON first.")
+
+    try:
+        payload = json.loads(raw_text)
+    except json.JSONDecodeError:
+        payload = None
+
+    if isinstance(payload, dict):
+        if "draft_scorecard" in payload:
+            draft = payload.get("draft_scorecard")
+            if isinstance(draft, dict):
+                upload["draft_scorecard"] = draft
+            if isinstance(payload.get("suggested_performances"), list):
+                upload["suggested_performances"] = [
+                    item for item in payload.get("suggested_performances", []) if isinstance(item, dict)
+                ]
+        elif "match" in payload or "innings" in payload:
+            parsed = parse_imported_extraction(store, raw_text)
+            upload.update(parsed)
+        else:
+            draft = default_scorecard(_extract_field(payload, "result") or upload.get("extracted_summary") or "Reviewed archive")
+            draft.update(
+                {
+                    "heartlake_runs": _extract_field(payload, "heartlake_runs", "summary"),
+                    "heartlake_wickets": _extract_field(payload, "heartlake_wickets", "summary"),
+                    "heartlake_overs": _extract_field(payload, "heartlake_overs", "summary"),
+                    "opponent_runs": _extract_field(payload, "opponent_runs", "summary"),
+                    "opponent_wickets": _extract_field(payload, "opponent_wickets", "summary"),
+                    "opponent_overs": _extract_field(payload, "opponent_overs", "summary"),
+                    "result": _extract_field(payload, "result") or "Reviewed archive",
+                    "live_summary": _extract_field(payload, "live_summary", "summary"),
+                }
+            )
+            upload["draft_scorecard"] = draft
+            upload["suggested_performances"] = _parse_imported_player_scores(store, payload)
+
+        upload["raw_extracted_text"] = str(_extract_field(payload, "raw_extracted_text") or raw_text)[:12000]
+        meta = payload.get("meta") if isinstance(payload.get("meta"), dict) else {}
+        upload["ocr_engine"] = str(
+            _extract_field(payload, "ocr_engine")
+            or meta.get("source")
+            or upload.get("ocr_engine")
+            or "manual-review"
+        )
+        upload["ocr_pipeline"] = str(_extract_field(payload, "ocr_pipeline") or upload.get("ocr_pipeline") or "Admin reviewed extraction")
+        upload["confidence"] = str(_extract_field(payload, "confidence") or meta.get("confidence") or upload.get("confidence") or "review")
+        summary = _extract_field(payload, "extracted_summary") or upload.get("extracted_summary") or "Reviewed archive scorecard."
+        upload["extracted_summary"] = str(summary)
+    else:
+        upload["raw_extracted_text"] = raw_text[:12000]
+        upload["ocr_engine"] = upload.get("ocr_engine") or "manual-review"
+        upload["ocr_pipeline"] = upload.get("ocr_pipeline") or "Admin reviewed extraction"
+        upload["confidence"] = upload.get("confidence") or "review"
+
+    inferred_club = _resolve_archive_club(upload, store.get("clubs", []))
+    if inferred_club:
+        upload["club_id"] = inferred_club.get("id", upload.get("club_id", ""))
+        upload["club_name"] = inferred_club.get("name", upload.get("club_name", ""))
+
+    upload["status"] = "Pending review"
+    upload["reviewed_by"] = user_row["display_name"] or user_row["mobile"] or "admin"
+    upload["reviewed_at"] = now_iso()
+    save_store(store)
+    refreshed = load_store()
+    updated = get_archive_or_404(refreshed, upload_id)
+    return {
+        "message": f"Reviewed draft saved for {updated['file_name']}.",
+        "archive": updated,
+        "dashboard": current_dashboard(refreshed, club.get("id", "")),
+    }
+
+
 @app.post("/api/scorecards/upload")
 async def upload_scorecard(
     match_id: str | None = None,
     season: str | None = None,
     focus_club_id: str | None = None,
+    x_auth_token: str | None = Header(default=None),
     file: UploadFile = File(...),
 ) -> dict[str, Any]:
+    _require_permission(x_auth_token, "manage_scorecards")
     store = load_store()
     selected_club = _selected_club(store, focus_club_id)
     suffix = Path(file.filename or "scorecard.jpg").suffix or ".jpg"
@@ -2022,17 +2580,19 @@ async def upload_scorecard(
         club_name=selected_club.get("name", ""),
     )
     record["original_file_name"] = file.filename or file_token
+    record["status"] = "Pending review"
     store["archive_uploads"].append(record)
     save_store(store)
     return {
-        "message": "Scorecard image uploaded for review.",
-        "dashboard": current_dashboard(load_store(), selected_club.get("id", "")),
-        "upload": record,
-    }
+                "message": "Scorecard image uploaded for admin review.",
+                "dashboard": current_dashboard(load_store(), selected_club.get("id", "")),
+                "upload": record,
+            }
 
 
 @app.post("/api/archive/{upload_id}/apply")
-def apply_archive(upload_id: str, request: ArchiveApplyRequest, focus_club_id: str | None = None) -> dict[str, Any]:
+def apply_archive(upload_id: str, request: ArchiveApplyRequest, focus_club_id: str | None = None, x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
+    user_row, _ = _require_permission(x_auth_token, "manage_scorecards")
     store = load_store()
     try:
         upload = get_archive_or_404(store, upload_id)
@@ -2050,6 +2610,10 @@ def apply_archive(upload_id: str, request: ArchiveApplyRequest, focus_club_id: s
             ),
         )
 
+    inferred_club = _resolve_archive_club(upload, store.get("clubs", []))
+    if inferred_club:
+        upload["club_id"] = inferred_club.get("id", upload.get("club_id", ""))
+        upload["club_name"] = inferred_club.get("name", upload.get("club_name", ""))
     upload["club_id"] = upload.get("club_id") or (focus_club_id or "")
     auto_register_players_from_archive(store, upload, match_id=request.match_id, club_id=upload.get("club_id", ""))
     match["scorecard"].update(
@@ -2085,10 +2649,88 @@ def apply_archive(upload_id: str, request: ArchiveApplyRequest, focus_club_id: s
             }
         )
     match["performances"] = existing_performances
-    upload["status"] = "Applied to match"
+    upload["status"] = "Approved"
     upload["applied_to_match_id"] = request.match_id
+    _touch_fixture_audit(match, user_row)
     save_store(store)
     return current_dashboard(load_store(), focus_club_id or upload.get("club_id"))
+
+
+@app.get("/api/admin/review-queue")
+def admin_review_queue(x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
+    user_row, current_club_id = _require_permission(x_auth_token, "view_admin")
+    store = load_store()
+    club = _selected_club(store, current_club_id)
+    queue = [
+        upload
+        for upload in canonical_archive_uploads(store.get("archive_uploads", []))
+        if str(upload.get("club_id") or "").strip() == str(club.get("id") or "").strip()
+        and str(upload.get("status") or "").strip().lower().startswith("pending")
+    ]
+    return {
+        "user": _auth_user_payload(user_row, current_club_id),
+        "club": club,
+        "queue": queue,
+    }
+
+
+@app.post("/api/admin/archive/{upload_id}/approve")
+def approve_archive(upload_id: str, x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
+    user_row, current_club_id = _require_permission(x_auth_token, "manage_scorecards")
+    store = load_store()
+    try:
+        upload = get_archive_or_404(store, upload_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    club = _selected_club(store, current_club_id)
+    upload["club_id"] = upload.get("club_id") or club.get("id", "")
+    upload["club_name"] = upload.get("club_name") or club.get("name", "")
+    upload["status"] = "Approved"
+    upload["reviewed_by"] = user_row["display_name"] or user_row["mobile"] or "admin"
+    upload["reviewed_at"] = now_iso()
+    auto_register_players_from_archive(store, upload, club_id=upload.get("club_id", ""))
+    save_store(store)
+    refreshed = load_store()
+    updated = get_archive_or_404(refreshed, upload_id)
+    return {
+        "message": f"{updated['file_name']} approved and added to reviewed history.",
+        "archive": updated,
+        "queue": [
+            item
+            for item in canonical_archive_uploads(refreshed.get("archive_uploads", []))
+            if str(item.get("club_id") or "").strip() == str(club.get("id") or "").strip()
+            and str(item.get("status") or "").strip().lower().startswith("pending")
+        ],
+        "dashboard": current_dashboard(refreshed, club.get("id", "")),
+    }
+
+
+@app.delete("/api/admin/archive/{upload_id}")
+def delete_archive(upload_id: str, x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
+    user_row, current_club_id = _require_permission(x_auth_token, "manage_scorecards")
+    store = load_store()
+    try:
+        upload = get_archive_or_404(store, upload_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    club = _selected_club(store, current_club_id)
+    if str(upload.get("club_id") or "").strip() and str(upload.get("club_id") or "").strip() != str(club.get("id") or "").strip():
+        raise HTTPException(status_code=403, detail="This archive belongs to a different club.")
+    store["archive_uploads"] = [
+        item for item in store.get("archive_uploads", []) if str(item.get("id") or "").strip() != upload_id
+    ]
+    store["duplicate_uploads"] = [
+        item
+        for item in store.get("duplicate_uploads", [])
+        if str(item.get("original_upload_id") or "").strip() != upload_id
+        and str(item.get("duplicate_upload_id") or "").strip() != upload_id
+    ]
+    save_store(store)
+    refreshed = load_store()
+    return {
+        "message": f"{upload['file_name']} removed from archives.",
+        "dashboard": current_dashboard(refreshed, club.get("id", "")),
+    }
 
 
 if __name__ == "__main__":

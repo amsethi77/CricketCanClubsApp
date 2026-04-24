@@ -359,6 +359,27 @@ h1 {
   margin-top: 4px;
 }
 
+.mini-stat .season-select {
+  width: 100%;
+  margin-top: 10px;
+}
+
+.live-locked {
+  opacity: 0.72;
+}
+
+.live-locked .form-grid,
+.live-locked .scorebook-shell {
+  pointer-events: none;
+  filter: grayscale(0.08);
+}
+
+.mode-note {
+  margin-top: 10px;
+  color: var(--muted);
+  font-size: 0.92rem;
+}
+
 .dashboard {
   display: grid;
   grid-template-columns: repeat(12, 1fr);
@@ -621,6 +642,20 @@ select:focus {
 
 textarea {
   resize: vertical;
+}
+
+.stack-label {
+  display: grid;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 0.92rem;
+  font-weight: 700;
+}
+
+.admin-review-text {
+  min-height: 200px;
+  line-height: 1.45;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
 }
 
 button {
