@@ -14,9 +14,12 @@ const savedChatHistory = (() => {
 
 const state = {
   dashboard: null,
+  viewerAuth: null,
   isAdmin: false,
+  canManageOtherAvailability: false,
   selectedMatchId: null,
   selectedPlayerName: null,
+  selectedAvailabilityPlayerName: null,
   selectedTeamName: null,
   selectedFocusClubId: getCookieValue("heartlakePrimaryClubId") || window.localStorage.getItem("heartlakePrimaryClubId") || null,
   selectedSeasonYear: null,
@@ -43,9 +46,14 @@ let statusTimer = null;
 const elements = {
   statusBanner: document.getElementById("statusBanner"),
   seasonLabel: document.getElementById("seasonLabel"),
+  nextMatchLabelTitle: document.getElementById("nextMatchLabelTitle"),
   nextMatchLabel: document.getElementById("nextMatchLabel"),
+  availabilityLabel: document.getElementById("availabilityLabel"),
   seasonModeLabel: document.getElementById("seasonModeLabel"),
   llmLabel: document.getElementById("llmLabel"),
+  viewerPlayerSnapshotLabel: document.getElementById("viewerPlayerSnapshotLabel"),
+  viewerPlayerSnapshotTitle: document.getElementById("viewerPlayerSnapshotTitle"),
+  viewerPlayerSnapshotDetails: document.getElementById("viewerPlayerSnapshotDetails"),
   heroEyebrow: document.getElementById("heroEyebrow"),
   focusClubBadge: document.getElementById("focusClubBadge"),
   activeMatchSelect: document.getElementById("activeMatchSelect"),
@@ -127,6 +135,7 @@ const elements = {
   availabilityPlayerSelect: document.getElementById("availabilityPlayerSelect"),
   availabilityStatusSelect: document.getElementById("availabilityStatusSelect"),
   availabilityNoteInput: document.getElementById("availabilityNoteInput"),
+  availabilityFixturesEditor: document.getElementById("availabilityFixturesEditor"),
   availabilityMatrix: document.getElementById("availabilityMatrix"),
   performanceForm: document.getElementById("performanceForm"),
   performancePlayerSelect: document.getElementById("performancePlayerSelect"),
@@ -159,6 +168,7 @@ const elements = {
   editPlayerPictureUrl: document.getElementById("editPlayerPictureUrl"),
   editPlayerNotes: document.getElementById("editPlayerNotes"),
   playerSeasonSummary: document.getElementById("playerSeasonSummary"),
+  playerCareerSnapshot: document.getElementById("playerCareerSnapshot"),
   playerPendingHistory: document.getElementById("playerPendingHistory"),
   playerMatchHistory: document.getElementById("playerMatchHistory"),
   teamProfileSelect: document.getElementById("teamProfileSelect"),
@@ -373,7 +383,79 @@ function currentMatch() {
 
 function currentPlayer() {
   const members = state.dashboard.all_members || state.dashboard.members || [];
-  return members.find((member) => member.name === state.selectedPlayerName) || members[0] || null;
+  const viewerMemberName = getViewerMemberNameFromAuth();
+  return (
+    members.find((member) => member.name === state.selectedPlayerName) ||
+    members.find((member) => member.name === viewerMemberName) ||
+    members[0] ||
+    null
+  );
+}
+
+function getViewerMemberNameFromAuth() {
+  const members = state.dashboard?.all_members || state.dashboard?.members || [];
+  const viewerMemberId = state.viewerAuth?.user?.member_id || "";
+  if (!viewerMemberId) {
+    return "";
+  }
+  const viewerMember = members.find((member) => member.id === viewerMemberId);
+  return viewerMember?.name || "";
+}
+
+function viewerMemberName(dashboard) {
+  const members = dashboard.all_members || dashboard.members || [];
+  const viewerMemberId = state.viewerAuth?.user?.member_id || dashboard.user?.member_id || "";
+  if (!viewerMemberId) {
+    return "";
+  }
+  const viewerMember = members.find((member) => member.id === viewerMemberId);
+  return viewerMember?.name || "";
+}
+
+function currentSignedInMemberName(dashboard = state.dashboard) {
+  if (!dashboard) return "";
+  const members = dashboard.all_members || dashboard.members || [];
+  const viewerMemberId = state.viewerAuth?.user?.member_id || dashboard.user?.member_id || "";
+  if (viewerMemberId) {
+    const matchById = members.find((member) => String(member.id || "") === String(viewerMemberId));
+    if (matchById?.name) return matchById.name;
+  }
+  const viewerName = viewerMemberName(dashboard);
+  if (viewerName) return viewerName;
+  const authName = String(state.viewerAuth?.user?.display_name || dashboard.user?.display_name || "").trim();
+  return authName ? authName : members[0]?.name || "";
+}
+
+function canManageOtherAvailability() {
+  const role = String(state.dashboard?.user?.effective_role || "").trim();
+  return role === "captain" || role === "superadmin";
+}
+
+function currentAvailabilityPlayerName() {
+  const selfName = currentSignedInMemberName();
+  if (!state.canManageOtherAvailability) {
+    return selfName;
+  }
+  return (
+    state.selectedAvailabilityPlayerName ||
+    elements.availabilityPlayerSelect.value ||
+    state.selectedPlayerName ||
+    selfName ||
+    state.dashboard?.members?.[0]?.name ||
+    ""
+  );
+}
+
+function updateViewerPlayerSnapshot(dashboard) {
+  if (!elements.viewerPlayerSnapshotLabel || !elements.viewerPlayerSnapshotTitle || !elements.viewerPlayerSnapshotDetails) {
+    return;
+  }
+  const focusClub = dashboard.focus_club || dashboard.club || {};
+  const summary = dashboard.summary || {};
+  const yearLabel = state.selectedSeasonYear || String(new Date().getFullYear());
+  elements.viewerPlayerSnapshotLabel.textContent = `Clubs Summary for ${yearLabel}`;
+  elements.viewerPlayerSnapshotTitle.textContent = `${focusClub.name || "Club"} Clubs Summary`;
+  elements.viewerPlayerSnapshotDetails.textContent = `Total Matches Played: ${summary.matches_played || 0} · Won: ${summary.matches_won || 0} · Lost: ${summary.matches_lost || 0} · NR: ${summary.matches_nr || 0}`;
 }
 
 function currentTeam() {
@@ -476,6 +558,21 @@ function populatePlayerSelects(members, allMembers = members) {
     })
     .join("");
   elements.playerProfileSelect.value = state.selectedPlayerName || allMembers[0]?.name || members[0]?.name || "";
+  const currentName = currentSignedInMemberName();
+  const availabilityChoice = state.canManageOtherAvailability
+    ? (
+        (state.selectedAvailabilityPlayerName && members.some((member) => member.name === state.selectedAvailabilityPlayerName)
+          ? state.selectedAvailabilityPlayerName
+          : state.selectedPlayerName && members.some((member) => member.name === state.selectedPlayerName)
+            ? state.selectedPlayerName
+            : members[0]?.name || "")
+      )
+    : currentName || state.selectedPlayerName || members[0]?.name || "";
+  elements.availabilityPlayerSelect.hidden = !state.canManageOtherAvailability;
+  elements.availabilityPlayerSelect.disabled = !state.canManageOtherAvailability;
+  elements.availabilityPlayerSelect.value = availabilityChoice;
+  state.selectedAvailabilityPlayerName = availabilityChoice || state.selectedAvailabilityPlayerName || null;
+  elements.performancePlayerSelect.value = availabilityChoice || members[0]?.name || "";
 }
 
 function populateTeamSelect(teams) {
@@ -673,6 +770,7 @@ function statusBadge(status) {
 
 function renderSummary(summary) {
   elements.summaryGrid.innerHTML = `
+    <article class="summary-card"><span>Clubs Summary</span><strong>${state.dashboard?.focus_club?.name || state.dashboard?.club?.name || "Club"}</strong><p>Total Matches Played: ${summary.matches_played || 0} · Won: ${summary.matches_won || 0} · Lost: ${summary.matches_lost || 0} · NR: ${summary.matches_nr || 0}</p></article>
     <article class="summary-card"><span>Fixtures</span><strong>${summary.fixture_count}</strong></article>
     <article class="summary-card"><span>Members</span><strong>${summary.member_count}</strong></article>
     <article class="summary-card"><span>Completed</span><strong>${summary.completed_matches}</strong></article>
@@ -1098,6 +1196,12 @@ function renderVisitingTeams(teams) {
 }
 
 function renderAvailabilityMatrix(board, fixtures) {
+  if (!state.canManageOtherAvailability) {
+    elements.availabilityMatrix.hidden = true;
+    elements.availabilityMatrix.innerHTML = "";
+    return;
+  }
+  elements.availabilityMatrix.hidden = false;
   const activeClubId = state.selectedFocusClubId || state.dashboard?.focus_club?.id || state.dashboard?.club?.id || "";
   const scopedFixtures = activeClubId ? fixtures.filter((match) => (match.club_id || "") === activeClubId) : fixtures;
   const scopedBoard = board?.map((row) => ({
@@ -1106,7 +1210,12 @@ function renderAvailabilityMatrix(board, fixtures) {
       ? row.by_match.filter((item) => scopedFixtures.some((match) => match.id === item.match_id))
       : row.by_match,
   }));
-  const head = scopedFixtures.map((match) => `<th>${match.date_label}</th>`).join("");
+  const head = scopedFixtures
+    .map((match) => {
+      const title = match.date || match.date_label || "Date TBD";
+      return `<th title="${title}"><span class="stacked-head">${match.date_label || "Date TBD"}</span></th>`;
+    })
+    .join("");
   const rows = scopedBoard
     .map((row) => {
       const cells = row.by_match.map((item) => `<td>${statusBadge(item.status)}</td>`).join("");
@@ -1121,6 +1230,41 @@ function renderAvailabilityMatrix(board, fixtures) {
       <tbody>${rows}</tbody>
     </table>
   `;
+}
+
+function renderAvailabilityFixtureEditor(fixtures) {
+  if (!elements.availabilityFixturesEditor) {
+    return;
+  }
+  const activeClubId = state.selectedFocusClubId || state.dashboard?.focus_club?.id || state.dashboard?.club?.id || "";
+  const scopedFixtures = activeClubId ? fixtures.filter((match) => (match.club_id || "") === activeClubId) : fixtures;
+  const playerName = currentAvailabilityPlayerName();
+  const cards = scopedFixtures.length
+    ? scopedFixtures
+        .map((fixture) => {
+          const currentStatus = fixture.availability_statuses?.[playerName] || "no response";
+          const currentNote = fixture.availability_notes?.[playerName] || "";
+          return `
+            <article class="detail-card" data-fixture-availability-card="${fixture.id}">
+              <strong>${fixture.date_label} vs ${fixture.opponent}</strong>
+              <p>${fixture.details?.venue || "Venue TBD"} · ${fixture.details?.scheduled_time || "Time TBD"}</p>
+              <small>${state.canManageOtherAvailability ? (playerName ? `For ${playerName}` : "Choose a player above first") : `For ${playerName || "you"}`}</small>
+              <small>Current status: ${currentStatus}${currentNote ? ` · ${currentNote}` : ""}</small>
+              <form class="inline-actions" data-fixture-availability-form="${fixture.id}">
+                <select name="status">
+                  <option value="available" ${currentStatus === "available" ? "selected" : ""}>Available</option>
+                  <option value="maybe" ${currentStatus === "maybe" ? "selected" : ""}>Maybe</option>
+                  <option value="unavailable" ${currentStatus === "unavailable" ? "selected" : ""}>Unavailable</option>
+                </select>
+                <input type="text" name="note" value="${currentNote}" placeholder="Optional note" />
+                <button class="secondary-button" type="submit">Save game</button>
+              </form>
+            </article>
+          `;
+        })
+        .join("")
+    : `<p class="empty-state">No fixtures are stored yet for this club.</p>`;
+  elements.availabilityFixturesEditor.innerHTML = cards;
 }
 
 function formatMetric(value, decimals = 2) {
@@ -1226,9 +1370,6 @@ function currentViewerProfilePayload(selectedSeasonYear = state.selectedSeasonYe
 function setLiveSeasonMode(isLiveSeason, selectedYear) {
   const lockedMessage = `Viewing ${selectedYear} season. Live scheduling, scoring, availability, and commentary are disabled for historical seasons.`;
   const activeMessage = `Viewing ${selectedYear} season. Live scheduling, scoring, availability, and commentary are enabled.`;
-  if (elements.seasonModeLabel) {
-    elements.seasonModeLabel.textContent = isLiveSeason ? "Live operations enabled" : "Historical season view";
-  }
   document.querySelectorAll("[data-live-only]").forEach((section) => {
     section.classList.toggle("live-locked", !isLiveSeason);
     section.dataset.liveMode = isLiveSeason ? "live" : "historical";
@@ -1250,6 +1391,72 @@ function setLiveSeasonMode(isLiveSeason, selectedYear) {
   });
 }
 
+function getArchiveOpponentName(archive, focusClubName) {
+  const directOpponent = String(archive.draft_scorecard?.opponent || archive.opponent || "").trim();
+  if (directOpponent) {
+    return directOpponent;
+  }
+
+  const liveSummary = String(archive.draft_scorecard?.live_summary || archive.extracted_summary || archive.raw_extracted_text || "").trim();
+  const match = /Batting team:\s*([^|]+)\|[^|]*\|?\s*Bowling team:\s*([^|]+)/i.exec(liveSummary);
+  if (match) {
+    const battingTeam = match[1].trim();
+    const bowlingTeam = match[2].trim();
+    const focus = String(focusClubName || "").trim();
+    if (focus && battingTeam.toLowerCase() === focus.toLowerCase()) return bowlingTeam;
+    if (focus && bowlingTeam.toLowerCase() === focus.toLowerCase()) return battingTeam;
+    return bowlingTeam || battingTeam;
+  }
+
+  const filename = String(archive.file_name || "").trim();
+  const fileMatch = /_(.+?)_vs_(.+?)(?:_|\.json|$)/i.exec(filename);
+  if (fileMatch) {
+    const teamA = fileMatch[1].replace(/[-_]/g, " ").trim();
+    const teamB = fileMatch[2].replace(/[-_]/g, " ").trim();
+    const focus = String(focusClubName || "").trim().toLowerCase();
+    if (focus && teamA.toLowerCase().includes(focus)) return teamB;
+    if (focus && teamB.toLowerCase().includes(focus)) return teamA;
+    return teamB || teamA;
+  }
+
+  const clubName = String(archive.club_name || "").trim();
+  if (clubName) {
+    return clubName;
+  }
+  return "last match";
+}
+
+function getHistoricalSeasonSummary(dashboard) {
+  const archives = Array.isArray(dashboard.archive_uploads) ? dashboard.archive_uploads : [];
+  const archiveCount = archives.length;
+  const latestArchive = archives
+    .filter((archive) => archive.archive_date || archive.scorecard_date || archive.created_at)
+    .sort((a, b) => {
+      const aDate = new Date(a.archive_date || a.scorecard_date || a.created_at || "");
+      const bDate = new Date(b.archive_date || b.scorecard_date || b.created_at || "");
+      return bDate - aDate;
+    })[0];
+  if (!latestArchive) {
+    return {
+      headline: archiveCount ? `Historical season · ${archiveCount} archive${archiveCount === 1 ? "" : "s"}` : "Historical season view",
+      details: archiveCount ? `${archiveCount} archived scorecard${archiveCount === 1 ? "" : "s"}` : "No archived match scorecards found for this season.",
+    };
+  }
+  const focusClubName = dashboard.focus_club?.name || dashboard.club?.name || "";
+  const opponent = getArchiveOpponentName(latestArchive, focusClubName);
+  const result =
+    latestArchive.draft_scorecard?.result ||
+    latestArchive.extracted_summary ||
+    latestArchive.draft_scorecard?.live_summary ||
+    latestArchive.status ||
+    "";
+  const reducedResult = String(result).split("\n")[0].trim();
+  return {
+    headline: opponent ? `Last Match: vs ${opponent}` : "Last Match",
+    details: reducedResult || `${archiveCount} archived scorecard${archiveCount === 1 ? "" : "s"}`,
+  };
+}
+
 function getPlayerAvailabilitySummary(playerName) {
   return state.dashboard.availability_board.find((row) => row.player_name === playerName);
 }
@@ -1257,15 +1464,16 @@ function getPlayerAvailabilitySummary(playerName) {
 function getPlayerSeasonProfile(playerName) {
   const members = state.dashboard.all_members || state.dashboard.members || [];
   const player = members.find((member) => member.name === playerName);
-  const combinedRecords = state.dashboard.combined_player_stats || state.dashboard.all_combined_player_stats || [];
+  const combinedRecords = state.dashboard.all_combined_player_stats || state.dashboard.combined_player_stats || [];
   const combinedRecord = combinedRecords.find((item) => item.player_name === playerName) || {
     batting_average: 0,
     strike_rate: 0,
     batting_innings: 0,
     outs: 0,
   };
-  const availability = getPlayerAvailabilitySummary(playerName);
   const membershipSummary = playerMembershipSummary(player || {});
+  const clubIdSet = new Set((membershipSummary.clubMemberships || []).map((club) => club.club_id).filter(Boolean));
+  const clubNameSet = new Set((membershipSummary.clubMemberships || []).map((club) => club.club_name).filter(Boolean));
   const pendingRecords = state.dashboard.player_pending_stats || state.dashboard.all_player_pending_stats || [];
   const pending = pendingRecords.find((item) => item.player_name === playerName) || {
     player_name: playerName,
@@ -1275,6 +1483,14 @@ function getPlayerSeasonProfile(playerName) {
     matches: 0,
     sources: [],
   };
+  const allFixtures = state.dashboard.all_fixtures || state.dashboard.fixtures || [];
+  const relevantFixtures = membershipSummary.clubMemberships.length
+    ? allFixtures.filter((match) => {
+        const matchClubId = match.club_id || match.details?.club_id || "";
+        const matchClubName = match.club_name || match.details?.club_name || "";
+        return (matchClubId && clubIdSet.has(matchClubId)) || (matchClubName && clubNameSet.has(matchClubName));
+      })
+    : allFixtures;
   const appearances = [];
   let runs = 0;
   let balls = 0;
@@ -1282,12 +1498,26 @@ function getPlayerSeasonProfile(playerName) {
   let catches = 0;
   let fours = 0;
   let sixes = 0;
+  let matchesAvailable = 0;
+  let matchesMaybe = 0;
+  let matchesUnavailable = 0;
+  let matchesNoResponse = 0;
+  const fixtureSortValue = (value) => {
+    const parsed = Date.parse(value || "");
+    return Number.isFinite(parsed) ? parsed : 0;
+  };
 
-  const fixtures = state.dashboard.fixtures || state.dashboard.all_fixtures || [];
-  fixtures.forEach((match) => {
+  relevantFixtures.forEach((match) => {
     const entries = (match.performances || []).filter((item) => item.player_name === playerName);
-    if (!entries.length) {
-      return;
+    const availabilityStatus = match.availability_statuses?.[playerName] || "no response";
+    if (availabilityStatus === "available") {
+      matchesAvailable += 1;
+    } else if (availabilityStatus === "maybe") {
+      matchesMaybe += 1;
+    } else if (availabilityStatus === "unavailable") {
+      matchesUnavailable += 1;
+    } else {
+      matchesNoResponse += 1;
     }
     const totals = entries.reduce(
       (acc, item) => {
@@ -1310,15 +1540,26 @@ function getPlayerSeasonProfile(playerName) {
     appearances.push({
       matchId: match.id,
       clubName: match.club_name || match.details?.club_name || state.dashboard.focus_club?.name || state.dashboard.club?.name || "Club",
+      date: match.date || "",
       dateLabel: match.date_label,
+      dateSort: fixtureSortValue(match.date),
       opponent: match.opponent,
       status: match.status,
       result: match.scorecard.result || match.result || "TBD",
-      availability: match.availability_statuses[playerName] || "no response",
+      availability: availabilityStatus,
+      played: entries.length > 0,
       ...totals,
       notes: entries.map((item) => item.notes).filter(Boolean).join(" · "),
     });
   });
+  appearances.sort((a, b) => b.dateSort - a.dateSort || b.matchId.localeCompare(a.matchId));
+  const playedAppearances = appearances.filter((item) => item.played);
+  const upcomingGames = appearances
+    .filter((item) => String(item.status || "").toLowerCase() === "scheduled" && item.dateSort >= fixtureSortValue(new Date().toISOString().slice(0, 10)))
+    .slice()
+    .sort((a, b) => a.dateSort - b.dateSort || a.matchId.localeCompare(b.matchId))
+    .slice(0, 5);
+  const lastGame = playedAppearances[0] || null;
 
   const clubRankings = membershipSummary.clubMemberships.map((club) => {
     const rankingBundle = state.dashboard.club_rankings?.[club.club_name] || {};
@@ -1330,6 +1571,13 @@ function getPlayerSeasonProfile(playerName) {
       fielding: clubRankForPlayer(rankingBundle, playerName, "fielding_rankings"),
     };
   });
+  const availability = {
+    matches_available: matchesAvailable,
+    matches_maybe: matchesMaybe,
+    matches_unavailable: matchesUnavailable,
+    matches_no_response: matchesNoResponse,
+    matches_total: relevantFixtures.length,
+  };
 
   return {
     player,
@@ -1338,6 +1586,8 @@ function getPlayerSeasonProfile(playerName) {
     clubRankings,
     pending,
     appearances,
+    upcomingGames,
+    lastGame,
     totals: {
       runs,
       balls,
@@ -1350,6 +1600,10 @@ function getPlayerSeasonProfile(playerName) {
       strikeRate: formatMetric(combinedRecord.strike_rate || 0),
       storedRuns: runs + Number(pending.runs || 0),
       storedMatches: appearances.length + Number(pending.matches || 0),
+      matchesAvailable,
+      matchesMaybe,
+      matchesUnavailable,
+      matchesNoResponse,
     },
   };
 }
@@ -1411,6 +1665,7 @@ function renderPlayerProfile() {
 
   elements.playerSeasonSummary.innerHTML = `
     ${clubRankingCards}
+    <article class="summary-card"><span>Clubs</span><strong>${profile.memberships.clubMemberships.length}</strong><p>${profile.memberships.clubMemberships.length ? "All linked clubs are included below" : "No club memberships stored"}</p></article>
     <article class="summary-card"><span>Stored Runs</span><strong>${profile.totals.storedRuns}</strong><p>${profile.totals.runs} confirmed + ${profile.pending.runs || 0} reviewed historical archive runs</p></article>
     <article class="summary-card"><span>Confirmed Runs</span><strong>${profile.totals.runs}</strong></article>
     <article class="summary-card"><span>Batting Average</span><strong>${profile.totals.battingAverage}</strong></article>
@@ -1422,6 +1677,32 @@ function renderPlayerProfile() {
     <article class="summary-card"><span>Scored Matches</span><strong>${profile.totals.innings}</strong></article>
     <article class="summary-card"><span>Historical Archive Runs</span><strong>${profile.pending.runs}</strong><p>${profile.pending.matches || 0} reviewed archive scorecards</p></article>
     <article class="summary-card"><span>Availability</span><strong>${availability ? `${availability.matches_available} yes / ${availability.matches_unavailable} no / ${availability.matches_no_response || 0} no response` : "n/a"}</strong></article>
+  `;
+
+  const lastGameLabel = profile.lastGame
+    ? `${profile.lastGame.clubName} · ${profile.lastGame.dateLabel} vs ${profile.lastGame.opponent}`
+    : "No played fixtures stored yet";
+  const lastGameDetails = profile.lastGame
+    ? `${profile.lastGame.runs} runs · ${profile.lastGame.wickets} wickets · ${profile.lastGame.catches} catches · ${profile.lastGame.result}`
+    : "This will populate once the player appears in a saved match.";
+  const upcomingGamesCards = profile.upcomingGames.length
+    ? profile.upcomingGames
+        .map(
+          (item) => `
+            <article class="summary-card">
+              <span>${item.clubName}</span>
+              <strong>${item.dateLabel}</strong>
+              <p>vs ${item.opponent} · ${item.status}</p>
+              <small>${item.availability === "no response" ? "Availability not yet set" : `Availability: ${item.availability}`}</small>
+            </article>
+          `
+        )
+        .join("")
+    : `<article class="summary-card"><span>Upcoming Games</span><strong>No upcoming fixtures</strong><p>Once the player is linked to scheduled games, they will appear here.</p></article>`;
+  elements.playerCareerSnapshot.innerHTML = `
+    <article class="summary-card"><span>Last Game</span><strong>${lastGameLabel}</strong><p>${lastGameDetails}</p></article>
+    ${upcomingGamesCards}
+    <article class="summary-card"><span>Involvement</span><strong>${profile.appearances.filter((item) => item.played).length} played fixtures</strong><p>${profile.totals.runs} runs · ${profile.totals.wickets} wickets · ${profile.totals.catches} catches across ${profile.memberships.clubMemberships.length} clubs</p></article>
   `;
 
   elements.playerPendingHistory.innerHTML = renderLimitedCollection(profile.pending.sources || [], {
@@ -1737,6 +2018,7 @@ function renderDashboard(dashboard) {
   state.dashboard = dashboard;
   const permissions = dashboard.user?.permissions || [];
   state.isAdmin = permissions.includes("view_admin") || permissions.includes("manage_club") || permissions.includes("manage_scorecards") || permissions.includes("manage_players");
+  state.canManageOtherAvailability = canManageOtherAvailability();
   if (elements.uploadForm) elements.uploadForm.hidden = true;
   if (elements.resetScoresButton) elements.resetScoresButton.hidden = true;
   if (elements.archiveImportForm) elements.archiveImportForm.hidden = true;
@@ -1746,33 +2028,77 @@ function renderDashboard(dashboard) {
     window.localStorage.setItem("heartlakePrimaryClubId", state.selectedFocusClubId);
     document.cookie = `heartlakePrimaryClubId=${encodeURIComponent(state.selectedFocusClubId)}; path=/; samesite=lax`;
   }
-  state.selectedSeasonYear = dashboard.selected_season_year || dashboard.default_season_year || state.selectedSeasonYear;
+  const currentYear = String(new Date().getFullYear());
+  state.selectedSeasonYear = dashboard.selected_season_year || dashboard.default_season_year || state.selectedSeasonYear || currentYear;
   if (state.selectedSeasonYear) {
     window.localStorage.setItem("heartlakeSelectedSeasonYear", state.selectedSeasonYear);
     document.cookie = `heartlakeSelectedSeasonYear=${encodeURIComponent(state.selectedSeasonYear)}; path=/; samesite=lax`;
   }
-  const currentYear = String(new Date().getFullYear());
   setLiveSeasonMode(String(state.selectedSeasonYear || "").trim() === currentYear, state.selectedSeasonYear || currentYear);
   if (!state.selectedMatchId || !dashboard.fixtures.some((match) => match.id === state.selectedMatchId)) {
     state.selectedMatchId = dashboard.upcoming_match.id;
   }
+  const memberNameForViewer = getViewerMemberNameFromAuth() || viewerMemberName(dashboard);
   if (!state.selectedPlayerName || !dashboard.members.some((member) => member.name === state.selectedPlayerName)) {
-    state.selectedPlayerName = dashboard.members[0]?.name || null;
+    state.selectedPlayerName = memberNameForViewer || dashboard.members[0]?.name || null;
+  }
+  if (!state.selectedAvailabilityPlayerName || !dashboard.members.some((member) => member.name === state.selectedAvailabilityPlayerName)) {
+    state.selectedAvailabilityPlayerName = state.canManageOtherAvailability
+      ? (state.selectedPlayerName || dashboard.members[0]?.name || null)
+      : (memberNameForViewer || state.selectedPlayerName || dashboard.members[0]?.name || null);
+  }
+  if (!state.canManageOtherAvailability) {
+    state.selectedAvailabilityPlayerName = memberNameForViewer || state.selectedPlayerName || dashboard.members[0]?.name || null;
   }
   if (!state.selectedTeamName || !dashboard.teams.some((team) => team.name === state.selectedTeamName)) {
     state.selectedTeamName = dashboard.teams[0]?.name || null;
   }
   const match = currentMatch();
   const landingNextMatch = dashboard.landing_upcoming_matches?.[0] || dashboard.upcoming_match || {};
-  elements.seasonLabel.textContent = dashboard.club.season;
-  elements.nextMatchLabel.textContent = landingNextMatch.date_label
-    ? `${landingNextMatch.date_label} vs ${landingNextMatch.opponent}`
-    : "No upcoming match";
+  const selectedYear = state.selectedSeasonYear || currentYear;
+  const isLiveSeason = String(state.selectedSeasonYear || "").trim() === currentYear;
+  const totalFixtures = dashboard.summary?.fixture_count ?? (dashboard.fixtures || []).length;
+  const playedMatches = dashboard.summary?.matches_played ?? 0;
+  const pendingMatches = Math.max(0, totalFixtures - playedMatches);
+  const upcomingAvailability = Array.isArray(landingNextMatch.availability) ? landingNextMatch.availability.length : 0;
+  const totalPlayers = (dashboard.members || []).length;
+  elements.seasonLabel.textContent = `${selectedYear} Season`;
+  if (elements.availabilityLabel) {
+    elements.availabilityLabel.textContent = totalPlayers
+      ? `${upcomingAvailability}/${totalPlayers}`
+      : `${upcomingAvailability} available`;
+  }
+  if (isLiveSeason) {
+    if (elements.nextMatchLabelTitle) {
+      elements.nextMatchLabelTitle.textContent = "Next Match";
+    }
+    elements.nextMatchLabel.textContent = landingNextMatch.date_label
+      ? `${landingNextMatch.date_label} vs ${landingNextMatch.opponent}`
+      : "No upcoming match";
+    if (elements.seasonModeLabel) {
+      elements.seasonModeLabel.textContent = `Fixtures : ${totalFixtures}, Played: ${playedMatches}, Pending: ${pendingMatches}`;
+    }
+  } else {
+    if (elements.nextMatchLabelTitle) {
+      elements.nextMatchLabelTitle.textContent = "Last Match";
+    }
+    const historicalSummary = getHistoricalSeasonSummary(dashboard);
+    elements.nextMatchLabel.textContent = historicalSummary.headline;
+    if (elements.seasonModeLabel) {
+      elements.seasonModeLabel.textContent = historicalSummary.details;
+    }
+  }
   elements.llmLabel.textContent = dashboard.llm.model || dashboard.llm.provider;
   elements.uploadSeason.value = elements.uploadSeason.value || ARCHIVE_SEASON_LABEL;
   renderViewerProfile(dashboard);
+  updateViewerPlayerSnapshot(dashboard);
   populateMatchSelects(dashboard.fixtures);
   populatePlayerSelects(dashboard.members, dashboard.all_members || dashboard.members || []);
+  if (!state.canManageOtherAvailability && elements.availabilityPlayerSelect) {
+    elements.availabilityPlayerSelect.hidden = true;
+    elements.availabilityPlayerSelect.disabled = true;
+    elements.availabilityPlayerSelect.value = currentSignedInMemberName(dashboard) || dashboard.members[0]?.name || "";
+  }
   populateTeamSelect(dashboard.teams || []);
   populateArchiveSelect(dashboard.archive_uploads);
   populateArchiveYearSelect(dashboard.archive_uploads);
@@ -1791,6 +2117,7 @@ function renderDashboard(dashboard) {
   renderLeaderboard();
   renderPlayerProfile();
   renderTeamPage();
+  renderAvailabilityFixtureEditor(dashboard.fixtures);
   renderArchive(dashboard.archive_uploads);
   renderDuplicates(dashboard.duplicate_uploads || []);
   renderArchiveScorecards(dashboard.archive_uploads);
@@ -1799,6 +2126,11 @@ function renderDashboard(dashboard) {
 }
 
 async function loadDashboard() {
+  try {
+    state.viewerAuth = await window.HeartlakePages.authMe();
+  } catch {
+    state.viewerAuth = null;
+  }
   const query = state.selectedFocusClubId ? `?focus_club_id=${encodeURIComponent(state.selectedFocusClubId)}` : "";
   const dashboard = await runAction(() => getJson(`/api/dashboard${query}`), "Club dashboard loaded.");
   if (dashboard) {
@@ -1985,7 +2317,7 @@ elements.scorebookBallForm.addEventListener("submit", async (event) => {
 
 async function saveDashboardAvailability() {
   const payload = {
-    player_name: elements.availabilityPlayerSelect.value,
+    player_name: currentAvailabilityPlayerName(),
     status: elements.availabilityStatusSelect.value,
     note: elements.availabilityNoteInput.value,
     club_id: state.selectedFocusClubId || currentMatch().club_id || "",
@@ -2009,15 +2341,47 @@ elements.availabilityForm.addEventListener("submit", async (event) => {
   await saveDashboardAvailability();
 });
 
+if (elements.availabilityFixturesEditor) {
+  elements.availabilityFixturesEditor.addEventListener("submit", async (event) => {
+    const form = event.target.closest("[data-fixture-availability-form]");
+    if (!form) return;
+    event.preventDefault();
+    const playerName = currentAvailabilityPlayerName();
+    if (!playerName) {
+      return;
+    }
+    const dashboard = await runAction(
+      () =>
+        postJson(`/api/matches/${form.dataset.fixtureAvailabilityForm}/availability`, {
+          player_name: playerName,
+          status: form.elements.status.value,
+          note: form.elements.note.value.trim(),
+          club_id: state.selectedFocusClubId || currentMatch().club_id || "",
+        }),
+      "Availability updated."
+    );
+    if (dashboard) {
+      renderDashboard(dashboard);
+      elements.availabilityNoteInput.value = "";
+    }
+  });
+}
+
 async function autoSaveDashboardAvailability() {
-  if (!elements.availabilityPlayerSelect.value || !elements.availabilityStatusSelect.value) {
+  if (!elements.availabilityStatusSelect.value) {
     return;
   }
   await saveDashboardAvailability();
 }
 
 elements.availabilityStatusSelect.addEventListener("change", autoSaveDashboardAvailability);
-elements.availabilityPlayerSelect.addEventListener("change", autoSaveDashboardAvailability);
+elements.availabilityPlayerSelect.addEventListener("change", () => {
+  if (!state.canManageOtherAvailability) {
+    return;
+  }
+  state.selectedAvailabilityPlayerName = elements.availabilityPlayerSelect.value || state.selectedAvailabilityPlayerName;
+  autoSaveDashboardAvailability();
+});
 
 elements.performanceForm.addEventListener("submit", async (event) => {
   event.preventDefault();

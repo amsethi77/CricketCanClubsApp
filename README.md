@@ -129,6 +129,15 @@ This section captures the user requirements in the order they were given and ref
 86. Use a modern Tailwind CSS + Node-based visual refresh for the web app.
 87. Make dashboard availability updates save reliably for the selected club and match.
 88. Ensure the dashboard and multipage flows always send the signed-in auth token with requests.
+89. Show a player snapshot immediately after login, before or alongside club selection.
+90. Split player snapshot stats into year-wise and club-wise tables.
+91. Cache player and club summary breakdowns in SQLite tables for fast reads.
+92. Use cricket-style milestone bands for summary stats: `25+`, `50+`, and `100+`.
+93. Show player snapshot totals with runs, highest score, average, strike rate, milestone counts, wickets, catches, and games.
+94. Make player availability game-by-game, not season-wide, and show the scheduled date for each fixture.
+95. Let player profile pages show all fixtures, totals, rankings, and involvement across all clubs the player belongs to.
+96. Use a more professional typography system with cleaner font sizes and a consistent `Inter` / serif pairing.
+97. Make the clubs page and dashboard feel more polished and less oversized.
 
 ## Current behavior summary
 
@@ -143,6 +152,10 @@ This section captures the user requirements in the order they were given and ref
 - The club dashboard is now club-focused and removes the in-page club picker so it reflects the selected club only.
 - Season setup stores fixtures with their own season year so `2026` and `2027` schedules can coexist.
 - Player availability is shown against the selected club's active season fixtures after login.
+- The clubs page now shows a player snapshot plus year-wise and club-wise summary tables using cached SQLite stats.
+- Summary milestone counts use `25+`, `50+`, and `100+` bands.
+- Player availability is now set per scheduled game, not as one season-wide toggle.
+- The player profile is the cross-club career view, while the club dashboard stays club-local.
 - The local UI is designed as the web baseline before a later native iPhone app conversion.
 - The repo now has an Azure App Service deployment plan checked in under `.azure/plan.md`, App Service infrastructure under `infra/`, and a GitHub Actions workflow under `.github/workflows/deploy.yml`.
 - Runtime data such as SQLite, uploads, duplicates, and cache files are treated as server data, while JSON snapshots are kept as the recovery source in Git.

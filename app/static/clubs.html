@@ -4,8 +4,14 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Select Club · Heartlake Clubs</title>
-    <link rel="stylesheet" href="/assets/styles.css?v=20260423b" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Source+Serif+4:opsz,wght@8..60;400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
     <link rel="stylesheet" href="/assets/tailwind.css?v=20260423c" />
+    <link rel="stylesheet" href="/assets/styles.css?v=20260424e" />
   </head>
   <body>
     <div class="page-shell">
@@ -26,7 +32,7 @@
       <section class="panel onboarding-panel">
         <div class="stack-card">
           <p class="section-kicker">Club Selection</p>
-          <h1 id="clubsGreeting">Signed in</h1>
+          <h1 id="clubsGreeting" class="clubs-greeting">Signed in</h1>
           <p id="selectedClubSummary" class="lede">Choose your current club. Your primary club is the default.</p>
           <div id="clubsStatus" class="status-banner" hidden></div>
           <form id="clubSearchForm" class="toolbar-actions">
@@ -36,6 +42,69 @@
           </form>
           <h2 class="section-heading">Available clubs</h2>
           <div id="clubsList" class="detail-stack"></div>
+          <div class="mini-stat">
+            <span>Player Snapshot</span>
+            <strong id="clubsPlayerSnapshotTitle">No player selected</strong>
+            <small id="clubsPlayerSnapshotDetails">Sign in with your player profile to see your totals here.</small>
+          </div>
+          <div class="detail-card snapshot-breakdown">
+            <strong class="snapshot-breakdown-title">Year wise</strong>
+            <div class="review-table-wrap">
+              <table class="review-table snapshot-table">
+                <thead>
+                  <tr>
+                    <th>Year</th>
+                    <th>Mat</th>
+                    <th>Inns</th>
+                    <th>NO</th>
+                    <th>Runs</th>
+                    <th>HS</th>
+                    <th>Ave</th>
+                    <th>BF</th>
+                    <th>SR</th>
+                    <th>25+</th>
+                    <th>50+</th>
+                    <th>100+</th>
+                    <th>4s</th>
+                    <th>6s</th>
+                    <th>Ct</th>
+                    <th>St</th>
+                  </tr>
+                </thead>
+                <tbody id="clubsPlayerYearRows">
+                  <tr><td colspan="16">Loading year wise breakdown...</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <strong class="snapshot-breakdown-title">Club wise</strong>
+            <div class="review-table-wrap">
+              <table class="review-table snapshot-table">
+                <thead>
+                  <tr>
+                    <th>Club</th>
+                    <th>Mat</th>
+                    <th>Inns</th>
+                    <th>NO</th>
+                    <th>Runs</th>
+                    <th>HS</th>
+                    <th>Ave</th>
+                    <th>BF</th>
+                    <th>SR</th>
+                    <th>25+</th>
+                    <th>50+</th>
+                    <th>100+</th>
+                    <th>4s</th>
+                    <th>6s</th>
+                    <th>Ct</th>
+                    <th>St</th>
+                  </tr>
+                </thead>
+                <tbody id="clubsPlayerClubRows">
+                  <tr><td colspan="16">Loading club wise breakdown...</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
           <div class="inline-actions">
             <a id="seasonSetupLink" class="primary-link" href="/season-setup">Season setup</a>
             <a id="playerAvailabilityLink" class="primary-link" href="/player-availability">Player availability</a>
@@ -44,7 +113,7 @@
         </div>
       </section>
     </div>
-    <script src="/assets/multipage.js?v=20260423e"></script>
-    <script src="/assets/clubs.js?v=20260423e"></script>
+    <script src="/assets/multipage.js?v=20260424d"></script>
+    <script src="/assets/clubs.js?v=20260424d"></script>
   </body>
 </html>

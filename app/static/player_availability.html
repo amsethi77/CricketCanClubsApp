@@ -4,8 +4,14 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Player Availability · Heartlake Clubs</title>
-    <link rel="stylesheet" href="/assets/styles.css?v=20260423b" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Source+Serif+4:opsz,wght@8..60;400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
     <link rel="stylesheet" href="/assets/tailwind.css?v=20260423c" />
+    <link rel="stylesheet" href="/assets/styles.css?v=20260424d" />
   </head>
   <body>
     <div class="page-shell">
@@ -34,16 +40,7 @@
             <select id="availabilityClubSelect"></select>
             <button id="availabilityClubSwitch" class="secondary-button wide" type="button">Switch selected club</button>
           </div>
-          <form id="seasonOutlookForm" class="form-grid">
-            <select id="seasonOutlookStatus" name="status">
-              <option value="">Overall availability for selected club</option>
-              <option value="available">Available most weeks</option>
-              <option value="maybe">Occasional / maybe</option>
-              <option value="unavailable">Unavailable this season</option>
-            </select>
-            <input id="seasonOutlookNote" name="note" type="text" placeholder="Club-level note for this season" />
-            <button class="secondary-button wide" type="submit">Save club outlook</button>
-          </form>
+          <p class="lede">Set your availability per scheduled game below. The date is shown on each fixture card.</p>
           <div id="playerFixtures" class="detail-stack"></div>
           <a class="primary-link" href="/player-profile">Open player profile</a>
           <a class="primary-link" href="/clubs">Back to club selection</a>

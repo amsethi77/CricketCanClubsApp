@@ -138,18 +138,251 @@ def _clubs_page_html(request: Request, search: str = "", focus_club_id: str = ""
     store = load_store()
     token = _auth_token_from_request(request)
     current_club_id = focus_club_id or str(store.get("viewer_profile", {}).get("primary_club_id") or "")
+    dashboard = current_dashboard(store, current_club_id)
     member_club_ids: list[str] = []
+    viewer_display_name = "Signed in"
+    snapshot_title = "No player selected"
+    snapshot_details = "Sign in with your player profile to see your totals here."
+    year_rows_html = '<tr><td colspan="16">Loading year wise breakdown...</td></tr>'
+    club_rows_html = '<tr><td colspan="16">Loading club wise breakdown...</td></tr>'
+
+    def _format_stat(value: Any, decimals: int = 0) -> str:
+        if value in ("", None):
+            return "—"
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            return html.escape(str(value))
+        if decimals:
+            text = f"{number:.{decimals}f}".rstrip("0").rstrip(".")
+            return text or "0"
+        return str(int(round(number)))
+
+    def _player_row_from_rankings(payload: dict[str, Any], player_name: str) -> dict[str, Any] | None:
+        for key in ("player_stats", "batting_rankings", "combined_player_stats"):
+            rows = payload.get(key, []) or []
+            row = next((item for item in rows if str(item.get("player_name") or "").strip() == player_name), None)
+            if row:
+                return row
+        return None
+
+    def _player_row_from_dashboard(payload: dict[str, Any], player_name: str) -> dict[str, Any]:
+        row = _player_row_from_rankings(payload, player_name)
+        return row or {
+            "player_name": player_name,
+            "matches": 0,
+            "batting_innings": 0,
+            "outs": 0,
+            "runs": 0,
+            "balls": 0,
+            "batting_average": 0.0,
+            "strike_rate": 0.0,
+            "fours": 0,
+            "sixes": 0,
+            "wickets": 0,
+            "catches": 0,
+        }
+
     if token:
         try:
             user_row, current_club_id = _auth_user_from_token(token)
+            dashboard = current_dashboard(store, current_club_id)
+            viewer_display_name = str(user_row["display_name"] or user_row["email"] or user_row["mobile"] or "Signed in")
             member_id = str(user_row["member_id"] or "")
-            member = next((item for item in store.get("members", []) if item.get("id") == member_id), None)
+            members = dashboard.get("all_members") or dashboard.get("members") or []
+            viewer_hints = {
+                hint
+                for hint in (
+                    str(user_row["display_name"] or "").strip().lower(),
+                    str(user_row["email"] or "").strip().lower(),
+                    str(user_row["mobile"] or "").strip().lower(),
+                )
+                if hint
+            }
+            member = next(
+                (
+                    item
+                    for item in members
+                    if item.get("id") == member_id
+                    or str(item.get("name") or "").strip().lower() in viewer_hints
+                    or str(item.get("full_name") or "").strip().lower() in viewer_hints
+                    or str(item.get("phone") or "").strip().lower() in viewer_hints
+                    or str(item.get("email") or "").strip().lower() in viewer_hints
+                    or any(str(alias or "").strip().lower() in viewer_hints for alias in item.get("aliases", []))
+                ),
+                None,
+            )
             if member:
+                member_name = str(member.get("name") or "")
+                viewer_display_name = str(member.get("full_name") or member.get("name") or viewer_display_name)
                 member_club_ids = [
                     str(club.get("club_id") or "").strip()
                     for club in member.get("club_memberships", [])
                     if str(club.get("club_id") or "").strip()
                 ]
+                member_aliases = {
+                    hint
+                    for hint in (
+                        str(member.get("name") or "").strip().lower(),
+                        str(member.get("full_name") or "").strip().lower(),
+                        str(user_row["display_name"] or "").strip().lower(),
+                        str(user_row["email"] or "").strip().lower(),
+                        str(user_row["mobile"] or "").strip().lower(),
+                        *(str(alias or "").strip().lower() for alias in member.get("aliases", [])),
+                    )
+                    if hint
+                }
+                def _performance_matches_member(performance_name: str) -> bool:
+                    return str(performance_name or "").strip().lower() in member_aliases
+
+                def _highest_score_for(year: str | None = None, club_id: str | None = None) -> int | None:
+                    highest: int | None = None
+                    for fixture in store.get("fixtures", []):
+                        if year and str(fixture.get("season_year") or "").strip() != str(year).strip():
+                            continue
+                        if club_id and str(fixture.get("club_id") or "").strip() != str(club_id).strip():
+                            continue
+                        for performance in fixture.get("performances", []) or []:
+                            if not _performance_matches_member(performance.get("player_name") or ""):
+                                continue
+                            runs = int(performance.get("runs") or 0)
+                            highest = runs if highest is None else max(highest, runs)
+                    for archive in store.get("archive_uploads", []):
+                        if year and str(archive.get("archive_year") or "").strip() != str(year).strip():
+                            continue
+                        if club_id and str(archive.get("club_id") or "").strip() != str(club_id).strip():
+                            continue
+                        for performance in archive.get("suggested_performances", []) or []:
+                            if not _performance_matches_member(performance.get("player_name") or ""):
+                                continue
+                            runs = int(performance.get("runs") or 0)
+                            highest = runs if highest is None else max(highest, runs)
+                    return highest
+
+                snapshot_stats = next(
+                    (item for item in dashboard.get("member_summary_stats", []) if item.get("player_name") == member_name),
+                    None,
+                ) or next(
+                    (item for item in dashboard.get("all_combined_player_stats", []) if item.get("player_name") == member_name),
+                    {"runs": 0, "wickets": 0, "catches": 0},
+                )
+                all_fixtures = dashboard.get("all_fixtures", []) or []
+                appearances = [
+                    fixture
+                    for fixture in all_fixtures
+                    if any((performance.get("player_name") or "") == member_name for performance in fixture.get("performances", []))
+                ]
+                appearances.sort(key=lambda item: str(item.get("date") or ""), reverse=True)
+                last_game = appearances[0] if appearances else None
+                upcoming_games = [
+                    fixture
+                    for fixture in all_fixtures
+                    if str(fixture.get("status") or "").lower() == "scheduled"
+                    and any((performance.get("player_name") or "") == member_name for performance in fixture.get("performances", []))
+                ]
+                upcoming_games.sort(key=lambda item: str(item.get("date") or ""))
+                next_game = upcoming_games[0] if upcoming_games else None
+                snapshot_title = str(member.get("full_name") or member_name or "Player")
+                games_played = max(int(snapshot_stats.get("matches") or 0), len(appearances))
+                snapshot_bits = [
+                    f'{int(snapshot_stats.get("runs") or 0)} runs',
+                    f'HS: {int(snapshot_stats.get("highest_score") or 0) if snapshot_stats.get("highest_score") is not None else "—"}',
+                    f'Avg: {_format_stat(snapshot_stats.get("batting_average"), 2)}',
+                    f'SR: {_format_stat(snapshot_stats.get("strike_rate"), 2)}',
+                    f'25s: {int(snapshot_stats.get("scores_25_plus") or 0)}',
+                    f'50s: {int(snapshot_stats.get("scores_50_plus") or 0)}',
+                    f'100s: {int(snapshot_stats.get("scores_100_plus") or 0)}',
+                    f'{int(snapshot_stats.get("wickets") or 0)} wickets',
+                    f'{int(snapshot_stats.get("catches") or 0)} catches',
+                    f"{games_played} games",
+                ]
+                if last_game:
+                    snapshot_bits.append(f'Last: {last_game.get("date_label") or "Game"} vs {last_game.get("opponent") or "TBD"}')
+                if next_game:
+                    snapshot_bits.append(f'Next: {next_game.get("date_label") or "Game"} vs {next_game.get("opponent") or "TBD"}')
+                snapshot_details = " · ".join(snapshot_bits)
+
+                year_rows: list[str] = []
+                year_summary_rows = dashboard.get("member_year_stats", []) or []
+                for year in dashboard.get("ranking_years", []) or []:
+                    year_row = next(
+                        (
+                            item
+                            for item in year_summary_rows
+                            if str(item.get("season_year") or "").strip() == str(year)
+                            and (
+                                str(item.get("player_name") or "").strip() == member_name
+                                or str(item.get("player_name") or "").strip().lower() == member_name.lower()
+                            )
+                        ),
+                        {},
+                    )
+                    year_no = max(0, int(year_row.get("batting_innings", 0) or 0) - int(year_row.get("outs", 0) or 0))
+                    year_hs = _highest_score_for(str(year))
+                    year_rows.append(
+                        "<tr>"
+                        f"<td>{html.escape(str(year))}</td>"
+                        f"<td>{_format_stat(year_row.get('matches'))}</td>"
+                        f"<td>{_format_stat(year_row.get('batting_innings'))}</td>"
+                        f"<td>{_format_stat(year_no)}</td>"
+                        f"<td>{_format_stat(year_row.get('runs'))}</td>"
+                        f"<td>{html.escape(str(year_hs) if year_hs is not None else '—')}</td>"
+                        f"<td>{_format_stat(year_row.get('batting_average'), 2)}</td>"
+                        f"<td>{_format_stat(year_row.get('balls'))}</td>"
+                        f"<td>{_format_stat(year_row.get('strike_rate'), 2)}</td>"
+                        f"<td>{_format_stat(year_row.get('scores_25_plus'))}</td>"
+                        f"<td>{_format_stat(year_row.get('scores_50_plus') or year_row.get('fifties') or year_row.get('fiftys'))}</td>"
+                        f"<td>{_format_stat(year_row.get('scores_100_plus') or year_row.get('centuries') or year_row.get('hundreds'))}</td>"
+                        f"<td>{_format_stat(year_row.get('fours'))}</td>"
+                        f"<td>{_format_stat(year_row.get('sixes'))}</td>"
+                        f"<td>{_format_stat(year_row.get('catches'))}</td>"
+                        f"<td>{_format_stat(year_row.get('stumpings'))}</td>"
+                        "</tr>"
+                    )
+                if year_rows:
+                    year_rows_html = "".join(year_rows)
+
+                club_rows: list[str] = []
+                club_summary_rows = dashboard.get("member_club_stats", []) or []
+                for club in member.get("club_memberships", []):
+                    club_id = str(club.get("club_id") or "").strip()
+                    club_name = str(club.get("club_name") or club_id or "").strip()
+                    if not club_id:
+                        continue
+                    club_row = next(
+                        (
+                            item
+                            for item in club_summary_rows
+                            if str(item.get("club_id") or "").strip() == club_id
+                            and (
+                                str(item.get("player_name") or "").strip() == member_name
+                                or str(item.get("player_name") or "").strip().lower() == member_name.lower()
+                            )
+                        ),
+                        {},
+                    )
+                    club_rows.append(
+                        "<tr>"
+                        f"<td>{html.escape(club_name)}</td>"
+                        f"<td>{_format_stat(club_row.get('matches'))}</td>"
+                        f"<td>{_format_stat(club_row.get('batting_innings'))}</td>"
+                        f"<td>{_format_stat(max(0, int(club_row.get('batting_innings', 0) or 0) - int(club_row.get('outs', 0) or 0)))}</td>"
+                        f"<td>{_format_stat(club_row.get('runs'))}</td>"
+                        f"<td>{html.escape(str(club_row.get('highest_score')) if club_row.get('highest_score') is not None else '—')}</td>"
+                        f"<td>{_format_stat(club_row.get('batting_average'), 2)}</td>"
+                        f"<td>{_format_stat(club_row.get('balls'))}</td>"
+                        f"<td>{_format_stat(club_row.get('strike_rate'), 2)}</td>"
+                        f"<td>{_format_stat(club_row.get('scores_25_plus'))}</td>"
+                        f"<td>{_format_stat(club_row.get('scores_50_plus'))}</td>"
+                        f"<td>{_format_stat(club_row.get('scores_100_plus'))}</td>"
+                        f"<td>{_format_stat(club_row.get('fours'))}</td>"
+                        f"<td>{_format_stat(club_row.get('sixes'))}</td>"
+                        f"<td>{_format_stat(club_row.get('catches'))}</td>"
+                        f"<td>—</td>"
+                        "</tr>"
+                    )
+                if club_rows:
+                    club_rows_html = "".join(club_rows)
         except HTTPException:
             member_club_ids = []
     clubs = _sorted_club_choices(store, current_club_id)
@@ -224,7 +457,7 @@ def _clubs_page_html(request: Request, search: str = "", focus_club_id: str = ""
         <meta charset="UTF-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1.0" />
         <title>Select Club · Heartlake Clubs</title>
-        <link rel="stylesheet" href="/assets/styles.css?v=20260423b" />
+        <link rel="stylesheet" href="/assets/styles.css?v=20260424e" />
       </head>
       <body>
         <div class="page-shell">
@@ -232,7 +465,7 @@ def _clubs_page_html(request: Request, search: str = "", focus_club_id: str = ""
           <section class="panel onboarding-panel">
             <div class="stack-card">
               <p class="section-kicker">Club Selection</p>
-              <h1 id="clubsGreeting">Signed in</h1>
+              <h1 id="clubsGreeting">Welcome, {html.escape(viewer_display_name)}</h1>
               <p id="selectedClubSummary" class="lede">Choose your current club. Your primary club is the default.</p>
               <div id="clubsStatus" class="status-banner" hidden></div>
               <form class="toolbar-actions" method="get" action="/clubs">
@@ -242,6 +475,65 @@ def _clubs_page_html(request: Request, search: str = "", focus_club_id: str = ""
               </form>
               <h2 class="section-heading">Available clubs</h2>
               <div id="clubsList" class="detail-stack" data-server-rendered="true">{cards}</div>
+              <div class="mini-stat">
+                <span>Player Snapshot</span>
+                <strong id="clubsPlayerSnapshotTitle">{html.escape(snapshot_title)}</strong>
+                <small id="clubsPlayerSnapshotDetails">{html.escape(snapshot_details)}</small>
+              </div>
+              <div class="detail-card snapshot-breakdown">
+                <strong class="snapshot-breakdown-title">Year wise</strong>
+                <div class="review-table-wrap">
+                  <table class="review-table snapshot-table">
+                    <thead>
+                      <tr>
+                        <th>Year</th>
+                        <th>Mat</th>
+                        <th>Inns</th>
+                        <th>NO</th>
+                        <th>Runs</th>
+                        <th>HS</th>
+                        <th>Ave</th>
+                        <th>BF</th>
+                        <th>SR</th>
+                        <th>25+</th>
+                        <th>50+</th>
+                        <th>100+</th>
+                        <th>4s</th>
+                        <th>6s</th>
+                        <th>Ct</th>
+                        <th>St</th>
+                      </tr>
+                    </thead>
+                    <tbody id="clubsPlayerYearRows">{year_rows_html}</tbody>
+                  </table>
+                </div>
+                <strong class="snapshot-breakdown-title">Club wise</strong>
+                <div class="review-table-wrap">
+                  <table class="review-table snapshot-table">
+                    <thead>
+                      <tr>
+                        <th>Club</th>
+                        <th>Mat</th>
+                        <th>Inns</th>
+                        <th>NO</th>
+                        <th>Runs</th>
+                        <th>HS</th>
+                        <th>Ave</th>
+                        <th>BF</th>
+                        <th>SR</th>
+                        <th>25+</th>
+                        <th>50+</th>
+                        <th>100+</th>
+                        <th>4s</th>
+                        <th>6s</th>
+                        <th>Ct</th>
+                        <th>St</th>
+                      </tr>
+                    </thead>
+                    <tbody id="clubsPlayerClubRows">{club_rows_html}</tbody>
+                  </table>
+                </div>
+              </div>
               <div class="inline-actions">
                 <a id="seasonSetupLink" class="primary-link" href="/season-setup">Season setup</a>
                 <a id="playerAvailabilityLink" class="primary-link" href="/player-availability">Player availability</a>
@@ -250,8 +542,8 @@ def _clubs_page_html(request: Request, search: str = "", focus_club_id: str = ""
             </div>
           </section>
         </div>
-        <script src="/assets/multipage.js?v=20260423d"></script>
-        <script src="/assets/clubs.js?v=20260423d"></script>
+        <script src="/assets/multipage.js?v=20260424d"></script>
+        <script src="/assets/clubs.js?v=20260424d"></script>
       </body>
     </html>
     """
@@ -2178,14 +2470,24 @@ def update_match_details(match_id: str, request: MatchDetailsRequest, x_auth_tok
 
 @app.post("/api/matches/{match_id}/availability")
 def update_availability(match_id: str, request: AvailabilityUpdateRequest, x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
-    user_row, _ = _require_permission(x_auth_token, "manage_fixtures")
+    user_row, current_club_id = _auth_user_from_token(x_auth_token)
     store = load_store()
     try:
         match = get_match_or_404(store, match_id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
 
-    player_name = resolve_member_name(store, request.player_name)
+    member = next((item for item in store.get("members", []) if item.get("id") == (user_row["member_id"] or "")), None)
+    if not member:
+        raise HTTPException(status_code=400, detail="This signed-in account is not linked to a player profile.")
+    effective_role = _effective_role_name(user_row, current_club_id)
+    can_edit_other_availability = effective_role in {"captain", "superadmin"}
+    requested_player_name = resolve_member_name(store, request.player_name) if request.player_name else ""
+    player_name = member.get("name", "")
+    if can_edit_other_availability and requested_player_name:
+        player_name = requested_player_name
+    elif requested_player_name and requested_player_name != player_name:
+        raise HTTPException(status_code=403, detail="Only captains or superadmins can update another player's availability.")
     match["availability_statuses"][player_name] = request.status
     if request.note.strip():
         match["availability_notes"][player_name] = request.note.strip()
@@ -2193,24 +2495,6 @@ def update_availability(match_id: str, request: AvailabilityUpdateRequest, x_aut
         match["availability_notes"].pop(player_name, None)
     _touch_fixture_audit(match, user_row)
     save_store(store)
-    with _auth_connection() as connection:
-        member = next((item for item in store.get("members", []) if item.get("name") == player_name), None)
-        if member:
-            connection.execute(
-                """
-                INSERT INTO fixture_availability (fixture_id, member_id, status, note)
-                VALUES (?, ?, ?, ?)
-                ON CONFLICT(fixture_id, member_id) DO UPDATE SET
-                  status = excluded.status,
-                  note = excluded.note
-                """,
-                (
-                    match_id,
-                    member.get("id", ""),
-                    request.status,
-                    request.note.strip(),
-                ),
-            )
     return current_dashboard(load_store(), request.club_id or match.get("club_id") or "")
 
 

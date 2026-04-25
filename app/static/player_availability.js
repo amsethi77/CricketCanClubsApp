@@ -4,9 +4,6 @@ const heading = document.getElementById("availabilityPageTitle");
 const summary = document.getElementById("availabilityPageSummary");
 const fixturesList = document.getElementById("playerFixtures");
 const statusBanner = document.getElementById("playerAvailabilityStatus");
-const seasonOutlookForm = document.getElementById("seasonOutlookForm");
-const seasonOutlookStatus = document.getElementById("seasonOutlookStatus");
-const seasonOutlookNote = document.getElementById("seasonOutlookNote");
 const clubSearchInput = document.getElementById("availabilityClubSearch");
 const clubSelect = document.getElementById("availabilityClubSelect");
 const clubSwitchButton = document.getElementById("availabilityClubSwitch");
@@ -40,8 +37,6 @@ function renderFixtures() {
     return;
   }
   const outlook = payload?.season_outlook || {};
-  seasonOutlookStatus.value = outlook.status || "";
-  seasonOutlookNote.value = outlook.note || "";
   renderClubOptions();
   fixturesList.innerHTML = (payload.fixtures || [])
     .map((fixture) => {
@@ -51,6 +46,7 @@ function renderFixtures() {
         <article class="detail-card">
           <strong>${fixture.date_label} vs ${fixture.opponent}</strong>
           <p>${fixture.details?.venue || "Venue TBD"} · ${fixture.details?.scheduled_time || "Time TBD"}</p>
+          <small>${fixture.date || "Date TBD"}</small>
           <small>Current status: ${currentStatus}${currentNote ? ` · ${currentNote}` : ""}</small>
           <form class="inline-actions" data-fixture-form="${fixture.id}">
             <select name="status">
@@ -75,25 +71,6 @@ async function loadAvailability() {
     : "Link this account to a player profile to update availability.";
   renderFixtures();
 }
-
-seasonOutlookForm.addEventListener("submit", async (event) => {
-  event.preventDefault();
-  try {
-    payload = await postJson(
-      "/api/player/season-availability",
-      {
-        status: seasonOutlookStatus.value,
-        note: seasonOutlookNote.value.trim(),
-        club_id: payload?.club?.id || "",
-      },
-      true
-    );
-    renderFixtures();
-    setStatus("Club availability outlook saved.", "success");
-  } catch (error) {
-    setStatus(error.message, "error");
-  }
-});
 
 fixturesList.addEventListener("submit", async (event) => {
   const form = event.target.closest("[data-fixture-form]");

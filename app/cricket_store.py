@@ -2638,10 +2638,6 @@ def _schema_tables() -> str:
       highest_score INTEGER,
       top_batter TEXT,
       top_batter_runs INTEGER,
-      matches_played INTEGER,
-      matches_won INTEGER,
-      matches_lost INTEGER,
-      matches_nr INTEGER,
       scores_25_plus INTEGER,
       scores_50_plus INTEGER,
       scores_100_plus INTEGER,
@@ -2662,10 +2658,6 @@ def _schema_tables() -> str:
       highest_score INTEGER,
       top_batter TEXT,
       top_batter_runs INTEGER,
-      matches_played INTEGER,
-      matches_won INTEGER,
-      matches_lost INTEGER,
-      matches_nr INTEGER,
       scores_25_plus INTEGER,
       scores_50_plus INTEGER,
       scores_100_plus INTEGER,
@@ -3367,12 +3359,10 @@ def _write_relational_state(connection: sqlite3.Connection, store: dict[str, Any
             INSERT INTO club_summary_stats (
               club_id, club_name, season_year, member_count, team_count, fixture_count, archive_count,
               total_runs, total_wickets, total_catches, highest_score, top_batter, top_batter_runs,
-              matches_played, matches_won, matches_lost, matches_nr,
               scores_25_plus, scores_50_plus, scores_100_plus, updated_at
             ) VALUES (
               :club_id, :club_name, :season_year, :member_count, :team_count, :fixture_count, :archive_count,
               :total_runs, :total_wickets, :total_catches, :highest_score, :top_batter, :top_batter_runs,
-              :matches_played, :matches_won, :matches_lost, :matches_nr,
               :scores_25_plus, :scores_50_plus, :scores_100_plus, :updated_at
             )
             """,
@@ -3383,12 +3373,10 @@ def _write_relational_state(connection: sqlite3.Connection, store: dict[str, Any
             INSERT INTO club_year_stats (
               club_id, season_year, club_name, member_count, fixture_count, archive_count, total_runs,
               total_wickets, total_catches, highest_score, top_batter, top_batter_runs,
-              matches_played, matches_won, matches_lost, matches_nr,
               scores_25_plus, scores_50_plus, scores_100_plus, updated_at
             ) VALUES (
               :club_id, :season_year, :club_name, :member_count, :fixture_count, :archive_count, :total_runs,
               :total_wickets, :total_catches, :highest_score, :top_batter, :top_batter_runs,
-              :matches_played, :matches_won, :matches_lost, :matches_nr,
               :scores_25_plus, :scores_50_plus, :scores_100_plus, :updated_at
             )
             """,
@@ -3858,19 +3846,11 @@ def ensure_database() -> None:
                 ("scores_100_plus", "ALTER TABLE member_club_stats ADD COLUMN scores_100_plus INTEGER"),
             ],
             "club_summary_stats": [
-                ("matches_played", "ALTER TABLE club_summary_stats ADD COLUMN matches_played INTEGER"),
-                ("matches_won", "ALTER TABLE club_summary_stats ADD COLUMN matches_won INTEGER"),
-                ("matches_lost", "ALTER TABLE club_summary_stats ADD COLUMN matches_lost INTEGER"),
-                ("matches_nr", "ALTER TABLE club_summary_stats ADD COLUMN matches_nr INTEGER"),
                 ("scores_25_plus", "ALTER TABLE club_summary_stats ADD COLUMN scores_25_plus INTEGER"),
                 ("scores_50_plus", "ALTER TABLE club_summary_stats ADD COLUMN scores_50_plus INTEGER"),
                 ("scores_100_plus", "ALTER TABLE club_summary_stats ADD COLUMN scores_100_plus INTEGER"),
             ],
             "club_year_stats": [
-                ("matches_played", "ALTER TABLE club_year_stats ADD COLUMN matches_played INTEGER"),
-                ("matches_won", "ALTER TABLE club_year_stats ADD COLUMN matches_won INTEGER"),
-                ("matches_lost", "ALTER TABLE club_year_stats ADD COLUMN matches_lost INTEGER"),
-                ("matches_nr", "ALTER TABLE club_year_stats ADD COLUMN matches_nr INTEGER"),
                 ("scores_25_plus", "ALTER TABLE club_year_stats ADD COLUMN scores_25_plus INTEGER"),
                 ("scores_50_plus", "ALTER TABLE club_year_stats ADD COLUMN scores_50_plus INTEGER"),
                 ("scores_100_plus", "ALTER TABLE club_year_stats ADD COLUMN scores_100_plus INTEGER"),
@@ -5172,10 +5152,6 @@ def _club_dashboard_card(
         "team_count": _club_team_count(store, club, member_names),
         "fixture_count": season_stats["fixture_count"] if season_stats and season_stats.get("fixture_count") is not None else len(club_fixtures),
         "archive_count": season_stats["archive_count"] if season_stats and season_stats.get("archive_count") is not None else _club_archive_count(archives, member_names),
-        "matches_played": season_stats["matches_played"] if season_stats and season_stats.get("matches_played") is not None else 0,
-        "matches_won": season_stats["matches_won"] if season_stats and season_stats.get("matches_won") is not None else 0,
-        "matches_lost": season_stats["matches_lost"] if season_stats and season_stats.get("matches_lost") is not None else 0,
-        "matches_nr": season_stats["matches_nr"] if season_stats and season_stats.get("matches_nr") is not None else 0,
         "top_batter": season_stats["top_batter"] if season_stats and season_stats.get("top_batter") else (batting_rankings[0]["player_name"] if batting_rankings else ""),
         "top_batter_runs": season_stats["top_batter_runs"] if season_stats and season_stats.get("top_batter_runs") is not None else (batting_rankings[0]["runs"] if batting_rankings else 0),
     }
@@ -5389,10 +5365,6 @@ def build_dashboard(store: dict[str, Any], llm_status: dict[str, Any], focus_clu
             "team_count": _club_team_count(store, focus_club, _club_member_names(store, focus_club)),
             "fixture_count": season_club_year_stats.get("fixture_count") if season_club_year_stats and season_club_year_stats.get("fixture_count") is not None else len(focus_fixtures),
             "archive_count": season_club_year_stats.get("archive_count") if season_club_year_stats and season_club_year_stats.get("archive_count") is not None else _club_archive_count(season_archives, _club_member_names(store, focus_club)),
-            "matches_played": season_club_year_stats.get("matches_played") if season_club_year_stats and season_club_year_stats.get("matches_played") is not None else 0,
-            "matches_won": season_club_year_stats.get("matches_won") if season_club_year_stats and season_club_year_stats.get("matches_won") is not None else 0,
-            "matches_lost": season_club_year_stats.get("matches_lost") if season_club_year_stats and season_club_year_stats.get("matches_lost") is not None else 0,
-            "matches_nr": season_club_year_stats.get("matches_nr") if season_club_year_stats and season_club_year_stats.get("matches_nr") is not None else 0,
             "top_batter": season_club_year_stats.get("top_batter") if season_club_year_stats and season_club_year_stats.get("top_batter") else (focus_batting_rankings[0]["player_name"] if focus_batting_rankings else ""),
             "top_batter_runs": season_club_year_stats.get("top_batter_runs") if season_club_year_stats and season_club_year_stats.get("top_batter_runs") is not None else (focus_batting_rankings[0]["runs"] if focus_batting_rankings else 0),
         },
