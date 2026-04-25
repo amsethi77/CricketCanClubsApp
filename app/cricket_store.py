@@ -142,7 +142,7 @@ def _current_season_label() -> str:
 
 
 def _dashboard_season_years(store: dict[str, Any]) -> list[str]:
-    years: set[str] = {str(datetime.utcnow().year)}
+    years: set[str] = set()
     current_year = int(datetime.utcnow().year)
     for fixture in store.get("fixtures", []):
         season_year = fixture_season_year(fixture)
@@ -155,6 +155,8 @@ def _dashboard_season_years(store: dict[str, Any]) -> list[str]:
             years.add(archive_year)
         elif re.match(r"20\d{2}", archive_date) and int(archive_date[:4]) <= current_year:
             years.add(archive_date[:4])
+    if not years:
+        years.add(str(current_year))
     return sorted(years, reverse=True)
 
 
@@ -2543,6 +2545,135 @@ def _schema_tables() -> str:
       voice_commentary_status TEXT
     );
 
+    CREATE TABLE IF NOT EXISTS member_summary_stats (
+      member_id TEXT PRIMARY KEY,
+      player_name TEXT NOT NULL,
+      full_name TEXT,
+      matches INTEGER,
+      batting_innings INTEGER,
+      outs INTEGER,
+      runs INTEGER,
+      balls INTEGER,
+      batting_average REAL,
+      strike_rate REAL,
+      wickets INTEGER,
+      catches INTEGER,
+      fours INTEGER,
+      sixes INTEGER,
+      highest_score INTEGER,
+      scores_25_plus INTEGER,
+      scores_50_plus INTEGER,
+      scores_100_plus INTEGER,
+      last_game_date TEXT,
+      last_opponent TEXT,
+      next_game_date TEXT,
+      next_opponent TEXT,
+      updated_at TEXT,
+      FOREIGN KEY (member_id) REFERENCES members(id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS member_year_stats (
+      member_id TEXT NOT NULL,
+      season_year TEXT NOT NULL,
+      player_name TEXT NOT NULL,
+      full_name TEXT,
+      matches INTEGER,
+      batting_innings INTEGER,
+      outs INTEGER,
+      runs INTEGER,
+      balls INTEGER,
+      batting_average REAL,
+      strike_rate REAL,
+      wickets INTEGER,
+      catches INTEGER,
+      fours INTEGER,
+      sixes INTEGER,
+      highest_score INTEGER,
+      scores_25_plus INTEGER,
+      scores_50_plus INTEGER,
+      scores_100_plus INTEGER,
+      updated_at TEXT,
+      PRIMARY KEY (member_id, season_year),
+      FOREIGN KEY (member_id) REFERENCES members(id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS member_club_stats (
+      member_id TEXT NOT NULL,
+      club_id TEXT NOT NULL,
+      player_name TEXT NOT NULL,
+      full_name TEXT,
+      club_name TEXT,
+      matches INTEGER,
+      batting_innings INTEGER,
+      outs INTEGER,
+      runs INTEGER,
+      balls INTEGER,
+      batting_average REAL,
+      strike_rate REAL,
+      wickets INTEGER,
+      catches INTEGER,
+      fours INTEGER,
+      sixes INTEGER,
+      highest_score INTEGER,
+      scores_25_plus INTEGER,
+      scores_50_plus INTEGER,
+      scores_100_plus INTEGER,
+      updated_at TEXT,
+      PRIMARY KEY (member_id, club_id),
+      FOREIGN KEY (member_id) REFERENCES members(id) ON DELETE CASCADE,
+      FOREIGN KEY (club_id) REFERENCES clubs(id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS club_summary_stats (
+      club_id TEXT PRIMARY KEY,
+      club_name TEXT NOT NULL,
+      season_year TEXT,
+      member_count INTEGER,
+      team_count INTEGER,
+      fixture_count INTEGER,
+      archive_count INTEGER,
+      total_runs INTEGER,
+      total_wickets INTEGER,
+      total_catches INTEGER,
+      highest_score INTEGER,
+      top_batter TEXT,
+      top_batter_runs INTEGER,
+      matches_played INTEGER,
+      matches_won INTEGER,
+      matches_lost INTEGER,
+      matches_nr INTEGER,
+      scores_25_plus INTEGER,
+      scores_50_plus INTEGER,
+      scores_100_plus INTEGER,
+      updated_at TEXT,
+      FOREIGN KEY (club_id) REFERENCES clubs(id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS club_year_stats (
+      club_id TEXT NOT NULL,
+      season_year TEXT NOT NULL,
+      club_name TEXT NOT NULL,
+      member_count INTEGER,
+      fixture_count INTEGER,
+      archive_count INTEGER,
+      total_runs INTEGER,
+      total_wickets INTEGER,
+      total_catches INTEGER,
+      highest_score INTEGER,
+      top_batter TEXT,
+      top_batter_runs INTEGER,
+      matches_played INTEGER,
+      matches_won INTEGER,
+      matches_lost INTEGER,
+      matches_nr INTEGER,
+      scores_25_plus INTEGER,
+      scores_50_plus INTEGER,
+      scores_100_plus INTEGER,
+      updated_at TEXT,
+      PRIMARY KEY (club_id, season_year),
+      FOREIGN KEY (club_id) REFERENCES clubs(id) ON DELETE CASCADE
+    );
+
     CREATE INDEX IF NOT EXISTS idx_member_aliases_alias ON member_aliases(alias);
     CREATE INDEX IF NOT EXISTS idx_team_memberships_member ON team_memberships(member_id);
     CREATE INDEX IF NOT EXISTS idx_team_memberships_team ON team_memberships(team_id);
@@ -2551,6 +2682,11 @@ def _schema_tables() -> str:
     CREATE INDEX IF NOT EXISTS idx_fixture_scorebook_balls_fixture ON fixture_scorebook_balls(fixture_id, inning_number);
     CREATE INDEX IF NOT EXISTS idx_archive_performances_member ON archive_performances(member_id);
     CREATE INDEX IF NOT EXISTS idx_archives_file_hash ON archives(file_hash);
+    CREATE INDEX IF NOT EXISTS idx_member_summary_stats_name ON member_summary_stats(player_name);
+    CREATE INDEX IF NOT EXISTS idx_member_year_stats_year ON member_year_stats(season_year);
+    CREATE INDEX IF NOT EXISTS idx_member_club_stats_club ON member_club_stats(club_id);
+    CREATE INDEX IF NOT EXISTS idx_club_summary_stats_name ON club_summary_stats(club_name);
+    CREATE INDEX IF NOT EXISTS idx_club_year_stats_year ON club_year_stats(season_year);
     """
 
 
@@ -2591,6 +2727,11 @@ def _clear_relational_state(connection: sqlite3.Connection) -> None:
         "archive_scorecards",
         "archives",
         "duplicate_uploads",
+        "club_year_stats",
+        "club_summary_stats",
+        "member_club_stats",
+        "member_year_stats",
+        "member_summary_stats",
         "team_memberships",
         "member_aliases",
         "members",
@@ -3175,6 +3316,85 @@ def _write_relational_state(connection: sqlite3.Connection, store: dict[str, Any
                 ),
             )
 
+        summary_rows, year_rows, club_rows = _build_materialized_member_stats(normalized)
+        club_summary_rows, club_year_rows = _build_materialized_club_stats(normalized)
+        connection.executemany(
+            """
+            INSERT INTO member_summary_stats (
+              member_id, player_name, full_name, matches, batting_innings, outs, runs, balls,
+              batting_average, strike_rate, wickets, catches, fours, sixes, highest_score,
+              scores_25_plus, scores_50_plus, scores_100_plus,
+              last_game_date, last_opponent, next_game_date, next_opponent, updated_at
+            ) VALUES (
+              :member_id, :player_name, :full_name, :matches, :batting_innings, :outs, :runs, :balls,
+              :batting_average, :strike_rate, :wickets, :catches, :fours, :sixes, :highest_score,
+              :scores_25_plus, :scores_50_plus, :scores_100_plus,
+              :last_game_date, :last_opponent, :next_game_date, :next_opponent, :updated_at
+            )
+            """,
+            summary_rows,
+        )
+        connection.executemany(
+            """
+            INSERT INTO member_year_stats (
+              member_id, season_year, player_name, full_name, matches, batting_innings, outs, runs, balls,
+              batting_average, strike_rate, wickets, catches, fours, sixes, highest_score,
+              scores_25_plus, scores_50_plus, scores_100_plus, updated_at
+            ) VALUES (
+              :member_id, :season_year, :player_name, :full_name, :matches, :batting_innings, :outs, :runs, :balls,
+              :batting_average, :strike_rate, :wickets, :catches, :fours, :sixes, :highest_score,
+              :scores_25_plus, :scores_50_plus, :scores_100_plus, :updated_at
+            )
+            """,
+            year_rows,
+        )
+        connection.executemany(
+            """
+            INSERT INTO member_club_stats (
+              member_id, club_id, player_name, full_name, club_name, matches, batting_innings, outs, runs, balls,
+              batting_average, strike_rate, wickets, catches, fours, sixes, highest_score,
+              scores_25_plus, scores_50_plus, scores_100_plus, updated_at
+            ) VALUES (
+              :member_id, :club_id, :player_name, :full_name, :club_name, :matches, :batting_innings, :outs, :runs, :balls,
+              :batting_average, :strike_rate, :wickets, :catches, :fours, :sixes, :highest_score,
+              :scores_25_plus, :scores_50_plus, :scores_100_plus, :updated_at
+            )
+            """,
+            club_rows,
+        )
+        connection.executemany(
+            """
+            INSERT INTO club_summary_stats (
+              club_id, club_name, season_year, member_count, team_count, fixture_count, archive_count,
+              total_runs, total_wickets, total_catches, highest_score, top_batter, top_batter_runs,
+              matches_played, matches_won, matches_lost, matches_nr,
+              scores_25_plus, scores_50_plus, scores_100_plus, updated_at
+            ) VALUES (
+              :club_id, :club_name, :season_year, :member_count, :team_count, :fixture_count, :archive_count,
+              :total_runs, :total_wickets, :total_catches, :highest_score, :top_batter, :top_batter_runs,
+              :matches_played, :matches_won, :matches_lost, :matches_nr,
+              :scores_25_plus, :scores_50_plus, :scores_100_plus, :updated_at
+            )
+            """,
+            club_summary_rows,
+        )
+        connection.executemany(
+            """
+            INSERT INTO club_year_stats (
+              club_id, season_year, club_name, member_count, fixture_count, archive_count, total_runs,
+              total_wickets, total_catches, highest_score, top_batter, top_batter_runs,
+              matches_played, matches_won, matches_lost, matches_nr,
+              scores_25_plus, scores_50_plus, scores_100_plus, updated_at
+            ) VALUES (
+              :club_id, :season_year, :club_name, :member_count, :fixture_count, :archive_count, :total_runs,
+              :total_wickets, :total_catches, :highest_score, :top_batter, :top_batter_runs,
+              :matches_played, :matches_won, :matches_lost, :matches_nr,
+              :scores_25_plus, :scores_50_plus, :scores_100_plus, :updated_at
+            )
+            """,
+            club_year_rows,
+        )
+
 
 def _read_relational_state(connection: sqlite3.Connection) -> dict[str, Any]:
     clubs_rows = connection.execute("SELECT * FROM clubs ORDER BY name").fetchall()
@@ -3213,6 +3433,17 @@ def _read_relational_state(connection: sqlite3.Connection) -> dict[str, Any]:
     archive_performance_rows = connection.execute("SELECT * FROM archive_performances ORDER BY archive_id, id").fetchall()
     duplicate_rows = connection.execute("SELECT * FROM duplicate_uploads ORDER BY created_at, id").fetchall()
     insights_row = connection.execute("SELECT * FROM app_insights WHERE id = 1").fetchone()
+    member_summary_rows = connection.execute("SELECT * FROM member_summary_stats ORDER BY player_name").fetchall()
+    member_year_rows = connection.execute(
+        "SELECT * FROM member_year_stats ORDER BY season_year DESC, player_name"
+    ).fetchall()
+    member_club_rows = connection.execute(
+        "SELECT * FROM member_club_stats ORDER BY club_name, player_name"
+    ).fetchall()
+    club_summary_rows = connection.execute("SELECT * FROM club_summary_stats ORDER BY club_name").fetchall()
+    club_year_rows = connection.execute(
+        "SELECT * FROM club_year_stats ORDER BY season_year DESC, club_name"
+    ).fetchall()
 
     club_dicts = [dict(row) for row in clubs_rows]
     primary_club = next(
@@ -3543,6 +3774,11 @@ def _read_relational_state(connection: sqlite3.Connection) -> dict[str, Any]:
     duplicate_uploads = [dict(row) for row in duplicate_rows]
     insights = dict(insights_row) if insights_row else {}
     insights.pop("id", None)
+    member_summary_stats = [dict(row) for row in member_summary_rows]
+    member_year_stats = [dict(row) for row in member_year_rows]
+    member_club_stats = [dict(row) for row in member_club_rows]
+    club_summary_stats = [dict(row) for row in club_summary_rows]
+    club_year_stats = [dict(row) for row in club_year_rows]
 
     store = {
         "club": {key: primary_club.get(key, "") for key in ["id", "name", "short_name", "city", "season", "home_ground", "whatsapp_number", "about"]},
@@ -3556,6 +3792,11 @@ def _read_relational_state(connection: sqlite3.Connection) -> dict[str, Any]:
         "duplicate_uploads": duplicate_uploads,
         "teams": team_dicts,
         "insights": insights,
+        "member_summary_stats": member_summary_stats,
+        "member_year_stats": member_year_stats,
+        "member_club_stats": member_club_stats,
+        "club_summary_stats": club_summary_stats,
+        "club_year_stats": club_year_stats,
         "viewer_profile": viewer_profile,
     }
     return store
@@ -3600,6 +3841,52 @@ def ensure_database() -> None:
             except sqlite3.OperationalError as exc:
                 if "duplicate column name" not in str(exc).lower():
                     raise
+        for table_name, required_columns in {
+            "member_summary_stats": [
+                ("scores_25_plus", "ALTER TABLE member_summary_stats ADD COLUMN scores_25_plus INTEGER"),
+                ("scores_50_plus", "ALTER TABLE member_summary_stats ADD COLUMN scores_50_plus INTEGER"),
+                ("scores_100_plus", "ALTER TABLE member_summary_stats ADD COLUMN scores_100_plus INTEGER"),
+            ],
+            "member_year_stats": [
+                ("scores_25_plus", "ALTER TABLE member_year_stats ADD COLUMN scores_25_plus INTEGER"),
+                ("scores_50_plus", "ALTER TABLE member_year_stats ADD COLUMN scores_50_plus INTEGER"),
+                ("scores_100_plus", "ALTER TABLE member_year_stats ADD COLUMN scores_100_plus INTEGER"),
+            ],
+            "member_club_stats": [
+                ("scores_25_plus", "ALTER TABLE member_club_stats ADD COLUMN scores_25_plus INTEGER"),
+                ("scores_50_plus", "ALTER TABLE member_club_stats ADD COLUMN scores_50_plus INTEGER"),
+                ("scores_100_plus", "ALTER TABLE member_club_stats ADD COLUMN scores_100_plus INTEGER"),
+            ],
+            "club_summary_stats": [
+                ("matches_played", "ALTER TABLE club_summary_stats ADD COLUMN matches_played INTEGER"),
+                ("matches_won", "ALTER TABLE club_summary_stats ADD COLUMN matches_won INTEGER"),
+                ("matches_lost", "ALTER TABLE club_summary_stats ADD COLUMN matches_lost INTEGER"),
+                ("matches_nr", "ALTER TABLE club_summary_stats ADD COLUMN matches_nr INTEGER"),
+                ("scores_25_plus", "ALTER TABLE club_summary_stats ADD COLUMN scores_25_plus INTEGER"),
+                ("scores_50_plus", "ALTER TABLE club_summary_stats ADD COLUMN scores_50_plus INTEGER"),
+                ("scores_100_plus", "ALTER TABLE club_summary_stats ADD COLUMN scores_100_plus INTEGER"),
+            ],
+            "club_year_stats": [
+                ("matches_played", "ALTER TABLE club_year_stats ADD COLUMN matches_played INTEGER"),
+                ("matches_won", "ALTER TABLE club_year_stats ADD COLUMN matches_won INTEGER"),
+                ("matches_lost", "ALTER TABLE club_year_stats ADD COLUMN matches_lost INTEGER"),
+                ("matches_nr", "ALTER TABLE club_year_stats ADD COLUMN matches_nr INTEGER"),
+                ("scores_25_plus", "ALTER TABLE club_year_stats ADD COLUMN scores_25_plus INTEGER"),
+                ("scores_50_plus", "ALTER TABLE club_year_stats ADD COLUMN scores_50_plus INTEGER"),
+                ("scores_100_plus", "ALTER TABLE club_year_stats ADD COLUMN scores_100_plus INTEGER"),
+            ],
+        }.items():
+            existing_columns = {
+                row[1]
+                for row in connection.execute(f"PRAGMA table_info({table_name})").fetchall()
+            }
+            for column_name, ddl in required_columns:
+                if column_name not in existing_columns:
+                    try:
+                        connection.execute(ddl)
+                    except sqlite3.OperationalError as exc:
+                        if "duplicate column name" not in str(exc).lower():
+                            raise
         if not _relational_tables_have_data(connection):
             legacy_store = _legacy_state_from_connection(connection)
             _write_relational_state(connection, legacy_store)
@@ -4111,6 +4398,226 @@ def build_combined_player_stats(
     )
 
 
+def _member_stat_hints(member: dict[str, Any]) -> set[str]:
+    return {
+        hint
+        for hint in (
+            str(member.get("name") or "").strip().lower(),
+            str(member.get("full_name") or "").strip().lower(),
+            str(member.get("phone") or "").strip().lower(),
+            str(member.get("email") or "").strip().lower(),
+            *(str(alias or "").strip().lower() for alias in member.get("aliases", [])),
+        )
+        if hint
+    }
+
+
+def _highest_score_for_member(
+    fixtures: list[dict[str, Any]],
+    archive_uploads: list[dict[str, Any]],
+    member: dict[str, Any],
+    *,
+    year: str | None = None,
+    club_id: str | None = None,
+) -> int | None:
+    aliases = _member_stat_hints(member)
+    highest: int | None = None
+
+    def consider(performance_name: str, runs_value: Any) -> None:
+        nonlocal highest
+        if str(performance_name or "").strip().lower() not in aliases:
+            return
+        runs = int(runs_value or 0)
+        highest = runs if highest is None else max(highest, runs)
+
+    for fixture in fixtures:
+        if year and fixture_season_year(fixture) != str(year).strip():
+            continue
+        if club_id and str(fixture.get("club_id") or "").strip() != str(club_id).strip():
+            continue
+        for performance in fixture.get("performances", []) or []:
+            consider(performance.get("player_name") or "", performance.get("runs") or 0)
+
+    for archive in canonical_archive_uploads(archive_uploads):
+        archive_year = str(archive.get("archive_year") or "").strip()
+        archive_date = str(archive.get("archive_date") or "").strip()
+        archive_year_value = archive_year[:4] if re.match(r"20\d{2}", archive_year) else (archive_date[:4] if re.match(r"20\d{2}", archive_date) else "")
+        if year and archive_year_value != str(year).strip():
+            continue
+        if club_id and str(archive.get("club_id") or "").strip() != str(club_id).strip():
+            continue
+        for performance in archive.get("suggested_performances", []) or []:
+            consider(performance.get("player_name") or "", performance.get("runs") or 0)
+    return highest
+
+
+def _batting_milestones(
+    fixtures: list[dict[str, Any]],
+    archive_uploads: list[dict[str, Any]],
+    member: dict[str, Any],
+    *,
+    year: str | None = None,
+    club_id: str | None = None,
+) -> dict[str, int]:
+    aliases = _member_stat_hints(member)
+    milestones = {"scores_25_plus": 0, "scores_50_plus": 0, "scores_100_plus": 0}
+
+    def consider(performance_name: str, runs_value: Any) -> None:
+        if str(performance_name or "").strip().lower() not in aliases:
+            return
+        runs = int(runs_value or 0)
+        if 25 < runs < 50:
+            milestones["scores_25_plus"] += 1
+        elif 50 < runs < 100:
+            milestones["scores_50_plus"] += 1
+        elif 100 < runs < 199:
+            milestones["scores_100_plus"] += 1
+
+    for fixture in fixtures:
+        if year and fixture_season_year(fixture) != str(year).strip():
+            continue
+        if club_id and str(fixture.get("club_id") or "").strip() != str(club_id).strip():
+            continue
+        for performance in fixture.get("performances", []) or []:
+            consider(performance.get("player_name") or "", performance.get("runs") or 0)
+
+    for archive in canonical_archive_uploads(archive_uploads):
+        archive_year = str(archive.get("archive_year") or "").strip()
+        archive_date = str(archive.get("archive_date") or "").strip()
+        archive_year_value = archive_year[:4] if re.match(r"20\d{2}", archive_year) else (archive_date[:4] if re.match(r"20\d{2}", archive_date) else "")
+        if year and archive_year_value != str(year).strip():
+            continue
+        if club_id and str(archive.get("club_id") or "").strip() != str(club_id).strip():
+            continue
+        for performance in archive.get("suggested_performances", []) or []:
+            consider(performance.get("player_name") or "", performance.get("runs") or 0)
+
+    return milestones
+
+
+def _player_stat_bucket(
+    row: dict[str, Any],
+    member: dict[str, Any],
+    highest_score: int | None,
+    *,
+    full_name: str = "",
+    milestones: dict[str, int] | None = None,
+) -> dict[str, Any]:
+    name = str(row.get("player_name") or member.get("name") or "").strip()
+    milestone_values = milestones or {}
+    return {
+        "member_id": str(member.get("id") or "").strip(),
+        "player_name": name,
+        "full_name": str(full_name or member.get("full_name") or name).strip(),
+        "matches": int(row.get("matches", 0) or 0),
+        "batting_innings": int(row.get("batting_innings", 0) or 0),
+        "outs": int(row.get("outs", 0) or 0),
+        "runs": int(row.get("runs", 0) or 0),
+        "balls": int(row.get("balls", 0) or 0),
+        "batting_average": round(float(row.get("batting_average", 0) or 0), 2),
+        "strike_rate": round(float(row.get("strike_rate", 0) or 0), 2),
+        "wickets": int(row.get("wickets", 0) or 0),
+        "catches": int(row.get("catches", 0) or 0),
+        "fours": int(row.get("fours", 0) or 0),
+        "sixes": int(row.get("sixes", 0) or 0),
+        "highest_score": highest_score,
+        "scores_25_plus": int(milestone_values.get("scores_25_plus", 0) or 0),
+        "scores_50_plus": int(milestone_values.get("scores_50_plus", 0) or 0),
+        "scores_100_plus": int(milestone_values.get("scores_100_plus", 0) or 0),
+        "updated_at": now_iso(),
+    }
+
+
+def _build_materialized_member_stats(store: dict[str, Any]) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+    members = list(store.get("members", []))
+    fixtures = list(store.get("fixtures", []))
+    archives = canonical_archive_uploads(store.get("archive_uploads", []))
+
+    overall_stats = {row["player_name"]: row for row in build_combined_player_stats(fixtures, archives, members)}
+    overall_rows: list[dict[str, Any]] = []
+    for member in members:
+        name = str(member.get("name") or "").strip()
+        aliases = _member_stat_hints(member)
+        appearances = [
+            fixture
+            for fixture in fixtures
+            if any(str(performance.get("player_name") or "").strip().lower() in aliases for performance in fixture.get("performances", []))
+        ]
+        appearances.sort(key=lambda item: str(item.get("date") or ""), reverse=True)
+        last_game = appearances[0] if appearances else None
+        upcoming_games = [
+            fixture
+            for fixture in fixtures
+            if str(fixture.get("status") or "").strip().lower() == "scheduled"
+            and any(str(performance.get("player_name") or "").strip().lower() in aliases for performance in fixture.get("performances", []))
+        ]
+        upcoming_games.sort(key=lambda item: str(item.get("date") or ""))
+        next_game = upcoming_games[0] if upcoming_games else None
+        overall_rows.append(
+            {
+                **_player_stat_bucket(
+                    overall_stats.get(name, {}),
+                    member,
+                    _highest_score_for_member(fixtures, archives, member),
+                    milestones=_batting_milestones(fixtures, archives, member),
+                ),
+                "last_game_date": last_game.get("date", "") if last_game else "",
+                "last_opponent": last_game.get("opponent", "") if last_game else "",
+                "next_game_date": next_game.get("date", "") if next_game else "",
+                "next_opponent": next_game.get("opponent", "") if next_game else "",
+            }
+        )
+
+    year_rows: list[dict[str, Any]] = []
+    for year in _season_years(store):
+        ranking_bundle = build_rankings_for_year(store, year)
+        row_by_name = {row["player_name"]: row for row in ranking_bundle.get("player_stats", []) or []}
+        for member in members:
+            name = str(member.get("name") or "").strip()
+            year_row = row_by_name.get(name)
+            if not year_row:
+                continue
+            year_rows.append(
+                {
+                    **_player_stat_bucket(
+                        year_row,
+                        member,
+                        _highest_score_for_member(fixtures, archives, member, year=year),
+                        milestones=_batting_milestones(fixtures, archives, member, year=year),
+                    ),
+                    "season_year": str(year),
+                }
+            )
+
+    club_rows: list[dict[str, Any]] = []
+    club_rankings = build_club_rankings(store)
+    for member in members:
+        name = str(member.get("name") or "").strip()
+        for club_membership in member.get("club_memberships", []) or []:
+            club_name = str(club_membership.get("club_name") or "").strip()
+            club_id = str(club_membership.get("club_id") or "").strip()
+            if not club_id or not club_name:
+                continue
+            club_bundle = club_rankings.get(club_name, {})
+            row_by_name = {row["player_name"]: row for row in club_bundle.get("player_stats", []) or []}
+            club_row = row_by_name.get(name)
+            if not club_row:
+                continue
+            club_rows.append(
+                {
+                    **_player_stat_bucket(
+                        club_row,
+                        member,
+                        _highest_score_for_member(fixtures, archives, member, club_id=club_id),
+                        milestones=_batting_milestones(fixtures, archives, member, club_id=club_id),
+                    ),
+                    "club_id": club_id,
+                    "club_name": club_name,
+                }
+            )
+    return overall_rows, year_rows, club_rows
+
+
 def build_club_rankings(store: dict[str, Any]) -> dict[str, dict[str, list[dict[str, Any]]]]:
     rankings: dict[str, dict[str, list[dict[str, Any]]]] = {}
     for club in store.get("clubs", []) or ([store["club"]] if store.get("club") else []):
@@ -4130,6 +4637,133 @@ def build_club_rankings(store: dict[str, Any]) -> dict[str, dict[str, list[dict[
             "fielding_rankings": build_fielding_rankings(club_stats),
         }
     return rankings
+
+
+def _club_match_counts(
+    fixtures: list[dict[str, Any]],
+    archives: list[dict[str, Any]],
+    club_name: str,
+    club_short_name: str,
+) -> dict[str, int]:
+    matches_played = 0
+    matches_won = 0
+    matches_lost = 0
+    matches_nr = 0
+    club_name = str(club_name or "").strip().lower()
+    club_short_name = str(club_short_name or "").strip().lower()
+    for match in fixtures:
+        result_text = " ".join(
+            str(part or "")
+            for part in (
+                match.get("result", ""),
+                (match.get("scorecard") or {}).get("result", ""),
+                (match.get("summary") or {}).get("result_text", ""),
+            )
+        ).strip().lower()
+        opponent = str(match.get("opponent") or "").strip().lower()
+        played, won, lost, nr = _count_match_result(result_text, club_name, club_short_name, opponent)
+        if not played:
+            continue
+        matches_played += played
+        matches_won += won
+        matches_lost += lost
+        matches_nr += nr
+    for archive in canonical_archive_uploads(archives):
+        result_text = _result_text_for_archive(archive)
+        opponent = _archive_opponent_name(archive)
+        played, won, lost, nr = _count_match_result(result_text, club_name, club_short_name, opponent.lower())
+        if not played:
+            continue
+        matches_played += played
+        matches_won += won
+        matches_lost += lost
+        matches_nr += nr
+    return {
+        "matches_played": matches_played,
+        "matches_won": matches_won,
+        "matches_lost": matches_lost,
+        "matches_nr": matches_nr,
+    }
+
+
+def _build_materialized_club_stats(store: dict[str, Any]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    clubs = list(store.get("clubs", []) or ([store.get("club", {})] if store.get("club") else []))
+    global_archives = canonical_archive_uploads(store.get("archive_uploads", []))
+    overall_rows: list[dict[str, Any]] = []
+    year_rows: list[dict[str, Any]] = []
+    season_years = _dashboard_season_years(store)
+    for club in clubs:
+        club_id = str(club.get("id") or "").strip()
+        club_name = str(club.get("name") or "").strip()
+        if not club_id or not club_name:
+            continue
+        club_store = scoped_store_for_club(store, club)
+        club_members = club_store.get("members", [])
+        club_fixtures = _club_owned_fixtures(store, club)
+        club_archives = _club_owned_archives(global_archives, club)
+        club_stats = build_combined_player_stats(club_fixtures, club_archives, club_members)
+        batting_rankings = build_batting_rankings(club_stats)
+        highest_score = max((int(row.get("runs", 0) or 0) for row in club_stats), default=0)
+        total_runs = sum(int(row.get("runs", 0) or 0) for row in club_stats)
+        total_wickets = sum(int(row.get("wickets", 0) or 0) for row in club_stats)
+        total_catches = sum(int(row.get("catches", 0) or 0) for row in club_stats)
+        milestones = {"scores_25_plus": 0, "scores_50_plus": 0, "scores_100_plus": 0}
+        for member in club_members:
+            member_milestones = _batting_milestones(club_fixtures, club_archives, member, club_id=club_id)
+            for key in milestones:
+                milestones[key] += int(member_milestones.get(key, 0) or 0)
+        overall_match_counts = _club_match_counts(club_fixtures, club_archives, club_name, str(club.get("short_name") or ""))
+        overall_rows.append(
+            {
+                "club_id": club_id,
+                "club_name": club_name,
+                "season_year": _display_club_season(store, club)[:4],
+                "member_count": len(_club_member_names(store, club)),
+                "team_count": _club_team_count(store, club, _club_member_names(store, club)),
+                "fixture_count": len(club_fixtures),
+                "archive_count": _club_archive_count(club_archives, _club_member_names(store, club)),
+                "total_runs": total_runs,
+                "total_wickets": total_wickets,
+                "total_catches": total_catches,
+                "highest_score": highest_score or None,
+                "top_batter": batting_rankings[0]["player_name"] if batting_rankings else "",
+                "top_batter_runs": batting_rankings[0]["runs"] if batting_rankings else 0,
+                "scores_25_plus": milestones["scores_25_plus"],
+                "scores_50_plus": milestones["scores_50_plus"],
+                "scores_100_plus": milestones["scores_100_plus"],
+                **overall_match_counts,
+                "updated_at": now_iso(),
+            }
+        )
+        for year in season_years:
+            year_fixtures = _filter_fixtures_by_year(club_fixtures, year)
+            year_archives = _filter_archives_by_year(club_archives, year)
+            year_stats = build_combined_player_stats(year_fixtures, year_archives, club_members)
+            year_batting_rankings = build_batting_rankings(year_stats)
+            year_highest = max((int(row.get("runs", 0) or 0) for row in year_stats), default=0)
+            year_match_counts = _club_match_counts(year_fixtures, year_archives, club_name, str(club.get("short_name") or ""))
+            year_rows.append(
+                {
+                    "club_id": club_id,
+                    "season_year": str(year),
+                    "club_name": club_name,
+                    "member_count": len(_club_member_names(store, club)),
+                    "fixture_count": len(year_fixtures),
+                    "archive_count": _club_archive_count(year_archives, _club_member_names(store, club)),
+                    "total_runs": sum(int(row.get("runs", 0) or 0) for row in year_stats),
+                    "total_wickets": sum(int(row.get("wickets", 0) or 0) for row in year_stats),
+                    "total_catches": sum(int(row.get("catches", 0) or 0) for row in year_stats),
+                    "highest_score": year_highest or None,
+                    "top_batter": year_batting_rankings[0]["player_name"] if year_batting_rankings else "",
+                    "top_batter_runs": year_batting_rankings[0]["runs"] if year_batting_rankings else 0,
+                    "scores_25_plus": sum(_batting_milestones(year_fixtures, year_archives, member, year=year)["scores_25_plus"] for member in club_members),
+                    "scores_50_plus": sum(_batting_milestones(year_fixtures, year_archives, member, year=year)["scores_50_plus"] for member in club_members),
+                    "scores_100_plus": sum(_batting_milestones(year_fixtures, year_archives, member, year=year)["scores_100_plus"] for member in club_members),
+                    **year_match_counts,
+                    "updated_at": now_iso(),
+                }
+            )
+    return overall_rows, year_rows
 
 
 def _season_years(store: dict[str, Any]) -> list[str]:
@@ -4167,6 +4801,58 @@ def _filter_archives_by_year(archive_uploads: list[dict[str, Any]], year: str) -
         if archive_year == target or archive_date.startswith(target):
             filtered.append(archive)
     return filtered
+
+
+def _result_text_for_archive(archive: dict[str, Any]) -> str:
+    draft = archive.get("draft_scorecard", {}) or {}
+    return " ".join(
+        str(part or "")
+        for part in (
+            draft.get("result", ""),
+            draft.get("live_summary", ""),
+            archive.get("extracted_summary", ""),
+            draft.get("batting_team", ""),
+            draft.get("home_team", ""),
+            draft.get("visitor_team", ""),
+        )
+    ).strip().lower()
+
+
+def _archive_opponent_name(archive: dict[str, Any]) -> str:
+    draft = archive.get("draft_scorecard", {}) or {}
+    return str(draft.get("opponent") or archive.get("opponent") or "").strip()
+
+
+def _count_match_result(
+    result_text: str,
+    club_name: str,
+    club_short_name: str,
+    opponent_name: str = "",
+) -> tuple[int, int, int, int]:
+    if not result_text:
+        return 0, 0, 0, 0
+    if any(keyword in result_text for keyword in ("tbd", "pending", "scheduled", "awaiting", "not started", "recovered from", "imported from")):
+        return 0, 0, 0, 0
+    played_matches = 1
+    if any(keyword in result_text for keyword in ("no result", "nr", "abandoned", "washout")):
+        return played_matches, 0, 0, 1
+    if any(keyword in result_text for keyword in ("tied", "tie", "draw")):
+        return played_matches, 0, 0, 1
+    if any(keyword in result_text for keyword in ("won", "beat", "defeated")):
+        if club_name and club_name in result_text:
+            return played_matches, 1, 0, 0
+        if club_short_name and club_short_name in result_text:
+            return played_matches, 1, 0, 0
+        if opponent_name and opponent_name.lower() in result_text:
+            return played_matches, 0, 1, 0
+        return played_matches, 1, 0, 0
+    if "lost" in result_text:
+        if club_name and club_name in result_text:
+            return played_matches, 0, 1, 0
+        if club_short_name and club_short_name in result_text:
+            return played_matches, 0, 1, 0
+        return played_matches, 0, 1, 0
+    return played_matches, 0, 0, 1
 
 
 def build_rankings_for_year(
@@ -4217,6 +4903,42 @@ def build_summary(store: dict[str, Any]) -> dict[str, Any]:
     completed_matches = sum(1 for match in fixtures if match.get("status") == "Completed")
     live_matches = sum(1 for match in fixtures if match.get("status") == "Live")
     no_captain = sum(1 for match in fixtures if not match.get("heartlake_captain"))
+    played_matches = 0
+    matches_won = 0
+    matches_lost = 0
+    matches_nr = 0
+    club_name = str(store.get("club", {}).get("name") or "").strip().lower()
+    club_short_name = str(store.get("club", {}).get("short_name") or "").strip().lower()
+    for match in fixtures:
+        result_text = " ".join(
+            str(part or "")
+            for part in (
+                match.get("result", ""),
+                (match.get("scorecard") or {}).get("result", ""),
+                (match.get("summary") or {}).get("result_text", ""),
+            )
+        ).strip().lower()
+        opponent = str(match.get("opponent") or "").strip().lower()
+        played, won, lost, nr = _count_match_result(result_text, club_name, club_short_name, opponent)
+        if not played:
+            continue
+        played_matches += played
+        matches_won += won
+        matches_lost += lost
+        matches_nr += nr
+    for archive in canonical_archives:
+        result_text = _result_text_for_archive(archive)
+        opponent = _archive_opponent_name(archive)
+        if opponent:
+            opponents[opponent] += 1
+        played, won, lost, nr = _count_match_result(result_text, club_name, club_short_name, opponent.lower())
+        if not played:
+            continue
+        played_matches += played
+        completed_matches += played
+        matches_won += won
+        matches_lost += lost
+        matches_nr += nr
     if opponents:
         most_common_opponent, most_common_opponent_count = opponents.most_common(1)[0]
     else:
@@ -4239,6 +4961,10 @@ def build_summary(store: dict[str, Any]) -> dict[str, Any]:
         "archive_count": len(canonical_archives),
         "archive_file_count": len(store.get("archive_uploads", [])),
         "duplicate_count": len(store.get("duplicate_uploads", [])),
+        "matches_played": played_matches,
+        "matches_won": matches_won,
+        "matches_lost": matches_lost,
+        "matches_nr": matches_nr,
         "availability_leader": availability_leader,
         "batting_leader": batting_leader,
         "batting_leader_runs": batting_leader_runs,
@@ -4336,7 +5062,7 @@ def _club_owned_fixtures(store: dict[str, Any], club: dict[str, Any]) -> list[di
         if club_id and fixture_club_id == club_id:
             owned.append(fixture)
             continue
-        if not club_id and fixture_club_name and fixture_club_name in {club_name, club_short_name}:
+        if fixture_club_name and fixture_club_name in {club_name, club_short_name}:
             owned.append(fixture)
     return owned
 
@@ -4352,7 +5078,7 @@ def _club_owned_archives(archives: list[dict[str, Any]], club: dict[str, Any]) -
         if club_id and archive_club_id == club_id:
             owned.append(archive)
             continue
-        if not club_id and archive_club_name and archive_club_name in {club_name, club_short_name}:
+        if archive_club_name and archive_club_name in {club_name, club_short_name}:
             owned.append(archive)
     return owned
 
@@ -4409,22 +5135,49 @@ def _resolve_archive_club(archive: dict[str, Any], clubs: list[dict[str, Any]]) 
     return matched[0] if matched else None
 
 
-def _club_dashboard_card(store: dict[str, Any], club: dict[str, Any], combined_stats: list[dict[str, Any]], archives: list[dict[str, Any]]) -> dict[str, Any]:
+def _find_club_year_stats(store: dict[str, Any], club_id: str, season_year: str) -> dict[str, Any] | None:
+    if not club_id or not season_year:
+        return None
+    club_id = str(club_id).strip().lower()
+    season_year = str(season_year).strip()
+    return next(
+        (
+            row
+            for row in store.get("club_year_stats", [])
+            if str(row.get("club_id") or "").strip().lower() == club_id
+            and str(row.get("season_year") or "").strip() == season_year
+        ),
+        None,
+    )
+
+
+def _club_dashboard_card(
+    store: dict[str, Any],
+    club: dict[str, Any],
+    combined_stats: list[dict[str, Any]],
+    archives: list[dict[str, Any]],
+    season_year: str = "",
+) -> dict[str, Any]:
     member_names = _club_member_names(store, club)
     club_stats = list(combined_stats)
     batting_rankings = build_batting_rankings(club_stats)
     club_fixtures = _club_owned_fixtures(store, club)
+    season_stats = _find_club_year_stats(store, str(club.get("id") or ""), season_year)
     return {
         "id": str(club.get("id") or "").strip(),
         "name": str(club.get("name") or "").strip(),
         "short_name": str(club.get("short_name") or "").strip(),
         "season": _display_club_season(store, club),
-        "member_count": len(member_names),
+        "member_count": season_stats["member_count"] if season_stats and season_stats.get("member_count") is not None else len(member_names),
         "team_count": _club_team_count(store, club, member_names),
-        "fixture_count": len(club_fixtures),
-        "archive_count": _club_archive_count(archives, member_names),
-        "top_batter": batting_rankings[0]["player_name"] if batting_rankings else "",
-        "top_batter_runs": batting_rankings[0]["runs"] if batting_rankings else 0,
+        "fixture_count": season_stats["fixture_count"] if season_stats and season_stats.get("fixture_count") is not None else len(club_fixtures),
+        "archive_count": season_stats["archive_count"] if season_stats and season_stats.get("archive_count") is not None else _club_archive_count(archives, member_names),
+        "matches_played": season_stats["matches_played"] if season_stats and season_stats.get("matches_played") is not None else 0,
+        "matches_won": season_stats["matches_won"] if season_stats and season_stats.get("matches_won") is not None else 0,
+        "matches_lost": season_stats["matches_lost"] if season_stats and season_stats.get("matches_lost") is not None else 0,
+        "matches_nr": season_stats["matches_nr"] if season_stats and season_stats.get("matches_nr") is not None else 0,
+        "top_batter": season_stats["top_batter"] if season_stats and season_stats.get("top_batter") else (batting_rankings[0]["player_name"] if batting_rankings else ""),
+        "top_batter_runs": season_stats["top_batter_runs"] if season_stats and season_stats.get("top_batter_runs") is not None else (batting_rankings[0]["runs"] if batting_rankings else 0),
     }
 
 
@@ -4504,6 +5257,27 @@ def build_dashboard(store: dict[str, Any], llm_status: dict[str, Any], focus_clu
         ),
     )
     summary = build_summary(season_store)
+    season_club_year_stats = _find_club_year_stats(store, str(focus_club.get("id") or ""), selected_year)
+    if season_club_year_stats:
+        summary = {
+            **summary,
+            "member_count": season_club_year_stats.get("member_count", summary.get("member_count")),
+            "fixture_count": season_club_year_stats.get("fixture_count", summary.get("fixture_count")),
+            "archive_count": season_club_year_stats.get("archive_count", summary.get("archive_count")),
+            "top_batter": season_club_year_stats.get("top_batter") or summary.get("top_batter"),
+            "top_batter_runs": season_club_year_stats.get("top_batter_runs") if season_club_year_stats.get("top_batter_runs") is not None else summary.get("top_batter_runs"),
+            "highest_score": season_club_year_stats.get("highest_score", summary.get("highest_score")),
+            "total_runs": season_club_year_stats.get("total_runs", summary.get("total_runs")),
+            "total_wickets": season_club_year_stats.get("total_wickets", summary.get("total_wickets")),
+            "total_catches": season_club_year_stats.get("total_catches", summary.get("total_catches")),
+            "matches_played": season_club_year_stats.get("matches_played", summary.get("matches_played")),
+            "matches_won": season_club_year_stats.get("matches_won", summary.get("matches_won")),
+            "matches_lost": season_club_year_stats.get("matches_lost", summary.get("matches_lost")),
+            "matches_nr": season_club_year_stats.get("matches_nr", summary.get("matches_nr")),
+            "scores_25_plus": season_club_year_stats.get("scores_25_plus", summary.get("scores_25_plus")),
+            "scores_50_plus": season_club_year_stats.get("scores_50_plus", summary.get("scores_50_plus")),
+            "scores_100_plus": season_club_year_stats.get("scores_100_plus", summary.get("scores_100_plus")),
+        }
     fixtures = sorted(season_fixtures, key=lambda item: item["date"])
     upcoming = next((match for match in fixtures if match["status"] != "Completed"), fixtures[0] if fixtures else {})
     global_pending_player_stats = build_player_pending_stats(global_archives, global_members)
@@ -4530,7 +5304,7 @@ def build_dashboard(store: dict[str, Any], llm_status: dict[str, Any], focus_clu
                 "bowling_rankings": build_bowling_rankings(club_stats),
                 "fielding_rankings": build_fielding_rankings(club_stats),
             }
-        club_directory.append(_club_dashboard_card(store, club, club_stats, club_archives))
+        club_directory.append(_club_dashboard_card(store, club, club_stats, club_archives, selected_year))
     club_directory.sort(
         key=lambda club: (
             0 if str(club.get("id") or "").strip() == str(focus_club.get("id") or "").strip() else 1,
@@ -4584,6 +5358,11 @@ def build_dashboard(store: dict[str, Any], llm_status: dict[str, Any], focus_clu
         "all_player_stats": global_player_stats,
         "all_combined_player_stats": global_combined_player_stats,
         "all_player_pending_stats": global_pending_player_stats,
+        "member_summary_stats": list(store.get("member_summary_stats", [])),
+        "member_year_stats": list(store.get("member_year_stats", [])),
+        "member_club_stats": list(store.get("member_club_stats", [])),
+        "club_summary_stats": list(store.get("club_summary_stats", [])),
+        "club_year_stats": list(store.get("club_year_stats", [])),
         "all_fixtures": global_fixtures,
         "all_archive_uploads": global_archives,
         "batting_rankings": build_batting_rankings(focus_stats),
@@ -4606,12 +5385,16 @@ def build_dashboard(store: dict[str, Any], llm_status: dict[str, Any], focus_clu
         "landing_upcoming_events": upcoming_events[:10],
         "landing_upcoming_matches": focus_fixtures[:10],
         "landing_club_stats": {
-            "member_count": len(_club_member_names(store, focus_club)),
+            "member_count": season_club_year_stats.get("member_count") if season_club_year_stats and season_club_year_stats.get("member_count") is not None else len(_club_member_names(store, focus_club)),
             "team_count": _club_team_count(store, focus_club, _club_member_names(store, focus_club)),
-            "fixture_count": len(focus_fixtures),
-            "archive_count": _club_archive_count(season_archives, _club_member_names(store, focus_club)),
-            "top_batter": focus_batting_rankings[0]["player_name"] if focus_batting_rankings else "",
-            "top_batter_runs": focus_batting_rankings[0]["runs"] if focus_batting_rankings else 0,
+            "fixture_count": season_club_year_stats.get("fixture_count") if season_club_year_stats and season_club_year_stats.get("fixture_count") is not None else len(focus_fixtures),
+            "archive_count": season_club_year_stats.get("archive_count") if season_club_year_stats and season_club_year_stats.get("archive_count") is not None else _club_archive_count(season_archives, _club_member_names(store, focus_club)),
+            "matches_played": season_club_year_stats.get("matches_played") if season_club_year_stats and season_club_year_stats.get("matches_played") is not None else 0,
+            "matches_won": season_club_year_stats.get("matches_won") if season_club_year_stats and season_club_year_stats.get("matches_won") is not None else 0,
+            "matches_lost": season_club_year_stats.get("matches_lost") if season_club_year_stats and season_club_year_stats.get("matches_lost") is not None else 0,
+            "matches_nr": season_club_year_stats.get("matches_nr") if season_club_year_stats and season_club_year_stats.get("matches_nr") is not None else 0,
+            "top_batter": season_club_year_stats.get("top_batter") if season_club_year_stats and season_club_year_stats.get("top_batter") else (focus_batting_rankings[0]["player_name"] if focus_batting_rankings else ""),
+            "top_batter_runs": season_club_year_stats.get("top_batter_runs") if season_club_year_stats and season_club_year_stats.get("top_batter_runs") is not None else (focus_batting_rankings[0]["runs"] if focus_batting_rankings else 0),
         },
         "club_directory": club_directory,
         "followed_players": followed_players,
