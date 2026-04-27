@@ -31,9 +31,14 @@ jobs:
       - name: Lightweight validation
         run: python -m compileall app
 
+      - name: Package application for deployment
+        run: |
+          rm -f app_package.zip
+          zip -r app_package.zip app requirements.txt -x 'app/data/**' 'app/uploads/**' 'app/duplicates/**' '*.DS_Store'
+
       - name: Deploy to Azure Web App
         uses: azure/webapps-deploy@v3
         with:
           app-name: ${{ env.AZURE_WEBAPP_NAME }}
           publish-profile: ${{ secrets.AZUREAPPSERVICE_PUBLISHPROFILE }}
-          package: .
+          package: app_package.zip

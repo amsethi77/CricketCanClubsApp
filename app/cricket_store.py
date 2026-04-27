@@ -3947,13 +3947,15 @@ def sync_uploads_in_store(store: dict[str, Any]) -> bool:
 
 def load_store() -> dict[str, Any]:
     ensure_database()
+
     with _connection() as connection:
         raw_store = _read_relational_state(connection)
+
     store = normalize_store(raw_store)
-    if store != raw_store or sync_uploads_in_store(store):
-        save_store(store)
-    else:
-        CACHE_FILE.write_text(json.dumps(store, indent=2), encoding="utf-8")
+
+    # ✅ cache only, NO DB writes
+    CACHE_FILE.write_text(json.dumps(store, indent=2), encoding="utf-8")
+
     return store
 
 
