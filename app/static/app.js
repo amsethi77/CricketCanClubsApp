@@ -4,6 +4,74 @@ function getCookieValue(name) {
   return decodeURIComponent(match.slice(name.length + 1));
 }
 
+/* Mobile quick-nav toggle: inject a button into the topbar and wire open/close behavior */
+(function setupMobileMenuToggle() {
+  try {
+    const isSmall = () => window.matchMedia && window.matchMedia("(max-width:640px)").matches;
+    const topbar = document.querySelector(".page-topbar");
+    const quickNav = document.querySelector(".quick-nav");
+    if (!topbar || !quickNav) return;
+
+    // create toggle button if not already present
+    if (!document.getElementById("mobileMenuToggle")) {
+      const btn = document.createElement("button");
+      btn.id = "mobileMenuToggle";
+      btn.type = "button";
+      btn.setAttribute("aria-expanded", "false");
+      btn.setAttribute("aria-label", "Open menu");
+      btn.innerHTML = '<span class="bar" aria-hidden="true"></span>';
+      // insert at start of topbar-actions or at end of topbar
+      const actions = topbar.querySelector(".topbar-actions");
+      if (actions) actions.insertAdjacentElement("afterbegin", btn);
+      else topbar.appendChild(btn);
+
+      btn.addEventListener("click", (e) => {
+        const open = quickNav.classList.toggle("open");
+        btn.setAttribute("aria-expanded", open ? "true" : "false");
+        if (open) {
+          btn.setAttribute("aria-label", "Close menu");
+        } else {
+          btn.setAttribute("aria-label", "Open menu");
+        }
+      });
+
+      // close when a link inside quickNav is clicked
+      quickNav.addEventListener("click", (e) => {
+        const a = e.target.closest("a");
+        if (a && quickNav.classList.contains("open")) {
+          quickNav.classList.remove("open");
+          const toggle = document.getElementById("mobileMenuToggle");
+          if (toggle) toggle.setAttribute("aria-expanded", "false");
+        }
+      });
+
+      // close on outside click
+      document.addEventListener("click", (e) => {
+        if (!isSmall()) return;
+        const open = quickNav.classList.contains("open");
+        if (!open) return;
+        const within = e.target.closest(".quick-nav") || e.target.closest("#mobileMenuToggle");
+        if (!within) {
+          quickNav.classList.remove("open");
+          const toggle = document.getElementById("mobileMenuToggle");
+          if (toggle) toggle.setAttribute("aria-expanded", "false");
+        }
+      });
+
+      // ensure menu state updates on resize
+      window.addEventListener("resize", () => {
+        if (!isSmall()) {
+          quickNav.classList.remove("open");
+          const toggle = document.getElementById("mobileMenuToggle");
+          if (toggle) toggle.setAttribute("aria-expanded", "false");
+        }
+      });
+    }
+  } catch (err) {
+    console.error("mobile menu toggle setup failed", err);
+  }
+})();
+
 const savedChatHistory = (() => {
   try {
     return JSON.parse(window.sessionStorage.getItem("heartlakeChatHistory") || "[]");
