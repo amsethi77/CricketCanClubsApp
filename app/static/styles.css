@@ -353,6 +353,26 @@ h1 {
       background: var(--blue-deep);
       box-shadow: 0 6px 0 0 var(--blue-deep), 0 -6px 0 0 var(--blue-deep);
     }
+  
+    /* Defensive: ensure closed quick-nav cannot block interactions */
+    .quick-nav {
+      transform: translateY(100%);
+      opacity: 0;
+      pointer-events: none;
+      transition: transform 220ms ease, opacity 220ms ease;
+    }
+
+    .quick-nav.open {
+      transform: translateY(0);
+      opacity: 1;
+      pointer-events: auto;
+    }
+
+    /* Ensure toggle is above other UI */
+    #mobileMenuToggle {
+      position: relative;
+      z-index: 9999;
+    }
   }
 }
 
