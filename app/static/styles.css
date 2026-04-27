@@ -284,6 +284,31 @@ h1 {
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 16px;
   margin-top: 20px;
+
+  /* Mobile: avoid sticky headers covering content — make navs flow normally */
+  @media (max-width: 640px) {
+    .page-topbar,
+    .quick-nav {
+      position: static;
+      top: auto;
+      z-index: 1;
+      box-shadow: none;
+      backdrop-filter: none;
+      margin-bottom: 12px;
+      padding: 8px;
+    }
+
+    .quick-nav {
+      overflow-x: auto;
+      -webkit-overflow-scrolling: touch;
+      white-space: nowrap;
+    }
+
+    .quick-nav a {
+      display: inline-block;
+      margin-right: 8px;
+    }
+  }
 }
 
 .scorebook-column {
