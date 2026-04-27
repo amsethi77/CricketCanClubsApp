@@ -5,6 +5,23 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <title>Heartlake Cricket Club</title>
+    <style>
+      /* Defensive mobile rule: ensure closed quick-nav cannot intercept touches
+         This is inlined to take effect even if clients have a stale external CSS. */
+      @media (max-width:640px) {
+        .quick-nav {
+          transform: translateY(100%) !important;
+          opacity: 0 !important;
+          pointer-events: none !important;
+        }
+        .quick-nav.open {
+          transform: none !important;
+          opacity: 1 !important;
+          pointer-events: auto !important;
+        }
+        #mobileMenuToggle { z-index: 9999 !important; }
+      }
+    </style>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
