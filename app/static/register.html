@@ -40,6 +40,25 @@
       </section>
     </div>
     <script src="/assets/multipage.js?v=20260423e"></script>
+    <script>
+      // Inline fallback: populate `#registerRole` if external JS fails or is stale
+      (async function populateRolesFallback() {
+        try {
+          const sel = document.getElementById('registerRole');
+          if (!sel) return;
+          // If roles already populated, skip
+          if (sel.options && sel.options.length > 1) return;
+          const resp = await fetch('/api/auth/options');
+          if (!resp.ok) return;
+          const data = await resp.json();
+          const roles = (data.roles || []).filter((r) => r.role_name);
+          sel.innerHTML = roles.map((r) => `<option value="${r.role_name}">${r.display_name || r.role_name}</option>`).join('');
+          if (!sel.value) sel.value = 'player';
+        } catch (e) {
+          console.warn('roles fallback failed', e);
+        }
+      })();
+    </script>
     <script src="/assets/register.js?v=20260423c"></script>
   </body>
 </html>
