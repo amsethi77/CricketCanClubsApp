@@ -1759,6 +1759,8 @@ def auth_options() -> dict[str, Any]:
     store = load_store()
     with _auth_connection() as connection:
         roles = _role_catalog(connection)
+        # Do not expose internal/sensitive roles in the public options
+        roles = [r for r in roles if str(r.get("role_name") or "") != "superadmin"]
     return {
         "clubs": _sorted_club_choices(store, str(store.get("viewer_profile", {}).get("primary_club_id") or "")),
         "members": [
