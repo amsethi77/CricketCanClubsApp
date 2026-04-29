@@ -51,6 +51,7 @@ try:
         archive_belongs_to_club,
         archive_club_context,
         archive_has_persisted_json,
+        _coerce_archive_string_list,
         extract_archive_by_id,
         fixture_season_year,
         get_archive_or_404,
@@ -89,6 +90,7 @@ except ModuleNotFoundError:
         archive_belongs_to_club,
         archive_club_context,
         archive_has_persisted_json,
+        _coerce_archive_string_list,
         extract_archive_by_id,
         fixture_season_year,
         get_archive_or_404,
@@ -140,6 +142,23 @@ def _page_response(filename: str) -> FileResponse:
             "Pragma": "no-cache",
         },
     )
+
+
+def _redirect_to_signin() -> RedirectResponse:
+    response = RedirectResponse(url="/signin", status_code=303)
+    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    response.headers["Pragma"] = "no-cache"
+    return response
+
+
+def _require_page_session(request: Request) -> tuple[sqlite3.Row, str] | RedirectResponse:
+    token = _auth_token_from_request(request)
+    if not token:
+        return _redirect_to_signin()
+    try:
+        return _auth_user_from_token(token)
+    except HTTPException:
+        return _redirect_to_signin()
 
 def normalize_name(name: str) -> str:
     return (name or "").strip().lower()
@@ -486,7 +505,7 @@ def _clubs_page_html(request: Request, search: str = "", focus_club_id: str = ""
         <meta charset="UTF-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1.0" />
         <title>Select Club · Heartlake Clubs</title>
-        <link rel="stylesheet" href="/assets/styles.css?v=20260429b" />
+        <link rel="stylesheet" href="/assets/styles.css?v=20260429e" />
       </head>
       <body>
         <div class="page-shell">
@@ -571,8 +590,8 @@ def _clubs_page_html(request: Request, search: str = "", focus_club_id: str = ""
             </div>
           </section>
         </div>
-        <script src="/assets/multipage.js?v=20260429b"></script>
-        <script src="/assets/clubs.js?v=20260429b"></script>
+        <script src="/assets/multipage.js?v=20260429d"></script>
+        <script src="/assets/clubs.js?v=20260429c"></script>
       </body>
     </html>
     """
@@ -852,6 +871,47 @@ def _club_by_identifier(clubs: list[dict[str, Any]], identifier: str) -> dict[st
         if clean in {item for item in identifiers if item}:
             return club
     return None
+
+
+def _lower_key(value: Any) -> str:
+    return str(value or "").strip().lower()
+
+
+def _club_context_names(store: dict[str, Any], club: dict[str, Any]) -> set[str]:
+    club_id = _lower_key(club.get("id"))
+    names = {
+        club_id,
+        _lower_key(club.get("name")),
+        _lower_key(club.get("short_name")),
+    }
+    for team in store.get("teams", []):
+        if _lower_key(team.get("club_id")) != club_id:
+            continue
+        names.add(_lower_key(team.get("name")))
+        names.add(_lower_key(team.get("display_name")))
+    return {name for name in names if name}
+
+
+def _member_team_names(member: dict[str, Any]) -> list[str]:
+    names: list[str] = []
+    seen: set[str] = set()
+
+    def add(value: Any) -> None:
+        clean = str(value or "").strip()
+        key = clean.lower()
+        if not clean or key in seen:
+            return
+        seen.add(key)
+        names.append(clean)
+
+    add(member.get("team_name"))
+    for raw in member.get("team_memberships", []) or member.get("memberships", []) or []:
+        if isinstance(raw, str):
+            add(raw)
+            continue
+        if isinstance(raw, dict):
+            add(raw.get("team_name") or raw.get("name") or raw.get("display_name"))
+    return names
 
 
 def _archive_match_club_ids(store: dict[str, Any], club_id: str, match_id: str = "") -> list[str]:
@@ -1269,6 +1329,179 @@ def _auth_user_from_token(token: str | None) -> tuple[sqlite3.Row, str]:
 
 def _require_admin(token: str | None) -> tuple[sqlite3.Row, str]:
     return _require_permission(token, "view_admin")
+
+
+def _require_superadmin(token: str | None) -> tuple[sqlite3.Row, str]:
+    user_row, current_club_id = _require_admin(token)
+    if _effective_role_name(user_row, current_club_id) != "superadmin":
+        raise HTTPException(status_code=403, detail="Only superadmin can perform this action.")
+    return user_row, current_club_id
+
+
+def _club_matches_removed_club(club_id: str, club_name: str, removed_club: dict[str, Any]) -> bool:
+    removed_id = str(removed_club.get("id") or "").strip().lower()
+    removed_name = str(removed_club.get("name") or "").strip().lower()
+    removed_short_name = str(removed_club.get("short_name") or "").strip().lower()
+    candidate_id = str(club_id or "").strip().lower()
+    candidate_name = str(club_name or "").strip().lower()
+    return any(
+        candidate
+        and candidate in {removed_id, removed_name, removed_short_name}
+        for candidate in [candidate_id, candidate_name]
+    )
+
+
+def _prune_member_references(
+    store: dict[str, Any],
+    member_id: str,
+    member_name: str,
+    club: dict[str, Any] | None = None,
+) -> None:
+    removed_member_id = str(member_id or "").strip()
+    removed_member_name = str(member_name or "").strip()
+    if not removed_member_id and not removed_member_name:
+        return
+    viewer_profile = dict(store.get("viewer_profile", {}))
+    followed = [
+        name
+        for name in viewer_profile.get("followed_player_names", []) or []
+        if str(name or "").strip() != removed_member_name
+    ]
+    viewer_profile["followed_player_names"] = followed
+    store["viewer_profile"] = viewer_profile
+
+    for fixture in store.get("fixtures", []):
+        if club and str(fixture.get("club_id") or "").strip() != str(club.get("id") or "").strip():
+            continue
+        statuses = fixture.get("availability_statuses", {})
+        notes = fixture.get("availability_notes", {})
+        if removed_member_name in statuses:
+            statuses.pop(removed_member_name, None)
+        if removed_member_name in notes:
+            notes.pop(removed_member_name, None)
+        selected_xi = [
+            name
+            for name in fixture.get("selected_playing_xi", []) or []
+            if str(name or "").strip() != removed_member_name
+        ]
+        fixture["selected_playing_xi"] = selected_xi
+        selected_ids = [
+            player_id
+            for player_id in fixture.get("selected_playing_xi_member_ids", []) or []
+            if str(player_id or "").strip() != removed_member_id
+        ]
+        fixture["selected_playing_xi_member_ids"] = selected_ids
+        fixture["performances"] = [
+            performance
+            for performance in fixture.get("performances", [])
+            if str(performance.get("player_name") or "").strip() != removed_member_name
+        ]
+        if str(fixture.get("heartlake_captain") or "").strip() == removed_member_name:
+            fixture["heartlake_captain"] = ""
+
+    for archive in store.get("archive_uploads", []):
+        if club and not archive_belongs_to_club(archive, club, store.get("clubs", []), store.get("members", []), store.get("fixtures", [])):
+            continue
+        archive["suggested_performances"] = [
+            performance
+            for performance in archive.get("suggested_performances", [])
+            if str(performance.get("player_name") or "").strip() != removed_member_name
+        ]
+
+
+def _unlink_member_from_auth(member_id: str) -> None:
+    clean_member_id = str(member_id or "").strip()
+    if not clean_member_id:
+        return
+    with _auth_connection() as connection:
+        user_ids = [
+            int(row["id"])
+            for row in connection.execute(
+                "SELECT id FROM app_users WHERE member_id = ?",
+                (clean_member_id,),
+            ).fetchall()
+        ]
+        connection.execute(
+            "UPDATE app_users SET member_id = NULL WHERE member_id = ?",
+            (clean_member_id,),
+        )
+        if user_ids:
+            connection.executemany(
+                "DELETE FROM app_player_season_availability WHERE user_id = ?",
+                [(user_id,) for user_id in user_ids],
+            )
+
+
+def _retarget_club_links_after_deletion(removed_club_id: str, replacement_club_id: str = "") -> None:
+    removed = str(removed_club_id or "").strip()
+    if not removed:
+        return
+    replacement = str(replacement_club_id or "").strip() or None
+    with _auth_connection() as connection:
+        connection.execute(
+            "DELETE FROM app_user_club_roles WHERE club_id = ?",
+            (removed,),
+        )
+        connection.execute(
+            "DELETE FROM app_player_season_availability WHERE club_id = ?",
+            (removed,),
+        )
+        connection.execute(
+            """
+            UPDATE app_users
+            SET primary_club_id = CASE WHEN primary_club_id = ? THEN ? ELSE primary_club_id END
+            WHERE primary_club_id = ?
+            """,
+            (removed, replacement, removed),
+        )
+        connection.execute(
+            """
+            UPDATE app_auth_sessions
+            SET current_club_id = CASE WHEN current_club_id = ? THEN ? ELSE current_club_id END
+            WHERE current_club_id = ?
+            """,
+            (removed, replacement, removed),
+        )
+        connection.execute(
+            "UPDATE app_user_profile SET primary_club_id = ? WHERE id = 1",
+            (replacement,),
+        )
+
+
+def _retarget_member_team_memberships(member: dict[str, Any], removed_club: dict[str, Any]) -> tuple[bool, str]:
+    removed_team_names = {
+        str(removed_club.get("id") or "").strip().lower(),
+        str(removed_club.get("name") or "").strip().lower(),
+        str(removed_club.get("short_name") or "").strip().lower(),
+    }
+    updated_memberships: list[dict[str, Any]] = []
+    for raw_membership in list(member.get("team_memberships", []) or []):
+        if not isinstance(raw_membership, dict):
+            continue
+        club_id = str(raw_membership.get("club_id") or "").strip().lower()
+        club_name = str(raw_membership.get("club_name") or "").strip().lower()
+        team_name = str(raw_membership.get("team_name") or raw_membership.get("display_name") or "").strip().lower()
+        if club_id in removed_team_names or club_name in removed_team_names or team_name in removed_team_names:
+            continue
+        updated_memberships.append(dict(raw_membership))
+    member["team_memberships"] = updated_memberships
+    if updated_memberships:
+        primary = next((item for item in updated_memberships if item.get("is_primary")), updated_memberships[0])
+        member["team_name"] = str(primary.get("team_name") or primary.get("display_name") or member.get("team_name") or "").strip()
+        if "club_memberships" in member:
+            member["club_memberships"] = [
+                dict(club_membership)
+                for club_membership in member.get("club_memberships", []) or []
+                if not _club_matches_removed_club(
+                    str(club_membership.get("club_id") or ""),
+                    str(club_membership.get("club_name") or ""),
+                    removed_club,
+                )
+            ]
+            if not member["club_memberships"]:
+                member.pop("club_memberships", None)
+        return True, ""
+    return False, str(member.get("name") or "").strip()
 
 
 def _touch_fixture_audit(match: dict[str, Any], user_row: sqlite3.Row, created: bool = False) -> None:
@@ -2071,7 +2304,7 @@ def _admin_center_html(request: Request) -> HTMLResponse:
         <meta charset="UTF-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1.0" />
         <title>Admin Center · Heartlake Clubs</title>
-        <link rel="stylesheet" href="/assets/styles.css?v=20260429b" />
+        <link rel="stylesheet" href="/assets/styles.css?v=20260429e" />
       </head>
       <body>
         <div class="page-shell">
@@ -2141,8 +2374,8 @@ def _admin_center_html(request: Request) -> HTMLResponse:
             </div>
           </section>
         </div>
-        <script src="/assets/multipage.js?v=20260429a"></script>
-        <script src="/assets/admin_center.js?v=20260429c"></script>
+        <script src="/assets/multipage.js?v=20260429d"></script>
+        <script src="/assets/admin_center.js?v=20260429f"></script>
       </body>
     </html>
     """
@@ -2156,12 +2389,18 @@ def _admin_center_html(request: Request) -> HTMLResponse:
 
 
 @app.get("/admin-center")
-def admin_center_page(request: Request) -> HTMLResponse:
+def admin_center_page(request: Request) -> Response:
+    session = _require_page_session(request)
+    if isinstance(session, RedirectResponse):
+        return session
     return _admin_center_html(request)
 
 
 @app.get("/admin")
-def admin_page_alias(request: Request) -> HTMLResponse:
+def admin_page_alias(request: Request) -> Response:
+    session = _require_page_session(request)
+    if isinstance(session, RedirectResponse):
+        return session
     return _admin_center_html(request)
 
 
@@ -2267,7 +2506,10 @@ def register_page() -> FileResponse:
 
 
 @app.get("/clubs")
-def clubs_page(request: Request, search: str = "", focus_club_id: str = "") -> HTMLResponse:
+def clubs_page(request: Request, search: str = "", focus_club_id: str = "") -> Response:
+    session = _require_page_session(request)
+    if isinstance(session, RedirectResponse):
+        return session
     return _clubs_page_html(request, search, focus_club_id)
 
 
@@ -2333,22 +2575,34 @@ def signout_page() -> HTMLResponse:
 
 
 @app.get("/season-setup")
-def season_setup_page() -> FileResponse:
+def season_setup_page(request: Request) -> Response:
+    session = _require_page_session(request)
+    if isinstance(session, RedirectResponse):
+        return session
     return _page_response("season_setup.html")
 
 
 @app.get("/player-availability")
-def player_availability_page() -> FileResponse:
+def player_availability_page(request: Request) -> Response:
+    session = _require_page_session(request)
+    if isinstance(session, RedirectResponse):
+        return session
     return _page_response("player_availability.html")
 
 
 @app.get("/player-profile")
-def player_profile_page() -> FileResponse:
+def player_profile_page(request: Request) -> Response:
+    session = _require_page_session(request)
+    if isinstance(session, RedirectResponse):
+        return session
     return _page_response("player_profile.html")
 
 
 @app.get("/dashboard")
-def dashboard_page() -> FileResponse:
+def dashboard_page(request: Request) -> Response:
+    session = _require_page_session(request)
+    if isinstance(session, RedirectResponse):
+        return session
     return _page_response("index.html")
 
 
@@ -3369,6 +3623,158 @@ def update_member(member_id: str, request: MemberUpdateRequest, x_auth_token: st
 
     save_store(store)
     return current_dashboard(load_store())
+
+
+@app.delete("/api/admin/clubs/{club_id}/members/{member_id}")
+def delete_club_member(
+    club_id: str,
+    member_id: str,
+    x_auth_token: str | None = Header(default=None),
+) -> dict[str, Any]:
+    _require_superadmin(x_auth_token)
+    store = load_store()
+    club = next((item for item in store.get("clubs", []) if str(item.get("id") or "").strip() == str(club_id or "").strip()), None)
+    if not club:
+        raise HTTPException(status_code=404, detail="Club not found.")
+    member = next((item for item in store.get("members", []) if str(item.get("id") or "").strip() == str(member_id or "").strip()), None)
+    if not member:
+        raise HTTPException(status_code=404, detail="Player not found.")
+    if not member_in_club(member, str(club.get("id") or ""), str(club.get("name") or "")):
+        raise HTTPException(status_code=403, detail="This player is not part of the selected club.")
+
+    keep_member, removed_name = _retarget_member_team_memberships(member, club)
+    if not keep_member:
+        store["members"] = [
+            item
+            for item in store.get("members", [])
+            if str(item.get("id") or "").strip() != str(member_id or "").strip()
+        ]
+        _prune_member_references(store, member_id, removed_name or str(member.get("name") or ""), club)
+        _unlink_member_from_auth(member_id)
+    save_store(store)
+    refreshed = load_store()
+    return {
+        "message": f"{member.get('name') or 'Player'} removed from {club.get('name') or 'the club'}.",
+        "dashboard": current_dashboard(refreshed, club.get("id", "")),
+    }
+
+
+@app.delete("/api/admin/clubs/{club_id}")
+def delete_club(
+    club_id: str,
+    x_auth_token: str | None = Header(default=None),
+) -> dict[str, Any]:
+    _require_superadmin(x_auth_token)
+    store = load_store()
+    club = next((item for item in store.get("clubs", []) if str(item.get("id") or "").strip() == str(club_id or "").strip()), None)
+    if not club:
+        raise HTTPException(status_code=404, detail="Club not found.")
+
+    removed_club_id = str(club.get("id") or "").strip()
+    removed_club_name = str(club.get("name") or "").strip()
+    removed_short_name = str(club.get("short_name") or "").strip()
+
+    replacement_club = next(
+        (
+            item
+            for item in store.get("clubs", [])
+            if str(item.get("id") or "").strip() != removed_club_id
+        ),
+        {},
+    )
+    replacement_club_id = str(replacement_club.get("id") or "").strip()
+
+    retained_members: list[dict[str, Any]] = []
+    removed_member_names: list[str] = []
+    for member in list(store.get("members", [])):
+        if not member_in_club(member, removed_club_id, removed_club_name):
+            retained_members.append(member)
+            continue
+        keep_member, removed_name = _retarget_member_team_memberships(member, club)
+        if keep_member:
+            retained_members.append(member)
+        else:
+            member_name = removed_name or str(member.get("name") or "").strip()
+            removed_member_names.append(member_name)
+            _prune_member_references(store, str(member.get("id") or ""), member_name, club)
+            _unlink_member_from_auth(str(member.get("id") or ""))
+
+    store["members"] = retained_members
+    store["teams"] = [
+        team
+        for team in store.get("teams", [])
+        if not _club_matches_removed_club(team.get("club_id", ""), team.get("club_name", ""), club)
+        and not _club_matches_removed_club(team.get("id", ""), team.get("name", ""), club)
+    ]
+    store["fixtures"] = [
+        fixture
+        for fixture in store.get("fixtures", [])
+        if str(fixture.get("club_id") or "").strip() != removed_club_id
+    ]
+
+    cleaned_archives: list[dict[str, Any]] = []
+    for archive in store.get("archive_uploads", []):
+        club_ids = [
+            item
+            for item in _coerce_archive_string_list(archive.get("club_ids"))
+            if str(item or "").strip().lower() != removed_club_id.lower()
+        ]
+        club_names = [
+            item
+            for item in _coerce_archive_string_list(archive.get("club_names"))
+            if str(item or "").strip().lower() not in {removed_club_id.lower(), removed_club_name.lower(), removed_short_name.lower()}
+        ]
+        primary_club_id = str(archive.get("club_id") or "").strip()
+        primary_club_name = str(archive.get("club_name") or "").strip()
+        if primary_club_id.lower() == removed_club_id.lower() or primary_club_name.lower() in {
+            removed_club_id.lower(),
+            removed_club_name.lower(),
+            removed_short_name.lower(),
+        }:
+            primary_club_id = club_ids[0] if club_ids else replacement_club_id
+            primary_club_name = ""
+        if not club_ids and not primary_club_id:
+            continue
+        archive["club_ids"] = list(dict.fromkeys([item for item in club_ids if str(item or "").strip()]))
+        if primary_club_id:
+            archive["club_id"] = primary_club_id
+        if primary_club_name:
+            archive["club_name"] = primary_club_name
+        elif primary_club_id:
+            resolved = _club_by_identifier(store.get("clubs", []), primary_club_id)
+            if resolved:
+                archive["club_name"] = str(resolved.get("name") or resolved.get("short_name") or "").strip()
+        archive["club_names"] = list(dict.fromkeys([item for item in club_names if str(item or "").strip()]))
+        cleaned_archives.append(archive)
+    store["archive_uploads"] = cleaned_archives
+
+    viewer_profile = dict(store.get("viewer_profile", {}))
+    current_primary = str(viewer_profile.get("primary_club_id") or "").strip()
+    if current_primary.lower() == removed_club_id.lower():
+        viewer_profile["primary_club_id"] = replacement_club_id
+        replacement = _club_by_identifier(store.get("clubs", []), replacement_club_id) if replacement_club_id else None
+        viewer_profile["primary_club_name"] = str((replacement or {}).get("name") or replacement_club_id or "").strip()
+    viewer_profile["followed_player_names"] = [
+        name
+        for name in viewer_profile.get("followed_player_names", []) or []
+        if str(name or "").strip() not in set(removed_member_names)
+    ]
+    store["viewer_profile"] = viewer_profile
+
+    store["clubs"] = [
+        item
+        for item in store.get("clubs", [])
+        if str(item.get("id") or "").strip() != removed_club_id
+    ]
+    store["club"] = _selected_club(store, replacement_club_id) if replacement_club_id else {}
+
+    _retarget_club_links_after_deletion(removed_club_id, replacement_club_id)
+    save_store(store)
+    refreshed = load_store()
+    return {
+        "message": f"{club.get('name') or 'Club'} removed from the database.",
+        "dashboard": current_dashboard(refreshed, replacement_club_id),
+    }
 
 
 @app.post("/api/matches/{match_id}/details")

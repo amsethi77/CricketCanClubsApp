@@ -234,11 +234,42 @@ function renderClubDetail(dashboard) {
   const club = dashboard?.club || {};
   const members = dashboard?.members || [];
   const teams = dashboard?.teams || [];
+  const memberCards = members.length
+    ? members
+        .map(
+          (member) => `
+            <article class="detail-card admin-member-card" data-admin-member="${escapeHtml(member.id || "")}">
+              <strong>${escapeHtml(member.name || "Player")}</strong>
+              <p>${escapeHtml(member.full_name || "")}</p>
+              <small>${escapeHtml(member.role || "player")} · ${escapeHtml(member.phone || "No mobile")}</small>
+              <small>${escapeHtml(member.team_name || "")}</small>
+              <div class="inline-actions">
+                <button class="danger-button" type="button" data-member-delete="${escapeHtml(member.id || "")}">Remove from club</button>
+              </div>
+            </article>
+          `
+        )
+        .join("")
+    : `<p class="empty-state">No club members are linked to this club yet.</p>`;
   clubDetail.innerHTML = `
-    <article class="detail-card">
+    <article class="detail-card admin-club-card" data-admin-club="${escapeHtml(club.id || "")}">
       <strong>${escapeHtml(club.name || "Selected club")}</strong>
       <p>${escapeHtml(club.short_name || "")} · ${escapeHtml(club.season || "Season TBD")}</p>
-      <small>${members.length} players · ${teams.length} teams</small>
+      <small>${members.length} players · ${teams.length} teams · ${escapeHtml(club.city || "City TBD")} · ${escapeHtml(club.country || "Country TBD")}</small>
+      <div class="inline-actions">
+        <button class="danger-button" type="button" data-club-delete="${escapeHtml(club.id || "")}">Delete club</button>
+      </div>
+    </article>
+    <article class="stack-card admin-roster-panel">
+      <div class="panel-head compact-head">
+        <div>
+          <p class="section-kicker">Players</p>
+          <h3>Club roster</h3>
+        </div>
+      </div>
+      <div class="archive-list">
+        ${memberCards}
+      </div>
     </article>
   `;
 }
@@ -482,6 +513,41 @@ archiveQueue?.addEventListener("click", async (event) => {
     await refreshAll();
   } catch (error) {
     setStatus(error.message, "error");
+  }
+});
+
+clubDetail?.addEventListener("click", async (event) => {
+  const clubDeleteButton = event.target.closest("[data-club-delete]");
+  const memberDeleteButton = event.target.closest("[data-member-delete]");
+  const club = selectedClub();
+  if (!club) return;
+  if (clubDeleteButton) {
+    const clubName = club.name || "this club";
+    if (!window.confirm(`Delete ${clubName} and remove its club-only data?`)) {
+      return;
+    }
+    try {
+      await deleteJson(`/api/admin/clubs/${encodeURIComponent(club.id)}`, true);
+      setStatus(`${clubName} deleted.`, "success");
+      await refreshAll();
+    } catch (error) {
+      setStatus(error.message, "error");
+    }
+  }
+  if (memberDeleteButton) {
+    const memberId = memberDeleteButton.dataset.memberDelete;
+    const member = (payload?.members || []).find((item) => String(item.id || "") === String(memberId || ""));
+    const memberName = member?.name || "this player";
+    if (!window.confirm(`Remove ${memberName} from ${club.name || "this club"}?`)) {
+      return;
+    }
+    try {
+      await deleteJson(`/api/admin/clubs/${encodeURIComponent(club.id)}/members/${encodeURIComponent(memberId)}`, true);
+      setStatus(`${memberName} removed from ${club.name || "the club"}.`, "success");
+      await refreshAll();
+    } catch (error) {
+      setStatus(error.message, "error");
+    }
   }
 });
 

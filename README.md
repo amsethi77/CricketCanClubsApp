@@ -256,6 +256,19 @@ When reviewing imported historical scorecards, use prompts or pasted review note
 - `Treat Amit S and Amit Sethi as the same saved player only when that alias exists in the database`
 - `Use the scorecard date if visible; otherwise fall back to image metadata`
 
+## Admin Center Controls
+
+- Superadmin-only Admin Center actions include club cleanup and player cleanup.
+- Delete a player from the selected club only after confirming they should be removed from that club roster.
+- Delete a club only from the superadmin Admin Center, and keep shared archives visible for any remaining clubs they belong to.
+- Keep club/player delete operations club-scoped and make sure auth references are cleared before the store is re-saved.
+
+## Access Control Sanity
+
+- Dashboard, Clubs, Season Setup, Player Availability, Player Profile, and Admin Center must redirect to `/signin` when there is no valid session.
+- Admin Center must stay superadmin-only.
+- Browser cache-busting must be updated whenever a page bundle changes so stale JS does not hide admin controls.
+
 ## Name Resolution
 
 - Player identity comes from persisted data in SQLite and cache, not hard-coded name maps.
