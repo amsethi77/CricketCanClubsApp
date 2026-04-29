@@ -29,7 +29,7 @@
       rel="stylesheet"
     />
     <link rel="stylesheet" href="/assets/tailwind.css?v=20260426a" />
-    <link rel="stylesheet" href="/assets/styles.css?v=20260426a" />
+    <link rel="stylesheet" href="/assets/styles.css?v=20260429b" />
   </head>
   <body>
     <div class="page-shell">
@@ -198,6 +198,23 @@
             <div>
               <h3>Commentary log</h3>
               <div id="selectedCommentary" class="detail-stack"></div>
+            </div>
+          </div>
+          <div class="split-grid" data-live-only data-superadmin-live-editable>
+            <div>
+              <h3 id="selectedPlayingXiTitle">Playing XI</h3>
+              <p class="lede">Pick up to 11 players from the players who have marked themselves available or maybe.</p>
+              <form id="selectedPlayingXiForm" class="detail-stack"></form>
+              <div class="inline-actions">
+                <button id="selectedPlayingXiAutoFillButton" class="secondary-button" type="button">Auto-fill from available</button>
+                <button id="selectedPlayingXiSaveButton" class="primary-button" type="button">Save playing XI</button>
+              </div>
+              <p id="selectedPlayingXiCount" class="lede"></p>
+            </div>
+            <div>
+              <h3>WhatsApp alerts</h3>
+              <p class="lede">Open prefilled WhatsApp chats for the players who can still update availability.</p>
+              <div id="selectedWhatsAppAlerts" class="detail-stack"></div>
             </div>
           </div>
         </section>
@@ -475,6 +492,7 @@
             </div>
           </div>
           <div id="memberList" class="member-list"></div>
+          <p class="lede">New player invites are always added to the currently selected club.</p>
           <form id="memberForm" class="form-grid">
             <input name="name" type="text" placeholder="Player name" required />
             <input name="full_name" type="text" placeholder="Full name" />
@@ -584,6 +602,6 @@
         </section>
       </main>
     </div>
-    <script src="/assets/app.js?v=20260423k"></script>
+    <script src="/assets/app.js?v=20260429b"></script>
   </body>
 </html>

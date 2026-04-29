@@ -29,9 +29,24 @@
             <select id="registerRole">
               <option value="">Loading roles...</option>
             </select>
+            <input id="registerClubSearch" type="search" placeholder="Search existing clubs" />
             <select id="registerClub"></select>
             <div id="registerMemberRow" class="wide">
               <select id="registerMember"></select>
+            </div>
+            <div class="stack-card wide">
+              <div class="panel-head compact-head">
+                <div>
+                  <p class="section-kicker">Add club</p>
+                  <h2>Can't find your club?</h2>
+                </div>
+              </div>
+              <p class="lede">If your club is not listed, add it here. Club names are matched ignoring case to prevent duplicates.</p>
+              <div class="form-grid">
+                <input id="registerNewClubName" type="text" placeholder="Club name" />
+                <input id="registerNewClubCity" type="text" placeholder="City" />
+                <input id="registerNewClubCountry" type="text" placeholder="Country" />
+              </div>
             </div>
             <button class="primary-button wide" type="submit">Register and continue</button>
           </form>

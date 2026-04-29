@@ -5,6 +5,7 @@ import os
 import re
 import secrets
 import sqlite3
+from copy import deepcopy
 from urllib import request
 import uuid
 from datetime import datetime
@@ -47,6 +48,9 @@ try:
         default_match_scorebook,
         auto_register_players_from_archive,
         club_season_year,
+        archive_belongs_to_club,
+        archive_club_context,
+        archive_has_persisted_json,
         extract_archive_by_id,
         fixture_season_year,
         get_archive_or_404,
@@ -58,6 +62,7 @@ try:
         _resolve_archive_club,
         reset_score_data,
         resolve_member_name,
+        scorecard_template_from_archive,
         save_store,
         scoped_store_for_club,
         summarize_innings_scorebook,
@@ -81,6 +86,9 @@ except ModuleNotFoundError:
         default_match_scorebook,
         auto_register_players_from_archive,
         club_season_year,
+        archive_belongs_to_club,
+        archive_club_context,
+        archive_has_persisted_json,
         extract_archive_by_id,
         fixture_season_year,
         get_archive_or_404,
@@ -92,6 +100,7 @@ except ModuleNotFoundError:
         _resolve_archive_club,
         reset_score_data,
         resolve_member_name,
+        scorecard_template_from_archive,
         save_store,
         scoped_store_for_club,
         summarize_innings_scorebook,
@@ -428,6 +437,8 @@ def _clubs_page_html(request: Request, search: str = "", focus_club_id: str = ""
         if not query
         or query in str(club.get("name", "")).lower()
         or query in str(club.get("short_name", "")).lower()
+        or query in str(club.get("city", "")).lower()
+        or query in str(club.get("country", "")).lower()
         or query in str(club.get("season", "")).lower()
     ]
     summary = (
@@ -440,7 +451,7 @@ def _clubs_page_html(request: Request, search: str = "", focus_club_id: str = ""
         <article class="detail-card {'active-card' if club.get('id') == focus_club_id else ''}">
           <strong>{html.escape(str(club.get('name', '') or ''))}</strong>
           <p>{html.escape(str(club.get('season', '') or 'Season TBD'))}</p>
-          <small>{html.escape(str(club.get('short_name', '') or ''))}</small>
+          <small>{html.escape(" · ".join(part for part in [str(club.get('short_name', '') or ''), str(club.get('city', '') or ''), str(club.get('country', '') or '')] if part))}</small>
           <div class="inline-actions">
             <form method="post" action="/clubs/select">
               <input type="hidden" name="club_id" value="{html.escape(str(club.get('id', '') or ''))}" />
@@ -475,7 +486,7 @@ def _clubs_page_html(request: Request, search: str = "", focus_club_id: str = ""
         <meta charset="UTF-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1.0" />
         <title>Select Club · Heartlake Clubs</title>
-        <link rel="stylesheet" href="/assets/styles.css?v=20260424e" />
+        <link rel="stylesheet" href="/assets/styles.css?v=20260429b" />
       </head>
       <body>
         <div class="page-shell">
@@ -560,8 +571,8 @@ def _clubs_page_html(request: Request, search: str = "", focus_club_id: str = ""
             </div>
           </section>
         </div>
-        <script src="/assets/multipage.js?v=20260424d"></script>
-        <script src="/assets/clubs.js?v=20260424d"></script>
+        <script src="/assets/multipage.js?v=20260429b"></script>
+        <script src="/assets/clubs.js?v=20260429b"></script>
       </body>
     </html>
     """
@@ -579,6 +590,7 @@ class MemberCreateRequest(BaseModel):
     full_name: str = ""
     gender: str = ""
     team_name: str = "Heartlake"
+    club_id: str = ""
     team_memberships: list[str] | str = []
     aliases: list[str] | str = []
     age: int
@@ -630,6 +642,11 @@ class AvailabilityUpdateRequest(BaseModel):
     player_name: str
     status: str
     note: str = ""
+    club_id: str = ""
+
+
+class PlayingXiUpdateRequest(BaseModel):
+    player_names: list[str] = []
     club_id: str = ""
 
 
@@ -736,8 +753,12 @@ class RegisterRequest(BaseModel):
     email: str = ""
     password: str
     role: str = "player"
+    roles: list[str] | str | None = None
     primary_club_id: str = ""
     member_name: str = ""
+    club_name: str = ""
+    club_city: str = ""
+    club_country: str = ""
 
 
 class SignInRequest(BaseModel):
@@ -818,6 +839,37 @@ def _selected_club(store: dict[str, Any], focus_club_id: str | None = None) -> d
     return club or store.get("club", {})
 
 
+def _club_by_identifier(clubs: list[dict[str, Any]], identifier: str) -> dict[str, Any] | None:
+    clean = str(identifier or "").strip().lower()
+    if not clean:
+        return None
+    for club in clubs:
+        identifiers = {
+            str(club.get("id") or "").strip().lower(),
+            str(club.get("name") or "").strip().lower(),
+            str(club.get("short_name") or "").strip().lower(),
+        }
+        if clean in {item for item in identifiers if item}:
+            return club
+    return None
+
+
+def _archive_match_club_ids(store: dict[str, Any], club_id: str, match_id: str = "") -> list[str]:
+    selected = _club_by_identifier(store.get("clubs", []), club_id)
+    if not selected:
+        return []
+    related_ids = [str(selected.get("id") or "").strip()]
+    if not match_id:
+        return [item for item in dict.fromkeys(item for item in related_ids if item)]
+    match = next((item for item in store.get("fixtures", []) if str(item.get("id") or "").strip() == str(match_id).strip()), None)
+    if match:
+        related_ids.append(str(match.get("club_id") or "").strip())
+        opponent = _club_by_identifier(store.get("clubs", []), str(match.get("opponent") or match.get("visiting_team") or ""))
+        if opponent:
+            related_ids.append(str(opponent.get("id") or "").strip())
+    return [item for item in dict.fromkeys(item for item in related_ids if item)]
+
+
 def _auth_connection() -> sqlite3.Connection:
     logger.debug("🗄️ Opening DB connection: %s", DATABASE_FILE)
     DATABASE_FILE.parent.mkdir(exist_ok=True)
@@ -830,17 +882,13 @@ def _auth_connection() -> sqlite3.Connection:
 DEFAULT_ROLE_PERMISSIONS: dict[str, dict[str, str]] = {
     "player": {},
     "captain": {
-        "view_admin": "View admin center and club controls",
-        "manage_club": "Update club-level details",
         "manage_fixtures": "Create and edit fixtures",
+        "manage_players": "Invite and update club players",
     },
     "club_admin": {
-        "view_admin": "View admin center and club controls",
         "manage_club": "Update club-level details",
         "manage_fixtures": "Create and edit fixtures",
-        "manage_scorecards": "Review and approve scorecards",
-        "manage_players": "Update player records",
-        "manage_roles": "Assign club roles",
+        "manage_players": "Invite and update club players",
     },
     "superadmin": {
         "view_admin": "View admin center and club controls",
@@ -872,6 +920,20 @@ def _seed_role_catalog(connection: sqlite3.Connection) -> None:
             """,
             (role_name, display_name, f"Default {display_name.lower()} role", now),
         )
+        for permission, description in permissions.items():
+            connection.execute(
+                """
+                INSERT INTO app_role_permissions (role_name, permission, description, created_at)
+                VALUES (?, ?, ?, ?)
+                """,
+                (role_name, permission, description, now),
+            )
+
+
+def _sync_role_permissions(connection: sqlite3.Connection) -> None:
+    for role_name, permissions in DEFAULT_ROLE_PERMISSIONS.items():
+        connection.execute("DELETE FROM app_role_permissions WHERE role_name = ?", (role_name,))
+        now = now_iso()
         for permission, description in permissions.items():
             connection.execute(
                 """
@@ -930,7 +992,7 @@ def ensure_auth_schema() -> None:
               club_id TEXT NOT NULL,
               role_name TEXT NOT NULL,
               created_at TEXT NOT NULL,
-              PRIMARY KEY (user_id, club_id),
+              PRIMARY KEY (user_id, club_id, role_name),
               FOREIGN KEY (user_id) REFERENCES app_users(id) ON DELETE CASCADE,
               FOREIGN KEY (club_id) REFERENCES clubs(id) ON DELETE CASCADE,
               FOREIGN KEY (role_name) REFERENCES app_roles(role_name) ON DELETE RESTRICT
@@ -949,6 +1011,45 @@ def ensure_auth_schema() -> None:
             """
         )
         _seed_role_catalog(connection)
+        _sync_role_permissions(connection)
+        _migrate_multi_role_assignments(connection)
+
+
+def _migrate_multi_role_assignments(connection: sqlite3.Connection) -> None:
+    table_info = connection.execute("PRAGMA table_info(app_user_club_roles)").fetchall()
+    pk_columns = [str(row["name"]) for row in table_info if int(row["pk"] or 0)]
+    if pk_columns == ["user_id", "club_id", "role_name"]:
+        return
+    existing_rows = connection.execute(
+        "SELECT user_id, club_id, role_name, created_at FROM app_user_club_roles"
+    ).fetchall()
+    connection.execute("ALTER TABLE app_user_club_roles RENAME TO app_user_club_roles_legacy")
+    connection.execute(
+        """
+        CREATE TABLE app_user_club_roles (
+          user_id INTEGER NOT NULL,
+          club_id TEXT NOT NULL,
+          role_name TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          PRIMARY KEY (user_id, club_id, role_name),
+          FOREIGN KEY (user_id) REFERENCES app_users(id) ON DELETE CASCADE,
+          FOREIGN KEY (club_id) REFERENCES clubs(id) ON DELETE CASCADE,
+          FOREIGN KEY (role_name) REFERENCES app_roles(role_name) ON DELETE RESTRICT
+        )
+        """
+    )
+    for row in existing_rows:
+        role_name = str(row["role_name"] or "").strip()
+        if not role_name:
+            continue
+        connection.execute(
+            """
+            INSERT OR IGNORE INTO app_user_club_roles (user_id, club_id, role_name, created_at)
+            VALUES (?, ?, ?, ?)
+            """,
+            (int(row["user_id"]), str(row["club_id"] or ""), role_name, str(row["created_at"] or now_iso())),
+        )
+    connection.execute("DROP TABLE app_user_club_roles_legacy")
 
 
 def _password_hash(password: str) -> str:
@@ -963,30 +1064,59 @@ def _role_permissions(connection: sqlite3.Connection, role_name: str) -> set[str
     return {str(row["permission"] or "").strip() for row in rows if str(row["permission"] or "").strip()}
 
 
-def _effective_role_name(user_row: sqlite3.Row, current_club_id: str = "") -> str:
-    role_name = str(user_row["role"] or "player").strip() or "player"
+def _role_rank(role_name: str) -> int:
+    return {
+        "player": 1,
+        "captain": 2,
+        "club_admin": 3,
+        "superadmin": 4,
+    }.get(str(role_name or "").strip(), 0)
+
+
+def _normalize_role_name(role_name: str) -> str:
+    clean = str(role_name or "").strip().lower()
+    if clean == "admin":
+        return "club_admin"
+    return clean
+
+
+def _user_role_names(user_row: sqlite3.Row, current_club_id: str = "") -> list[str]:
+    base_role = str(user_row["role"] or "player").strip() or "player"
+    roles = [base_role]
     club_id = str(current_club_id or "").strip()
-    if not club_id:
-        return role_name
-    with _auth_connection() as connection:
-        row = connection.execute(
-            """
-            SELECT role_name
-            FROM app_user_club_roles
-            WHERE user_id = ? AND club_id = ?
-            """,
-            (int(user_row["id"]), club_id),
-        ).fetchone()
-        if row and row["role_name"]:
-            return str(row["role_name"]).strip() or role_name
-    return role_name
+    if club_id:
+        with _auth_connection() as connection:
+            rows = connection.execute(
+                """
+                SELECT role_name
+                FROM app_user_club_roles
+                WHERE user_id = ? AND club_id = ?
+                ORDER BY role_name
+                """,
+                (int(user_row["id"]), club_id),
+            ).fetchall()
+        roles.extend(str(row["role_name"] or "").strip() for row in rows if str(row["role_name"] or "").strip())
+    unique_roles = []
+    for role_name in roles:
+        if role_name and role_name not in unique_roles:
+            unique_roles.append(role_name)
+    return unique_roles
+
+
+def _effective_role_name(user_row: sqlite3.Row, current_club_id: str = "") -> str:
+    roles = _user_role_names(user_row, current_club_id)
+    if not roles:
+        return "player"
+    return max(roles, key=_role_rank)
 
 
 def _user_permissions(user_row: sqlite3.Row, current_club_id: str = "") -> set[str]:
-    role_name = _effective_role_name(user_row, current_club_id)
+    role_names = _user_role_names(user_row, current_club_id)
     with _auth_connection() as connection:
-        permissions = _role_permissions(connection, role_name)
-        if role_name == "superadmin":
+        permissions: set[str] = set()
+        for role_name in role_names:
+            permissions |= _role_permissions(connection, role_name)
+        if "superadmin" in role_names:
             permissions |= {
                 "view_admin",
                 "manage_club",
@@ -1035,6 +1165,7 @@ def _role_catalog(connection: sqlite3.Connection) -> list[dict[str, Any]]:
 
 def _auth_user_payload(user_row: sqlite3.Row, current_club_id: str = "") -> dict[str, Any]:
     effective_role = _effective_role_name(user_row, current_club_id)
+    role_names = _user_role_names(user_row, current_club_id)
     permissions = sorted(_user_permissions(user_row, current_club_id))
     return {
         "id": int(user_row["id"]),
@@ -1042,6 +1173,7 @@ def _auth_user_payload(user_row: sqlite3.Row, current_club_id: str = "") -> dict
         "mobile": user_row["mobile"] or "",
         "email": user_row["email"] or "",
         "role": user_row["role"] or "player",
+        "roles": role_names,
         "effective_role": effective_role,
         "permissions": permissions,
         "member_id": user_row["member_id"] or "",
@@ -1165,6 +1297,8 @@ def _club_choices(store: dict[str, Any]) -> list[dict[str, str]]:
             "id": str(club.get("id") or ""),
             "name": str(club.get("name") or ""),
             "short_name": str(club.get("short_name") or ""),
+            "city": str(club.get("city") or ""),
+            "country": str(club.get("country") or ""),
             "season": str(club.get("season") or ""),
         }
         for club in store.get("clubs", [])
@@ -1179,6 +1313,111 @@ def _sorted_club_choices(store: dict[str, Any], preferred_club_id: str = "") -> 
             str(club.get("name") or ""),
         ),
     )
+
+
+def _club_match_key(value: str) -> str:
+    return normalize_name(value)
+
+
+def _club_identity_keys(club: dict[str, Any]) -> set[str]:
+    keys = {
+        _club_match_key(club.get("id") or ""),
+        _club_match_key(club.get("name") or ""),
+        _club_match_key(club.get("short_name") or ""),
+    }
+    return {key for key in keys if key}
+
+
+def _find_club_by_name(store: dict[str, Any], club_name: str) -> dict[str, Any] | None:
+    target = _club_match_key(club_name)
+    if not target:
+        return None
+    return next((club for club in store.get("clubs", []) if target in _club_identity_keys(club)), None)
+
+
+def _club_slug(name: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", normalize_name(name))
+    slug = re.sub(r"-+", "-", slug).strip("-")
+    return slug or "club"
+
+
+def _create_club_record(store: dict[str, Any], name: str, city: str, country: str) -> tuple[dict[str, Any], bool]:
+    existing = _find_club_by_name(store, name)
+    if existing:
+        return existing, False
+    base_slug = _club_slug(name)
+    existing_ids = {str(club.get("id") or "").strip().lower() for club in store.get("clubs", [])}
+    candidate = f"club-{base_slug}"
+    suffix = 2
+    while candidate.lower() in existing_ids:
+        candidate = f"club-{base_slug}-{suffix}"
+        suffix += 1
+    club = {
+        "id": candidate,
+        "name": name.strip(),
+        "short_name": name.strip(),
+        "city": city.strip(),
+        "country": country.strip(),
+        "season": f"{datetime.utcnow().year} Season",
+        "home_ground": "",
+        "whatsapp_number": "",
+        "about": "Created during registration",
+    }
+    store.setdefault("clubs", []).append(club)
+    save_store(store)
+    return club, True
+
+
+def _attach_creator_to_club(store: dict[str, Any], club: dict[str, Any], member: dict[str, Any]) -> None:
+    club_id = str(club.get("id") or "").strip()
+    club_name = str(club.get("name") or "").strip()
+    club_short_name = str(club.get("short_name") or "").strip()
+    team_name = club_short_name or club_name or club_id or "Club"
+    if not club_id and not club_name:
+        return
+
+    teams = store.setdefault("teams", [])
+    if not any(
+        str(team.get("name") or "").strip().lower() == team_name.lower()
+        or (club_id and str(team.get("club_id") or "").strip().lower() == club_id.lower())
+        for team in teams
+    ):
+        teams.append(
+            {
+                "name": team_name,
+                "type": "club",
+                "display_name": club_name or team_name,
+                "club_id": club_id,
+                "club_name": club_name,
+            }
+        )
+
+    memberships = list(member.get("team_memberships") or [])
+    memberships = [
+        raw
+        for raw in memberships
+        if not (
+            isinstance(raw, dict)
+            and (
+                str(raw.get("club_id") or "").strip().lower() == club_id.lower()
+                or str(raw.get("club_name") or "").strip().lower() == club_name.lower()
+                or str(raw.get("team_name") or "").strip().lower() == team_name.lower()
+            )
+        )
+    ]
+    memberships.insert(
+        0,
+        {
+            "team_name": team_name,
+            "display_name": club_name or team_name,
+            "club_id": club_id,
+            "club_name": club_name,
+            "team_type": "club",
+            "is_primary": True,
+        },
+    )
+    member["team_memberships"] = memberships
+    member["team_name"] = team_name
 
 
 def _primary_club_for_member(store: dict[str, Any], member: dict[str, Any]) -> dict[str, Any]:
@@ -1275,6 +1514,151 @@ def _parse_imported_player_scores(store: dict[str, Any], payload: dict[str, Any]
     return parsed
 
 
+def _is_scorecard_template_payload(payload: Any) -> bool:
+    return (
+        isinstance(payload, dict)
+        and isinstance(payload.get("meta"), dict)
+        and isinstance(payload.get("match"), dict)
+        and isinstance(payload.get("innings"), list)
+        and isinstance(payload.get("validation"), dict)
+    )
+
+
+def _canonical_scorecard_template_payload(payload: dict[str, Any]) -> dict[str, Any] | None:
+    template = payload if _is_scorecard_template_payload(payload) else payload.get("extraction_template")
+    if not _is_scorecard_template_payload(template):
+        return None
+    return deepcopy(template)
+
+
+def _scorecard_template_review_data(store: dict[str, Any], template: dict[str, Any]) -> tuple[dict[str, Any], list[dict[str, Any]], str]:
+    meta = template.get("meta") if isinstance(template.get("meta"), dict) else {}
+    match = template.get("match") if isinstance(template.get("match"), dict) else {}
+    innings = template.get("innings") if isinstance(template.get("innings"), list) else []
+    first_innings = innings[0] if len(innings) > 0 and isinstance(innings[0], dict) else {}
+    second_innings = innings[1] if len(innings) > 1 and isinstance(innings[1], dict) else {}
+    first_summary = first_innings.get("summary") if isinstance(first_innings.get("summary"), dict) else {}
+    second_summary = second_innings.get("summary") if isinstance(second_innings.get("summary"), dict) else {}
+    first_extras = first_innings.get("extras") if isinstance(first_innings.get("extras"), dict) else {}
+    match_teams = match.get("teams") if isinstance(match.get("teams"), dict) else {}
+    first_batting_team = _string_value(first_innings.get("batting_team") or match_teams.get("team_1"))
+    first_bowling_team = _string_value(first_innings.get("bowling_team") or match_teams.get("team_2"))
+
+    draft = default_scorecard("Imported from pasted extraction")
+    draft["heartlake_runs"] = _string_value(first_summary.get("runs"))
+    draft["heartlake_wickets"] = _string_value(first_summary.get("wickets"))
+    draft["heartlake_overs"] = _string_value(first_summary.get("overs"))
+    draft["opponent_runs"] = _string_value(second_summary.get("runs"))
+    draft["opponent_wickets"] = _string_value(second_summary.get("wickets"))
+    draft["opponent_overs"] = _string_value(second_summary.get("overs"))
+    expected_result = _string_value((template.get("validation") or {}).get("expected_result"))
+    if expected_result:
+        draft["result"] = expected_result
+
+    summary_bits = []
+    if first_batting_team:
+        summary_bits.append(f"Batting team: {first_batting_team}")
+    if first_bowling_team:
+        summary_bits.append(f"Bowling team: {first_bowling_team}")
+    extras_total = _string_value(first_extras.get("total"))
+    if extras_total:
+        summary_bits.append(f"Extras: {extras_total}")
+    if isinstance(first_innings.get("did_not_bat"), list) and first_innings.get("did_not_bat"):
+        summary_bits.append(
+            "Did not bat: "
+            + ", ".join(_string_value(name) for name in first_innings.get("did_not_bat", []) if _string_value(name))
+        )
+    if expected_result:
+        summary_bits.append(f"Expected result: {expected_result}")
+    draft["live_summary"] = " | ".join(summary_bits)
+
+    suggested: list[dict[str, Any]] = []
+    for inning_index, inning in enumerate(innings[:2], start=1):
+        if not isinstance(inning, dict):
+            continue
+        batting_rows = inning.get("batting") or []
+        if not isinstance(batting_rows, list):
+            continue
+        for row in batting_rows:
+            if not isinstance(row, dict):
+                continue
+            player = row.get("player") if isinstance(row.get("player"), dict) else {}
+            raw_name = _string_value(
+                player.get("name")
+                or player.get("normalized_name")
+                or row.get("name")
+                or row.get("player_name")
+            )
+            if not raw_name:
+                continue
+            dismissal = row.get("dismissal") if isinstance(row.get("dismissal"), dict) else {}
+            dismissal_bits = []
+            if dismissal.get("type"):
+                dismissal_bits.append(_string_value(dismissal.get("type")))
+            if dismissal.get("fielder"):
+                dismissal_bits.append(f"fielder: {_string_value(dismissal.get('fielder'))}")
+            if dismissal.get("bowler"):
+                dismissal_bits.append(f"bowler: {_string_value(dismissal.get('bowler'))}")
+            suggested.append(
+                {
+                    "player_name": resolve_member_name(store, raw_name),
+                    "runs": int(row.get("runs", 0) or 0),
+                    "balls": int(row.get("balls", 0) or 0),
+                    "wickets": int(row.get("wickets", 0) or 0),
+                    "catches": int(row.get("catches", 0) or 0),
+                    "fours": int(row.get("fours", 0) or 0),
+                    "sixes": int(row.get("sixes", 0) or 0),
+                    "notes": " | ".join(dismissal_bits) or "Imported from ChatGPT/manual extraction",
+                    "source": "imported-review",
+                    "confidence": "imported",
+                    "inning_number": inning_index,
+                }
+            )
+
+    extracted_summary = "Imported scorecard template"
+    if first_batting_team or first_bowling_team:
+        extracted_summary += f" for {first_batting_team or 'batting team'} vs {first_bowling_team or 'opponent'}"
+    extracted_summary += f" with {len(suggested)} batting entries for review."
+    return draft, suggested, extracted_summary
+
+
+def _scorecard_template_from_review_payload(
+    store: dict[str, Any],
+    payload: dict[str, Any],
+    draft: dict[str, Any],
+    suggested: list[dict[str, Any]],
+    raw_text: str,
+    *,
+    ocr_engine: str,
+    ocr_pipeline: str,
+    confidence: str,
+    extracted_summary: str,
+) -> dict[str, Any]:
+    template = _canonical_scorecard_template_payload(payload)
+    if template is None:
+        template = scorecard_template_from_archive(
+            {
+                "draft_scorecard": draft,
+                "suggested_performances": suggested,
+                "ocr_engine": ocr_engine,
+                "ocr_pipeline": ocr_pipeline,
+                "confidence": confidence,
+                "created_at": now_iso(),
+                "ocr_processed_at": now_iso(),
+            }
+        )
+    else:
+        template = deepcopy(template)
+    if isinstance(template.get("meta"), dict):
+        template["meta"].setdefault("source", ocr_engine or None)
+        template["meta"].setdefault("processed_by", ocr_pipeline or None)
+        template["meta"].setdefault("confidence", confidence or None)
+        template["meta"].setdefault("status", "template")
+        template["meta"].setdefault("created_at", None)
+        template["meta"].setdefault("updated_at", None)
+    return template
+
+
 def _parse_match_json_payload(store: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any] | None:
     match_block = payload.get("match")
     if not isinstance(match_block, dict):
@@ -1289,8 +1673,9 @@ def _parse_match_json_payload(store: dict[str, Any], payload: dict[str, Any]) ->
     draft["heartlake_wickets"] = _string_value(first_innings.get("wickets"))
     draft["heartlake_overs"] = _string_value(first_innings.get("overs"))
 
-    batting_team = _string_value(first_innings.get("batting_team") or match_block.get("teams", {}).get("batting"))
-    bowling_team = _string_value(match_block.get("teams", {}).get("bowling"))
+    match_teams = match_block.get("teams") if isinstance(match_block.get("teams"), dict) else {}
+    batting_team = _string_value(first_innings.get("batting_team") or match_teams.get("batting"))
+    bowling_team = _string_value(match_teams.get("bowling"))
     extras = first_innings.get("extras") if isinstance(first_innings.get("extras"), dict) else {}
     extras_total = _string_value(extras.get("total"))
     did_not_bat = first_innings.get("did_not_bat") if isinstance(first_innings.get("did_not_bat"), list) else []
@@ -1343,6 +1728,17 @@ def _parse_match_json_payload(store: dict[str, Any], payload: dict[str, Any]) ->
     return {
         "draft_scorecard": draft,
         "suggested_performances": player_scores,
+        "extraction_template": _scorecard_template_from_review_payload(
+            store,
+            payload,
+            draft,
+            player_scores,
+            json.dumps(payload, indent=2)[:12000],
+            ocr_engine="manual-import",
+            ocr_pipeline="Imported from ChatGPT/manual extraction",
+            confidence="Imported review",
+            extracted_summary=extracted_summary,
+        ),
         "raw_extracted_text": json.dumps(payload, indent=2)[:12000],
         "ocr_engine": "manual-import",
         "ocr_pipeline": "Imported from ChatGPT/manual extraction",
@@ -1433,6 +1829,17 @@ def _parse_innings_root_json_payload(store: dict[str, Any], payload: dict[str, A
     return {
         "draft_scorecard": draft,
         "suggested_performances": player_scores,
+        "extraction_template": _scorecard_template_from_review_payload(
+            store,
+            payload,
+            draft,
+            player_scores,
+            json.dumps(payload, indent=2)[:12000],
+            ocr_engine="manual-import",
+            ocr_pipeline="Imported from ChatGPT/manual extraction",
+            confidence="Imported review",
+            extracted_summary=extracted_summary,
+        ),
         "raw_extracted_text": json.dumps(payload, indent=2)[:12000],
         "ocr_engine": "manual-import",
         "ocr_pipeline": "Imported from ChatGPT/manual extraction",
@@ -1490,6 +1897,20 @@ def parse_imported_extraction(store: dict[str, Any], text: str) -> dict[str, Any
         payload = None
 
     if isinstance(payload, dict):
+        template_payload = _canonical_scorecard_template_payload(payload)
+        if template_payload is not None:
+            draft, suggested, extracted_summary = _scorecard_template_review_data(store, template_payload)
+            return {
+                "draft_scorecard": draft,
+                "suggested_performances": suggested,
+                "extraction_template": template_payload,
+                "raw_extracted_text": raw_text[:12000],
+                "ocr_engine": _string_value((template_payload.get("meta") or {}).get("source")) or "manual-import",
+                "ocr_pipeline": _string_value((template_payload.get("meta") or {}).get("processed_by"))
+                or "Imported from ChatGPT/manual extraction",
+                "confidence": _string_value((template_payload.get("meta") or {}).get("confidence")) or "Imported review",
+                "extracted_summary": extracted_summary,
+            }
         nested_match_payload = _parse_match_json_payload(store, payload)
         if nested_match_payload is not None:
             return nested_match_payload
@@ -1510,14 +1931,37 @@ def parse_imported_extraction(store: dict[str, Any], text: str) -> dict[str, Any
             }
         )
         suggested = _parse_imported_player_scores(store, payload)
+        template = _scorecard_template_from_review_payload(
+            store,
+            payload,
+            draft,
+            suggested,
+            raw_text,
+            ocr_engine="manual-import",
+            ocr_pipeline="Imported from ChatGPT/manual extraction",
+            confidence="Imported review",
+            extracted_summary=f"Imported pasted extraction with {len(suggested)} player score entries for review.",
+        )
     else:
         fallback = _parse_imported_text_fallback(store, raw_text)
         draft = fallback["draft_scorecard"]
         suggested = fallback["suggested_performances"]
+        template = _scorecard_template_from_review_payload(
+            store,
+            {},
+            draft,
+            suggested,
+            raw_text,
+            ocr_engine="manual-import",
+            ocr_pipeline="Imported from ChatGPT/manual extraction",
+            confidence="Imported review",
+            extracted_summary=f"Imported pasted extraction with {len(suggested)} player score entries for review.",
+        )
 
     return {
         "draft_scorecard": draft,
         "suggested_performances": suggested,
+        "extraction_template": template,
         "raw_extracted_text": raw_text[:12000],
         "ocr_engine": "manual-import",
         "ocr_pipeline": "Imported from ChatGPT/manual extraction",
@@ -1543,8 +1987,8 @@ def signin_page() -> FileResponse:
 
 def _admin_center_html(request: Request) -> HTMLResponse:
     user_row, current_club_id = _auth_user_from_token(_auth_token_from_request(request))
-    if "view_admin" not in _user_permissions(user_row, current_club_id):
-        raise HTTPException(status_code=403, detail="Only club administrators can open the admin center.")
+    if _effective_role_name(user_row, current_club_id) != "superadmin":
+        raise HTTPException(status_code=403, detail="Only superadmin can open the admin center.")
     store = load_store()
     club = _selected_club(store, current_club_id)
     role = _effective_role_name(user_row, current_club_id)
@@ -1553,16 +1997,19 @@ def _admin_center_html(request: Request) -> HTMLResponse:
         status = str(upload.get("status") or "").strip().lower()
         if status in {"approved", "applied to match", "deleted"}:
             continue
+        club_ids, club_names = archive_club_context(upload, store.get("clubs", []), store.get("members", []), store.get("fixtures", []))
         inferred_club = _resolve_archive_club(upload, store.get("clubs", []))
-        resolved_club_id = str(upload.get("club_id") or (inferred_club.get("id") if inferred_club else "") or "").strip()
-        resolved_club_name = str(upload.get("club_name") or (inferred_club.get("name") if inferred_club else "") or "Unassigned").strip() or "Unassigned"
-        if role != "superadmin" and resolved_club_id != str(club.get("id") or "").strip():
+        resolved_club_id = str((club_ids[0] if club_ids else upload.get("club_id")) or (inferred_club.get("id") if inferred_club else "") or "").strip()
+        resolved_club_name = " / ".join(club_names) if club_names else str(upload.get("club_name") or (inferred_club.get("name") if inferred_club else "") or "Unassigned").strip() or "Unassigned"
+        if role != "superadmin" and not archive_belongs_to_club(upload, club, store.get("clubs", []), store.get("members", []), store.get("fixtures", [])):
             continue
         review_uploads.append(
             {
                 **upload,
                 "resolved_club_id": resolved_club_id,
                 "resolved_club_name": resolved_club_name,
+                "resolved_club_ids": club_ids,
+                "resolved_club_names": club_names,
             }
         )
     club_options = "\n".join(
@@ -1573,20 +2020,14 @@ def _admin_center_html(request: Request) -> HTMLResponse:
     for upload in review_uploads:
         key = f'{upload.get("resolved_club_id") or ""}::{upload.get("resolved_club_name") or "Unassigned"}'
         review_groups.setdefault(key, []).append(upload)
-    review_queue_html = ""
     if review_uploads:
-        review_queue_html = "".join(
-            f"""
-            <section class="admin-review-group">
-              <div class="panel-head compact-head">
-                <div>
-                  <p class="section-kicker">Club review queue</p>
-                  <h3>{html.escape(group[0].get('resolved_club_name') or 'Unassigned')} · {len(group)}</h3>
-                </div>
-              </div>
-              <div class="archive-list">
-                {''.join(
-                    f'''
+        rendered_groups: list[str] = []
+        for group in review_groups.values():
+            rendered_cards: list[str] = []
+            for upload in group:
+                template_value = upload.get("extraction_template") if isinstance(upload.get("extraction_template"), dict) else scorecard_template_from_archive(upload)
+                rendered_cards.append(
+                    f"""
                       <article class="detail-card" data-admin-upload="{html.escape(str(upload.get('id') or ''))}">
                         <strong>{html.escape(upload.get('file_name') or '')}</strong>
                         <p>{html.escape(upload.get('club_name') or upload.get('resolved_club_name') or 'Club TBD')} · {html.escape(upload.get('season') or 'Season TBD')}</p>
@@ -1594,24 +2035,7 @@ def _admin_center_html(request: Request) -> HTMLResponse:
                         <p>{html.escape(upload.get('extracted_summary') or 'Review the extracted draft before approving.')}</p>
                         <label class="stack-label">
                           Reviewed extraction JSON
-                          <textarea class="admin-review-text" rows="10" spellcheck="false">{html.escape(json.dumps({
-                              "meta": {
-                                  "source": upload.get("ocr_engine") or "manual-review",
-                                  "confidence": upload.get("confidence") or "review",
-                                  "status": upload.get("status") or "Pending review",
-                              },
-                              "archive": {
-                                  "id": upload.get("id"),
-                                  "file_name": upload.get("file_name"),
-                                  "season": upload.get("season"),
-                                  "club_name": upload.get("club_name") or upload.get("resolved_club_name") or "Unassigned",
-                                  "archive_date": upload.get("archive_date"),
-                                  "archive_year": upload.get("archive_year"),
-                              },
-                              "draft_scorecard": upload.get("draft_scorecard") or {},
-                              "suggested_performances": upload.get("suggested_performances") or [],
-                              "raw_extracted_text": upload.get("raw_extracted_text") or "",
-                          }, indent=2))}</textarea>
+                          <textarea class="admin-review-text" rows="10" spellcheck="false">{html.escape(json.dumps(template_value, indent=2))}</textarea>
                         </label>
                         <div class="inline-actions">
                           <button class="secondary-button" type="button" data-action="extract">Re-extract</button>
@@ -1620,14 +2044,24 @@ def _admin_center_html(request: Request) -> HTMLResponse:
                           <button class="secondary-button" type="button" data-action="delete">Delete</button>
                         </div>
                       </article>
-                    '''
-                    for upload in group
-                )}
-              </div>
-            </section>
-            """
-            for group in review_groups.values()
-        )
+                    """
+                )
+            rendered_groups.append(
+                f"""
+                <section class="admin-review-group">
+                  <div class="panel-head compact-head">
+                    <div>
+                      <p class="section-kicker">Club review queue</p>
+                      <h3>{html.escape(group[0].get('resolved_club_name') or 'Unassigned')} · {len(group)}</h3>
+                    </div>
+                  </div>
+                  <div class="archive-list">
+                    {''.join(rendered_cards)}
+                  </div>
+                </section>
+                """
+            )
+        review_queue_html = "".join(rendered_groups)
     else:
         review_queue_html = '<p class="empty-state">No archives match this club or search.</p>'
     body = f"""
@@ -1637,7 +2071,7 @@ def _admin_center_html(request: Request) -> HTMLResponse:
         <meta charset="UTF-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1.0" />
         <title>Admin Center · Heartlake Clubs</title>
-        <link rel="stylesheet" href="/assets/styles.css?v=20260423b" />
+        <link rel="stylesheet" href="/assets/styles.css?v=20260429b" />
       </head>
       <body>
         <div class="page-shell">
@@ -1708,7 +2142,7 @@ def _admin_center_html(request: Request) -> HTMLResponse:
           </section>
         </div>
         <script src="/assets/multipage.js?v=20260429a"></script>
-        <script src="/assets/admin_center.js?v=20260429a"></script>
+        <script src="/assets/admin_center.js?v=20260429c"></script>
       </body>
     </html>
     """
@@ -1930,7 +2364,15 @@ def dashboard(request: Request, focus_club_id: str | None = None) -> dict[str, A
         or str(request.cookies.get("heartlakePrimaryClubId") or "").strip()
         or None
     )
-    return current_dashboard(load_store(), resolved_focus_club_id)
+    dashboard_data = current_dashboard(load_store(), resolved_focus_club_id)
+    token = _auth_token_from_request(request)
+    if token:
+        try:
+            user_row, current_club_id = _auth_user_from_token(token)
+            dashboard_data["user"] = _auth_user_payload(user_row, current_club_id or resolved_focus_club_id or "")
+        except Exception:
+            pass
+    return dashboard_data
 
 
 @app.get("/api/auth/options")
@@ -2004,8 +2446,22 @@ def register(request: RegisterRequest, response: Response) -> dict[str, Any]:
         # -----------------------------
         # ✅ ROLE
         # -----------------------------
-        role = (request.role or "player").strip().lower()
+        raw_roles = request.roles if request.roles is not None else request.role
+        if isinstance(raw_roles, str):
+            requested_roles = [item.strip() for item in re.split(r"[,\n;|]", raw_roles) if item.strip()]
+        elif isinstance(raw_roles, list):
+            requested_roles = [str(item or "").strip() for item in raw_roles if str(item or "").strip()]
+        else:
+            requested_roles = []
+        if not requested_roles:
+            requested_roles = [request.role or "player"]
+        requested_roles = [_normalize_role_name(role) for role in requested_roles if _normalize_role_name(role)]
+        if not requested_roles:
+            requested_roles = ["player"]
+        role = requested_roles[0]
         member_roles = {"player", "captain", "club_admin", "admin"}
+        if role == "superadmin":
+            raise HTTPException(status_code=403, detail="Superadmin registration is reserved for Amit S / Amit Sethi.")
 
         # -----------------------------
         # ✅ NAME NORMALIZATION
@@ -2015,6 +2471,38 @@ def register(request: RegisterRequest, response: Response) -> dict[str, Any]:
         normalized_input = normalize_name(input_name)
 
         logger.debug("👤 Input → %s | normalized → %s", input_name, normalized_input)
+
+        requested_club_id = str(request.primary_club_id or "").strip()
+        requested_club_name = str(request.club_name or "").strip()
+        requested_club_city = str(request.club_city or "").strip()
+        requested_club_country = str(request.club_country or "").strip()
+        selected_club = None
+        created_club = False
+
+        if requested_club_id:
+            selected_club = next(
+                (
+                    club
+                    for club in store.get("clubs", [])
+                    if str(club.get("id") or "").strip().lower() == requested_club_id.lower()
+                ),
+                None,
+            )
+        if not selected_club and requested_club_name:
+            selected_club = _find_club_by_name(store, requested_club_name)
+        if not selected_club and requested_club_name:
+            if not requested_club_city or not requested_club_country:
+                raise HTTPException(status_code=400, detail="Add club name, city, and country to create a new club.")
+            selected_club, created_club = _create_club_record(store, requested_club_name, requested_club_city, requested_club_country)
+            requested_club_id = str(selected_club.get("id") or "").strip()
+        if not selected_club:
+            raise HTTPException(status_code=400, detail="Select an existing club or add a new club.")
+        if not requested_club_id:
+            requested_club_id = str(selected_club.get("id") or "").strip()
+
+        effective_role = max(requested_roles, key=_role_rank)
+        if created_club and role in {"player", "captain", "club_admin", "admin"}:
+            effective_role = "club_admin"
 
         member = None
         member_id = None
@@ -2100,6 +2588,10 @@ def register(request: RegisterRequest, response: Response) -> dict[str, Any]:
             if member:
                 member_id = member.get("id")
 
+            if created_club and member:
+                _attach_creator_to_club(store, selected_club, member)
+                save_store(store)
+
             existing_user_for_member = _existing_user_for_member(connection, member_id or "")
 
             # -----------------------------
@@ -2110,15 +2602,16 @@ def register(request: RegisterRequest, response: Response) -> dict[str, Any]:
                 connection.execute(
                     """
                     UPDATE app_users
-                    SET display_name = ?, mobile = ?, email = ?, role = ?, member_id = ?
+                    SET display_name = ?, mobile = ?, email = ?, role = ?, member_id = ?, primary_club_id = ?
                     WHERE id = ?
                     """,
                     (
                         request.display_name.strip() or input_name or existing_user_for_member["display_name"],
                         mobile or None,
                         email or None,
-                        role,
+                        effective_role,
                         member_id,
+                        requested_club_id or None,
                         user_id,
                     ),
                 )
@@ -2134,21 +2627,40 @@ def register(request: RegisterRequest, response: Response) -> dict[str, Any]:
                         mobile or None,
                         email or None,
                         _password_hash(request.password.strip()),
-                        role,
+                        effective_role,
                         member_id,
-                        None,
+                        requested_club_id or None,
                         now_iso(),
                     ),
                 )
 
                 user_id = int(cursor.lastrowid)
 
+            club_role_names = [role_name for role_name in requested_roles if role_name in {"captain", "club_admin"}]
+            if created_club and "club_admin" not in club_role_names:
+                club_role_names.append("club_admin")
+            for club_role_name in club_role_names:
+                connection.execute(
+                    """
+                    INSERT INTO app_user_club_roles (user_id, club_id, role_name, created_at)
+                    VALUES (?, ?, ?, ?)
+                    ON CONFLICT(user_id, club_id, role_name) DO UPDATE SET
+                      created_at = excluded.created_at
+                    """,
+                    (
+                        user_id,
+                        requested_club_id,
+                        club_role_name,
+                        now_iso(),
+                    ),
+                )
+
             connection.execute(
                 """
                 INSERT INTO app_auth_sessions (token, user_id, current_club_id, created_at)
                 VALUES (?, ?, ?, ?)
                 """,
-                (token, user_id, None, now_iso()),
+                (token, user_id, requested_club_id or None, now_iso()),
             )
 
             user_row = connection.execute(
@@ -2158,15 +2670,15 @@ def register(request: RegisterRequest, response: Response) -> dict[str, Any]:
         # -----------------------------
         # ✅ RESPONSE
         # -----------------------------
-        _set_auth_cookies(response, token, "")
+        _set_auth_cookies(response, token, requested_club_id)
 
         logger.info("🎉 SUCCESS → user_id=%s", user_id)
 
         return {
             "token": token,
-            "user": _auth_user_payload(user_row, ""),
+            "user": _auth_user_payload(user_row, requested_club_id),
             "member": member,
-            "clubs": _sorted_club_choices(store, ""),
+            "clubs": _sorted_club_choices(load_store(), requested_club_id),
         }
 
     # -----------------------------
@@ -2769,8 +3281,11 @@ def cache_status() -> dict[str, Any]:
 
 @app.post("/api/members")
 def create_member(request: MemberCreateRequest, x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
-    _require_permission(x_auth_token, "manage_players")
+    user_row, current_club_id = _require_permission(x_auth_token, "manage_players")
     store = load_store()
+    selected_club = _selected_club(store, request.club_id or current_club_id)
+    if str(selected_club.get("id") or "").strip() != str(current_club_id or "").strip():
+        raise HTTPException(status_code=403, detail="You can only invite players into your selected club.")
     phone = canonical_phone(request.phone)
     if phone and any(canonical_phone(member.get("phone", "")) == phone for member in store["members"]):
         raise HTTPException(status_code=409, detail="A player with this mobile number already exists.")
@@ -2780,12 +3295,17 @@ def create_member(request: MemberCreateRequest, x_auth_token: str | None = Heade
     team_memberships = request.team_memberships
     if isinstance(team_memberships, str):
         team_memberships = [team.strip() for team in team_memberships.split(",") if team.strip()]
+    club_team_name = str(selected_club.get("short_name") or selected_club.get("name") or request.team_name or "Club").strip()
+    if not team_memberships:
+        team_memberships = [club_team_name]
+    elif club_team_name and club_team_name not in team_memberships:
+        team_memberships.insert(0, club_team_name)
     member = {
         "id": str(uuid.uuid4())[:8],
         "name": request.name,
         "full_name": request.full_name,
         "gender": _normalize_gender(request.gender),
-        "team_name": request.team_name or "Heartlake",
+        "team_name": club_team_name,
         "team_memberships": team_memberships,
         "aliases": aliases,
         "age": request.age,
@@ -2800,8 +3320,9 @@ def create_member(request: MemberCreateRequest, x_auth_token: str | None = Heade
         "jersey_number": request.jersey_number,
     }
     store["members"].append(member)
+    _attach_creator_to_club(store, selected_club, member)
     save_store(store)
-    return current_dashboard(load_store())
+    return current_dashboard(load_store(), current_club_id)
 
 
 @app.post("/api/members/{member_id}")
@@ -2885,13 +3406,13 @@ def update_availability(match_id: str, request: AvailabilityUpdateRequest, x_aut
     if not member:
         raise HTTPException(status_code=400, detail="This signed-in account is not linked to a player profile.")
     effective_role = _effective_role_name(user_row, current_club_id)
-    can_edit_other_availability = effective_role in {"captain", "superadmin"}
+    can_edit_other_availability = effective_role in {"captain", "club_admin", "superadmin"}
     requested_player_name = resolve_member_name(store, request.player_name) if request.player_name else ""
     player_name = member.get("name", "")
     if can_edit_other_availability and requested_player_name:
         player_name = requested_player_name
     elif requested_player_name and requested_player_name != player_name:
-        raise HTTPException(status_code=403, detail="Only captains or superadmins can update another player's availability.")
+        raise HTTPException(status_code=403, detail="Only captains, club admins, or superadmins can update another player's availability.")
     match["availability_statuses"][player_name] = request.status
     if request.note.strip():
         match["availability_notes"][player_name] = request.note.strip()
@@ -2900,6 +3421,53 @@ def update_availability(match_id: str, request: AvailabilityUpdateRequest, x_aut
     _touch_fixture_audit(match, user_row)
     save_store(store)
     return current_dashboard(load_store(), request.club_id or match.get("club_id") or "")
+
+
+@app.post("/api/matches/{match_id}/lineup")
+def update_playing_xi(match_id: str, request: PlayingXiUpdateRequest, x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
+    user_row, current_club_id = _require_permission(x_auth_token, "manage_fixtures")
+    store = load_store()
+    try:
+        match = get_match_or_404(store, match_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+    effective_role = _effective_role_name(user_row, current_club_id)
+    selected_club = _selected_club(store, request.club_id or match.get("club_id") or current_club_id)
+    selected_club_id = str(selected_club.get("id") or "").strip()
+    match_club_id = str(match.get("club_id") or "").strip()
+    if selected_club_id and match_club_id and selected_club_id != match_club_id:
+        raise HTTPException(status_code=400, detail="The selected club does not match this fixture.")
+    if effective_role != "superadmin" and selected_club_id and selected_club_id != current_club_id:
+        raise HTTPException(status_code=403, detail="You can only manage the playing XI for your selected club.")
+
+    dashboard = current_dashboard(store, selected_club_id or match_club_id or current_club_id)
+    club_members = {str(member.get("name") or "").strip(): member for member in dashboard.get("members", [])}
+    selected_names: list[str] = []
+    selected_member_ids: list[str] = []
+    for raw_name in request.player_names or []:
+        resolved_name = resolve_member_name(store, raw_name)
+        if not resolved_name:
+            continue
+        member = club_members.get(resolved_name)
+        if not member:
+            raise HTTPException(status_code=400, detail=f"{resolved_name} is not associated with this club.")
+        status = str(match.get("availability_statuses", {}).get(resolved_name, "")).strip().lower()
+        if status not in {"available", "maybe"}:
+            raise HTTPException(status_code=400, detail=f"{resolved_name} must be marked available or maybe before selection.")
+        member_id = str(member.get("id") or "").strip()
+        if member_id in selected_member_ids:
+            continue
+        selected_names.append(resolved_name)
+        selected_member_ids.append(member_id)
+    if len(selected_names) > 11:
+        raise HTTPException(status_code=400, detail="Playing XI can include at most 11 players.")
+
+    match["selected_playing_xi"] = selected_names
+    match["selected_playing_xi_member_ids"] = selected_member_ids
+    _touch_fixture_audit(match, user_row)
+    save_store(store)
+    return current_dashboard(load_store(), request.club_id or match.get("club_id") or current_club_id)
 
 
 @app.post("/api/matches/{match_id}/scorecard")
@@ -3160,7 +3728,24 @@ def save_archive_review(upload_id: str, request: ArchiveReviewRequest, x_auth_to
         payload = None
 
     if isinstance(payload, dict):
-        if "draft_scorecard" in payload:
+        template_payload = _canonical_scorecard_template_payload(payload)
+        if template_payload is not None:
+            draft, suggested, extracted_summary = _scorecard_template_review_data(store, template_payload)
+            upload["extraction_template"] = template_payload
+            upload["draft_scorecard"] = draft
+            upload["suggested_performances"] = suggested
+            upload["raw_extracted_text"] = raw_text[:12000]
+            meta = template_payload.get("meta") if isinstance(template_payload.get("meta"), dict) else {}
+            upload["ocr_engine"] = str(meta.get("source") or upload.get("ocr_engine") or "manual-review")
+            upload["ocr_pipeline"] = str(meta.get("processed_by") or upload.get("ocr_pipeline") or "Admin reviewed extraction")
+            upload["confidence"] = str(meta.get("confidence") or upload.get("confidence") or "review")
+            upload["extracted_summary"] = str(
+                _extract_field(template_payload, "extracted_summary")
+                or extracted_summary
+                or upload.get("extracted_summary")
+                or "Reviewed archive scorecard."
+            )
+        elif "draft_scorecard" in payload:
             draft = payload.get("draft_scorecard")
             if isinstance(draft, dict):
                 upload["draft_scorecard"] = draft
@@ -3168,6 +3753,9 @@ def save_archive_review(upload_id: str, request: ArchiveReviewRequest, x_auth_to
                 upload["suggested_performances"] = [
                     item for item in payload.get("suggested_performances", []) if isinstance(item, dict)
                 ]
+            template = payload.get("extraction_template")
+            if isinstance(template, dict) and _is_scorecard_template_payload(template):
+                upload["extraction_template"] = deepcopy(template)
         elif "match" in payload or "innings" in payload:
             parsed = parse_imported_extraction(store, raw_text)
             upload.update(parsed)
@@ -3187,6 +3775,17 @@ def save_archive_review(upload_id: str, request: ArchiveReviewRequest, x_auth_to
             )
             upload["draft_scorecard"] = draft
             upload["suggested_performances"] = _parse_imported_player_scores(store, payload)
+            upload["extraction_template"] = _scorecard_template_from_review_payload(
+                store,
+                payload,
+                draft,
+                upload["suggested_performances"],
+                raw_text,
+                ocr_engine=str(_extract_field(payload, "ocr_engine") or upload.get("ocr_engine") or "manual-review"),
+                ocr_pipeline=str(_extract_field(payload, "ocr_pipeline") or upload.get("ocr_pipeline") or "Admin reviewed extraction"),
+                confidence=str(_extract_field(payload, "confidence") or upload.get("confidence") or "review"),
+                extracted_summary=str(_extract_field(payload, "extracted_summary") or upload.get("extracted_summary") or "Reviewed archive scorecard."),
+            )
 
         upload["raw_extracted_text"] = str(_extract_field(payload, "raw_extracted_text") or raw_text)[:12000]
         meta = payload.get("meta") if isinstance(payload.get("meta"), dict) else {}
@@ -3200,11 +3799,34 @@ def save_archive_review(upload_id: str, request: ArchiveReviewRequest, x_auth_to
         upload["confidence"] = str(_extract_field(payload, "confidence") or meta.get("confidence") or upload.get("confidence") or "review")
         summary = _extract_field(payload, "extracted_summary") or upload.get("extracted_summary") or "Reviewed archive scorecard."
         upload["extracted_summary"] = str(summary)
+        if "extraction_template" not in upload:
+            upload["extraction_template"] = _scorecard_template_from_review_payload(
+                store,
+                payload,
+                upload.get("draft_scorecard") or default_scorecard("Reviewed archive"),
+                upload.get("suggested_performances") or [],
+                raw_text,
+                ocr_engine=upload["ocr_engine"],
+                ocr_pipeline=upload["ocr_pipeline"],
+                confidence=upload["confidence"],
+                extracted_summary=upload["extracted_summary"],
+            )
     else:
         upload["raw_extracted_text"] = raw_text[:12000]
         upload["ocr_engine"] = upload.get("ocr_engine") or "manual-review"
         upload["ocr_pipeline"] = upload.get("ocr_pipeline") or "Admin reviewed extraction"
         upload["confidence"] = upload.get("confidence") or "review"
+        upload["extraction_template"] = _scorecard_template_from_review_payload(
+            store,
+            {},
+            upload.get("draft_scorecard") or default_scorecard("Reviewed archive"),
+            upload.get("suggested_performances") or [],
+            raw_text,
+            ocr_engine=upload["ocr_engine"],
+            ocr_pipeline=upload["ocr_pipeline"],
+            confidence=upload["confidence"],
+            extracted_summary=upload.get("extracted_summary") or "Reviewed archive scorecard.",
+        )
 
     inferred_club = _resolve_archive_club(upload, store.get("clubs", []))
     if inferred_club:
@@ -3235,6 +3857,10 @@ async def upload_scorecard(
     _require_permission(x_auth_token, "manage_scorecards")
     store = load_store()
     selected_club = _selected_club(store, focus_club_id)
+    related_club_ids = _archive_match_club_ids(store, selected_club.get("id", ""), match_id or "")
+    related_clubs = [_club_by_identifier(store.get("clubs", []), club_id) for club_id in related_club_ids]
+    related_clubs = [club for club in related_clubs if club]
+    related_club_names = [str(club.get("name") or club.get("short_name") or "").strip() for club in related_clubs]
     suffix = Path(file.filename or "scorecard.jpg").suffix or ".jpg"
     content = await file.read()
     incoming_hash = file_sha256_from_bytes(content)
@@ -3266,6 +3892,8 @@ async def upload_scorecard(
         source="upload",
         club_id=selected_club.get("id", ""),
         club_name=selected_club.get("name", ""),
+        club_ids=related_club_ids,
+        club_names=related_club_names,
     )
     record["original_file_name"] = file.filename or file_token
     record["status"] = "Pending review"
@@ -3303,6 +3931,17 @@ def apply_archive(upload_id: str, request: ArchiveApplyRequest, focus_club_id: s
         upload["club_id"] = inferred_club.get("id", upload.get("club_id", ""))
         upload["club_name"] = inferred_club.get("name", upload.get("club_name", ""))
     upload["club_id"] = upload.get("club_id") or (focus_club_id or "")
+    existing_club_ids, existing_club_names = archive_club_context(upload, store.get("clubs", []), store.get("members", []), store.get("fixtures", []))
+    club_ids = _archive_match_club_ids(store, upload.get("club_id", ""), request.match_id)
+    if not club_ids:
+        club_ids = [str(upload.get("club_id") or "").strip()]
+    upload["club_ids"] = list(dict.fromkeys([*(existing_club_ids or []), *(club_ids or []), str(upload.get("club_id") or "").strip()]))
+    club_names = [name for name in existing_club_names if name]
+    for club_id in upload["club_ids"]:
+        club_item = _club_by_identifier(store.get("clubs", []), club_id)
+        if club_item:
+            club_names.append(str(club_item.get("name") or club_item.get("short_name") or "").strip())
+    upload["club_names"] = list(dict.fromkeys(name for name in club_names if name))
     auto_register_players_from_archive(store, upload, match_id=request.match_id, club_id=upload.get("club_id", ""))
     match["scorecard"].update(
         {
@@ -3346,29 +3985,28 @@ def apply_archive(upload_id: str, request: ArchiveApplyRequest, focus_club_id: s
 
 @app.get("/api/admin/review-queue")
 def admin_review_queue(x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
-    user_row, current_club_id = _require_permission(x_auth_token, "view_admin")
+    user_row, current_club_id = _require_permission(x_auth_token, "manage_scorecards")
     store = load_store()
     club = _selected_club(store, current_club_id)
     role = _effective_role_name(user_row, current_club_id)
+    if role != "superadmin":
+        raise HTTPException(status_code=403, detail="Only superadmin can open the admin review queue.")
     queue: list[dict[str, Any]] = []
     for upload in canonical_archive_uploads(store.get("archive_uploads", [])):
         status = str(upload.get("status") or "").strip().lower()
         if status in {"approved", "applied to match", "deleted"}:
             continue
+        club_ids, club_names = archive_club_context(upload, store.get("clubs", []), store.get("members", []), store.get("fixtures", []))
         inferred_club = _resolve_archive_club(upload, store.get("clubs", []))
         queue.append(
             {
                 **upload,
-                "resolved_club_id": str(upload.get("club_id") or (inferred_club.get("id") if inferred_club else "") or "").strip(),
-                "resolved_club_name": str(upload.get("club_name") or (inferred_club.get("name") if inferred_club else "") or "Unassigned").strip() or "Unassigned",
+                "resolved_club_id": str((club_ids[0] if club_ids else upload.get("club_id")) or (inferred_club.get("id") if inferred_club else "") or "").strip(),
+                "resolved_club_name": " / ".join(club_names) if club_names else str(upload.get("club_name") or (inferred_club.get("name") if inferred_club else "") or "Unassigned").strip() or "Unassigned",
+                "resolved_club_ids": club_ids,
+                "resolved_club_names": club_names,
             }
         )
-    if role != "superadmin":
-        queue = [
-            upload
-            for upload in queue
-            if str(upload.get("resolved_club_id") or upload.get("club_id") or "").strip() == str(club.get("id") or "").strip()
-        ]
     return {
         "user": _auth_user_payload(user_row, current_club_id),
         "club": club,
@@ -3388,6 +4026,15 @@ def approve_archive(upload_id: str, x_auth_token: str | None = Header(default=No
     inferred_club = _resolve_archive_club(upload, store.get("clubs", [])) or club
     upload["club_id"] = upload.get("club_id") or inferred_club.get("id", "") or club.get("id", "")
     upload["club_name"] = upload.get("club_name") or inferred_club.get("name", "") or club.get("name", "")
+    existing_club_ids, existing_club_names = archive_club_context(upload, store.get("clubs", []), store.get("members", []), store.get("fixtures", []))
+    club_ids = [str(upload.get("club_id") or club.get("id") or "").strip()]
+    upload["club_ids"] = list(dict.fromkeys([*(existing_club_ids or []), *(club_ids or [])]))
+    club_names = [name for name in existing_club_names if name]
+    for club_id in upload["club_ids"]:
+        club_item = _club_by_identifier(store.get("clubs", []), club_id)
+        if club_item:
+            club_names.append(str(club_item.get("name") or club_item.get("short_name") or "").strip())
+    upload["club_names"] = list(dict.fromkeys(name for name in club_names if name))
     upload["status"] = "Approved"
     upload["reviewed_by"] = user_row["display_name"] or user_row["mobile"] or "admin"
     upload["reviewed_at"] = now_iso()
@@ -3417,7 +4064,7 @@ def delete_archive(upload_id: str, x_auth_token: str | None = Header(default=Non
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
     club = _selected_club(store, current_club_id)
-    if str(upload.get("club_id") or "").strip() and str(upload.get("club_id") or "").strip() != str(club.get("id") or "").strip():
+    if not archive_belongs_to_club(upload, club, store.get("clubs", []), store.get("members", []), store.get("fixtures", [])):
         raise HTTPException(status_code=403, detail="This archive belongs to a different club.")
     store["archive_uploads"] = [
         item for item in store.get("archive_uploads", []) if str(item.get("id") or "").strip() != upload_id

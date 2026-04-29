@@ -106,8 +106,8 @@ async function syncAdminOnlyElements() {
   }
   try {
     const auth = await authMe();
-    const permissions = auth?.user?.permissions || [];
-    const isAdmin = permissions.includes("view_admin") || permissions.includes("manage_club") || permissions.includes("manage_scorecards") || permissions.includes("manage_players");
+    const role = String(auth?.user?.effective_role || auth?.user?.role || "").trim();
+    const isAdmin = role === "superadmin";
     nodes.forEach((node) => {
       node.hidden = !isAdmin;
     });

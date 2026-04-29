@@ -63,6 +63,25 @@ function selectedClubKeys(dashboard = payload) {
   return { clubIdValue, clubNameValue, clubShortNameValue };
 }
 
+function normalizeClubList(value) {
+  if (Array.isArray(value)) {
+    return value.map((item) => String(item || "").trim().toLowerCase()).filter(Boolean);
+  }
+  if (typeof value === "string") {
+    const text = value.trim();
+    if (!text) return [];
+    try {
+      const parsed = JSON.parse(text);
+      if (Array.isArray(parsed)) {
+        return parsed.map((item) => String(item || "").trim().toLowerCase()).filter(Boolean);
+      }
+    } catch {
+      return text.split(/[,;|]/).map((item) => String(item || "").trim().toLowerCase()).filter(Boolean);
+    }
+  }
+  return [];
+}
+
 function archiveBelongsToSelectedClub(upload, dashboard = payload) {
   const { clubIdValue, clubNameValue, clubShortNameValue } = selectedClubKeys(dashboard);
   if (!clubIdValue && !clubNameValue && !clubShortNameValue) {
@@ -70,13 +89,125 @@ function archiveBelongsToSelectedClub(upload, dashboard = payload) {
   }
   const resolvedClubId = String(upload.resolved_club_id || upload.club_id || "").trim().toLowerCase();
   const resolvedClubName = String(upload.resolved_club_name || upload.club_name || "").trim().toLowerCase();
-  if (clubIdValue) {
-    return resolvedClubId === clubIdValue;
+  const resolvedClubIds = normalizeClubList(upload.resolved_club_ids || upload.club_ids || resolvedClubId);
+  const resolvedClubNames = normalizeClubList(upload.resolved_club_names || upload.club_names || resolvedClubName);
+  if (clubIdValue && resolvedClubIds.includes(clubIdValue)) {
+    return true;
   }
-  return (
-    (clubNameValue && (resolvedClubName === clubNameValue || resolvedClubName === clubShortNameValue)) ||
-    (clubShortNameValue && resolvedClubName === clubShortNameValue)
-  );
+  return clubNameValue
+    ? resolvedClubNames.includes(clubNameValue) || resolvedClubNames.includes(clubShortNameValue)
+    : clubShortNameValue
+      ? resolvedClubNames.includes(clubShortNameValue)
+      : false;
+}
+
+function blankTemplatePlayer(didNotBat = false) {
+  if (didNotBat) {
+    return {
+      player: { name: null, normalized_name: null, member_id: null },
+      runs: null,
+      dismissal: { type: "did_not_bat" },
+    };
+  }
+  return {
+    player: { name: null, normalized_name: null, member_id: null },
+    runs: null,
+    balls: null,
+    fours: null,
+    sixes: null,
+    strike_rate: null,
+    dismissal: { type: null, fielder: null, bowler: null },
+  };
+}
+
+function blankTemplateBowler() {
+  return {
+    player: { name: null, normalized_name: null },
+    overs: null,
+    runs_conceded: null,
+    wickets: null,
+    economy: null,
+  };
+}
+
+function reviewTemplateForUpload(upload) {
+  if (upload?.extraction_template && typeof upload.extraction_template === "object") {
+    return upload.extraction_template;
+  }
+  const draft = upload?.draft_scorecard || {};
+  return {
+    meta: {
+      source: upload?.ocr_engine || null,
+      processed_by: upload?.ocr_pipeline || null,
+      confidence: upload?.confidence || null,
+      status: "template",
+      created_at: upload?.created_at || null,
+      updated_at: upload?.ocr_processed_at || upload?.updated_at || null,
+    },
+    match: {
+      match_id: upload?.match_id || null,
+      match_type: "club",
+      format: upload?.match_format || null,
+      date: upload?.archive_date || upload?.scorecard_date || upload?.photo_taken_at || null,
+      venue: upload?.venue || null,
+      teams: {
+        team_1: null,
+        team_2: null,
+      },
+      overs_limit: upload?.overs_limit || null,
+    },
+    innings: [
+      {
+        inning_number: 1,
+        batting_team: null,
+        bowling_team: null,
+        summary: {
+          runs: draft.heartlake_runs || null,
+          wickets: draft.heartlake_wickets || null,
+          overs: draft.heartlake_overs || null,
+          balls: upload?.inning_1_balls || null,
+        },
+        batting: Array.from({ length: 10 }, () => blankTemplatePlayer()).concat([blankTemplatePlayer(true)]),
+        bowling: [blankTemplateBowler()],
+        extras: {
+          wides: null,
+          no_balls: null,
+          byes: null,
+          leg_byes: null,
+          penalties: null,
+          total: null,
+        },
+      },
+      {
+        inning_number: 2,
+        batting_team: null,
+        bowling_team: null,
+        summary: {
+          runs: draft.opponent_runs || null,
+          wickets: draft.opponent_wickets || null,
+          overs: draft.opponent_overs || null,
+          balls: upload?.inning_2_balls || null,
+        },
+        batting: Array.from({ length: 10 }, () => blankTemplatePlayer()).concat([blankTemplatePlayer(true)]),
+        bowling: [blankTemplateBowler()],
+        extras: {
+          wides: null,
+          no_balls: null,
+          byes: null,
+          leg_byes: null,
+          penalties: null,
+          total: null,
+        },
+      },
+    ],
+    validation: {
+      inning_1_total: draft.heartlake_runs || null,
+      inning_2_total: draft.opponent_runs || null,
+      expected_result: draft.result || null,
+      is_consistent: null,
+      notes: null,
+    },
+  };
 }
 
 function renderClubSelect(dashboard = payload) {
@@ -171,8 +302,8 @@ function renderArchives(dashboard, uploadsOverride = null) {
   }
 
   const groups = uploads.reduce((acc, upload) => {
-    const clubKey = upload.resolved_club_id || upload.club_id || "";
-    const clubName = upload.resolved_club_name || upload.club_name || "Unassigned";
+    const clubKey = upload.resolved_club_id || normalizeClubList(upload.resolved_club_ids || upload.club_ids)[0] || upload.club_id || "";
+    const clubName = upload.resolved_club_name || upload.club_name || normalizeClubList(upload.resolved_club_names || upload.club_names).join(" / ") || "Unassigned";
     const key = `${clubKey}::${clubName}`;
     if (!acc[key]) {
       acc[key] = { clubKey, clubName, uploads: [] };
@@ -200,28 +331,7 @@ function renderArchives(dashboard, uploadsOverride = null) {
           <div class="archive-list">
             ${group.uploads
               .map((upload) => {
-                const reviewText = JSON.stringify(
-                  {
-                    meta: {
-                      source: upload.ocr_engine || "manual-review",
-                      confidence: upload.confidence || "review",
-                      status: upload.status || "Pending review",
-                    },
-                    archive: {
-                      id: upload.id,
-                      file_name: upload.file_name,
-                      season: upload.season,
-                      club_name: upload.club_name || upload.resolved_club_name || "Unassigned",
-                      archive_date: upload.archive_date,
-                      archive_year: upload.archive_year,
-                    },
-                    draft_scorecard: upload.draft_scorecard || {},
-                    suggested_performances: upload.suggested_performances || [],
-                    raw_extracted_text: upload.raw_extracted_text || "",
-                  },
-                  null,
-                  2
-                );
+                const reviewText = JSON.stringify(reviewTemplateForUpload(upload), null, 2);
                 return `
                   <article class="detail-card" data-admin-upload="${upload.id}">
                     <strong>${escapeHtml(upload.file_name)}</strong>

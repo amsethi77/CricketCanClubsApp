@@ -12,10 +12,14 @@ document.addEventListener("DOMContentLoaded", () => {
 
   const form = document.getElementById("registerForm");
   const roleSelect = document.getElementById("registerRole");
+  const clubSearchInput = document.getElementById("registerClubSearch");
   const clubSelect = document.getElementById("registerClub");
   const memberSelect = document.getElementById("registerMember");
   const memberRow = document.getElementById("registerMemberRow");
   const statusBanner = document.getElementById("registerStatus");
+  const newClubNameInput = document.getElementById("registerNewClubName");
+  const newClubCityInput = document.getElementById("registerNewClubCity");
+  const newClubCountryInput = document.getElementById("registerNewClubCountry");
 
   const displayNameInput = document.getElementById("registerDisplayName");
   const mobileInput = document.getElementById("registerMobile");
@@ -45,17 +49,43 @@ document.addEventListener("DOMContentLoaded", () => {
     return (value || "").replace(/\D/g, ""); // remove non-digits
   }
 
+  function normalizeText(value) {
+    return String(value || "").trim().toLowerCase();
+  }
+
+  function clubLabel(club) {
+    const parts = [club?.name, club?.city, club?.country].filter(Boolean);
+    return `${parts.join(" · ")}${club?.season ? ` · ${club.season}` : ""}`;
+  }
+
+  function renderClubOptions(clubs, search = "") {
+    if (!clubSelect) return;
+    const query = normalizeText(search);
+    const filtered = query
+      ? clubs.filter((club) => {
+          const haystack = `${club.name || ""} ${club.short_name || ""} ${club.city || ""} ${club.country || ""} ${club.season || ""}`.toLowerCase();
+          return haystack.includes(query);
+        })
+      : clubs;
+    clubSelect.innerHTML = `<option value="">Select an existing club</option>` + optionMarkup(filtered, "id", clubLabel);
+    if (clubSelect.value && !filtered.some((club) => club.id === clubSelect.value)) {
+      clubSelect.value = "";
+    }
+  }
+
   async function loadOptions() {
     try {
       console.log("🔄 Loading registration options...");
       const data = await getJson("/api/auth/options");
+      const clubs = Array.isArray(data.clubs) ? data.clubs : [];
+
+      if (clubSearchInput) {
+        clubSearchInput.value = "";
+        clubSearchInput.addEventListener("input", () => renderClubOptions(clubs, clubSearchInput.value));
+      }
 
       if (clubSelect) {
-        clubSelect.innerHTML = optionMarkup(
-          data.clubs,
-          "id",
-          (club) => `${club.name} · ${club.season || "Season TBD"}`
-        );
+        renderClubOptions(clubs, clubSearchInput?.value || "");
       }
 
       if (memberSelect) {
@@ -105,7 +135,10 @@ document.addEventListener("DOMContentLoaded", () => {
     password: document.getElementById("registerPassword")?.value || "",
     role: roleSelect?.value || "player",
     primary_club_id: clubSelect?.value || "",
-    member_name: memberSelect?.value || ""   // 🔥 FIXED
+    member_name: memberSelect?.value || "",
+    club_name: newClubNameInput?.value.trim() || "",
+    club_city: newClubCityInput?.value.trim() || "",
+    club_country: newClubCountryInput?.value.trim() || ""
   };
 
     console.log("📤 Registration payload:", payload);
@@ -126,8 +159,13 @@ document.addEventListener("DOMContentLoaded", () => {
       return;
     }
 
-    if (!payload.primary_club_id) {
-      setStatus("❌ Select a club", "error");
+    if (!payload.primary_club_id && !payload.club_name) {
+      setStatus("❌ Select a club or add a new one", "error");
+      return;
+    }
+
+    if (!payload.primary_club_id && payload.club_name && (!payload.club_city || !payload.club_country)) {
+      setStatus("❌ Add club city and country to create a new club", "error");
       return;
     }
 

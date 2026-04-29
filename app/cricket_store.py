@@ -785,6 +785,10 @@ def normalize_member(member: dict[str, Any]) -> dict[str, Any]:
     return member
 
 
+def normalize_name(name: str) -> str:
+    return re.sub(r"\s+", " ", str(name or "").strip()).lower()
+
+
 def canonical_phone(value: str) -> str:
     digits = re.sub(r"\D", "", str(value or ""))
     if len(digits) == 11 and digits.startswith("1"):
@@ -835,6 +839,49 @@ def archive_batting_team_name(upload: dict[str, Any]) -> str:
     return ""
 
 
+def archive_bowling_team_name(upload: dict[str, Any]) -> str:
+    summary = str(upload.get("draft_scorecard", {}).get("live_summary", "") or "").strip()
+    match = re.search(r"Bowling team:\s*([^|]+)", summary, flags=re.IGNORECASE)
+    if match:
+        return match.group(1).strip()
+    return ""
+
+
+def _archive_team_names_from_payload(payload: dict[str, Any]) -> list[str]:
+    names: list[str] = []
+
+    def add(value: Any) -> None:
+        text = str(value or "").strip()
+        if text:
+            names.append(text)
+
+    def inspect(candidate: Any) -> None:
+        if not isinstance(candidate, dict):
+            return
+        for key in ("batting_team", "bowling_team", "home_team", "visitor_team", "opponent", "club_name"):
+            add(candidate.get(key))
+        teams = candidate.get("teams")
+        if isinstance(teams, dict):
+            for key in ("batting", "bowling", "home", "visitor", "club_a", "club_b"):
+                add(teams.get(key))
+        if isinstance(teams, list):
+            for item in teams:
+                add(item)
+        innings = candidate.get("innings")
+        if isinstance(innings, list):
+            for inning in innings[:2]:
+                if isinstance(inning, dict):
+                    add(inning.get("batting_team"))
+                    add(inning.get("bowling_team"))
+
+    inspect(payload)
+    inspect(payload.get("match"))
+    inspect(payload.get("info"))
+    if isinstance(payload.get("info"), dict):
+        inspect(payload["info"].get("match"))
+    return _dedupe_nonempty_strings(names)
+
+
 def archive_batting_team_is_focus_club(upload: dict[str, Any], club_name: str, club_short_name: str = "") -> bool:
     batting_team = archive_batting_team_name(upload).lower()
     candidates = {
@@ -843,6 +890,220 @@ def archive_batting_team_is_focus_club(upload: dict[str, Any], club_name: str, c
     }
     candidates = {item for item in candidates if item}
     return bool(batting_team and batting_team in candidates)
+
+
+def _archive_json_payload(upload: dict[str, Any]) -> dict[str, Any] | None:
+    raw = str(upload.get("raw_extracted_text") or "").strip()
+    if not raw:
+        return None
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _archive_json_innings_count(payload: dict[str, Any]) -> int:
+    candidates: list[Any] = []
+    if isinstance(payload.get("innings"), list):
+        candidates.append(payload.get("innings"))
+    match = payload.get("match")
+    if isinstance(match, dict) and isinstance(match.get("innings"), list):
+        candidates.append(match.get("innings"))
+    info = payload.get("info")
+    if isinstance(info, dict):
+        match_info = info.get("match")
+        if isinstance(match_info, dict) and isinstance(match_info.get("innings"), list):
+            candidates.append(match_info.get("innings"))
+    for innings_list in candidates:
+        if len([item for item in innings_list if isinstance(item, dict)]) >= 2:
+            return len([item for item in innings_list if isinstance(item, dict)])
+    return 0
+
+
+def archive_has_persisted_json(upload: dict[str, Any]) -> bool:
+    payload = _archive_json_payload(upload)
+    if not payload:
+        return False
+    return _archive_json_innings_count(payload) >= 2
+
+
+def archive_has_partial_json(upload: dict[str, Any]) -> bool:
+    payload = _archive_json_payload(upload)
+    if not payload:
+        return False
+    return _archive_json_innings_count(payload) == 1
+
+
+def _archive_context_signature(upload: dict[str, Any]) -> str:
+    payload = _archive_json_payload(upload)
+    if payload:
+        innings_count = _archive_json_innings_count(payload)
+        sources = [f"json:{innings_count}"]
+        team_names = _archive_team_names_from_payload(payload)
+        if team_names:
+            sources.append("|".join(name.lower() for name in team_names[:4]))
+        return "|".join(sources)
+    summary_bits = [
+        archive_batting_team_name(upload).strip().lower(),
+        archive_bowling_team_name(upload).strip().lower(),
+        str(upload.get("club_name") or "").strip().lower(),
+        str(upload.get("draft_scorecard", {}).get("live_summary", "") or "").strip().lower(),
+    ]
+    return "|".join(bit for bit in summary_bits if bit)
+
+
+def _dedupe_nonempty_strings(values: list[str]) -> list[str]:
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for value in values:
+        clean = str(value or "").strip()
+        if not clean:
+            continue
+        key = clean.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        ordered.append(clean)
+    return ordered
+
+
+def _coerce_archive_string_list(value: Any) -> list[str]:
+    if value is None:
+        return []
+    items: list[Any]
+    if isinstance(value, list):
+        items = value
+    elif isinstance(value, tuple):
+        items = list(value)
+    elif isinstance(value, dict):
+        items = list(value.values())
+    else:
+        text = str(value or "").strip()
+        if not text:
+            return []
+        try:
+            parsed = json.loads(text)
+        except json.JSONDecodeError:
+            parsed = None
+        if isinstance(parsed, list):
+            items = parsed
+        elif isinstance(parsed, dict):
+            items = list(parsed.values())
+        else:
+            items = re.split(r"[,\n;|]", text)
+    return _dedupe_nonempty_strings([str(item or "").strip() for item in items])
+
+
+def _club_reference_matches(club: dict[str, Any], identifier: str) -> bool:
+    clean = str(identifier or "").strip().lower()
+    if not clean:
+        return False
+    identifiers = {
+        str(club.get("id") or "").strip().lower(),
+        str(club.get("name") or "").strip().lower(),
+        str(club.get("short_name") or "").strip().lower(),
+    }
+    return clean in {item for item in identifiers if item}
+
+
+def _resolve_club_reference(clubs: list[dict[str, Any]], identifier: str) -> dict[str, Any] | None:
+    clean = str(identifier or "").strip().lower()
+    if not clean:
+        return None
+    return next((club for club in clubs if _club_reference_matches(club, clean)), None)
+
+
+def _archive_fixture_clubs(archive: dict[str, Any], clubs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    related: list[dict[str, Any]] = []
+    seen: set[str] = set()
+
+    def add_club(club: dict[str, Any] | None) -> None:
+        if not club:
+            return
+        club_id = str(club.get("id") or "").strip().lower()
+        if club_id and club_id in seen:
+            return
+        if club_id:
+            seen.add(club_id)
+        related.append(club)
+
+    add_club(_resolve_club_reference(clubs, str(archive.get("club_id") or "")))
+    add_club(_resolve_club_reference(clubs, str(archive.get("club_name") or "")))
+
+    for fixture_id in {str(archive.get("match_id") or "").strip(), str(archive.get("applied_to_match_id") or "").strip()}:
+        if not fixture_id:
+            continue
+        fixture = next((item for item in archive.get("_fixtures", []) if str(item.get("id") or "").strip() == fixture_id), None)
+        if not fixture:
+            continue
+        add_club(_resolve_club_reference(clubs, str(fixture.get("club_id") or "")))
+        add_club(_resolve_club_reference(clubs, str(fixture.get("club_name") or "")))
+        add_club(_resolve_club_reference(clubs, str(fixture.get("opponent") or fixture.get("visiting_team") or "")))
+
+    batting_team = archive_batting_team_name(archive)
+    bowling_team = archive_bowling_team_name(archive)
+    add_club(_resolve_club_reference(clubs, batting_team))
+    add_club(_resolve_club_reference(clubs, bowling_team))
+
+    payload = _archive_json_payload(archive)
+    if payload:
+        for team_name in _archive_team_names_from_payload(payload):
+            add_club(_resolve_club_reference(clubs, team_name))
+
+    return related
+
+
+def archive_club_context(
+    archive: dict[str, Any],
+    clubs: list[dict[str, Any]],
+    members: list[dict[str, Any]] | None = None,
+    fixtures: list[dict[str, Any]] | None = None,
+) -> tuple[list[str], list[str]]:
+    working = dict(archive)
+    working["_members"] = list(members or [])
+    working["_fixtures"] = list(fixtures or [])
+    related = _archive_fixture_clubs(working, clubs)
+    club_ids = _dedupe_nonempty_strings([str(club.get("id") or "").strip() for club in related])
+    club_names = _dedupe_nonempty_strings(
+        [
+            str(club.get("name") or club.get("short_name") or "").strip()
+            for club in related
+        ]
+    )
+    return club_ids, club_names
+
+
+def archive_belongs_to_club(
+    archive: dict[str, Any],
+    club: dict[str, Any],
+    clubs: list[dict[str, Any]] | None = None,
+    members: list[dict[str, Any]] | None = None,
+    fixtures: list[dict[str, Any]] | None = None,
+) -> bool:
+    if not club:
+        return False
+    club_id = str(club.get("id") or "").strip().lower()
+    club_name = str(club.get("name") or "").strip().lower()
+    club_short_name = str(club.get("short_name") or "").strip().lower()
+    club_ids, club_names = archive_club_context(archive, clubs or [], members, fixtures)
+    archive_club_ids = {str(item or "").strip().lower() for item in club_ids if str(item or "").strip()}
+    archive_club_names = {str(item or "").strip().lower() for item in club_names if str(item or "").strip()}
+    if club_id and club_id in archive_club_ids:
+        return True
+    if club_name and club_name in archive_club_names:
+        return True
+    if club_short_name and club_short_name in archive_club_names:
+        return True
+    archive_club_id = str(archive.get("club_id") or "").strip().lower()
+    archive_club_name = str(archive.get("club_name") or "").strip().lower()
+    if club_id and archive_club_id == club_id:
+        return True
+    if club_name and archive_club_name in {club_name, club_short_name}:
+        return True
+    if club_short_name and archive_club_name == club_short_name:
+        return True
+    return False
 
 
 def ensure_member_record(
@@ -960,9 +1221,176 @@ def normalize_performance(entry: dict[str, Any]) -> dict[str, Any]:
     return normalized
 
 
+def _scorecard_template_player_entry(
+    name: str = "",
+    member_id: str = "",
+    *,
+    runs: int | None = None,
+    balls: int | None = None,
+    fours: int | None = None,
+    sixes: int | None = None,
+    strike_rate: float | int | None = None,
+    dismissal_type: str | None = None,
+    fielder: str | None = None,
+    bowler: str | None = None,
+) -> dict[str, Any]:
+    return {
+        "player": {
+            "name": name or None,
+            "normalized_name": normalize_name(name) if name else None,
+            "member_id": member_id or None,
+        },
+        "runs": runs,
+        "balls": balls,
+        "fours": fours,
+        "sixes": sixes,
+        "strike_rate": strike_rate,
+        "dismissal": {
+            "type": dismissal_type,
+            "fielder": fielder,
+            "bowler": bowler,
+        },
+    }
+
+
+def _scorecard_template_bowler_entry(name: str = "") -> dict[str, Any]:
+    return {
+        "player": {
+            "name": name or None,
+            "normalized_name": normalize_name(name) if name else None,
+        },
+        "overs": None,
+        "runs_conceded": None,
+        "wickets": None,
+        "economy": None,
+    }
+
+
+def scorecard_template_from_archive(archive: dict[str, Any]) -> dict[str, Any]:
+    draft = dict(archive.get("draft_scorecard") or default_scorecard())
+    suggested = [dict(item) for item in archive.get("suggested_performances", []) if isinstance(item, dict)]
+    batting_team = str(draft.get("batting_team") or draft.get("heartlake_team") or archive.get("batting_team") or "").strip() or None
+    bowling_team = str(draft.get("bowling_team") or archive.get("bowling_team") or "").strip() or None
+    batting_players = []
+    for item in suggested[:10]:
+        player_name = str(item.get("player_name") or item.get("name") or "").strip()
+        runs = item.get("runs")
+        balls = item.get("balls")
+        fours = item.get("fours")
+        sixes = item.get("sixes")
+        strike_rate = None
+        if balls not in (None, "", 0):
+            try:
+                strike_rate = round((float(runs or 0) / float(balls or 0)) * 100, 2)
+            except Exception:
+                strike_rate = None
+        batting_players.append(
+            _scorecard_template_player_entry(
+                player_name,
+                str(item.get("member_id") or "").strip(),
+                runs=int(runs or 0) if str(runs or "").strip() != "" else None,
+                balls=int(balls or 0) if str(balls or "").strip() != "" else None,
+                fours=int(fours or 0) if str(fours or "").strip() != "" else None,
+                sixes=int(sixes or 0) if str(sixes or "").strip() != "" else None,
+                strike_rate=strike_rate,
+                dismissal_type=None,
+                fielder=None,
+                bowler=None,
+            )
+        )
+    while len(batting_players) < 10:
+        batting_players.append(_scorecard_template_player_entry())
+    batting_players.append(_scorecard_template_player_entry(dismissal_type="did_not_bat"))
+
+    second_innings_players = [_scorecard_template_player_entry() for _ in range(10)]
+    second_innings_players.append(_scorecard_template_player_entry(dismissal_type="did_not_bat"))
+
+    first_runs = draft.get("heartlake_runs")
+    first_wickets = draft.get("heartlake_wickets")
+    first_overs = draft.get("heartlake_overs")
+    second_runs = draft.get("opponent_runs")
+    second_wickets = draft.get("opponent_wickets")
+    second_overs = draft.get("opponent_overs")
+    return {
+        "meta": {
+            "source": archive.get("ocr_engine") or archive.get("source") or None,
+            "processed_by": archive.get("reviewed_by") or archive.get("ocr_pipeline") or None,
+            "confidence": archive.get("confidence") or None,
+            "status": "template",
+            "created_at": archive.get("created_at") or None,
+            "updated_at": archive.get("ocr_processed_at") or archive.get("updated_at") or None,
+        },
+        "match": {
+            "match_id": archive.get("match_id") or None,
+            "match_type": "club",
+            "format": archive.get("match_format") or None,
+            "date": archive.get("archive_date") or archive.get("scorecard_date") or archive.get("photo_taken_at") or None,
+            "venue": archive.get("venue") or None,
+            "teams": {
+                "team_1": batting_team,
+                "team_2": bowling_team,
+            },
+            "overs_limit": archive.get("overs_limit") or None,
+        },
+        "innings": [
+            {
+                "inning_number": 1,
+                "batting_team": batting_team,
+                "bowling_team": bowling_team,
+                "summary": {
+                    "runs": int(first_runs) if str(first_runs or "").strip() else None,
+                    "wickets": int(first_wickets) if str(first_wickets or "").strip() else None,
+                    "overs": first_overs if first_overs not in ("", None) else None,
+                    "balls": archive.get("inning_1_balls") or None,
+                },
+                "batting": batting_players,
+                "bowling": [_scorecard_template_bowler_entry()],
+                "extras": {
+                    "wides": None,
+                    "no_balls": None,
+                    "byes": None,
+                    "leg_byes": None,
+                    "penalties": None,
+                    "total": None,
+                },
+            },
+            {
+                "inning_number": 2,
+                "batting_team": bowling_team,
+                "bowling_team": batting_team,
+                "summary": {
+                    "runs": int(second_runs) if str(second_runs or "").strip() else None,
+                    "wickets": int(second_wickets) if str(second_wickets or "").strip() else None,
+                    "overs": second_overs if second_overs not in ("", None) else None,
+                    "balls": archive.get("inning_2_balls") or None,
+                },
+                "batting": second_innings_players,
+                "bowling": [_scorecard_template_bowler_entry()],
+                "extras": {
+                    "wides": None,
+                    "no_balls": None,
+                    "byes": None,
+                    "leg_byes": None,
+                    "penalties": None,
+                    "total": None,
+                },
+            },
+        ],
+        "validation": {
+            "inning_1_total": int(first_runs) if str(first_runs or "").strip() else None,
+            "inning_2_total": int(second_runs) if str(second_runs or "").strip() else None,
+            "expected_result": draft.get("result") or None,
+            "is_consistent": None,
+            "notes": "Template preserved for admin review.",
+        },
+    }
+
+
 def normalize_archive(item: dict[str, Any]) -> dict[str, Any]:
     normalized = dict(item)
     normalized.setdefault("id", str(uuid.uuid4())[:8])
+    normalized.setdefault("club_ids", _coerce_archive_string_list(normalized.get("club_ids")))
+    normalized.setdefault("club_names", _coerce_archive_string_list(normalized.get("club_names")))
     normalized.setdefault("club_id", "")
     normalized.setdefault("club_name", "")
     normalized.setdefault("status", "Pending review")
@@ -988,10 +1416,21 @@ def normalize_archive(item: dict[str, Any]) -> dict[str, Any]:
     normalized.setdefault("ocr_pipeline", "")
     normalized.setdefault("suggested_performances", [])
     normalized.setdefault("draft_scorecard", default_scorecard())
+    normalized.setdefault("extraction_template", scorecard_template_from_archive(normalized))
     normalized.setdefault("family_key", "")
     normalized.setdefault("family_variant_count", 1)
     normalized.setdefault("family_hidden_count", 0)
     normalized.setdefault("family_hidden_files", [])
+    normalized["club_ids"] = _dedupe_nonempty_strings(
+        _coerce_archive_string_list(normalized.get("club_ids")) + ([str(normalized.get("club_id") or "").strip()] if normalized.get("club_id") else [])
+    )
+    normalized["club_names"] = _dedupe_nonempty_strings(
+        _coerce_archive_string_list(normalized.get("club_names")) + ([str(normalized.get("club_name") or "").strip()] if normalized.get("club_name") else [])
+    )
+    if not normalized.get("club_id") and normalized["club_ids"]:
+        normalized["club_id"] = normalized["club_ids"][0]
+    if not normalized.get("club_name") and normalized["club_names"]:
+        normalized["club_name"] = normalized["club_names"][0]
     normalized.setdefault(
         "extracted_summary",
         "Draft created from uploaded scorecard image. Review values before publishing online.",
@@ -1025,7 +1464,7 @@ def archive_family_key(item: dict[str, Any]) -> str:
     photo_taken_at = str(item.get("photo_taken_at", "") or "").strip()
     created_at = str(item.get("created_at", "") or "").strip()
     family_date = archive_date or scorecard_date or photo_taken_at[:10] or created_at[:10]
-    return f"{stem}|{family_date}"
+    return f"{stem}|{family_date}|{_archive_context_signature(item)}"
 
 
 def archive_review_priority(item: dict[str, Any]) -> tuple[int, int, str, str]:
@@ -1874,6 +2313,21 @@ def normalize_fixture(fixture: dict[str, Any], members: list[dict[str, Any]]) ->
     normalized["availability_seed"] = list(raw_availability or [])
     availability_statuses = dict(normalized.get("availability_statuses", {}))
     availability_notes = dict(normalized.get("availability_notes", {}))
+    selected_lineup_source = normalized.get("selected_playing_xi_member_ids")
+    if selected_lineup_source is None:
+        selected_lineup_source = normalized.get("selected_playing_xi", [])
+    if isinstance(selected_lineup_source, str):
+        selected_lineup_source = [item.strip() for item in selected_lineup_source.split(",") if item.strip()]
+    member_name_to_id = {str(member.get("name") or "").strip(): str(member.get("id") or "").strip() for member in members}
+    member_id_to_name = {str(member.get("id") or "").strip(): str(member.get("name") or "").strip() for member in members}
+    selected_member_ids: list[str] = []
+    for item in list(selected_lineup_source or []):
+        raw_value = str(item or "").strip()
+        if not raw_value:
+            continue
+        member_id = raw_value if raw_value in member_id_to_name else member_name_to_id.get(raw_value, "")
+        if member_id and member_id not in selected_member_ids:
+            selected_member_ids.append(member_id)
     if not availability_statuses:
         availability_statuses, default_notes = build_availability_defaults(members, raw_availability)
         availability_notes = availability_notes or default_notes
@@ -1905,6 +2359,12 @@ def normalize_fixture(fixture: dict[str, Any], members: list[dict[str, Any]]) ->
     normalized["availability_statuses"] = availability_statuses
     normalized["availability_notes"] = availability_notes
     normalized["availability"] = available_labels(availability_statuses, availability_notes)
+    normalized["selected_playing_xi_member_ids"] = selected_member_ids
+    normalized["selected_playing_xi"] = [
+        member_id_to_name.get(member_id, member_id)
+        for member_id in selected_member_ids
+        if member_id_to_name.get(member_id, member_id)
+    ]
     normalized["heartlake_score"] = compose_score(
         merged_scorecard["heartlake_runs"],
         merged_scorecard["heartlake_wickets"],
@@ -1976,6 +2436,7 @@ def normalize_store(store: dict[str, Any]) -> dict[str, Any]:
     club.setdefault("name", "Heartlake Cricket Club")
     club.setdefault("short_name", "Heartlake")
     club.setdefault("city", "Brampton")
+    club.setdefault("country", "Canada")
     club.setdefault("season", _current_season_label())
     club.setdefault("home_ground", "Heartlake Grounds")
     club.setdefault("whatsapp_number", "14165550123")
@@ -1991,6 +2452,10 @@ def normalize_store(store: dict[str, Any]) -> dict[str, Any]:
     fixtures = [normalize_fixture(item, members) for item in normalized.get("fixtures", [])]
     normalized["fixtures"] = fixtures
     normalized["archive_uploads"] = [normalize_archive(item) for item in normalized.get("archive_uploads", [])]
+    for archive in normalized["archive_uploads"]:
+        if archive_has_persisted_json(archive) and str(archive.get("status") or "").strip().lower() not in {"approved", "applied to match", "deleted"}:
+            archive["status"] = "Approved"
+            archive["confidence"] = archive.get("confidence") or "Persisted JSON"
     normalized["duplicate_uploads"] = [normalize_duplicate(item) for item in normalized.get("duplicate_uploads", [])]
     insights = dict(normalized.get("insights", {}))
     insights.setdefault("free_llm_mode", "heuristic")
@@ -2062,11 +2527,17 @@ def archive_record_from_file(
     source: str = "filesystem",
     club_id: str = "",
     club_name: str = "",
+    club_ids: list[str] | None = None,
+    club_names: list[str] | None = None,
 ) -> dict[str, Any]:
+    associated_ids = _dedupe_nonempty_strings(_coerce_archive_string_list(club_ids) + ([club_id] if club_id else []))
+    associated_names = _dedupe_nonempty_strings(_coerce_archive_string_list(club_names) + ([club_name] if club_name else []))
     record = {
         "id": str(uuid.uuid4())[:8],
         "club_id": club_id,
         "club_name": club_name,
+        "club_ids": associated_ids,
+        "club_names": associated_names,
         "file_name": path.name,
         "file_path": str(path),
         "preview_url": f"/uploads/{path.name}",
@@ -2257,6 +2728,7 @@ def _schema_tables() -> str:
       name TEXT NOT NULL,
       short_name TEXT,
       city TEXT,
+      country TEXT,
       season TEXT,
       home_ground TEXT,
       whatsapp_number TEXT,
@@ -2382,6 +2854,15 @@ def _schema_tables() -> str:
       FOREIGN KEY (member_id) REFERENCES members(id) ON DELETE CASCADE
     );
 
+    CREATE TABLE IF NOT EXISTS fixture_playing_xi (
+      fixture_id TEXT NOT NULL,
+      member_id TEXT NOT NULL,
+      slot_number INTEGER NOT NULL DEFAULT 0,
+      PRIMARY KEY (fixture_id, member_id),
+      FOREIGN KEY (fixture_id) REFERENCES fixtures(id) ON DELETE CASCADE,
+      FOREIGN KEY (member_id) REFERENCES members(id) ON DELETE CASCADE
+    );
+
     CREATE TABLE IF NOT EXISTS fixture_performances (
       id TEXT PRIMARY KEY,
       fixture_id TEXT NOT NULL,
@@ -2463,6 +2944,8 @@ def _schema_tables() -> str:
     CREATE TABLE IF NOT EXISTS archives (
       id TEXT PRIMARY KEY,
       club_id TEXT,
+      club_ids TEXT,
+      club_names TEXT,
       match_id TEXT,
       applied_to_match_id TEXT,
       season TEXT,
@@ -2670,6 +3153,7 @@ def _schema_tables() -> str:
     CREATE INDEX IF NOT EXISTS idx_team_memberships_member ON team_memberships(member_id);
     CREATE INDEX IF NOT EXISTS idx_team_memberships_team ON team_memberships(team_id);
     CREATE INDEX IF NOT EXISTS idx_fixtures_date ON fixtures(date);
+    CREATE INDEX IF NOT EXISTS idx_fixture_playing_xi_fixture ON fixture_playing_xi(fixture_id, slot_number);
     CREATE INDEX IF NOT EXISTS idx_fixture_performances_member ON fixture_performances(member_id);
     CREATE INDEX IF NOT EXISTS idx_fixture_scorebook_balls_fixture ON fixture_scorebook_balls(fixture_id, inning_number);
     CREATE INDEX IF NOT EXISTS idx_archive_performances_member ON archive_performances(member_id);
@@ -2715,6 +3199,7 @@ def _clear_relational_state(connection: sqlite3.Connection) -> None:
         "fixture_availability",
         "fixture_scorecards",
         "fixtures",
+        "fixture_playing_xi",
         "archive_performances",
         "archive_scorecards",
         "archives",
@@ -2753,6 +3238,7 @@ def _normalized_clubs(store: dict[str, Any]) -> tuple[list[dict[str, Any]], str]
             "name": candidate.get("name") or primary.get("name") or "Heartlake Cricket Club",
             "short_name": candidate.get("short_name") or primary.get("short_name") or "Heartlake",
             "city": candidate.get("city") or primary.get("city") or "Brampton",
+            "country": candidate.get("country") or primary.get("country") or "Canada",
             "season": candidate.get("season") or primary.get("season") or "2026 Summer Season",
             "home_ground": candidate.get("home_ground") or primary.get("home_ground") or "Heartlake Grounds",
             "whatsapp_number": candidate.get("whatsapp_number") or primary.get("whatsapp_number") or "",
@@ -2848,8 +3334,8 @@ def _write_relational_state(connection: sqlite3.Connection, store: dict[str, Any
 
         connection.executemany(
             """
-            INSERT INTO clubs (id, name, short_name, city, season, home_ground, whatsapp_number, about)
-            VALUES (:id, :name, :short_name, :city, :season, :home_ground, :whatsapp_number, :about)
+            INSERT INTO clubs (id, name, short_name, city, country, season, home_ground, whatsapp_number, about)
+            VALUES (:id, :name, :short_name, :city, :country, :season, :home_ground, :whatsapp_number, :about)
             """,
             clubs,
         )
@@ -3037,6 +3523,30 @@ def _write_relational_state(connection: sqlite3.Connection, store: dict[str, Any
                     ),
                 )
 
+            selected_playing_xi = fixture.get("selected_playing_xi_member_ids")
+            if selected_playing_xi is None:
+                selected_playing_xi = fixture.get("selected_playing_xi", [])
+            if isinstance(selected_playing_xi, str):
+                selected_playing_xi = [item.strip() for item in selected_playing_xi.split(",") if item.strip()]
+            for slot_number, player_identifier in enumerate(list(selected_playing_xi or []), start=1):
+                player_key = str(player_identifier or "").strip()
+                if not player_key:
+                    continue
+                member_id = player_key if player_key in member_name_to_id.values() else member_name_to_id.get(player_key, "")
+                if not member_id:
+                    continue
+                connection.execute(
+                    """
+                    INSERT INTO fixture_playing_xi (fixture_id, member_id, slot_number)
+                    VALUES (?, ?, ?)
+                    """,
+                    (
+                        fixture.get("id", ""),
+                        member_id,
+                        slot_number,
+                    ),
+                )
+
             for performance in fixture.get("performances", []):
                 connection.execute(
                     """
@@ -3154,15 +3664,17 @@ def _write_relational_state(connection: sqlite3.Connection, store: dict[str, Any
             connection.execute(
                 """
                 INSERT INTO archives (
-                  id, club_id, match_id, applied_to_match_id, season, status, confidence, created_at,
+                  id, club_id, club_ids, club_names, match_id, applied_to_match_id, season, status, confidence, created_at,
                   preview_url, file_name, file_path, file_hash, file_size, source, scorecard_date,
                   photo_taken_at, photo_date_source, archive_date, archive_year, archive_date_source,
                   raw_extracted_text, ocr_engine, ocr_processed_at, ocr_pipeline, extracted_summary
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     archive.get("id", ""),
                     archive.get("club_id") or primary_club_id or None,
+                    json.dumps(_coerce_archive_string_list(archive.get("club_ids")) or ([archive.get("club_id", "")] if archive.get("club_id") else [])),
+                    json.dumps(_coerce_archive_string_list(archive.get("club_names")) or ([archive.get("club_name", "")] if archive.get("club_name") else [])),
                     archive.get("match_id", ""),
                     archive.get("applied_to_match_id", ""),
                     archive.get("season", ""),
@@ -3402,6 +3914,9 @@ def _read_relational_state(connection: sqlite3.Connection) -> dict[str, Any]:
     fixtures_rows = connection.execute("SELECT * FROM fixtures ORDER BY date, id").fetchall()
     fixture_scorecard_rows = connection.execute("SELECT * FROM fixture_scorecards").fetchall()
     fixture_availability_rows = connection.execute("SELECT * FROM fixture_availability").fetchall()
+    fixture_playing_xi_rows = connection.execute(
+        "SELECT * FROM fixture_playing_xi ORDER BY fixture_id, slot_number, member_id"
+    ).fetchall()
     fixture_performance_rows = connection.execute("SELECT * FROM fixture_performances ORDER BY fixture_id, id").fetchall()
     fixture_commentary_rows = connection.execute("SELECT * FROM fixture_commentary ORDER BY fixture_id, created_at, id").fetchall()
     fixture_scorebook_innings_rows = connection.execute(
@@ -3527,6 +4042,9 @@ def _read_relational_state(connection: sqlite3.Connection) -> dict[str, Any]:
     availability_by_fixture: dict[str, list[sqlite3.Row]] = defaultdict(list)
     for row in fixture_availability_rows:
         availability_by_fixture[row["fixture_id"]].append(row)
+    playing_xi_by_fixture: dict[str, list[sqlite3.Row]] = defaultdict(list)
+    for row in fixture_playing_xi_rows:
+        playing_xi_by_fixture[row["fixture_id"]].append(row)
     performances_by_fixture: dict[str, list[sqlite3.Row]] = defaultdict(list)
     for row in fixture_performance_rows:
         performances_by_fixture[row["fixture_id"]].append(row)
@@ -3557,6 +4075,16 @@ def _read_relational_state(connection: sqlite3.Connection) -> dict[str, Any]:
             availability_statuses[member_name] = availability["status"] or ""
             if availability["note"]:
                 availability_notes[member_name] = availability["note"]
+        selected_playing_xi_member_ids = [
+            str(item["member_id"] or "").strip()
+            for item in playing_xi_by_fixture.get(row["id"], [])
+            if str(item["member_id"] or "").strip()
+        ]
+        selected_playing_xi = [
+            member_id_to_name.get(member_id, "")
+            for member_id in selected_playing_xi_member_ids
+            if member_id_to_name.get(member_id, "")
+        ]
 
         performances = []
         for performance in performances_by_fixture.get(row["id"], []):
@@ -3651,6 +4179,8 @@ def _read_relational_state(connection: sqlite3.Connection) -> dict[str, Any]:
                 "availability_statuses": availability_statuses,
                 "availability_notes": availability_notes,
                 "availability": available_labels(availability_statuses, availability_notes),
+                "selected_playing_xi_member_ids": selected_playing_xi_member_ids,
+                "selected_playing_xi": selected_playing_xi,
                 "heartlake_score": row["heartlake_score"] or "",
                 "opponent_score": row["opponent_score"] or "",
                 "result": row["result"] or "TBD",
@@ -3695,6 +4225,7 @@ def _read_relational_state(connection: sqlite3.Connection) -> dict[str, Any]:
 
     archive_uploads = []
     for row in archive_rows:
+        row_keys = set(row.keys())
         suggested_performances = []
         for performance in performances_by_archive.get(row["id"], []):
             suggested_performances.append(
@@ -3712,11 +4243,15 @@ def _read_relational_state(connection: sqlite3.Connection) -> dict[str, Any]:
                 }
             )
         draft = scorecard_by_archive.get(row["id"], {})
+        club_ids = _coerce_archive_string_list(row["club_ids"] if "club_ids" in row_keys else [])
+        club_names = _coerce_archive_string_list(row["club_names"] if "club_names" in row_keys else [])
         archive_uploads.append(
             {
                 "id": row["id"],
                 "club_id": row["club_id"] or "",
                 "club_name": club_id_to_name.get(row["club_id"], ""),
+                "club_ids": club_ids,
+                "club_names": club_names,
                 "match_id": row["match_id"] or "",
                 "applied_to_match_id": row["applied_to_match_id"] or "",
                 "season": row["season"] or "",
@@ -3754,9 +4289,17 @@ def _read_relational_state(connection: sqlite3.Connection) -> dict[str, Any]:
             }
         )
     for archive in archive_uploads:
+        club_ids, club_names = archive_club_context(archive, club_dicts, members, fixtures)
+        if club_ids:
+            archive["club_ids"] = club_ids
+            archive["club_id"] = archive.get("club_id") or club_ids[0]
+        if club_names:
+            archive["club_names"] = club_names
+            archive["club_name"] = archive.get("club_name") or club_names[0]
         inferred_club = _resolve_archive_club(archive, club_dicts)
-        if inferred_club:
+        if inferred_club and not archive.get("club_id"):
             archive["club_id"] = inferred_club.get("id", archive.get("club_id", ""))
+        if inferred_club and not archive.get("club_name"):
             archive["club_name"] = inferred_club.get("name", archive.get("club_name", ""))
 
     duplicate_uploads = [dict(row) for row in duplicate_rows]
@@ -3769,9 +4312,9 @@ def _read_relational_state(connection: sqlite3.Connection) -> dict[str, Any]:
     club_year_stats = [dict(row) for row in club_year_rows]
 
     store = {
-        "club": {key: primary_club.get(key, "") for key in ["id", "name", "short_name", "city", "season", "home_ground", "whatsapp_number", "about"]},
+        "club": {key: primary_club.get(key, "") for key in ["id", "name", "short_name", "city", "country", "season", "home_ground", "whatsapp_number", "about"]},
         "clubs": [
-            {key: club.get(key, "") for key in ["id", "name", "short_name", "city", "season", "home_ground", "whatsapp_number", "about"]}
+            {key: club.get(key, "") for key in ["id", "name", "short_name", "city", "country", "season", "home_ground", "whatsapp_number", "about"]}
             for club in club_dicts
         ],
         "members": members,
@@ -3829,6 +4372,30 @@ def ensure_database() -> None:
             except sqlite3.OperationalError as exc:
                 if "duplicate column name" not in str(exc).lower():
                     raise
+        existing_club_columns = {
+            row[1]
+            for row in connection.execute("PRAGMA table_info(clubs)").fetchall()
+        }
+        if "country" not in existing_club_columns:
+            try:
+                connection.execute("ALTER TABLE clubs ADD COLUMN country TEXT")
+            except sqlite3.OperationalError as exc:
+                if "duplicate column name" not in str(exc).lower():
+                    raise
+        existing_archive_columns = {
+            row[1]
+            for row in connection.execute("PRAGMA table_info(archives)").fetchall()
+        }
+        for column_name, ddl in [
+            ("club_ids", "ALTER TABLE archives ADD COLUMN club_ids TEXT"),
+            ("club_names", "ALTER TABLE archives ADD COLUMN club_names TEXT"),
+        ]:
+            if column_name not in existing_archive_columns:
+                try:
+                    connection.execute(ddl)
+                except sqlite3.OperationalError as exc:
+                    if "duplicate column name" not in str(exc).lower():
+                        raise
         for table_name, required_columns in {
             "member_summary_stats": [
                 ("scores_25_plus", "ALTER TABLE member_summary_stats ADD COLUMN scores_25_plus INTEGER"),
@@ -4426,8 +4993,12 @@ def _highest_score_for_member(
         archive_year_value = archive_year[:4] if re.match(r"20\d{2}", archive_year) else (archive_date[:4] if re.match(r"20\d{2}", archive_date) else "")
         if year and archive_year_value != str(year).strip():
             continue
-        if club_id and str(archive.get("club_id") or "").strip() != str(club_id).strip():
-            continue
+        if club_id:
+            club_match = str(club_id).strip().lower()
+            archive_club_ids = {str(item or "").strip().lower() for item in _coerce_archive_string_list(archive.get("club_ids"))}
+            archive_club_id = str(archive.get("club_id") or "").strip().lower()
+            if club_match not in archive_club_ids and archive_club_id != club_match:
+                continue
         for performance in archive.get("suggested_performances", []) or []:
             consider(performance.get("player_name") or "", performance.get("runs") or 0)
     return highest
@@ -4469,8 +5040,12 @@ def _batting_milestones(
         archive_year_value = archive_year[:4] if re.match(r"20\d{2}", archive_year) else (archive_date[:4] if re.match(r"20\d{2}", archive_date) else "")
         if year and archive_year_value != str(year).strip():
             continue
-        if club_id and str(archive.get("club_id") or "").strip() != str(club_id).strip():
-            continue
+        if club_id:
+            club_match = str(club_id).strip().lower()
+            archive_club_ids = {str(item or "").strip().lower() for item in _coerce_archive_string_list(archive.get("club_ids"))}
+            archive_club_id = str(archive.get("club_id") or "").strip().lower()
+            if club_match not in archive_club_ids and archive_club_id != club_match:
+                continue
         for performance in archive.get("suggested_performances", []) or []:
             consider(performance.get("player_name") or "", performance.get("runs") or 0)
 
@@ -5055,8 +5630,19 @@ def _club_owned_archives(archives: list[dict[str, Any]], club: dict[str, Any]) -
     club_short_name = str(club.get("short_name") or "").strip().lower()
     owned: list[dict[str, Any]] = []
     for archive in archives:
+        archive_club_ids = {str(item or "").strip().lower() for item in _coerce_archive_string_list(archive.get("club_ids"))}
+        archive_club_names = {str(item or "").strip().lower() for item in _coerce_archive_string_list(archive.get("club_names"))}
         archive_club_id = str(archive.get("club_id") or "").strip().lower()
         archive_club_name = str(archive.get("club_name") or "").strip().lower()
+        if club_id and club_id in archive_club_ids:
+            owned.append(archive)
+            continue
+        if club_name and club_name in archive_club_names:
+            owned.append(archive)
+            continue
+        if club_short_name and club_short_name in archive_club_names:
+            owned.append(archive)
+            continue
         if club_id and archive_club_id == club_id:
             owned.append(archive)
             continue
@@ -5065,9 +5651,29 @@ def _club_owned_archives(archives: list[dict[str, Any]], club: dict[str, Any]) -
     return owned
 
 
+def _duplicate_belongs_to_club(duplicate: dict[str, Any], club: dict[str, Any], archives: list[dict[str, Any]]) -> bool:
+    if not club:
+        return False
+    club_archives = _club_owned_archives(archives, club)
+    if not club_archives:
+        return False
+    original_name = str(duplicate.get("original_file_name") or "").strip().lower()
+    original_hash = str(duplicate.get("file_hash") or "").strip().lower()
+    for archive in club_archives:
+        archive_name = str(archive.get("file_name") or "").strip().lower()
+        archive_hash = str(archive.get("file_hash") or "").strip().lower()
+        if original_name and original_name == archive_name:
+            return True
+        if original_hash and original_hash == archive_hash:
+            return True
+    return False
+
+
 def _resolve_archive_club(archive: dict[str, Any], clubs: list[dict[str, Any]]) -> dict[str, Any] | None:
     if not clubs:
         return None
+    current_ids = [str(item or "").strip().lower() for item in _coerce_archive_string_list(archive.get("club_ids"))]
+    current_names = [str(item or "").strip().lower() for item in _coerce_archive_string_list(archive.get("club_names"))]
     current_id = str(archive.get("club_id") or "").strip().lower()
     current_name = str(archive.get("club_name") or "").strip().lower()
     batting_team = archive_batting_team_name(archive).lower()
@@ -5086,6 +5692,12 @@ def _resolve_archive_club(archive: dict[str, Any], clubs: list[dict[str, Any]]) 
         club_id = str(club.get("id") or "").strip().lower()
         club_name = str(club.get("name") or "").strip().lower()
         club_short_name = str(club.get("short_name") or "").strip().lower()
+        if club_id and club_id in current_ids:
+            return True
+        if club_name and club_name in current_names:
+            return True
+        if club_short_name and club_short_name in current_names:
+            return True
         if batting_team and batting_team in {club_name, club_short_name}:
             return True
         if current_id and current_id == club_id and not batting_team:
@@ -5098,6 +5710,11 @@ def _resolve_archive_club(archive: dict[str, Any], clubs: list[dict[str, Any]]) 
     matched = [club for club in clubs if club_matches(club)]
     if len(matched) == 1:
         return matched[0]
+    if current_ids:
+        for club_id in current_ids:
+            current = next((club for club in clubs if str(club.get("id") or "").strip().lower() == club_id), None)
+            if current:
+                return current
     if batting_team:
         batting_matches = [
             club
@@ -5160,16 +5777,9 @@ def _club_dashboard_card(
 
 
 def _filter_archives_for_club(archives: list[dict[str, Any]], club: dict[str, Any], member_names: set[str]) -> list[dict[str, Any]]:
-    club_id = str(club.get("id") or "").strip()
-    club_name = str(club.get("name") or "").strip().lower()
-    club_short_name = str(club.get("short_name") or "").strip().lower()
     filtered = []
     for archive in archives:
-        archive_club_id = str(archive.get("club_id") or "").strip()
-        if club_id and archive_club_id and archive_club_id == club_id:
-            filtered.append(archive)
-            continue
-        if archive_batting_team_is_focus_club(archive, club_name, club_short_name):
+        if archive_belongs_to_club(archive, club):
             filtered.append(archive)
     return filtered
 
@@ -5213,6 +5823,11 @@ def build_dashboard(store: dict[str, Any], llm_status: dict[str, Any], focus_clu
     global_members = list(store.get("members", []))
     global_fixtures = list(store.get("fixtures", []))
     global_archives = canonical_archive_uploads(store.get("archive_uploads", []))
+    club_duplicate_uploads = [
+        duplicate
+        for duplicate in list(reversed(store.get("duplicate_uploads", [])))
+        if _duplicate_belongs_to_club(duplicate, focus_club, focused_store.get("archive_uploads", []))
+    ]
     selected_year = _resolve_dashboard_season_year(store)
     season_label = _season_label_for_year(selected_year)
     season_fixtures = _filter_fixtures_by_year(_club_owned_fixtures(store, focus_club), selected_year)
@@ -5220,6 +5835,7 @@ def build_dashboard(store: dict[str, Any], llm_status: dict[str, Any], focus_clu
     season_store = dict(focused_store)
     season_store["fixtures"] = season_fixtures
     season_store["archive_uploads"] = season_archives
+    season_store["duplicate_uploads"] = club_duplicate_uploads
     ordered_clubs = sorted(
         store.get("clubs", []) or ([store["club"]] if store.get("club") else []),
         key=lambda club: (
@@ -5356,7 +5972,7 @@ def build_dashboard(store: dict[str, Any], llm_status: dict[str, Any], focus_clu
         "player_pending_stats": pending_player_stats,
         "archive_uploads": list(reversed(season_archives)),
         "archive_file_uploads": list(reversed(focused_store["archive_uploads"])),
-        "duplicate_uploads": list(reversed(store.get("duplicate_uploads", []))),
+        "duplicate_uploads": club_duplicate_uploads,
         "llm": llm_status,
         "insights": focused_store["insights"],
         "viewer_profile": store.get("viewer_profile", dict(DEFAULT_VIEWER_PROFILE)),

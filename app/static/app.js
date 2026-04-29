@@ -85,6 +85,7 @@ const state = {
   viewerAuth: null,
   isAdmin: false,
   canManageOtherAvailability: false,
+  canManageLineupSelection: false,
   selectedMatchId: null,
   selectedPlayerName: null,
   selectedAvailabilityPlayerName: null,
@@ -145,12 +146,18 @@ const elements = {
   matchCenterHeading: document.getElementById("matchCenterHeading"),
   selectedScorecardTitle: document.getElementById("selectedScorecardTitle"),
   selectedAvailabilityTitle: document.getElementById("selectedAvailabilityTitle"),
+  selectedPlayingXiTitle: document.getElementById("selectedPlayingXiTitle"),
   summaryGrid: document.getElementById("summaryGrid"),
   selectedMatchSnapshot: document.getElementById("selectedMatchSnapshot"),
   selectedScorecard: document.getElementById("selectedScorecard"),
   selectedAvailability: document.getElementById("selectedAvailability"),
   selectedPerformances: document.getElementById("selectedPerformances"),
   selectedCommentary: document.getElementById("selectedCommentary"),
+  selectedPlayingXiForm: document.getElementById("selectedPlayingXiForm"),
+  selectedPlayingXiAutoFillButton: document.getElementById("selectedPlayingXiAutoFillButton"),
+  selectedPlayingXiSaveButton: document.getElementById("selectedPlayingXiSaveButton"),
+  selectedPlayingXiCount: document.getElementById("selectedPlayingXiCount"),
+  selectedWhatsAppAlerts: document.getElementById("selectedWhatsAppAlerts"),
   detailsForm: document.getElementById("detailsForm"),
   captainInput: document.getElementById("captainInput"),
   venueInput: document.getElementById("venueInput"),
@@ -458,9 +465,13 @@ function currentMatch() {
 }
 
 function currentPlayer() {
-  const members = state.dashboard.all_members || state.dashboard.members || [];
+  const clubMembers = state.dashboard.members || [];
+  const members = clubMembers.length ? clubMembers : (state.dashboard.all_members || []);
   const viewerMemberName = getViewerMemberNameFromAuth();
   return (
+    clubMembers.find((member) => member.name === state.selectedPlayerName) ||
+    clubMembers.find((member) => member.name === viewerMemberName) ||
+    clubMembers[0] ||
     members.find((member) => member.name === state.selectedPlayerName) ||
     members.find((member) => member.name === viewerMemberName) ||
     members[0] ||
@@ -502,9 +513,104 @@ function currentSignedInMemberName(dashboard = state.dashboard) {
   return authName ? authName : members[0]?.name || "";
 }
 
+function effectiveViewerRole() {
+  const dashboardRole = String(state.dashboard?.user?.effective_role || state.dashboard?.user?.role || "").trim();
+  if (dashboardRole) {
+    return dashboardRole;
+  }
+  const authRole = String(state.viewerAuth?.user?.effective_role || state.viewerAuth?.user?.role || "").trim();
+  return authRole;
+}
+
+function effectiveViewerPermissions() {
+  const dashboardPermissions = Array.isArray(state.dashboard?.user?.permissions) ? state.dashboard.user.permissions : [];
+  const authPermissions = Array.isArray(state.viewerAuth?.user?.permissions) ? state.viewerAuth.user.permissions : [];
+  return [...new Set([...dashboardPermissions, ...authPermissions].map((item) => String(item || "").trim()).filter(Boolean))];
+}
+
+function effectiveViewerRoles() {
+  const dashboardRoles = Array.isArray(state.dashboard?.user?.roles) ? state.dashboard.user.roles : [];
+  const authRoles = Array.isArray(state.viewerAuth?.user?.roles) ? state.viewerAuth.user.roles : [];
+  const roleStrings = [
+    String(state.dashboard?.user?.effective_role || state.dashboard?.user?.role || "").trim(),
+    String(state.viewerAuth?.user?.effective_role || state.viewerAuth?.user?.role || "").trim(),
+    ...dashboardRoles,
+    ...authRoles,
+  ]
+    .map((item) => String(item || "").trim())
+    .filter(Boolean);
+  return [...new Set(roleStrings)];
+}
+
 function canManageOtherAvailability() {
-  const role = String(state.dashboard?.user?.effective_role || "").trim();
-  return role === "captain" || role === "superadmin";
+  const permissions = effectiveViewerPermissions();
+  const roles = effectiveViewerRoles();
+  return (
+    permissions.includes("manage_fixtures") ||
+    permissions.includes("manage_players") ||
+    permissions.includes("manage_club") ||
+    roles.includes("captain") ||
+    roles.includes("club_admin") ||
+    roles.includes("superadmin")
+  );
+}
+
+function canManageLineupSelection() {
+  const permissions = effectiveViewerPermissions();
+  const roles = effectiveViewerRoles();
+  return (
+    permissions.includes("manage_fixtures") ||
+    permissions.includes("manage_players") ||
+    permissions.includes("manage_club") ||
+    roles.includes("captain") ||
+    roles.includes("club_admin") ||
+    roles.includes("superadmin")
+  );
+}
+
+function lineupStatusRank(status) {
+  if (status === "available") return 0;
+  if (status === "maybe") return 1;
+  if (status === "unavailable") return 3;
+  return 2;
+}
+
+function lineupCandidateRows(match) {
+  const members = state.dashboard?.members || [];
+  return members
+    .map((member) => {
+      const status = String(match?.availability_statuses?.[member.name] || "no response").toLowerCase();
+      return {
+        ...member,
+        availability_status: status,
+        availability_note: match?.availability_notes?.[member.name] || "",
+      };
+    })
+    .sort((a, b) => {
+      const rankA = lineupStatusRank(a.availability_status);
+      const rankB = lineupStatusRank(b.availability_status);
+      if (rankA !== rankB) return rankA - rankB;
+      return String(a.name || "").localeCompare(String(b.name || ""));
+    });
+}
+
+function selectedPlayingXiNames(match) {
+  return Array.isArray(match?.selected_playing_xi) ? match.selected_playing_xi : [];
+}
+
+function isEligibleForLineup(status) {
+  return status === "available" || status === "maybe";
+}
+
+function playingXiAlertText(member, match) {
+  const clubName = focusClubName();
+  const selectedNames = selectedPlayingXiNames(match);
+  const availability = String(member.availability_status || "no response").replace("_", " ");
+  return encodeURIComponent(
+    `Hi ${member.name}, ${clubName} fixture reminder: ${match.date_label} vs ${match.opponent}. ` +
+      `Your current availability is ${availability}. Please update the dashboard if anything changes. ` +
+      `${selectedNames.length ? `Selected XI so far: ${selectedNames.join(", ")}.` : "Please confirm if you are available."}`
+  );
 }
 
 function currentAvailabilityPlayerName() {
@@ -627,13 +733,14 @@ function populatePlayerSelects(members, allMembers = members) {
     .join("");
   elements.availabilityPlayerSelect.innerHTML = options;
   elements.performancePlayerSelect.innerHTML = options;
-  elements.playerProfileSelect.innerHTML = allMembers
+  const playerProfileMembers = members.length ? members : allMembers;
+  elements.playerProfileSelect.innerHTML = playerProfileMembers
     .map((member) => {
       const label = member.full_name ? `${member.name} (${member.full_name})` : member.name;
       return `<option value="${member.name}">${label}</option>`;
     })
     .join("");
-  elements.playerProfileSelect.value = state.selectedPlayerName || allMembers[0]?.name || members[0]?.name || "";
+  elements.playerProfileSelect.value = state.selectedPlayerName || playerProfileMembers[0]?.name || members[0]?.name || "";
   const currentName = currentSignedInMemberName();
   const availabilityChoice = state.canManageOtherAvailability
     ? (
@@ -1098,6 +1205,91 @@ function renderSelectedMatch(match) {
   });
 }
 
+function renderPlayingXiSection(match) {
+  if (!elements.selectedPlayingXiForm || !elements.selectedWhatsAppAlerts || !elements.selectedPlayingXiCount) {
+    return;
+  }
+
+  const canManageLineup = canManageLineupSelection();
+  const isLiveSeason = String(state.selectedSeasonYear || "").trim() === String(new Date().getFullYear());
+  const canEditLineup = canManageLineup && isLiveSeason;
+  const candidates = lineupCandidateRows(match);
+  const selectedNames = new Set(selectedPlayingXiNames(match));
+  const selectedCount = selectedNames.size;
+
+  if (elements.selectedPlayingXiTitle) {
+    elements.selectedPlayingXiTitle.textContent = `${focusClubName()} playing XI`;
+  }
+
+  const candidateCards = candidates.length
+    ? candidates
+        .map((member) => {
+          const canSelect = isEligibleForLineup(member.availability_status);
+          const checked = selectedNames.has(member.name);
+          const statusText = member.availability_status === "available"
+            ? "Available"
+            : member.availability_status === "maybe"
+              ? "Maybe"
+              : member.availability_status === "unavailable"
+                ? "Unavailable"
+                : "No response";
+          return `
+            <label class="detail-card lineup-card ${checked ? "selected-card" : ""} ${canSelect ? "" : "muted-card"}">
+              <input
+                type="checkbox"
+                name="playing_xi"
+                value="${member.name}"
+                data-lineup-eligible="${canSelect ? "true" : "false"}"
+                ${checked ? "checked" : ""}
+                ${canEditLineup && canSelect ? "" : "disabled"}
+              />
+              <div>
+                <strong>${member.name}</strong>
+                <p>${statusText}${member.phone ? ` · ${member.phone}` : ""}</p>
+                <small>${member.availability_note || (canSelect ? "Eligible for selection" : "Not eligible for selection yet")}</small>
+              </div>
+            </label>
+          `;
+        })
+        .join("")
+    : `<p class="empty-state">No club players found for this fixture.</p>`;
+
+  elements.selectedPlayingXiForm.innerHTML = candidateCards;
+  elements.selectedPlayingXiCount.textContent = `${selectedCount}/11 selected`;
+
+  if (elements.selectedPlayingXiForm) {
+    elements.selectedPlayingXiForm.querySelectorAll("input[type=checkbox][name=playing_xi]").forEach((input) => {
+      input.disabled = !(canEditLineup && input.dataset.lineupEligible === "true");
+    });
+  }
+  if (elements.selectedPlayingXiAutoFillButton) {
+    elements.selectedPlayingXiAutoFillButton.disabled = !canEditLineup;
+  }
+  if (elements.selectedPlayingXiSaveButton) {
+    elements.selectedPlayingXiSaveButton.disabled = !canEditLineup;
+  }
+
+  const alertCards = candidates
+    .filter((member) => member.phone)
+    .map((member) => {
+      const text = playingXiAlertText(member, match);
+      return `
+        <article class="detail-card">
+          <strong>${member.name}</strong>
+          <p>${member.phone}</p>
+          <small>${member.availability_status === "available" ? "Available" : member.availability_status === "maybe" ? "Maybe" : "Awaiting response"}</small>
+          <div class="inline-actions">
+            <a class="secondary-button" href="https://wa.me/${member.phone}?text=${text}" target="_blank" rel="noreferrer">Open WhatsApp</a>
+          </div>
+        </article>
+      `;
+    })
+    .join("");
+
+  elements.selectedWhatsAppAlerts.innerHTML = alertCards
+    || `<p class="empty-state">No player phone numbers are stored yet for this club.</p>`;
+}
+
 function renderFormValues(match) {
   const clubShort = focusClubShortName();
   elements.captainInput.placeholder = `${clubShort} captain`;
@@ -1550,7 +1742,7 @@ function getPlayerAvailabilitySummary(playerName) {
 }
 
 function getPlayerSeasonProfile(playerName) {
-  const members = state.dashboard.all_members || state.dashboard.members || [];
+  const members = state.dashboard.members || state.dashboard.all_members || [];
   const player = members.find((member) => member.name === playerName);
   const selectedYear = String(state.selectedSeasonYear || state.dashboard?.selected_season_year || state.dashboard?.default_season_year || "").trim();
   const combinedRecords = state.dashboard.combined_player_stats || state.dashboard.all_combined_player_stats || [];
@@ -1987,9 +2179,9 @@ function dashboardArchiveUploads(dashboard = state.dashboard) {
   if (!dashboard) {
     return [];
   }
-  const permissions = state.viewerAuth?.user?.permissions || [];
-  const isAdminViewer = permissions.includes("view_admin") || permissions.includes("manage_scorecards") || permissions.includes("manage_club") || permissions.includes("manage_players");
-  return isAdminViewer ? (dashboard.all_archive_uploads || dashboard.archive_uploads || []) : (dashboard.archive_uploads || []);
+  const role = String(state.viewerAuth?.user?.effective_role || state.viewerAuth?.user?.role || "").trim();
+  const isSuperadmin = role === "superadmin";
+  return isSuperadmin ? (dashboard.all_archive_uploads || dashboard.archive_uploads || []) : (dashboard.archive_uploads || []);
 }
 
 function loadArchiveIntoEditor(archiveId) {
@@ -2107,21 +2299,26 @@ function syncArchiveDraft() {
 }
 
 function updateWhatsappLink(match) {
+  const selectedLineup = selectedPlayingXiNames(match);
   const text = encodeURIComponent(
-    `${state.dashboard.focus_club?.name || state.dashboard.club?.name || "Club"} update: ${match.date_label} vs ${match.opponent}. Status: ${match.status}. Available players: ${match.availability.join(", ") || "none yet"}.`
+    `${state.dashboard.focus_club?.name || state.dashboard.club?.name || "Club"} update: ${match.date_label} vs ${match.opponent}. Status: ${match.status}. Available players: ${match.availability.join(", ") || "none yet"}.` +
+      (selectedLineup.length ? ` Selected XI: ${selectedLineup.join(", ")}.` : "") +
+      " Please update availability in the dashboard."
   );
   elements.whatsappLink.href = `https://wa.me/${state.dashboard.club.whatsapp_number}?text=${text}`;
 }
 
 function renderDashboard(dashboard) {
   state.dashboard = dashboard;
-  const permissions = dashboard.user?.permissions || [];
-  state.isAdmin = permissions.includes("view_admin") || permissions.includes("manage_club") || permissions.includes("manage_scorecards") || permissions.includes("manage_players");
+  const roles = effectiveViewerRoles();
+  const role = effectiveViewerRole();
+  state.isAdmin = roles.includes("superadmin") || role === "superadmin";
   state.canManageOtherAvailability = canManageOtherAvailability();
-  if (elements.uploadForm) elements.uploadForm.hidden = true;
-  if (elements.resetScoresButton) elements.resetScoresButton.hidden = true;
-  if (elements.archiveImportForm) elements.archiveImportForm.hidden = true;
-  if (elements.archiveApplyForm) elements.archiveApplyForm.hidden = true;
+  state.canManageLineupSelection = canManageLineupSelection();
+  if (elements.uploadForm) elements.uploadForm.hidden = !state.isAdmin;
+  if (elements.resetScoresButton) elements.resetScoresButton.hidden = !state.isAdmin;
+  if (elements.archiveImportForm) elements.archiveImportForm.hidden = !state.isAdmin;
+  if (elements.archiveApplyForm) elements.archiveApplyForm.hidden = !state.isAdmin;
   state.selectedFocusClubId = dashboard.focus_club?.id || dashboard.viewer_profile?.primary_club_id || state.selectedFocusClubId;
   if (state.selectedFocusClubId) {
     window.localStorage.setItem("heartlakePrimaryClubId", state.selectedFocusClubId);
@@ -2212,6 +2409,7 @@ function renderDashboard(dashboard) {
   }
   renderSummary(dashboard.summary, visibleArchiveUploads.length);
   renderSelectedMatch(match);
+  renderPlayingXiSection(match);
   renderFormValues(match);
   renderScorebook(match);
   renderMembers(dashboard.members);
@@ -2436,8 +2634,40 @@ async function saveDashboardAvailability() {
   }
 }
 
+async function savePlayingXiSelection() {
+  if (!elements.selectedPlayingXiForm) return;
+  const selectedPlayers = Array.from(elements.selectedPlayingXiForm.querySelectorAll("input[type=checkbox][name=playing_xi]:checked"))
+    .map((input) => input.value.trim())
+    .filter(Boolean)
+    .slice(0, 11);
+  const dashboard = await runAction(
+    () =>
+      postJson(`/api/matches/${state.selectedMatchId}/lineup`, {
+        player_names: selectedPlayers,
+        club_id: state.selectedFocusClubId || currentMatch().club_id || "",
+      }),
+    "Playing XI saved."
+  );
+  if (dashboard) {
+    renderDashboard(dashboard);
+  }
+}
+
+function autoFillPlayingXiSelection() {
+  if (!elements.selectedPlayingXiForm) return;
+  const eligible = lineupCandidateRows(currentMatch())
+    .filter((member) => isEligibleForLineup(member.availability_status))
+    .slice(0, 11)
+    .map((member) => member.name);
+  elements.selectedPlayingXiForm.querySelectorAll("input[type=checkbox][name=playing_xi]").forEach((input) => {
+    input.checked = eligible.includes(input.value);
+  });
+  elements.selectedPlayingXiCount.textContent = `${eligible.length}/11 selected`;
+}
+
 window.HeartlakeDashboard = {
   saveDashboardAvailability,
+  savePlayingXiSelection,
 };
 
 elements.availabilityForm.addEventListener("submit", async (event) => {
@@ -2468,6 +2698,18 @@ if (elements.availabilityFixturesEditor) {
       renderDashboard(dashboard);
       elements.availabilityNoteInput.value = "";
     }
+  });
+}
+
+if (elements.selectedPlayingXiSaveButton) {
+  elements.selectedPlayingXiSaveButton.addEventListener("click", async () => {
+    await savePlayingXiSelection();
+  });
+}
+
+if (elements.selectedPlayingXiAutoFillButton) {
+  elements.selectedPlayingXiAutoFillButton.addEventListener("click", () => {
+    autoFillPlayingXiSelection();
   });
 }
 
@@ -2531,6 +2773,7 @@ elements.memberForm.addEventListener("submit", async (event) => {
   const form = new FormData(elements.memberForm);
   const payload = Object.fromEntries(form.entries());
   payload.age = Number(payload.age);
+  payload.club_id = state.selectedFocusClubId || state.dashboard?.club?.id || "";
   const dashboard = await runAction(() => postJson("/api/members", payload), "Player profile created.");
   if (dashboard) {
     renderDashboard(dashboard);

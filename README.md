@@ -141,6 +141,18 @@ This section captures the user requirements in the order they were given and ref
 98. Keep the Admin Center club-specific so selecting another club switches the archive review queue and club data to that club.
 99. Show uploaded scorecards clubwise inside the Admin Center, with the archive cards aligned under the Archives area.
 100. Let superadmin Amit S review and approve club scorecards before they are added into the club's performance history.
+101. Tag uploaded scorecards to the correct club using uploader, captain, player, and match context, and show shared scorecards in both clubs' Admin Center archives when a match belongs to two clubs.
+102. Auto-approve scorecards that already have persisted complete JSON, keep only non-JSON or incomplete-extractions in review, and do not treat one-innings uploads as duplicates when the other innings is still missing.
+103. Do not leak single-club scorecards into another club's Admin Center archive when the second team is missing.
+104. Let a registering player create a new club if it cannot be found, requiring club name, city, and country, and make that user the default club-admin for the new club.
+105. Keep the RBAC model centered on `player` by default, `captain`, `club_admin`, and a single `superadmin` identity for Amit S / Amit Sethi only.
+106. Keep each club dashboard's player profile list limited to the members actually associated with that club, and seed a newly created club with its creator as the first member.
+107. Let captains and club admins manage fixtures, match setup, and player invites for their club, but keep the Admin Center and scorecard review flows superadmin-only.
+108. When a captain or club admin invites a player, force that invite into the currently selected club only and do not allow cross-club player creation.
+109. Let captains and club admins send WhatsApp fixture and availability reminders to players using their stored mobile numbers so players can update dashboard availability before the game.
+110. Let captains and club admins select or deselect the playing XI from the players who have already marked themselves available for the upcoming fixture.
+111. Allow a player to hold multiple roles for the same club, and have the auth layer combine those roles for permissions instead of overwriting the previous one.
+112. Keep the Admin Center extraction/review JSON on the canonical scorecard template with `meta`, `match`, `innings`, and `validation` so scorecard processing stays consistent.
 
 ## Current behavior summary
 
@@ -160,7 +172,13 @@ This section captures the user requirements in the order they were given and ref
 - Player availability is now set per scheduled game, not as one season-wide toggle.
 - The player profile is the cross-club career view, while the club dashboard stays club-local.
 - The Admin Center now renders the selected club first, filters its archive review queue by the active club, and groups uploaded scorecards clubwise for review.
-- Historical scorecards stay in the archive-review flow until superadmin approval attaches them back to the correct club.
+- Historical scorecards stay in the archive-review flow until superadmin approval attaches them back to the correct club or clubs.
+- Shared archives can appear in both clubs' Admin Center queues when the scorecard clearly belongs to a two-club match.
+- Single-club archives no longer bleed into another club's review queue when the second team is missing.
+- Complete JSON imports are auto-approved; partial scorecards and non-JSON uploads remain reviewable until manually confirmed.
+- Registration can create a new club when the search does not find a match, and the new club owner becomes that club's default admin.
+- Captains and club admins can now notify players through WhatsApp reminders and build a selectable playing XI from the club's available players.
+- Players can now carry multiple club roles, and the auth layer unions those roles when calculating permissions.
 - The local UI is designed as the web baseline before a later native iPhone app conversion.
 - The repo now has an Azure App Service deployment plan checked in under `.azure/plan.md`, App Service infrastructure under `infra/`, and a GitHub Actions workflow under `.github/workflows/deploy.yml`.
 - Runtime data such as SQLite, uploads, duplicates, and cache files are treated as server data, while JSON snapshots are kept as the recovery source in Git.
