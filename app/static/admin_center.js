@@ -1,26 +1,32 @@
-const { requireAuth, getJson, postJson, putJson, deleteJson, setPrimaryClubId, optionMarkup } = window.HeartlakePages;
+let requireAuth;
+let getJson;
+let postJson;
+let putJson;
+let deleteJson;
+let setPrimaryClubId;
+let optionMarkup;
 
-const statusBanner = document.getElementById("adminCenterStatus");
-const clubForm = document.getElementById("adminClubForm");
-const clubSelect = document.getElementById("adminClubSelect");
-const loadClubButton = document.getElementById("adminLoadClubButton");
-const clubStats = document.getElementById("adminClubStats");
-const clubDetail = document.getElementById("adminClubDetail");
-const fixtureForm = document.getElementById("adminFixtureForm");
-const fixtureIdInput = document.getElementById("adminFixtureId");
-const fixtureDateLabelInput = document.getElementById("adminFixtureDateLabel");
-const fixtureDateInput = document.getElementById("adminFixtureDate");
-const fixtureOpponentInput = document.getElementById("adminFixtureOpponent");
-const fixtureVenueInput = document.getElementById("adminFixtureVenue");
-const fixtureTypeInput = document.getElementById("adminFixtureType");
-const fixtureTimeInput = document.getElementById("adminFixtureTime");
-const fixtureOversInput = document.getElementById("adminFixtureOvers");
-const fixtureYearInput = document.getElementById("adminSeasonYear");
-const fixtureList = document.getElementById("adminFixtureList");
-const archiveSearchInput = document.getElementById("adminArchiveSearch");
-const refreshButton = document.getElementById("adminRefreshButton");
-const archiveQueue = document.getElementById("adminReviewQueue");
-const roleBadge = document.getElementById("adminRoleBadge");
+let statusBanner;
+let clubForm;
+let clubSelect;
+let loadClubButton;
+let clubStats;
+let clubDetail;
+let fixtureForm;
+let fixtureIdInput;
+let fixtureDateLabelInput;
+let fixtureDateInput;
+let fixtureOpponentInput;
+let fixtureVenueInput;
+let fixtureTypeInput;
+let fixtureTimeInput;
+let fixtureOversInput;
+let fixtureYearInput;
+let fixtureList;
+let archiveSearchInput;
+let refreshButton;
+let archiveQueue;
+let roleBadge;
 
 let payload = null;
 let auth = null;
@@ -28,6 +34,45 @@ let reviewQueue = [];
 let selectedClubId = "";
 let pendingDelete = { key: "", expiresAt: 0 };
 let pendingDeleteTimer = null;
+
+function bootstrapAdminCenter() {
+  const pages = window.HeartlakePages;
+  if (!pages) {
+    return false;
+  }
+  ({
+    requireAuth,
+    getJson,
+    postJson,
+    putJson,
+    deleteJson,
+    setPrimaryClubId,
+    optionMarkup,
+  } = pages);
+
+  statusBanner = document.getElementById("adminCenterStatus");
+  clubForm = document.getElementById("adminClubForm");
+  clubSelect = document.getElementById("adminClubSelect");
+  loadClubButton = document.getElementById("adminLoadClubButton");
+  clubStats = document.getElementById("adminClubStats");
+  clubDetail = document.getElementById("adminClubDetail");
+  fixtureForm = document.getElementById("adminFixtureForm");
+  fixtureIdInput = document.getElementById("adminFixtureId");
+  fixtureDateLabelInput = document.getElementById("adminFixtureDateLabel");
+  fixtureDateInput = document.getElementById("adminFixtureDate");
+  fixtureOpponentInput = document.getElementById("adminFixtureOpponent");
+  fixtureVenueInput = document.getElementById("adminFixtureVenue");
+  fixtureTypeInput = document.getElementById("adminFixtureType");
+  fixtureTimeInput = document.getElementById("adminFixtureTime");
+  fixtureOversInput = document.getElementById("adminFixtureOvers");
+  fixtureYearInput = document.getElementById("adminSeasonYear");
+  fixtureList = document.getElementById("adminFixtureList");
+  archiveSearchInput = document.getElementById("adminArchiveSearch");
+  refreshButton = document.getElementById("adminRefreshButton");
+  archiveQueue = document.getElementById("adminReviewQueue");
+  roleBadge = document.getElementById("adminRoleBadge");
+  return true;
+}
 
 function setStatus(message, tone = "info") {
   if (!statusBanner) return;
@@ -752,15 +797,20 @@ refreshButton?.addEventListener("click", async () => {
   }
 });
 
-requireAuth()
-  .then(async (result) => {
+async function startAdminCenter() {
+  if (!bootstrapAdminCenter()) {
+    window.addEventListener("load", startAdminCenter, { once: true });
+    return;
+  }
+  try {
+    const result = await requireAuth();
     if (!result) return;
-    try {
-      await refreshAll();
-    } catch (error) {
-      setStatus(error.message, "error");
-    }
-  })
-  .catch((error) => setStatus(error.message, "error"));
+    await refreshAll();
+  } catch (error) {
+    setStatus(error.message, "error");
+  }
+}
+
+startAdminCenter();
 
 renderRoleBadge();
