@@ -701,14 +701,14 @@ archiveQueue?.addEventListener("click", async (event) => {
   const uploadId = card.dataset.adminUpload;
   const textarea = card.querySelector(".admin-review-text");
   try {
-  if (button.dataset.action === "extract") {
+    if (button.dataset.action === "extract") {
       await postJson(`/api/archive/${uploadId}/extract`, {}, true);
       setStatus("Scorecard re-extracted.", "success");
     } else if (button.dataset.action === "save") {
       await postJson(`/api/admin/archive/${uploadId}/review`, { text: textarea?.value || "" }, true);
       setStatus("Reviewed extraction saved.", "success");
     } else if (button.dataset.action === "approve") {
-      await postJson(`/api/admin/archive/${uploadId}/approve`, {}, true);
+      await postJson(`/api/admin/archive/${uploadId}/approve`, { text: textarea?.value || "" }, true);
       setStatus("Archive approved.", "success");
     } else if (button.dataset.action === "delete") {
       if (!confirmTypedDelete("Delete this archive record?", uploadId, button)) return;

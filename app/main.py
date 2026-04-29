@@ -771,6 +771,134 @@ class ArchiveReviewRequest(BaseModel):
     text: str
 
 
+def _apply_archive_review_text(
+    store: dict[str, Any],
+    upload: dict[str, Any],
+    raw_text: str,
+    *,
+    user_row: dict[str, Any] | None = None,
+) -> None:
+    review_text = str(raw_text or "").strip()
+    if not review_text:
+        raise HTTPException(status_code=400, detail="Paste the reviewed scorecard JSON first.")
+
+    try:
+        payload = json.loads(review_text)
+    except json.JSONDecodeError:
+        payload = None
+
+    if isinstance(payload, dict):
+        template_payload = _canonical_scorecard_template_payload(payload)
+        if template_payload is not None:
+            draft, suggested, extracted_summary = _scorecard_template_review_data(store, template_payload)
+            upload["extraction_template"] = template_payload
+            upload["draft_scorecard"] = draft
+            upload["suggested_performances"] = suggested
+            upload["raw_extracted_text"] = review_text[:12000]
+            meta = template_payload.get("meta") if isinstance(template_payload.get("meta"), dict) else {}
+            upload["ocr_engine"] = str(meta.get("source") or upload.get("ocr_engine") or "manual-review")
+            upload["ocr_pipeline"] = str(meta.get("processed_by") or upload.get("ocr_pipeline") or "Admin reviewed extraction")
+            upload["confidence"] = str(meta.get("confidence") or upload.get("confidence") or "review")
+            upload["extracted_summary"] = str(
+                _extract_field(template_payload, "extracted_summary")
+                or extracted_summary
+                or upload.get("extracted_summary")
+                or "Reviewed archive scorecard."
+            )
+            return
+        if "draft_scorecard" in payload:
+            draft = payload.get("draft_scorecard")
+            if isinstance(draft, dict):
+                upload["draft_scorecard"] = draft
+            if isinstance(payload.get("suggested_performances"), list):
+                upload["suggested_performances"] = [
+                    item for item in payload.get("suggested_performances", []) if isinstance(item, dict)
+                ]
+            template = payload.get("extraction_template")
+            if isinstance(template, dict) and _is_scorecard_template_payload(template):
+                upload["extraction_template"] = deepcopy(template)
+        elif "match" in payload or "innings" in payload:
+            parsed = parse_imported_extraction(store, review_text)
+            upload.update(parsed)
+        else:
+            draft = default_scorecard(_extract_field(payload, "result") or upload.get("extracted_summary") or "Reviewed archive")
+            draft.update(
+                {
+                    "heartlake_runs": _extract_field(payload, "heartlake_runs", "summary"),
+                    "heartlake_wickets": _extract_field(payload, "heartlake_wickets", "summary"),
+                    "heartlake_overs": _extract_field(payload, "heartlake_overs", "summary"),
+                    "opponent_runs": _extract_field(payload, "opponent_runs", "summary"),
+                    "opponent_wickets": _extract_field(payload, "opponent_wickets", "summary"),
+                    "opponent_overs": _extract_field(payload, "opponent_overs", "summary"),
+                    "result": _extract_field(payload, "result") or "Reviewed archive",
+                    "live_summary": _extract_field(payload, "live_summary", "summary"),
+                }
+            )
+            upload["draft_scorecard"] = draft
+            upload["suggested_performances"] = _parse_imported_player_scores(store, payload)
+            upload["extraction_template"] = _scorecard_template_from_review_payload(
+                store,
+                payload,
+                draft,
+                upload["suggested_performances"],
+                review_text,
+                ocr_engine=str(_extract_field(payload, "ocr_engine") or upload.get("ocr_engine") or "manual-review"),
+                ocr_pipeline=str(_extract_field(payload, "ocr_pipeline") or upload.get("ocr_pipeline") or "Admin reviewed extraction"),
+                confidence=str(_extract_field(payload, "confidence") or upload.get("confidence") or "review"),
+                extracted_summary=str(_extract_field(payload, "extracted_summary") or upload.get("extracted_summary") or "Reviewed archive scorecard."),
+            )
+
+        upload["raw_extracted_text"] = str(_extract_field(payload, "raw_extracted_text") or review_text)[:12000]
+        meta = payload.get("meta") if isinstance(payload.get("meta"), dict) else {}
+        upload["ocr_engine"] = str(
+            _extract_field(payload, "ocr_engine")
+            or meta.get("source")
+            or upload.get("ocr_engine")
+            or "manual-review"
+        )
+        upload["ocr_pipeline"] = str(_extract_field(payload, "ocr_pipeline") or upload.get("ocr_pipeline") or "Admin reviewed extraction")
+        upload["confidence"] = str(_extract_field(payload, "confidence") or meta.get("confidence") or upload.get("confidence") or "review")
+        summary = _extract_field(payload, "extracted_summary") or upload.get("extracted_summary") or "Reviewed archive scorecard."
+        upload["extracted_summary"] = str(summary)
+        if "extraction_template" not in upload:
+            upload["extraction_template"] = _scorecard_template_from_review_payload(
+                store,
+                payload,
+                upload.get("draft_scorecard") or default_scorecard("Reviewed archive"),
+                upload.get("suggested_performances") or [],
+                review_text,
+                ocr_engine=upload["ocr_engine"],
+                ocr_pipeline=upload["ocr_pipeline"],
+                confidence=upload["confidence"],
+                extracted_summary=upload["extracted_summary"],
+            )
+    else:
+        upload["raw_extracted_text"] = review_text[:12000]
+        upload["ocr_engine"] = upload.get("ocr_engine") or "manual-review"
+        upload["ocr_pipeline"] = upload.get("ocr_pipeline") or "Admin reviewed extraction"
+        upload["confidence"] = upload.get("confidence") or "review"
+        upload["extraction_template"] = _scorecard_template_from_review_payload(
+            store,
+            {},
+            upload.get("draft_scorecard") or default_scorecard("Reviewed archive"),
+            upload.get("suggested_performances") or [],
+            review_text,
+            ocr_engine=upload["ocr_engine"],
+            ocr_pipeline=upload["ocr_pipeline"],
+            confidence=upload["confidence"],
+            extracted_summary=upload.get("extracted_summary") or "Reviewed archive scorecard.",
+        )
+
+    inferred_club = _resolve_archive_club(upload, store.get("clubs", []))
+    if inferred_club:
+        upload["club_id"] = inferred_club.get("id", upload.get("club_id", ""))
+        upload["club_name"] = inferred_club.get("name", upload.get("club_name", ""))
+    upload["status"] = "Pending review"
+    if user_row:
+        upload["reviewed_by"] = user_row["display_name"] or user_row["mobile"] or "admin"
+    upload["reviewed_at"] = now_iso()
+
+
 class ViewerProfileRequest(BaseModel):
     display_name: str = ""
     mobile: str = ""
@@ -4322,125 +4450,7 @@ def save_archive_review(upload_id: str, request: ArchiveReviewRequest, x_auth_to
     club = _selected_club(store, current_club_id)
     upload["club_id"] = upload.get("club_id") or club.get("id", "")
     upload["club_name"] = upload.get("club_name") or club.get("name", "")
-
-    raw_text = request.text.strip()
-    if not raw_text:
-        raise HTTPException(status_code=400, detail="Paste the reviewed scorecard JSON first.")
-
-    try:
-        payload = json.loads(raw_text)
-    except json.JSONDecodeError:
-        payload = None
-
-    if isinstance(payload, dict):
-        template_payload = _canonical_scorecard_template_payload(payload)
-        if template_payload is not None:
-            draft, suggested, extracted_summary = _scorecard_template_review_data(store, template_payload)
-            upload["extraction_template"] = template_payload
-            upload["draft_scorecard"] = draft
-            upload["suggested_performances"] = suggested
-            upload["raw_extracted_text"] = raw_text[:12000]
-            meta = template_payload.get("meta") if isinstance(template_payload.get("meta"), dict) else {}
-            upload["ocr_engine"] = str(meta.get("source") or upload.get("ocr_engine") or "manual-review")
-            upload["ocr_pipeline"] = str(meta.get("processed_by") or upload.get("ocr_pipeline") or "Admin reviewed extraction")
-            upload["confidence"] = str(meta.get("confidence") or upload.get("confidence") or "review")
-            upload["extracted_summary"] = str(
-                _extract_field(template_payload, "extracted_summary")
-                or extracted_summary
-                or upload.get("extracted_summary")
-                or "Reviewed archive scorecard."
-            )
-        elif "draft_scorecard" in payload:
-            draft = payload.get("draft_scorecard")
-            if isinstance(draft, dict):
-                upload["draft_scorecard"] = draft
-            if isinstance(payload.get("suggested_performances"), list):
-                upload["suggested_performances"] = [
-                    item for item in payload.get("suggested_performances", []) if isinstance(item, dict)
-                ]
-            template = payload.get("extraction_template")
-            if isinstance(template, dict) and _is_scorecard_template_payload(template):
-                upload["extraction_template"] = deepcopy(template)
-        elif "match" in payload or "innings" in payload:
-            parsed = parse_imported_extraction(store, raw_text)
-            upload.update(parsed)
-        else:
-            draft = default_scorecard(_extract_field(payload, "result") or upload.get("extracted_summary") or "Reviewed archive")
-            draft.update(
-                {
-                    "heartlake_runs": _extract_field(payload, "heartlake_runs", "summary"),
-                    "heartlake_wickets": _extract_field(payload, "heartlake_wickets", "summary"),
-                    "heartlake_overs": _extract_field(payload, "heartlake_overs", "summary"),
-                    "opponent_runs": _extract_field(payload, "opponent_runs", "summary"),
-                    "opponent_wickets": _extract_field(payload, "opponent_wickets", "summary"),
-                    "opponent_overs": _extract_field(payload, "opponent_overs", "summary"),
-                    "result": _extract_field(payload, "result") or "Reviewed archive",
-                    "live_summary": _extract_field(payload, "live_summary", "summary"),
-                }
-            )
-            upload["draft_scorecard"] = draft
-            upload["suggested_performances"] = _parse_imported_player_scores(store, payload)
-            upload["extraction_template"] = _scorecard_template_from_review_payload(
-                store,
-                payload,
-                draft,
-                upload["suggested_performances"],
-                raw_text,
-                ocr_engine=str(_extract_field(payload, "ocr_engine") or upload.get("ocr_engine") or "manual-review"),
-                ocr_pipeline=str(_extract_field(payload, "ocr_pipeline") or upload.get("ocr_pipeline") or "Admin reviewed extraction"),
-                confidence=str(_extract_field(payload, "confidence") or upload.get("confidence") or "review"),
-                extracted_summary=str(_extract_field(payload, "extracted_summary") or upload.get("extracted_summary") or "Reviewed archive scorecard."),
-            )
-
-        upload["raw_extracted_text"] = str(_extract_field(payload, "raw_extracted_text") or raw_text)[:12000]
-        meta = payload.get("meta") if isinstance(payload.get("meta"), dict) else {}
-        upload["ocr_engine"] = str(
-            _extract_field(payload, "ocr_engine")
-            or meta.get("source")
-            or upload.get("ocr_engine")
-            or "manual-review"
-        )
-        upload["ocr_pipeline"] = str(_extract_field(payload, "ocr_pipeline") or upload.get("ocr_pipeline") or "Admin reviewed extraction")
-        upload["confidence"] = str(_extract_field(payload, "confidence") or meta.get("confidence") or upload.get("confidence") or "review")
-        summary = _extract_field(payload, "extracted_summary") or upload.get("extracted_summary") or "Reviewed archive scorecard."
-        upload["extracted_summary"] = str(summary)
-        if "extraction_template" not in upload:
-            upload["extraction_template"] = _scorecard_template_from_review_payload(
-                store,
-                payload,
-                upload.get("draft_scorecard") or default_scorecard("Reviewed archive"),
-                upload.get("suggested_performances") or [],
-                raw_text,
-                ocr_engine=upload["ocr_engine"],
-                ocr_pipeline=upload["ocr_pipeline"],
-                confidence=upload["confidence"],
-                extracted_summary=upload["extracted_summary"],
-            )
-    else:
-        upload["raw_extracted_text"] = raw_text[:12000]
-        upload["ocr_engine"] = upload.get("ocr_engine") or "manual-review"
-        upload["ocr_pipeline"] = upload.get("ocr_pipeline") or "Admin reviewed extraction"
-        upload["confidence"] = upload.get("confidence") or "review"
-        upload["extraction_template"] = _scorecard_template_from_review_payload(
-            store,
-            {},
-            upload.get("draft_scorecard") or default_scorecard("Reviewed archive"),
-            upload.get("suggested_performances") or [],
-            raw_text,
-            ocr_engine=upload["ocr_engine"],
-            ocr_pipeline=upload["ocr_pipeline"],
-            confidence=upload["confidence"],
-            extracted_summary=upload.get("extracted_summary") or "Reviewed archive scorecard.",
-        )
-
-    inferred_club = _resolve_archive_club(upload, store.get("clubs", []))
-    if inferred_club:
-        upload["club_id"] = inferred_club.get("id", upload.get("club_id", ""))
-        upload["club_name"] = inferred_club.get("name", upload.get("club_name", ""))
-
-    upload["status"] = "Pending review"
-    upload["reviewed_by"] = user_row["display_name"] or user_row["mobile"] or "admin"
-    upload["reviewed_at"] = now_iso()
+    _apply_archive_review_text(store, upload, request.text, user_row=user_row)
     save_store(store)
     refreshed = load_store()
     updated = get_archive_or_404(refreshed, upload_id)
@@ -4453,13 +4463,14 @@ def save_archive_review(upload_id: str, request: ArchiveReviewRequest, x_auth_to
 
 @app.post("/api/scorecards/upload")
 async def upload_scorecard(
+    request: Request,
     match_id: str | None = None,
     season: str | None = None,
     focus_club_id: str | None = None,
     x_auth_token: str | None = Header(default=None),
     file: UploadFile = File(...),
 ) -> dict[str, Any]:
-    _require_permission(x_auth_token, "manage_scorecards")
+    _require_permission(_auth_token_from_request(request, x_auth_token), "manage_scorecards")
     store = load_store()
     selected_club = _selected_club(store, focus_club_id)
     related_club_ids = _archive_match_club_ids(store, selected_club.get("id", ""), match_id or "")
@@ -4503,9 +4514,11 @@ async def upload_scorecard(
     record["original_file_name"] = file.filename or file_token
     record["status"] = "Pending review"
     store["archive_uploads"].append(record)
+    record = extract_archive_by_id(store, record["id"])
+    record["extraction_template"] = scorecard_template_from_archive(record)
     save_store(store)
     return {
-                "message": "Scorecard image uploaded for admin review.",
+                "message": f"Scorecard image '{record.get('original_file_name') or file.filename or file_token}' uploaded successfully and queued for admin review.",
                 "dashboard": current_dashboard(load_store(), selected_club.get("id", "")),
                 "upload": record,
             }
@@ -4620,7 +4633,11 @@ def admin_review_queue(x_auth_token: str | None = Header(default=None)) -> dict[
 
 
 @app.post("/api/admin/archive/{upload_id}/approve")
-def approve_archive(upload_id: str, x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
+def approve_archive(
+    upload_id: str,
+    request: ArchiveReviewRequest | None = None,
+    x_auth_token: str | None = Header(default=None),
+) -> dict[str, Any]:
     user_row, current_club_id = _require_permission(x_auth_token, "manage_scorecards")
     store = load_store()
     try:
@@ -4631,6 +4648,8 @@ def approve_archive(upload_id: str, x_auth_token: str | None = Header(default=No
     inferred_club = _resolve_archive_club(upload, store.get("clubs", [])) or club
     upload["club_id"] = upload.get("club_id") or inferred_club.get("id", "") or club.get("id", "")
     upload["club_name"] = upload.get("club_name") or inferred_club.get("name", "") or club.get("name", "")
+    if request and str(request.text or "").strip():
+        _apply_archive_review_text(store, upload, request.text, user_row=user_row)
     existing_club_ids, existing_club_names = archive_club_context(upload, store.get("clubs", []), store.get("members", []), store.get("fixtures", []))
     club_ids = [str(upload.get("club_id") or club.get("id") or "").strip()]
     upload["club_ids"] = list(dict.fromkeys([*(existing_club_ids or []), *(club_ids or [])]))

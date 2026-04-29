@@ -51,6 +51,22 @@ body {
   border: 1px solid var(--line);
   background: rgba(255, 255, 255, 0.9);
   box-shadow: var(--shadow);
+  scroll-margin-top: 100px;
+}
+
+.status-banner[role="alert"] {
+  animation: status-pop 180ms ease-out;
+}
+
+@keyframes status-pop {
+  from {
+    transform: translateY(-4px);
+    opacity: 0.7;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
 }
 
 .status-banner.success {

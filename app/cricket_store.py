@@ -23,12 +23,15 @@ DATA_FILE = Path(os.getenv("HEARTLAKE_SEED_FILE", str(BASE_DIR / "data" / "seed.
 DATABASE_FILE = Path(os.getenv("HEARTLAKE_DATABASE_FILE", str(DATA_ROOT / "heartlake.db")))
 CACHE_FILE = Path(os.getenv("HEARTLAKE_CACHE_FILE", str(DATA_ROOT / "store_cache.json")))
 DASHBOARD_CACHE_FILE = Path(os.getenv("HEARTLAKE_DASHBOARD_CACHE_FILE", str(DATA_ROOT / "dashboard_cache.json")))
-UPLOAD_DIR = Path(os.getenv("HEARTLAKE_UPLOAD_DIR", str(DATA_ROOT / "uploads")))
+UPLOAD_DIR = Path(os.getenv("HEARTLAKE_UPLOAD_DIR", str(BASE_DIR / "uploads")))
 DUPLICATE_DIR = Path(os.getenv("HEARTLAKE_DUPLICATE_DIR", str(DATA_ROOT / "duplicates")))
+LEGACY_UPLOAD_DIR = DATA_ROOT / "uploads"
 VISION_OCR_SCRIPT = REPO_DIR / "tools" / "vision_ocr.swift"
 DATA_ROOT.mkdir(parents=True, exist_ok=True)
 UPLOAD_DIR.mkdir(exist_ok=True)
 DUPLICATE_DIR.mkdir(exist_ok=True)
+if LEGACY_UPLOAD_DIR != UPLOAD_DIR:
+    LEGACY_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".heic", ".heif", ".webp"}
 CURRENT_ARCHIVE_YEAR = "2025"
 CURRENT_ARCHIVE_SEASON_LABEL = f"{CURRENT_ARCHIVE_YEAR} Season"
@@ -349,37 +352,24 @@ def refresh_archive_dates(item: dict[str, Any], scorecard_text: str = "") -> dic
     preferred_year = ""
     preferred_season = ""
 
-    if re.match(r"20\d{2}-\d{2}-\d{2}$", explicit_archive_date):
+    if re.match(r"20\d{2}-\d{2}-\d{2}$", scorecard_date):
+        preferred_date = scorecard_date
+        preferred_source = "scorecard"
+        preferred_year = scorecard_date[:4]
+        preferred_season = f"{preferred_year} Season"
+    elif not preferred_date and re.match(r"20\d{2}-\d{2}-\d{2}$", photo_taken_at[:10] if photo_taken_at else ""):
+        preferred_date = photo_taken_at[:10]
+        preferred_source = photo_date_source or "metadata"
+        preferred_year = photo_taken_at[:4]
+        preferred_season = f"{preferred_year} Season"
+    elif re.match(r"20\d{2}-\d{2}-\d{2}$", explicit_archive_date):
         preferred_date = explicit_archive_date
         preferred_year = explicit_archive_year or explicit_archive_date[:4]
         preferred_source = explicit_archive_source or "manual-season"
         preferred_season = explicit_season or f"{preferred_year} Season"
-
-    if not preferred_date and re.match(r"20\d{2}$", explicit_archive_year):
-        if re.match(r"20\d{2}-\d{2}-\d{2}$", scorecard_date) and scorecard_date.startswith(explicit_archive_year):
-            preferred_date = scorecard_date
-            preferred_source = explicit_archive_source or "scorecard"
-        elif re.match(r"20\d{2}-\d{2}-\d{2}$", photo_taken_at[:10] if photo_taken_at else "") and photo_taken_at.startswith(explicit_archive_year):
-            preferred_date = photo_taken_at[:10]
-            preferred_source = explicit_archive_source or photo_date_source or "metadata"
+    elif re.match(r"20\d{2}$", explicit_archive_year):
         preferred_year = explicit_archive_year
         preferred_season = explicit_season or f"{preferred_year} Season"
-
-    scorecard_date_2025 = force_archive_year(scorecard_date)
-    photo_date_2025 = force_archive_year(photo_taken_at[:10] if photo_taken_at else "")
-
-    if not preferred_date and scorecard_date_2025:
-        preferred_date = scorecard_date_2025
-        preferred_source = "scorecard"
-        preferred_year = CURRENT_ARCHIVE_YEAR
-        preferred_season = CURRENT_ARCHIVE_SEASON_LABEL
-    elif not preferred_date and photo_date_2025:
-        preferred_date = photo_date_2025
-        preferred_source = photo_date_source or "metadata"
-        if preferred_source.startswith("metadata"):
-            preferred_source += "-normalized-2025"
-        preferred_year = CURRENT_ARCHIVE_YEAR
-        preferred_season = CURRENT_ARCHIVE_SEASON_LABEL
     elif not preferred_source:
         preferred_source = "assumed-2025-season"
         preferred_year = CURRENT_ARCHIVE_YEAR
@@ -1570,15 +1560,17 @@ def resolve_existing_upload_path(path_string: str, file_name: str = "") -> Path 
         if not clean or clean.lower() in seen:
             continue
         seen.add(clean.lower())
-        exact = UPLOAD_DIR / clean
-        if exact.is_file():
-            return exact
+        for root in (UPLOAD_DIR, LEGACY_UPLOAD_DIR):
+            exact = root / clean
+            if exact.is_file():
+                return exact
         stem = Path(clean).stem.lower()
         if not stem:
             continue
-        for existing in UPLOAD_DIR.iterdir():
-            if existing.is_file() and existing.stem.lower() == stem:
-                return existing
+        for root in (UPLOAD_DIR, LEGACY_UPLOAD_DIR):
+            for existing in root.iterdir():
+                if existing.is_file() and existing.stem.lower() == stem:
+                    return existing
     return None
 
 
@@ -2138,14 +2130,64 @@ def draft_from_ocr_text(text: str, match_id: str = "") -> dict[str, str]:
 def extract_player_suggestions(text: str, members: list[dict[str, Any]]) -> list[dict[str, Any]]:
     suggestions: list[dict[str, Any]] = []
     seen_players: set[str] = set()
+
+    def add_suggestion(player_name: str, runs: int, balls: int, line: str, source: str) -> None:
+        canonical_name = str(player_name or "").strip()
+        if not canonical_name:
+            return
+        normalized_name = _normalized_phrase(canonical_name)
+        if not normalized_name or normalized_name in seen_players:
+            return
+        suggestions.append(
+            {
+                "player_name": canonical_name,
+                "runs": max(0, int(runs or 0)),
+                "balls": max(0, int(balls or 0)),
+                "wickets": 0,
+                "catches": 0,
+                "fours": 0,
+                "sixes": 0,
+                "notes": f"OCR suggested from archive line: {line[:120]}",
+                "source": source,
+                "confidence": "low" if source == "ocr-suggested" else "heuristic",
+            }
+        )
+        seen_players.add(normalized_name)
+
+    def fallback_row_from_line(line: str) -> tuple[str, int, int]:
+        lowered = line.lower()
+        if any(keyword in lowered for keyword in ("date", "venue", "toss", "umpire", "scorer", "overs", "innings", "result")):
+            return "", 0, 0
+        numbers = [int(value) for value in re.findall(r"(?<!\d)(\d{1,3})(?!\d)", line)]
+        numbers = [value for value in numbers if value <= 200]
+        if not numbers:
+            return "", 0, 0
+        tokens = re.split(r"\s+", line.strip())
+        name_tokens: list[str] = []
+        for token in tokens:
+            if re.search(r"\d", token):
+                break
+            clean = re.sub(r"[^A-Za-z'.-]", "", token).strip()
+            if not clean or clean.lower() in {"not", "out", "did", "bat", "didn't", "dnb"}:
+                continue
+            name_tokens.append(clean)
+        candidate_name = re.sub(r"\s+", " ", " ".join(name_tokens)).strip(" -.,")
+        if len(candidate_name) < 2:
+            return "", 0, 0
+        runs = numbers[0]
+        balls = numbers[1] if len(numbers) > 1 and numbers[1] <= 120 else 0
+        return candidate_name, runs, balls
+
     for line in clean_ocr_lines(text):
         normalized_line = _normalized_phrase(line)
         if not normalized_line:
             continue
         numbers = [int(value) for value in re.findall(r"(?<!\d)(\d{1,3})(?!\d)", line)]
         numbers = [value for value in numbers if value <= 200]
+        matched = False
         for member in members:
-            if member["name"] in seen_players:
+            member_key = normalize_name(member["name"])
+            if member_key in seen_players:
                 continue
             variants = {_normalized_phrase(value) for value in player_name_variants(member)}
             variants = {value for value in variants if value}
@@ -2153,24 +2195,16 @@ def extract_player_suggestions(text: str, members: list[dict[str, Any]]) -> list
                 continue
             if not numbers:
                 break
-            runs = numbers[-1]
-            balls = numbers[-2] if len(numbers) > 1 and numbers[-2] <= 120 else 0
-            suggestions.append(
-                {
-                    "player_name": member["name"],
-                    "runs": runs,
-                    "balls": balls,
-                    "wickets": 0,
-                    "catches": 0,
-                    "fours": 0,
-                    "sixes": 0,
-                    "notes": f"OCR suggested from archive line: {line[:120]}",
-                    "source": "ocr-suggested",
-                    "confidence": "low",
-                }
-            )
-            seen_players.add(member["name"])
+            runs = numbers[0]
+            balls = numbers[1] if len(numbers) > 1 and numbers[1] <= 120 else 0
+            add_suggestion(member["name"], runs, balls, line, "ocr-suggested")
+            matched = True
             break
+        if matched:
+            continue
+        fallback_name, fallback_runs, fallback_balls = fallback_row_from_line(line)
+        if fallback_name and fallback_runs:
+            add_suggestion(fallback_name, fallback_runs, fallback_balls, line, "ocr-fallback")
     return suggestions
 
 
@@ -2260,6 +2294,7 @@ def extract_archive_by_id(store: dict[str, Any], upload_id: str) -> dict[str, An
         if item.get("id") != upload_id:
             continue
         extracted = enrich_archive_record(reset_archive_extraction(item), members)
+        extracted["extraction_template"] = scorecard_template_from_archive(extracted)
         store["archive_uploads"][index] = extracted
         return extracted
     raise ValueError("Archive upload not found.")

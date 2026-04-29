@@ -336,12 +336,17 @@ function setStatus(message, tone = "info") {
     return;
   }
   elements.statusBanner.hidden = false;
+  elements.statusBanner.setAttribute("role", "alert");
+  elements.statusBanner.setAttribute("aria-live", "polite");
   elements.statusBanner.textContent = message;
   elements.statusBanner.className = `status-banner ${tone}`;
   window.clearTimeout(statusTimer);
   statusTimer = window.setTimeout(() => {
     elements.statusBanner.hidden = true;
   }, 5000);
+  if (tone === "success" || tone === "error") {
+    elements.statusBanner.scrollIntoView({ behavior: "smooth", block: "center" });
+  }
 }
 
 function saveExpandedLists() {
