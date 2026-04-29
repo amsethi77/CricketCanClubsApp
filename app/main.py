@@ -11,12 +11,14 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+
 from fastapi import FastAPI, File, Form, Header, HTTPException, Request, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+import sqlite3
 import logging
 
 logger = logging.getLogger("CricketClubApp")
@@ -128,6 +130,8 @@ def _page_response(filename: str) -> FileResponse:
         },
     )
 
+def normalize_name(name: str) -> str:
+    return (name or "").strip().lower()
 
 def _set_auth_cookies(response: Response, token: str, club_id: str = "") -> None:
     response.set_cookie("heartlakeAuthToken", token, httponly=False, samesite="lax", path="/")
@@ -1166,6 +1170,8 @@ def file_sha256_from_bytes(content: bytes) -> str:
 def _string_value(value: Any) -> str:
     return str(value or "").strip()
 
+def normalize_name(name: str) -> str:
+    return (name or "").strip().lower()
 
 def _extract_field(payload: dict[str, Any], *keys: str) -> str:
     containers = [payload]
@@ -1818,116 +1824,113 @@ def register(request: RegisterRequest, response: Response) -> dict[str, Any]:
     logger.debug("🔵 [START] Register API called")
 
     try:
-        safe_payload = request.dict()
-        safe_payload["password"] = "***"
-        logger.debug("📥 Payload: %s", safe_payload)
-
+        # -----------------------------
+        # ✅ VALIDATION
+        # -----------------------------
         if not request.mobile.strip() and not request.email.strip():
-            logger.warning("❌ Missing mobile/email")
-            raise HTTPException(status_code=400, detail="Register with mobile number or email.")
+            raise HTTPException(status_code=400, detail="Register with mobile or email.")
 
         if len(request.password.strip()) < 4:
-            logger.warning("❌ Weak password")
-            raise HTTPException(status_code=400, detail="Use a password with at least 4 characters.")
+            raise HTTPException(status_code=400, detail="Password must be at least 4 characters.")
 
+        # -----------------------------
+        # ✅ LOAD STORE
+        # -----------------------------
         store = load_store()
-        logger.debug("📦 Store loaded: members=%d", len(store.get("members", [])))
 
-        primary_club = _selected_club(store, request.primary_club_id)
+        # -----------------------------
+        # ✅ ROLE
+        # -----------------------------
+        role = (request.role or "player").strip().lower()
+        member_roles = {"player", "captain", "club_admin", "admin"}
 
-        club_id = primary_club.get("id", "") if primary_club else ""
-        club_name = (
-            primary_club.get("name")
-            or primary_club.get("short_name")
-            or "Unknown Club"
-        ) if primary_club else "Unknown Club"
+        # -----------------------------
+        # ✅ NAME NORMALIZATION
+        # -----------------------------
+        raw_name = request.member_name or request.display_name or ""
+        input_name = raw_name.strip()
+        normalized_input = normalize_name(input_name)
 
-        logger.debug("🏏 Club resolved → id=%s name=%s", club_id, club_name)
+        logger.debug("👤 Input → %s | normalized → %s", input_name, normalized_input)
 
-        if not club_id:
-            logger.error("❌ Invalid club selection")
-            raise HTTPException(status_code=400, detail="Invalid club selection")
-
-        member_id = ""
         member = None
+        member_id = None
+        member_to_create = None  # 🔥 IMPORTANT
 
-        input_name = (request.member_name or request.display_name or "").strip()
-        logger.debug("👤 Input name: %s", input_name)
-
+        # -----------------------------
+        # ✅ MEMBER LOOKUP ONLY (NO CREATE)
+        # -----------------------------
         if input_name:
-            resolved_member_name = resolve_member_name(store, input_name)
-            logger.debug("🧠 resolve_member_name(%s) → %s", input_name, resolved_member_name)
+            resolved_name = resolve_member_name(store, input_name)
+            normalized_resolved = normalize_name(resolved_name)
 
             member = next(
                 (
-                    item for item in store.get("members", [])
-                    if item.get("name", "").lower() == resolved_member_name.lower()
-                    and str(item.get("club_id", "")) == str(club_id)
-                ),
-                None,
-            )
-
-        # 🟢 Auto-create member
-        if (request.role.strip() or "player") == "player" and not member:
-            display_name = request.display_name.strip() or input_name or "Player"
-
-            logger.debug("🆕 Creating member: %s", display_name)
-
-            existing_member = next(
-                (
                     m for m in store.get("members", [])
-                    if m.get("name", "").lower() == display_name.lower()
-                    and str(m.get("club_id", "")) == str(club_id)
+                    if m.get("normalized_name") == normalized_resolved
                 ),
                 None,
             )
 
-            if existing_member:
-                logger.debug("♻️ Reusing existing member")
-                member = existing_member
-            else:
-                member = {
-                    "id": str(uuid.uuid4()),
-                    "name": display_name,
-                    "full_name": display_name,
-                    "club_id": club_id,
-                    "team_name": club_name,
-                    "aliases": [],
-                    "created_at": now_iso(),
-                }
+        # -----------------------------
+        # ✅ PREPARE MEMBER (DO NOT SAVE YET)
+        # -----------------------------
+        if role in member_roles and not member:
+            display_name = request.display_name.strip() or input_name or "Player"
+            normalized_display = normalize_name(display_name)
 
-                store.setdefault("members", []).append(member)
-                save_store(store)
+            member_to_create = {
+                "id": str(uuid.uuid4()),
+                "name": display_name,
+                "normalized_name": normalized_display,
+                "full_name": display_name,
+                "aliases": [],
+                "created_at": now_iso(),
+            }
 
-                logger.info("✅ Member created: %s", display_name)
+            logger.debug("🆕 Prepared member (not saved yet) → %s", display_name)
 
-        if member:
-            member_id = member.get("id", "")
-            logger.debug("🔗 Member linked: %s", member_id)
-
-        
-        mobile = request.mobile.strip() if request.mobile else ""
-        mobile = "".join(filter(str.isdigit, mobile))
-
+        # -----------------------------
+        # ✅ MOBILE / EMAIL
+        # -----------------------------
+        mobile = "".join(filter(str.isdigit, request.mobile.strip() if request.mobile else ""))
         email = request.email.strip().lower()
+
+        if mobile and len(mobile) < 10:
+            raise HTTPException(status_code=400, detail="Invalid mobile number")
 
         token = secrets.token_urlsafe(24)
 
+        # -----------------------------
+        # ✅ DB TRANSACTION
+        # -----------------------------
         with _auth_connection() as connection:
-            logger.debug("🔍 Checking existing user")
 
+            # check existing user
             existing = connection.execute(
                 "SELECT id FROM app_users WHERE mobile = ? OR email = ?",
                 (mobile or None, email or None),
             ).fetchone()
 
             if existing:
-                logger.warning("❌ Duplicate user")
-                raise HTTPException(
-                    status_code=409,
-                    detail="An account already exists for this mobile number or email.",
-                )
+                raise HTTPException(status_code=409, detail="User already exists.")
 
+            # -----------------------------
+            # ✅ CREATE MEMBER NOW (SAFE POINT)
+            # -----------------------------
+            if member_to_create:
+                store.setdefault("members", []).append(member_to_create)
+                save_store(store)
+
+                member = member_to_create
+                logger.info("✅ Member created → %s", member["name"])
+
+            if member:
+                member_id = member.get("id")
+
+            # -----------------------------
+            # ✅ CREATE USER
+            # -----------------------------
             cursor = connection.execute(
                 """
                 INSERT INTO app_users (
@@ -1935,69 +1938,84 @@ def register(request: RegisterRequest, response: Response) -> dict[str, Any]:
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
-                    request.display_name.strip() or input_name or "Club User",
+                    request.display_name.strip() or input_name or "User",
                     mobile or None,
                     email or None,
                     _password_hash(request.password.strip()),
-                    request.role.strip() or "player",
-                    member_id or None,
-                    club_id or None,
+                    role,
+                    member_id,
+                    None,
                     now_iso(),
                 ),
             )
 
             user_id = int(cursor.lastrowid)
 
-            logger.info("👤 User created → id=%s", user_id)
-
             connection.execute(
                 """
                 INSERT INTO app_auth_sessions (token, user_id, current_club_id, created_at)
                 VALUES (?, ?, ?, ?)
                 """,
-                (token, user_id, club_id or None, now_iso()),
+                (token, user_id, None, now_iso()),
             )
 
             user_row = connection.execute(
                 "SELECT * FROM app_users WHERE id = ?", (user_id,)
             ).fetchone()
 
-        _set_auth_cookies(response, token, club_id)
+        # -----------------------------
+        # ✅ RESPONSE
+        # -----------------------------
+        _set_auth_cookies(response, token, "")
 
         logger.info("🎉 SUCCESS → user_id=%s", user_id)
-        logger.debug("📤 Returning response")
 
         return {
             "token": token,
-            "user": _auth_user_payload(user_row, club_id),
+            "user": _auth_user_payload(user_row, ""),
             "member": member,
-            "clubs": _sorted_club_choices(store, club_id),
+            "clubs": _sorted_club_choices(store, ""),
         }
+
+    # -----------------------------
+    # ❌ ERROR HANDLING (FIXED)
+    # -----------------------------
+    except sqlite3.IntegrityError as e:
+        logger.warning("⚠️ Integrity error: %s", str(e))
+
+        raise HTTPException(
+            status_code=409,
+            detail="Duplicate member or user."
+        )
 
     except Exception:
         logger.exception("🔥 Register API FAILED")
-        raise
+
+        raise HTTPException(
+            status_code=500,
+            detail="Registration failed due to server error."
+        )
 
 @app.post("/api/auth/signin")
 def signin(request: SignInRequest, response: Response) -> dict[str, Any]:
     ensure_auth_schema()
 
-    identifier = request.identifier.strip()
-    password = request.password.strip()
+    identifier = (request.identifier or "").strip()
+    password = (request.password or "").strip()
+    player_name = (request.player_name or "").strip()
 
-    logger.debug("🔐 Signin attempt → identifier=%s player=%s", identifier, request.player_name)
+    logger.debug("🔐 Signin attempt → identifier=%s player=%s", identifier, player_name)
 
     store = load_store()
 
-    identifier_phone = canonical_phone(identifier)
-    identifier_email = identifier.strip().lower() if "@" in identifier else ""
+    identifier_phone = "".join(filter(str.isdigit, identifier)) if identifier else ""
+    identifier_email = identifier.lower() if "@" in identifier else ""
 
     with _auth_connection() as connection:
         user_row = None
 
-        # ✅ STEP 1 — PASSWORD LOGIN (if provided)
+        # ✅ STEP 1 — PASSWORD LOGIN
         if password:
-            hashed = _password_hash(password)
             logger.debug("🔑 Trying password login")
 
             user_row = connection.execute(
@@ -2006,7 +2024,7 @@ def signin(request: SignInRequest, response: Response) -> dict[str, Any]:
                 WHERE (mobile = ? OR lower(email) = lower(?))
                   AND password_hash = ?
                 """,
-                (identifier_phone, identifier_email, hashed),
+                (identifier_phone or None, identifier_email or None, _password_hash(password)),
             ).fetchone()
 
             if user_row:
@@ -2014,7 +2032,7 @@ def signin(request: SignInRequest, response: Response) -> dict[str, Any]:
 
         # ✅ STEP 2 — DIRECT USER LOGIN (NO PASSWORD)
         if not user_row:
-            logger.debug("📱 Trying direct user lookup (no password)")
+            logger.debug("📱 Trying direct user lookup")
 
             user_row = connection.execute(
                 """
@@ -2029,39 +2047,22 @@ def signin(request: SignInRequest, response: Response) -> dict[str, Any]:
             if user_row:
                 logger.debug("✅ Direct user match → user_id=%s", user_row["id"])
 
-        # ✅ STEP 3 — MEMBER RESOLUTION (fallback)
-        if not user_row:
-            logger.debug("🔍 Falling back to member resolution")
+        # ✅ STEP 3 — MEMBER NAME LOGIN
+        if not user_row and player_name:
+            logger.debug("🔍 Falling back to player name lookup")
 
-            candidate_members: list[dict[str, Any]] = []
+            resolved_name = resolve_member_name(store, player_name)
+            normalized_input = normalize_name(resolved_name)
 
-            if request.player_name.strip():
-                resolved_member_name = resolve_member_name(store, request.player_name.strip())
-                logger.debug("🧠 Resolved member name → %s", resolved_member_name)
+            member = next(
+                (
+                    m for m in store.get("members", [])
+                    if normalize_name(m.get("name")) == normalized_input
+                ),
+                None,
+            )
 
-                member = next(
-                    (item for item in store.get("members", [])
-                     if item.get("name", "").lower() == resolved_member_name.lower()),
-                    None,
-                )
-
-                if member:
-                    candidate_members = [member]
-            else:
-                for member in store.get("members", []):
-                    member_phone = canonical_phone(member.get("phone", ""))
-                    member_email = str(member.get("email", "") or "").strip().lower()
-
-                    phone_matches = identifier_phone and member_phone and identifier_phone == member_phone
-                    email_matches = identifier_email and member_email and identifier_email == member_email
-
-                    if phone_matches or email_matches:
-                        candidate_members.append(member)
-
-            logger.debug("👥 Candidate members found: %d", len(candidate_members))
-
-            if len(candidate_members) == 1:
-                member = candidate_members[0]
+            if member:
                 logger.debug("👤 Member matched → %s", member.get("name"))
 
                 primary_club = _primary_club_for_member(store, member)
@@ -2069,43 +2070,19 @@ def signin(request: SignInRequest, response: Response) -> dict[str, Any]:
                 existing_user = connection.execute(
                     """
                     SELECT * FROM app_users
-                    WHERE member_id = ? OR mobile = ? OR lower(email) = lower(?)
+                    WHERE member_id = ?
                     ORDER BY id
                     LIMIT 1
                     """,
-                    (
-                        member.get("id", ""),
-                        identifier_phone or None,
-                        identifier_email or None,
-                    ),
+                    (member.get("id", ""),),
                 ).fetchone()
 
                 if existing_user:
-                    logger.debug("♻️ Updating existing user → id=%s", existing_user["id"])
-
-                    connection.execute(
-                        """
-                        UPDATE app_users
-                        SET display_name = ?, mobile = ?, email = ?, member_id = ?, primary_club_id = ?
-                        WHERE id = ?
-                        """,
-                        (
-                            member.get("full_name") or member.get("name") or existing_user["display_name"],
-                            identifier_phone or existing_user["mobile"],
-                            identifier_email or existing_user["email"],
-                            member.get("id", "") or None,
-                            primary_club.get("id", "") or existing_user["primary_club_id"],
-                            int(existing_user["id"]),
-                        ),
-                    )
-
-                    user_row = connection.execute(
-                        "SELECT * FROM app_users WHERE id = ?",
-                        (int(existing_user["id"]),)
-                    ).fetchone()
+                    logger.debug("♻️ Reusing existing user → id=%s", existing_user["id"])
+                    user_row = existing_user
 
                 else:
-                    logger.debug("🆕 Creating new user from member")
+                    logger.debug("🆕 Creating user from member")
 
                     cursor = connection.execute(
                         """
@@ -2114,25 +2091,25 @@ def signin(request: SignInRequest, response: Response) -> dict[str, Any]:
                         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                         """,
                         (
-                            member.get("full_name") or member.get("name") or request.player_name.strip() or identifier,
+                            member.get("full_name") or member.get("name"),
                             identifier_phone or None,
                             identifier_email or None,
                             _password_hash(secrets.token_urlsafe(24)),
                             "player",
-                            member.get("id", "") or None,
-                            primary_club.get("id", "") or None,
+                            member.get("id"),
+                            primary_club.get("id") if primary_club else None,
                             now_iso(),
                         ),
                     )
 
                     user_row = connection.execute(
                         "SELECT * FROM app_users WHERE id = ?",
-                        (int(cursor.lastrowid),)
+                        (int(cursor.lastrowid),),
                     ).fetchone()
 
         # ❌ FINAL FAILURE
         if not user_row:
-            logger.warning("❌ Login failed → no matching user/member")
+            logger.warning("❌ Login failed")
             raise HTTPException(
                 status_code=401,
                 detail="Invalid sign-in. Use mobile/email or player name."
@@ -2152,7 +2129,7 @@ def signin(request: SignInRequest, response: Response) -> dict[str, Any]:
 
     logger.info("🎉 Login successful → user_id=%s", user_row["id"])
 
-    _set_auth_cookies(response, token, current_club_id or "")
+    _set_auth_cookies(response, token, current_club_id)
 
     return {
         "token": token,
