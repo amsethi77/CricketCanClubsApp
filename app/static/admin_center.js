@@ -22,6 +22,7 @@ const archiveQueue = document.getElementById("adminReviewQueue");
 
 let payload = null;
 let auth = null;
+let reviewQueue = [];
 
 function setStatus(message, tone = "info") {
   if (!statusBanner) return;
@@ -41,12 +42,21 @@ function clubId() {
   return clubSelect?.value || auth?.user?.current_club_id || auth?.user?.primary_club_id || "";
 }
 
-function selectedClub() {
-  return (auth?.clubs || []).find((club) => club.id === clubId()) || auth?.clubs?.[0] || null;
+function availableClubs(dashboard = payload) {
+  const authClubs = Array.isArray(auth?.clubs) ? auth.clubs : [];
+  if (authClubs.length) {
+    return authClubs;
+  }
+  return Array.isArray(dashboard?.clubs) ? dashboard.clubs : [];
 }
 
-function renderClubSelect() {
-  const clubs = auth?.clubs || [];
+function selectedClub() {
+  const clubs = availableClubs();
+  return clubs.find((club) => club.id === clubId()) || clubs[0] || null;
+}
+
+function renderClubSelect(dashboard = payload) {
+  const clubs = availableClubs(dashboard);
   const current = clubId() || clubs[0]?.id || "";
   clubSelect.innerHTML = optionMarkup(clubs, "id", (club) => `${club.name} · ${club.season || "Season TBD"}`);
   clubSelect.value = current;
@@ -112,9 +122,10 @@ function renderFixtures(dashboard) {
     : `<p class="empty-state">No fixtures created for this club yet.</p>`;
 }
 
-function renderArchives(dashboard) {
+function renderArchives(dashboard, uploadsOverride = null) {
   const query = String(archiveSearchInput?.value || "").trim().toLowerCase();
-  const uploads = (dashboard?.archive_uploads || []).filter((upload) => {
+  const sourceUploads = Array.isArray(uploadsOverride) ? uploadsOverride : (dashboard?.archive_uploads || []);
+  const uploads = sourceUploads.filter((upload) => {
     if (!query) return true;
     return [
       upload.file_name,
@@ -127,75 +138,130 @@ function renderArchives(dashboard) {
     ].some((value) => String(value || "").toLowerCase().includes(query));
   });
 
-  archiveQueue.innerHTML = uploads.length
-    ? uploads
-        .map((upload) => {
-          const reviewText = JSON.stringify(
-            {
-              meta: {
-                source: upload.ocr_engine || "manual-review",
-                confidence: upload.confidence || "review",
-                status: upload.status || "Pending review",
-              },
-              archive: {
-                id: upload.id,
-                file_name: upload.file_name,
-                season: upload.season,
-                club_name: upload.club_name,
-                archive_date: upload.archive_date,
-                archive_year: upload.archive_year,
-              },
-              draft_scorecard: upload.draft_scorecard || {},
-              suggested_performances: upload.suggested_performances || [],
-              raw_extracted_text: upload.raw_extracted_text || "",
-            },
-            null,
-            2
-          );
-          return `
-            <article class="detail-card" data-admin-upload="${upload.id}">
-              <strong>${escapeHtml(upload.file_name)}</strong>
-              <p>${escapeHtml(upload.club_name || "Club TBD")} · ${escapeHtml(upload.season || "Season TBD")}</p>
-              <small>${escapeHtml(upload.archive_date || "Date TBD")} · ${escapeHtml(upload.status || "Pending review")}</small>
-              <p>${escapeHtml(upload.extracted_summary || "Review the extracted draft before approving.")}</p>
-              <label class="stack-label">
-                Reviewed extraction JSON
-                <textarea class="admin-review-text" rows="10" spellcheck="false">${escapeHtml(reviewText)}</textarea>
-              </label>
-              <div class="inline-actions">
-                <button class="secondary-button" type="button" data-action="extract">Re-extract</button>
-                <button class="secondary-button" type="button" data-action="save">Save review</button>
-                <button class="primary-button" type="button" data-action="approve">Approve</button>
-                <button class="secondary-button" type="button" data-action="delete">Delete</button>
-              </div>
-            </article>
-          `;
-        })
-        .join("")
-    : `<p class="empty-state">No archives match this club or search.</p>`;
+  if (!uploads.length) {
+    archiveQueue.innerHTML = `<p class="empty-state">No archives match this club or search.</p>`;
+    return;
+  }
+
+  const groups = uploads.reduce((acc, upload) => {
+    const clubKey = upload.resolved_club_id || upload.club_id || "";
+    const clubName = upload.resolved_club_name || upload.club_name || "Unassigned";
+    const key = `${clubKey}::${clubName}`;
+    if (!acc[key]) {
+      acc[key] = { clubKey, clubName, uploads: [] };
+    }
+    acc[key].uploads.push(upload);
+    return acc;
+  }, {});
+
+  const orderedGroups = Object.values(groups).sort((a, b) => {
+    const left = String(a.clubName || "").toLowerCase();
+    const right = String(b.clubName || "").toLowerCase();
+    return left.localeCompare(right);
+  });
+
+  archiveQueue.innerHTML = orderedGroups
+    .map(
+      (group) => `
+        <section class="admin-review-group">
+          <div class="panel-head compact-head">
+            <div>
+              <p class="section-kicker">Club review queue</p>
+              <h3>${escapeHtml(group.clubName || "Unassigned")} · ${group.uploads.length}</h3>
+            </div>
+          </div>
+          <div class="archive-list">
+            ${group.uploads
+              .map((upload) => {
+                const reviewText = JSON.stringify(
+                  {
+                    meta: {
+                      source: upload.ocr_engine || "manual-review",
+                      confidence: upload.confidence || "review",
+                      status: upload.status || "Pending review",
+                    },
+                    archive: {
+                      id: upload.id,
+                      file_name: upload.file_name,
+                      season: upload.season,
+                      club_name: upload.club_name || upload.resolved_club_name || "Unassigned",
+                      archive_date: upload.archive_date,
+                      archive_year: upload.archive_year,
+                    },
+                    draft_scorecard: upload.draft_scorecard || {},
+                    suggested_performances: upload.suggested_performances || [],
+                    raw_extracted_text: upload.raw_extracted_text || "",
+                  },
+                  null,
+                  2
+                );
+                return `
+                  <article class="detail-card" data-admin-upload="${upload.id}">
+                    <strong>${escapeHtml(upload.file_name)}</strong>
+                    <p>${escapeHtml(upload.club_name || upload.resolved_club_name || "Club TBD")} · ${escapeHtml(upload.season || "Season TBD")}</p>
+                    <small>${escapeHtml(upload.archive_date || "Date TBD")} · ${escapeHtml(upload.status || "Pending review")}</small>
+                    <p>${escapeHtml(upload.extracted_summary || "Review the extracted draft before approving.")}</p>
+                    <label class="stack-label">
+                      Reviewed extraction JSON
+                      <textarea class="admin-review-text" rows="10" spellcheck="false">${escapeHtml(reviewText)}</textarea>
+                    </label>
+                    <div class="inline-actions">
+                      <button class="secondary-button" type="button" data-action="extract">Re-extract</button>
+                      <button class="secondary-button" type="button" data-action="save">Save review</button>
+                      <button class="primary-button" type="button" data-action="approve">Approve</button>
+                      <button class="secondary-button" type="button" data-action="delete">Delete</button>
+                    </div>
+                  </article>
+                `;
+              })
+              .join("")}
+          </div>
+        </section>
+      `
+    )
+    .join("");
 }
 
-async function loadClubView(targetClubId = "") {
-  const club = (auth?.clubs || []).find((item) => item.id === targetClubId) || selectedClub();
-  if (!club) {
+async function loadClubView(targetClubId = "", uploadsOverride = null) {
+  const requestedClubId = targetClubId || clubId() || auth?.user?.current_club_id || auth?.user?.primary_club_id || "";
+  payload = requestedClubId
+    ? await getJson(`/api/dashboard?focus_club_id=${encodeURIComponent(requestedClubId)}`, true)
+    : await getJson("/api/dashboard", true);
+  const clubs = availableClubs(payload);
+  const resolvedClubId = requestedClubId || payload?.focus_club?.id || payload?.club?.id || clubs[0]?.id || "";
+  const club = clubs.find((item) => item.id === resolvedClubId) || payload?.focus_club || payload?.club || { id: resolvedClubId, name: "Selected club" };
+  if (!club?.id) {
     setStatus("No club selected.", "error");
     return;
   }
   setPrimaryClubId(club.id);
   clubSelect.value = club.id;
-  payload = await getJson(`/api/dashboard?focus_club_id=${encodeURIComponent(club.id)}`, true);
+  if (!Array.isArray(auth?.clubs) || !auth.clubs.length) {
+    auth = {
+      ...auth,
+      clubs: clubs,
+    };
+  }
   renderClubStats(payload);
   renderClubDetail(payload);
   renderFixtures(payload);
-  renderArchives(payload);
+  renderArchives(payload, uploadsOverride);
+  renderClubSelect(payload);
   populateFixtureForm();
   setStatus(`Loaded ${payload.club?.name || club.name}.`, "success");
 }
 
+async function loadReviewQueue() {
+  const data = await getJson("/api/admin/review-queue", true);
+  reviewQueue = data?.queue || [];
+  return reviewQueue;
+}
+
 async function refreshAll() {
   auth = await getJson("/api/auth/me", true);
-  renderClubSelect();
-  await loadClubView(clubId() || auth.user.current_club_id || auth.user.primary_club_id || auth.clubs?.[0]?.id || "");
+  const targetClubId = clubId() || auth.user.current_club_id || auth.user.primary_club_id || "";
+  const queue = await loadReviewQueue();
+  await loadClubView(targetClubId, queue);
 }
 
 fixtureForm?.addEventListener("submit", async (event) => {
@@ -284,7 +350,8 @@ archiveQueue?.addEventListener("click", async (event) => {
 
 clubSelect?.addEventListener("change", async () => {
   try {
-    await loadClubView(clubSelect.value);
+    const queue = await loadReviewQueue();
+    await loadClubView(clubSelect.value, queue);
   } catch (error) {
     setStatus(error.message, "error");
   }
@@ -292,16 +359,18 @@ clubSelect?.addEventListener("change", async () => {
 
 loadClubButton?.addEventListener("click", async () => {
   try {
-    await loadClubView(clubSelect.value);
+    const queue = await loadReviewQueue();
+    await loadClubView(clubSelect.value, queue);
   } catch (error) {
     setStatus(error.message, "error");
   }
 });
 
-archiveSearchInput?.addEventListener("input", () => renderArchives(payload));
+archiveSearchInput?.addEventListener("input", () => renderArchives(payload, reviewQueue));
 refreshButton?.addEventListener("click", async () => {
   try {
-    await loadClubView(clubSelect.value);
+    const queue = await loadReviewQueue();
+    await loadClubView(clubSelect.value, queue);
   } catch (error) {
     setStatus(error.message, "error");
   }

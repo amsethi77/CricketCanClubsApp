@@ -1047,6 +1047,65 @@ def _auth_user_payload(user_row: sqlite3.Row, current_club_id: str = "") -> dict
         "current_club_id": current_club_id or user_row["primary_club_id"] or "",
     }
 
+def _member_for_user(store: dict[str, Any], user_row: sqlite3.Row) -> dict[str, Any] | None:
+    member_id = str(user_row["member_id"] or "").strip()
+    members = store.get("members", [])
+    if member_id:
+        by_id = next((item for item in members if str(item.get("id") or "").strip() == member_id), None)
+        if by_id:
+            return by_id
+    hint = str(user_row["display_name"] or "").strip()
+    if not hint:
+        return None
+    resolved_name = resolve_member_name(store, hint)
+    normalized = normalize_name(resolved_name)
+    return next(
+        (
+            item for item in members
+            if normalize_name(str(item.get("name") or "")) == normalized
+            or normalize_name(str(item.get("full_name") or "")) == normalized
+            or any(normalize_name(str(alias or "")) == normalized for alias in (item.get("aliases", []) or []))
+        ),
+        None,
+    )
+
+
+def _member_identity_keys(member: dict[str, Any]) -> set[str]:
+    keys: set[str] = set()
+    for value in [
+        member.get("normalized_name"),
+        member.get("name"),
+        member.get("full_name"),
+        *(member.get("aliases", []) or []),
+    ]:
+        normalized = normalize_name(str(value or ""))
+        if normalized:
+            keys.add(normalized)
+    return keys
+
+
+def _member_matches_name(member: dict[str, Any], candidate: str) -> bool:
+    normalized_candidate = normalize_name(candidate)
+    if not normalized_candidate:
+        return False
+    return normalized_candidate in _member_identity_keys(member)
+
+
+def _existing_user_for_member(connection: sqlite3.Connection, member_id: str) -> sqlite3.Row | None:
+    clean_member_id = str(member_id or "").strip()
+    if not clean_member_id:
+        return None
+    return connection.execute(
+        """
+        SELECT *
+        FROM app_users
+        WHERE member_id = ?
+        ORDER BY id
+        LIMIT 1
+        """,
+        (clean_member_id,),
+    ).fetchone()
+
 
 def _require_permission(token: str | None, permission: str) -> tuple[sqlite3.Row, str]:
     user_row, current_club_id = _auth_user_from_token(token)
@@ -1486,6 +1545,10 @@ def _admin_center_html(request: Request) -> HTMLResponse:
         raise HTTPException(status_code=403, detail="Only club administrators can open the admin center.")
     store = load_store()
     club = _selected_club(store, current_club_id)
+    club_options = "\n".join(
+        f'<option value="{html.escape(item["id"])}">{html.escape(item["name"])} · {html.escape(item["season"] or "Season TBD")}</option>'
+        for item in _sorted_club_choices(store, current_club_id)
+    )
     body = f"""
     <!DOCTYPE html>
     <html lang="en">
@@ -1519,7 +1582,7 @@ def _admin_center_html(request: Request) -> HTMLResponse:
               <div id="adminCenterStatus" class="status-banner" hidden></div>
               <div class="summary-grid compact-summary-grid" id="adminClubStats"></div>
               <div class="toolbar-actions">
-                <select id="adminClubSelect"></select>
+                <select id="adminClubSelect">{club_options}</select>
                 <button id="adminLoadClubButton" class="secondary-button" type="button">Load club</button>
               </div>
               <div id="adminClubDetail" class="detail-stack"></div>
@@ -1563,8 +1626,8 @@ def _admin_center_html(request: Request) -> HTMLResponse:
             </div>
           </section>
         </div>
-        <script src="/assets/multipage.js?v=20260423d"></script>
-        <script src="/assets/admin_center.js?v=20260423e"></script>
+        <script src="/assets/multipage.js?v=20260429a"></script>
+        <script src="/assets/admin_center.js?v=20260429a"></script>
       </body>
     </html>
     """
@@ -1792,10 +1855,26 @@ def dashboard(request: Request, focus_club_id: str | None = None) -> dict[str, A
 @app.get("/api/auth/options")
 def auth_options() -> dict[str, Any]:
     store = load_store()
+    linked_member_ids: set[str] = set()
+    linked_member_name_keys: set[str] = set()
     with _auth_connection() as connection:
         roles = _role_catalog(connection)
         # Do not expose internal/sensitive roles in the public options
         roles = [r for r in roles if str(r.get("role_name") or "") != "superadmin"]
+        linked_member_ids = {
+            str(row["member_id"]).strip()
+            for row in connection.execute(
+                "SELECT member_id FROM app_users WHERE member_id IS NOT NULL AND TRIM(member_id) != ''"
+            ).fetchall()
+            if str(row["member_id"] or "").strip()
+        }
+    for member in store.get("members", []):
+        if str(member.get("id") or "").strip() not in linked_member_ids:
+            continue
+        for value in [member.get("name"), member.get("full_name"), *(member.get("aliases", []) or [])]:
+            normalized = normalize_name(str(value or ""))
+            if normalized:
+                linked_member_name_keys.add(normalized)
     return {
         "clubs": _sorted_club_choices(store, str(store.get("viewer_profile", {}).get("primary_club_id") or "")),
         "members": [
@@ -1806,6 +1885,9 @@ def auth_options() -> dict[str, Any]:
                 "team_name": member.get("team_name", ""),
             }
             for member in store.get("members", [])
+            if str(member.get("id") or "").strip() not in linked_member_ids
+            and normalize_name(str(member.get("name") or "")) not in linked_member_name_keys
+            and normalize_name(str(member.get("full_name") or "")) not in linked_member_name_keys
         ],
         "roles": roles,
     }
@@ -1862,15 +1944,22 @@ def register(request: RegisterRequest, response: Response) -> dict[str, Any]:
         # -----------------------------
         if input_name:
             resolved_name = resolve_member_name(store, input_name)
-            normalized_resolved = normalize_name(resolved_name)
-
             member = next(
                 (
-                    m for m in store.get("members", [])
-                    if m.get("normalized_name") == normalized_resolved
+                    m
+                    for m in store.get("members", [])
+                    if _member_matches_name(m, resolved_name)
+                    or _member_matches_name(m, input_name)
                 ),
                 None,
             )
+
+            if member and normalize_name(input_name) != normalize_name(str(member.get("name") or "")):
+                aliases = [str(alias or "").strip() for alias in (member.get("aliases") or []) if str(alias or "").strip()]
+                if input_name not in aliases:
+                    aliases.append(input_name)
+                    member["aliases"] = aliases
+                    save_store(store)
 
         # -----------------------------
         # ✅ PREPARE MEMBER (DO NOT SAVE YET)
@@ -1915,6 +2004,8 @@ def register(request: RegisterRequest, response: Response) -> dict[str, Any]:
             if existing:
                 raise HTTPException(status_code=409, detail="User already exists.")
 
+            existing_user_for_member = None
+
             # -----------------------------
             # ✅ CREATE MEMBER NOW (SAFE POINT)
             # -----------------------------
@@ -1928,28 +2019,48 @@ def register(request: RegisterRequest, response: Response) -> dict[str, Any]:
             if member:
                 member_id = member.get("id")
 
-            # -----------------------------
-            # ✅ CREATE USER
-            # -----------------------------
-            cursor = connection.execute(
-                """
-                INSERT INTO app_users (
-                  display_name, mobile, email, password_hash, role, member_id, primary_club_id, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    request.display_name.strip() or input_name or "User",
-                    mobile or None,
-                    email or None,
-                    _password_hash(request.password.strip()),
-                    role,
-                    member_id,
-                    None,
-                    now_iso(),
-                ),
-            )
+            existing_user_for_member = _existing_user_for_member(connection, member_id or "")
 
-            user_id = int(cursor.lastrowid)
+            # -----------------------------
+            # ✅ CREATE OR REUSE USER
+            # -----------------------------
+            if existing_user_for_member:
+                user_id = int(existing_user_for_member["id"])
+                connection.execute(
+                    """
+                    UPDATE app_users
+                    SET display_name = ?, mobile = ?, email = ?, role = ?, member_id = ?
+                    WHERE id = ?
+                    """,
+                    (
+                        request.display_name.strip() or input_name or existing_user_for_member["display_name"],
+                        mobile or None,
+                        email or None,
+                        role,
+                        member_id,
+                        user_id,
+                    ),
+                )
+            else:
+                cursor = connection.execute(
+                    """
+                    INSERT INTO app_users (
+                      display_name, mobile, email, password_hash, role, member_id, primary_club_id, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        request.display_name.strip() or input_name or "User",
+                        mobile or None,
+                        email or None,
+                        _password_hash(request.password.strip()),
+                        role,
+                        member_id,
+                        None,
+                        now_iso(),
+                    ),
+                )
+
+                user_id = int(cursor.lastrowid)
 
             connection.execute(
                 """
@@ -2434,8 +2545,7 @@ def player_availability_data(x_auth_token: str | None = Header(default=None)) ->
         if (not active_year or fixture_season_year(fixture) == active_year) and fixture.get("status") != "Completed"
     ]
     fixtures.sort(key=lambda fixture: (str(fixture.get("date") or ""), str(fixture.get("opponent") or "")))
-    member_id = user_row["member_id"] or ""
-    member = next((item for item in store.get("members", []) if item.get("id") == member_id), None)
+    member = _member_for_user(store, user_row)
     return {
         "user": _auth_user_payload(user_row, current_club_id),
         "club": club,
@@ -2451,7 +2561,7 @@ def player_availability_data(x_auth_token: str | None = Header(default=None)) ->
 def save_player_availability(request: PlayerAvailabilitySelfRequest, x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
     user_row, current_club_id = _auth_user_from_token(x_auth_token)
     store = load_store()
-    member = next((item for item in store.get("members", []) if item.get("id") == (user_row["member_id"] or "")), None)
+    member = _member_for_user(store, user_row)
     if not member:
         raise HTTPException(status_code=400, detail="This signed-in account is not linked to a player profile.")
     try:
@@ -2504,8 +2614,7 @@ def player_profile_data(x_auth_token: str | None = Header(default=None)) -> dict
     user_row, current_club_id = _auth_user_from_token(x_auth_token)
     store = load_store()
     club = _selected_club(store, current_club_id)
-    member_id = user_row["member_id"] or ""
-    member = next((item for item in store.get("members", []) if item.get("id") == member_id), None)
+    member = _member_for_user(store, user_row)
     return {
         "user": _auth_user_payload(user_row, current_club_id),
         "club": club,
@@ -2518,7 +2627,7 @@ def player_profile_data(x_auth_token: str | None = Header(default=None)) -> dict
 def save_player_profile(request: PlayerSelfProfileRequest, x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
     user_row, current_club_id = _auth_user_from_token(x_auth_token)
     store = load_store()
-    member = next((item for item in store.get("members", []) if item.get("id") == (user_row["member_id"] or "")), None)
+    member = _member_for_user(store, user_row)
     if not member:
         raise HTTPException(status_code=400, detail="This signed-in account is not linked to a player profile.")
 
@@ -2691,7 +2800,7 @@ def update_availability(match_id: str, request: AvailabilityUpdateRequest, x_aut
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
 
-    member = next((item for item in store.get("members", []) if item.get("id") == (user_row["member_id"] or "")), None)
+    member = _member_for_user(store, user_row)
     if not member:
         raise HTTPException(status_code=400, detail="This signed-in account is not linked to a player profile.")
     effective_role = _effective_role_name(user_row, current_club_id)
@@ -3159,12 +3268,26 @@ def admin_review_queue(x_auth_token: str | None = Header(default=None)) -> dict[
     user_row, current_club_id = _require_permission(x_auth_token, "view_admin")
     store = load_store()
     club = _selected_club(store, current_club_id)
-    queue = [
-        upload
-        for upload in canonical_archive_uploads(store.get("archive_uploads", []))
-        if str(upload.get("club_id") or "").strip() == str(club.get("id") or "").strip()
-        and str(upload.get("status") or "").strip().lower().startswith("pending")
-    ]
+    role = _effective_role_name(user_row, current_club_id)
+    queue: list[dict[str, Any]] = []
+    for upload in canonical_archive_uploads(store.get("archive_uploads", [])):
+        status = str(upload.get("status") or "").strip().lower()
+        if status in {"approved", "applied to match", "deleted"}:
+            continue
+        inferred_club = _resolve_archive_club(upload, store.get("clubs", []))
+        queue.append(
+            {
+                **upload,
+                "resolved_club_id": str(upload.get("club_id") or (inferred_club.get("id") if inferred_club else "") or "").strip(),
+                "resolved_club_name": str(upload.get("club_name") or (inferred_club.get("name") if inferred_club else "") or "Unassigned").strip() or "Unassigned",
+            }
+        )
+    if role != "superadmin":
+        queue = [
+            upload
+            for upload in queue
+            if str(upload.get("resolved_club_id") or upload.get("club_id") or "").strip() == str(club.get("id") or "").strip()
+        ]
     return {
         "user": _auth_user_payload(user_row, current_club_id),
         "club": club,
@@ -3181,8 +3304,9 @@ def approve_archive(upload_id: str, x_auth_token: str | None = Header(default=No
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
     club = _selected_club(store, current_club_id)
-    upload["club_id"] = upload.get("club_id") or club.get("id", "")
-    upload["club_name"] = upload.get("club_name") or club.get("name", "")
+    inferred_club = _resolve_archive_club(upload, store.get("clubs", [])) or club
+    upload["club_id"] = upload.get("club_id") or inferred_club.get("id", "") or club.get("id", "")
+    upload["club_name"] = upload.get("club_name") or inferred_club.get("name", "") or club.get("name", "")
     upload["status"] = "Approved"
     upload["reviewed_by"] = user_row["display_name"] or user_row["mobile"] or "admin"
     upload["reviewed_at"] = now_iso()
@@ -3196,10 +3320,10 @@ def approve_archive(upload_id: str, x_auth_token: str | None = Header(default=No
         "queue": [
             item
             for item in canonical_archive_uploads(refreshed.get("archive_uploads", []))
-            if str(item.get("club_id") or "").strip() == str(club.get("id") or "").strip()
+            if str(item.get("club_id") or "").strip() == str(updated.get("club_id") or club.get("id") or "").strip()
             and str(item.get("status") or "").strip().lower().startswith("pending")
         ],
-        "dashboard": current_dashboard(refreshed, club.get("id", "")),
+        "dashboard": current_dashboard(refreshed, updated.get("club_id") or club.get("id", "")),
     }
 
 

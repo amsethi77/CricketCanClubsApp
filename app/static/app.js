@@ -106,6 +106,7 @@ const state = {
 
 const ARCHIVE_SEASON_LABEL = "2025 Season";
 const DEFAULT_LIST_LIMIT = 5;
+const currentYearLabel = `${new Date().getFullYear()} Season`;
 
 let recognition = null;
 let recognitionActive = false;
@@ -118,7 +119,7 @@ const elements = {
   nextMatchLabel: document.getElementById("nextMatchLabel"),
   availabilityLabel: document.getElementById("availabilityLabel"),
   seasonModeLabel: document.getElementById("seasonModeLabel"),
-  llmLabel: document.getElementById("llmLabel"),
+  scorecardLabel: document.getElementById("scorecardLabel"),
   viewerPlayerSnapshotLabel: document.getElementById("viewerPlayerSnapshotLabel"),
   viewerPlayerSnapshotTitle: document.getElementById("viewerPlayerSnapshotTitle"),
   viewerPlayerSnapshotDetails: document.getElementById("viewerPlayerSnapshotDetails"),
@@ -284,6 +285,13 @@ const elements = {
   chatInput: document.getElementById("chatInput"),
 };
 
+if (elements.seasonLabel && elements.seasonLabel.textContent === "Loading...") {
+  elements.seasonLabel.textContent = currentYearLabel;
+}
+if (elements.scorecardLabel && elements.scorecardLabel.textContent === "Loading...") {
+  elements.scorecardLabel.textContent = "0";
+}
+
 window.sessionStorage.setItem("heartlakeChatSessionId", state.chatSessionId);
 
 async function getJson(url) {
@@ -364,11 +372,11 @@ function renderLimitedCollection(items, { key, renderItem, emptyMessage, limit =
 }
 
 function statsByPlayer() {
-  return Object.fromEntries((state.dashboard?.all_player_stats || state.dashboard?.player_stats || []).map((item) => [item.player_name, item]));
+  return Object.fromEntries((state.dashboard?.player_stats || state.dashboard?.all_player_stats || []).map((item) => [item.player_name, item]));
 }
 
 function combinedStatsByPlayer() {
-  return Object.fromEntries((state.dashboard?.all_combined_player_stats || state.dashboard?.combined_player_stats || []).map((item) => [item.player_name, item]));
+  return Object.fromEntries((state.dashboard?.combined_player_stats || state.dashboard?.all_combined_player_stats || []).map((item) => [item.player_name, item]));
 }
 
 function displayPlayerName(member) {
@@ -723,6 +731,18 @@ function archiveDateLabel(upload) {
   return upload.archive_date || (upload.photo_taken_at || "").slice(0, 10) || "";
 }
 
+function fixtureSeasonYear(match) {
+  const raw = String(match?.season_year || match?.season || match?.date || "").trim();
+  const year = raw.match(/^20\d{2}/)?.[0] || "";
+  return year;
+}
+
+function archiveSeasonYear(upload) {
+  const raw = String(upload?.archive_year || upload?.season || upload?.archive_date || upload?.scorecard_date || upload?.created_at || "").trim();
+  const year = raw.match(/^20\d{2}/)?.[0] || "";
+  return year;
+}
+
 function archiveVariantLabel(upload) {
   const count = Number(upload.family_hidden_count || 0);
   if (!count) {
@@ -757,7 +777,7 @@ function filteredArchiveUploads(uploads) {
   const selectedYear = elements.archiveYearSelect.value;
   return uploads.filter((upload) => {
     const archiveDate = archiveDateLabel(upload);
-    const archiveYear = upload.archive_year || (archiveDate ? archiveDate.slice(0, 4) : "");
+    const archiveYear = archiveSeasonYear(upload) || (archiveDate ? archiveDate.slice(0, 4) : "");
     if (selectedDate && archiveDate !== selectedDate) {
       return false;
     }
@@ -790,7 +810,7 @@ function filteredArchiveUploads(uploads) {
 }
 
 function populateArchiveYearSelect(uploads) {
-  const years = [...new Set(uploads.map((upload) => upload.archive_year).filter(Boolean))].sort().reverse();
+  const years = [...new Set(uploads.map((upload) => archiveSeasonYear(upload)).filter(Boolean))].sort().reverse();
   const options = ['<option value="">All years</option>']
     .concat(years.map((year) => `<option value="${year}">${year}</option>`))
     .join("");
@@ -836,9 +856,9 @@ function statusBadge(status) {
   return `<span class="status-pill ${cls}">${status}</span>`;
 }
 
-function renderSummary(summary) {
+function renderSummary(summary, archiveCount = summary.archive_file_count ?? summary.archive_count ?? 0) {
   elements.summaryGrid.innerHTML = `
-    <article class="summary-card"><span>Clubs Summary</span><strong>${state.dashboard?.focus_club?.name || state.dashboard?.club?.name || "Club"}</strong><p>Total Matches Played: ${summary.matches_played || 0} · Won: ${summary.matches_won || 0} · Lost: ${summary.matches_lost || 0} · NR: ${summary.matches_nr || 0}</p></article>
+    <article class="summary-card"><span>Clubs Summary</span><strong>${state.dashboard?.focus_club?.name || state.dashboard?.club?.name || "Club"}</strong><p>Total Matches Played: ${summary.matches_played || 0} · Won: ${summary.matches_won || 0} · Lost: ${summary.matches_lost || 0} · NR: ${summary.matches_nr || 0}<br />Uploaded Scorecards: ${archiveCount}</p></article>
     <article class="summary-card"><span>Fixtures</span><strong>${summary.fixture_count}</strong></article>
     <article class="summary-card"><span>Members</span><strong>${summary.member_count}</strong></article>
     <article class="summary-card"><span>Completed</span><strong>${summary.completed_matches}</strong></article>
@@ -1532,7 +1552,8 @@ function getPlayerAvailabilitySummary(playerName) {
 function getPlayerSeasonProfile(playerName) {
   const members = state.dashboard.all_members || state.dashboard.members || [];
   const player = members.find((member) => member.name === playerName);
-  const combinedRecords = state.dashboard.all_combined_player_stats || state.dashboard.combined_player_stats || [];
+  const selectedYear = String(state.selectedSeasonYear || state.dashboard?.selected_season_year || state.dashboard?.default_season_year || "").trim();
+  const combinedRecords = state.dashboard.combined_player_stats || state.dashboard.all_combined_player_stats || [];
   const combinedRecord = combinedRecords.find((item) => item.player_name === playerName) || {
     batting_average: 0,
     strike_rate: 0,
@@ -1542,7 +1563,7 @@ function getPlayerSeasonProfile(playerName) {
   const membershipSummary = playerMembershipSummary(player || {});
   const clubIdSet = new Set((membershipSummary.clubMemberships || []).map((club) => club.club_id).filter(Boolean));
   const clubNameSet = new Set((membershipSummary.clubMemberships || []).map((club) => club.club_name).filter(Boolean));
-  const pendingRecords = state.dashboard.player_pending_stats || state.dashboard.all_player_pending_stats || [];
+  const pendingRecords = selectedYear ? (state.dashboard.player_pending_stats || []) : (state.dashboard.all_player_pending_stats || []);
   const pending = pendingRecords.find((item) => item.player_name === playerName) || {
     player_name: playerName,
     runs: 0,
@@ -1552,13 +1573,14 @@ function getPlayerSeasonProfile(playerName) {
     sources: [],
   };
   const allFixtures = state.dashboard.all_fixtures || state.dashboard.fixtures || [];
+  const seasonFixtures = selectedYear ? allFixtures.filter((match) => fixtureSeasonYear(match) === selectedYear) : allFixtures;
   const relevantFixtures = membershipSummary.clubMemberships.length
-    ? allFixtures.filter((match) => {
+    ? seasonFixtures.filter((match) => {
         const matchClubId = match.club_id || match.details?.club_id || "";
         const matchClubName = match.club_name || match.details?.club_name || "";
         return (matchClubId && clubIdSet.has(matchClubId)) || (matchClubName && clubNameSet.has(matchClubName));
       })
-    : allFixtures;
+    : seasonFixtures;
   const appearances = [];
   let runs = 0;
   let balls = 0;
@@ -1961,8 +1983,17 @@ function renderArchiveScorecards(uploads) {
   });
 }
 
+function dashboardArchiveUploads(dashboard = state.dashboard) {
+  if (!dashboard) {
+    return [];
+  }
+  const permissions = state.viewerAuth?.user?.permissions || [];
+  const isAdminViewer = permissions.includes("view_admin") || permissions.includes("manage_scorecards") || permissions.includes("manage_club") || permissions.includes("manage_players");
+  return isAdminViewer ? (dashboard.all_archive_uploads || dashboard.archive_uploads || []) : (dashboard.archive_uploads || []);
+}
+
 function loadArchiveIntoEditor(archiveId) {
-  const upload = state.dashboard.archive_uploads.find((item) => item.id === archiveId);
+  const upload = dashboardArchiveUploads().find((item) => item.id === archiveId);
   if (!upload) {
     return;
   }
@@ -2059,7 +2090,7 @@ function renderTeamPage() {
 
 function syncArchiveDraft() {
   const uploadId = elements.archiveSelect.value;
-  const upload = state.dashboard.archive_uploads.find((item) => item.id === uploadId);
+  const upload = dashboardArchiveUploads().find((item) => item.id === uploadId);
   if (!upload) return;
   const draft = upload.draft_scorecard || {};
   elements.archiveHeartlakeRunsInput.value = draft.heartlake_runs || "";
@@ -2130,6 +2161,7 @@ function renderDashboard(dashboard) {
   const pendingMatches = Math.max(0, totalFixtures - playedMatches);
   const upcomingAvailability = Array.isArray(landingNextMatch.availability) ? landingNextMatch.availability.length : 0;
   const totalPlayers = (dashboard.members || []).length;
+  const visibleArchiveUploads = dashboardArchiveUploads(dashboard);
   elements.seasonLabel.textContent = `${selectedYear} Season`;
   if (elements.availabilityLabel) {
     elements.availabilityLabel.textContent = totalPlayers
@@ -2156,7 +2188,11 @@ function renderDashboard(dashboard) {
       elements.seasonModeLabel.textContent = historicalSummary.details;
     }
   }
-  elements.llmLabel.textContent = dashboard.llm.model || dashboard.llm.provider;
+  if (elements.scorecardLabel) {
+    elements.scorecardLabel.textContent = String(
+      dashboard.summary?.archive_file_count ?? dashboard.summary?.archive_count ?? visibleArchiveUploads.length ?? 0
+    );
+  }
   elements.uploadSeason.value = elements.uploadSeason.value || ARCHIVE_SEASON_LABEL;
   renderViewerProfile(dashboard);
   updateViewerPlayerSnapshot(dashboard);
@@ -2168,13 +2204,13 @@ function renderDashboard(dashboard) {
     elements.availabilityPlayerSelect.value = currentSignedInMemberName(dashboard) || dashboard.members[0]?.name || "";
   }
   populateTeamSelect(dashboard.teams || []);
-  populateArchiveSelect(dashboard.archive_uploads);
-  populateArchiveYearSelect(dashboard.archive_uploads);
+  populateArchiveSelect(visibleArchiveUploads);
+  populateArchiveYearSelect(visibleArchiveUploads);
   populateRankingYearSelect(dashboard);
   if (!elements.archiveSourceNoteInput.value) {
     elements.archiveSourceNoteInput.value = "Offline scorecard sync";
   }
-  renderSummary(dashboard.summary);
+  renderSummary(dashboard.summary, visibleArchiveUploads.length);
   renderSelectedMatch(match);
   renderFormValues(match);
   renderScorebook(match);
@@ -2186,9 +2222,9 @@ function renderDashboard(dashboard) {
   renderPlayerProfile();
   renderTeamPage();
   renderAvailabilityFixtureEditor(dashboard.fixtures);
-  renderArchive(dashboard.archive_uploads);
+  renderArchive(visibleArchiveUploads);
   renderDuplicates(dashboard.duplicate_uploads || []);
-  renderArchiveScorecards(dashboard.archive_uploads);
+  renderArchiveScorecards(visibleArchiveUploads);
   updateWhatsappLink(match);
   syncArchiveDraft();
 }
@@ -2616,16 +2652,19 @@ elements.uploadForm.addEventListener("submit", async (event) => {
 
 for (const eventName of ["input", "change"]) {
   elements.archiveSearchInput.addEventListener(eventName, () => {
-    renderArchive(state.dashboard.archive_uploads);
-    renderArchiveScorecards(state.dashboard.archive_uploads);
+    const uploads = dashboardArchiveUploads();
+    renderArchive(uploads);
+    renderArchiveScorecards(uploads);
   });
   elements.archiveDateInput.addEventListener(eventName, () => {
-    renderArchive(state.dashboard.archive_uploads);
-    renderArchiveScorecards(state.dashboard.archive_uploads);
+    const uploads = dashboardArchiveUploads();
+    renderArchive(uploads);
+    renderArchiveScorecards(uploads);
   });
   elements.archiveYearSelect.addEventListener(eventName, () => {
-    renderArchive(state.dashboard.archive_uploads);
-    renderArchiveScorecards(state.dashboard.archive_uploads);
+    const uploads = dashboardArchiveUploads();
+    renderArchive(uploads);
+    renderArchiveScorecards(uploads);
   });
 }
 
@@ -2633,8 +2672,9 @@ elements.archiveClearFilters.addEventListener("click", () => {
   elements.archiveSearchInput.value = "";
   elements.archiveDateInput.value = "";
   elements.archiveYearSelect.value = "";
-  renderArchive(state.dashboard.archive_uploads);
-  renderArchiveScorecards(state.dashboard.archive_uploads);
+  const uploads = dashboardArchiveUploads();
+  renderArchive(uploads);
+  renderArchiveScorecards(uploads);
 });
 
 elements.resetScoresButton.addEventListener("click", async () => {
@@ -2698,7 +2738,7 @@ elements.archiveScorecards.addEventListener("click", (event) => {
   }
   const reviewButton = event.target.closest("[data-archive-review-json]");
   if (reviewButton) {
-    const upload = state.dashboard.archive_uploads.find((item) => item.id === reviewButton.dataset.archiveReviewJson);
+    const upload = dashboardArchiveUploads().find((item) => item.id === reviewButton.dataset.archiveReviewJson);
     if (!upload) return;
     elements.archiveImportSelect.value = upload.id;
     elements.archiveSelect.value = upload.id;
