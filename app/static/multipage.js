@@ -109,11 +109,16 @@ async function syncAdminOnlyElements() {
     const role = String(auth?.user?.effective_role || auth?.user?.role || "").trim();
     const isAdmin = role === "superadmin";
     nodes.forEach((node) => {
-      node.hidden = !isAdmin;
+      if (isAdmin) {
+        node.hidden = false;
+        node.removeAttribute("aria-hidden");
+      } else {
+        node.remove();
+      }
     });
   } catch {
     nodes.forEach((node) => {
-      node.hidden = true;
+      node.remove();
     });
   }
 }

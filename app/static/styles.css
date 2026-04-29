@@ -1116,6 +1116,12 @@ button:hover,
   font-weight: 600;
 }
 
+.admin-role-badge {
+  margin-top: 4px;
+  margin-bottom: 8px;
+  width: fit-content;
+}
+
 .three-column-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -1199,6 +1205,13 @@ button:hover,
   border: 1px solid rgba(90, 167, 255, 0.12);
   border-radius: 20px;
   background: linear-gradient(180deg, rgba(250, 252, 255, 0.98), rgba(241, 247, 255, 0.94));
+}
+
+.admin-controls-panel {
+  border: 1px solid rgba(214, 40, 57, 0.12);
+  background:
+    radial-gradient(circle at top right, rgba(214, 40, 57, 0.08), transparent 26%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(244, 249, 255, 0.94));
 }
 
 .admin-member-card {

@@ -58,6 +58,7 @@ try:
         get_match_or_404,
         load_store,
         member_initials,
+        member_in_club,
         now_iso,
         normalize_scorebook_ball,
         _resolve_archive_club,
@@ -97,6 +98,7 @@ except ModuleNotFoundError:
         get_match_or_404,
         load_store,
         member_initials,
+        member_in_club,
         now_iso,
         normalize_scorebook_ball,
         _resolve_archive_club,
@@ -505,7 +507,7 @@ def _clubs_page_html(request: Request, search: str = "", focus_club_id: str = ""
         <meta charset="UTF-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1.0" />
         <title>Select Club · Heartlake Clubs</title>
-        <link rel="stylesheet" href="/assets/styles.css?v=20260429e" />
+        <link rel="stylesheet" href="/assets/styles.css?v=20260429f" />
       </head>
       <body>
         <div class="page-shell">
@@ -2253,6 +2255,63 @@ def _admin_center_html(request: Request) -> HTMLResponse:
     for upload in review_uploads:
         key = f'{upload.get("resolved_club_id") or ""}::{upload.get("resolved_club_name") or "Unassigned"}'
         review_groups.setdefault(key, []).append(upload)
+    club_id_value = str(club.get("id") or "").strip().lower()
+    club_name_value = str(club.get("name") or "").strip().lower()
+    club_short_name_value = str(club.get("short_name") or "").strip().lower()
+    club_members = [
+        member
+        for member in store.get("members", [])
+        if member_in_club(member, str(club.get("id") or ""), str(club.get("name") or ""))
+    ]
+    club_teams = [
+        team
+        for team in store.get("teams", []) or []
+        if (
+            club_id_value
+            and str(team.get("club_id") or "").strip().lower() == club_id_value
+        )
+        or (
+            club_name_value
+            and str(team.get("club_name") or "").strip().lower() in {club_name_value, club_short_name_value}
+        )
+    ]
+    club_detail_html = (
+        f"""
+        <article class="detail-card admin-club-card" data-admin-club="{html.escape(str(club.get('id') or ''))}">
+          <strong>{html.escape(club.get('name') or 'Selected club')}</strong>
+          <p>{html.escape(club.get('short_name') or '')} · {html.escape(club.get('season') or 'Season TBD')}</p>
+          <small>{len(club_members)} players · {len(club_teams)} teams · {html.escape(club.get('city') or 'City TBD')} · {html.escape(club.get('country') or 'Country TBD')}</small>
+          <div class="inline-actions">
+            <button class="danger-button" type="button" data-club-delete="{html.escape(str(club.get('id') or ''))}">Delete club</button>
+          </div>
+        </article>
+        <article class="stack-card admin-roster-panel">
+          <div class="panel-head compact-head">
+            <div>
+              <p class="section-kicker">Players</p>
+              <h3>Club roster</h3>
+            </div>
+          </div>
+          <div class="archive-list">
+            {''.join(
+                f'''
+                <article class="detail-card admin-member-card" data-admin-member="{html.escape(str(member.get("id") or ""))}">
+                  <strong>{html.escape(member.get("name") or "Player")}</strong>
+                  <p>{html.escape(member.get("full_name") or "")}</p>
+                  <small>{html.escape(member.get("role") or "player")} · {html.escape(member.get("phone") or "No mobile")}</small>
+                  <small>{html.escape(member.get("team_name") or "")}</small>
+                  <div class="inline-actions">
+                    <button class="danger-button" type="button" data-member-delete="{html.escape(str(member.get("id") or ""))}">Remove from club</button>
+                  </div>
+                </article>
+                '''
+                for member in club_members
+            ) or '<p class="empty-state">No club members are linked to this club yet.</p>'}
+          </div>
+        </article>
+        """
+        if club else '<p class="empty-state">Select a club to manage its roster.</p>'
+    )
     if review_uploads:
         rendered_groups: list[str] = []
         for group in review_groups.values():
@@ -2326,17 +2385,27 @@ def _admin_center_html(request: Request) -> HTMLResponse:
             <div class="stack-card">
               <p class="section-kicker">Admin Center</p>
               <h1>{html.escape(club.get('name', 'Selected club'))} control room</h1>
+              <div id="adminRoleBadge" class="hero-badge admin-role-badge">Loading role...</div>
               <p class="lede">Select a club, review that club’s data, edit fixtures, and manage archives from one place.</p>
               <div id="adminCenterStatus" class="status-banner" hidden></div>
               <div class="summary-grid compact-summary-grid" id="adminClubStats"></div>
-              <div class="toolbar-actions">
-                <select id="adminClubSelect">{club_options}</select>
-                <button id="adminLoadClubButton" class="secondary-button" type="button">Load club</button>
-              </div>
-              <div id="adminClubDetail" class="detail-stack"></div>
             </div>
 
             <div class="detail-stack">
+              <div class="stack-card admin-controls-panel">
+                <div class="panel-head compact-head">
+                  <div>
+                    <p class="section-kicker">Club Controls</p>
+                    <h2>Delete club and players</h2>
+                  </div>
+                </div>
+                <p class="lede">Superadmin only. Select a club first, then remove the club or remove players from that club’s roster.</p>
+                <div class="toolbar-actions">
+                  <select id="adminClubSelect">{club_options}</select>
+                  <button id="adminLoadClubButton" class="secondary-button" type="button">Load club</button>
+                </div>
+                <div id="adminClubDetail" class="detail-stack">{club_detail_html}</div>
+              </div>
               <div class="stack-card">
                 <div class="panel-head compact-head">
                   <div>
@@ -2375,7 +2444,7 @@ def _admin_center_html(request: Request) -> HTMLResponse:
           </section>
         </div>
         <script src="/assets/multipage.js?v=20260429d"></script>
-        <script src="/assets/admin_center.js?v=20260429f"></script>
+        <script src="/assets/admin_center.js?v=20260429j"></script>
       </body>
     </html>
     """

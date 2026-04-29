@@ -267,7 +267,14 @@ When reviewing imported historical scorecards, use prompts or pasted review note
 
 - Dashboard, Clubs, Season Setup, Player Availability, Player Profile, and Admin Center must redirect to `/signin` when there is no valid session.
 - Admin Center must stay superadmin-only.
+- In Admin Center, club and player delete controls should appear before the fixture editor for discoverability.
 - Browser cache-busting must be updated whenever a page bundle changes so stale JS does not hide admin controls.
+
+## Deployment Workflow
+
+- Test locally first before any Azure deploy.
+- Azure deploys are manual and require explicit approval by setting `DEPLOY_APPROVED=yes`.
+- The deploy script packages the current working tree directly to Azure App Service, so GitHub commits are not required for deployment.
 
 ## Name Resolution
 

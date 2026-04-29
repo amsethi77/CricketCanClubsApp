@@ -19,16 +19,30 @@ const fixtureList = document.getElementById("adminFixtureList");
 const archiveSearchInput = document.getElementById("adminArchiveSearch");
 const refreshButton = document.getElementById("adminRefreshButton");
 const archiveQueue = document.getElementById("adminReviewQueue");
+const roleBadge = document.getElementById("adminRoleBadge");
 
 let payload = null;
 let auth = null;
 let reviewQueue = [];
+let selectedClubId = "";
 
 function setStatus(message, tone = "info") {
   if (!statusBanner) return;
   statusBanner.hidden = !message;
   statusBanner.textContent = message || "";
   statusBanner.className = `status-banner ${tone}`;
+}
+
+function renderRoleBadge() {
+  if (!roleBadge) return;
+  const role = String(
+    auth?.user?.effective_role ||
+      auth?.user?.role ||
+      auth?.user?.roles?.[0] ||
+      ""
+  ).trim();
+  const label = role ? role.replace(/_/g, " ") : "role unavailable";
+  roleBadge.textContent = `Signed in as ${label}`;
 }
 
 function escapeHtml(value) {
@@ -38,21 +52,41 @@ function escapeHtml(value) {
     .replace(/>/g, "&gt;");
 }
 
+function confirmTypedDelete(message, expectedValue) {
+  const expected = String(expectedValue || "").trim();
+  if (!expected) {
+    return window.confirm(message);
+  }
+  const response = window.prompt(`${message}\n\nType ${expected} to confirm deletion.`);
+  return String(response || "").trim() === expected;
+}
+
 function clubId() {
-  return clubSelect?.value || auth?.user?.current_club_id || auth?.user?.primary_club_id || "";
+  return selectedClubId || clubSelect?.value || auth?.user?.current_club_id || auth?.user?.primary_club_id || "";
 }
 
 function availableClubs(dashboard = payload) {
-  const authClubs = Array.isArray(auth?.clubs) ? auth.clubs : [];
-  if (authClubs.length) {
-    return authClubs;
+  const merged = [];
+  const seen = new Set();
+  for (const source of [auth?.clubs, dashboard?.clubs]) {
+    if (!Array.isArray(source)) continue;
+    for (const club of source) {
+      const id = String(club?.id || "").trim();
+      if (!id || seen.has(id)) continue;
+      seen.add(id);
+      merged.push(club);
+    }
   }
-  return Array.isArray(dashboard?.clubs) ? dashboard.clubs : [];
+  return merged;
 }
 
 function selectedClub() {
   const clubs = availableClubs();
   return clubs.find((club) => club.id === clubId()) || clubs[0] || null;
+}
+
+function focusedClub(dashboard = payload) {
+  return dashboard?.focus_club || dashboard?.club || selectedClub() || {};
 }
 
 function selectedClubKeys(dashboard = payload) {
@@ -80,6 +114,89 @@ function normalizeClubList(value) {
     }
   }
   return [];
+}
+
+function clubMatchesSelection(club, selected) {
+  if (!club || !selected) return false;
+  const clubIdValue = String(selected.id || selected.club_id || "").trim().toLowerCase();
+  const clubNameValue = String(selected.name || "").trim().toLowerCase();
+  const clubShortNameValue = String(selected.short_name || "").trim().toLowerCase();
+  const targetId = String(club.club_id || club.id || "").trim().toLowerCase();
+  const targetName = String(club.club_name || club.name || "").trim().toLowerCase();
+  const targetShortName = String(club.short_name || "").trim().toLowerCase();
+  return (
+    (clubIdValue && targetId === clubIdValue) ||
+    (clubNameValue && (targetName === clubNameValue || targetShortName === clubNameValue)) ||
+    (clubShortNameValue && (targetName === clubShortNameValue || targetShortName === clubShortNameValue))
+  );
+}
+
+function memberMatchesClub(member, club) {
+  if (!member || !club) return false;
+  if (clubMatchesSelection(member, club)) {
+    return true;
+  }
+  const memberships = Array.isArray(member.club_memberships)
+    ? member.club_memberships
+    : Array.isArray(member.team_memberships)
+      ? member.team_memberships
+      : [];
+  return memberships.some((membership) => clubMatchesSelection(membership, club));
+}
+
+function filterMembersForClub(dashboard, club) {
+  const source = Array.isArray(dashboard?.all_members) && dashboard.all_members.length
+    ? dashboard.all_members
+    : Array.isArray(dashboard?.members)
+      ? dashboard.members
+      : [];
+  return source.filter((member) => memberMatchesClub(member, club));
+}
+
+function fixtureMatchesClub(fixture, club) {
+  if (!fixture || !club) return false;
+  const clubIdValue = String(club.id || club.club_id || "").trim().toLowerCase();
+  const clubNameValue = String(club.name || "").trim().toLowerCase();
+  const clubShortNameValue = String(club.short_name || "").trim().toLowerCase();
+  const fixtureClubId = String(fixture.club_id || "").trim().toLowerCase();
+  const fixtureClubName = String(fixture.club_name || fixture.details?.club_name || "").trim().toLowerCase();
+  return (
+    (clubIdValue && fixtureClubId === clubIdValue) ||
+    (clubNameValue && (fixtureClubName === clubNameValue || fixtureClubName === clubShortNameValue)) ||
+    (clubShortNameValue && fixtureClubName === clubShortNameValue)
+  );
+}
+
+function filterFixturesForClub(dashboard, club) {
+  const source = Array.isArray(dashboard?.all_fixtures) && dashboard.all_fixtures.length
+    ? dashboard.all_fixtures
+    : Array.isArray(dashboard?.fixtures)
+      ? dashboard.fixtures
+      : [];
+  return source.filter((fixture) => fixtureMatchesClub(fixture, club));
+}
+
+function archiveMatchesClub(upload, club) {
+  if (!upload || !club) return false;
+  const clubIdValue = String(club.id || club.club_id || "").trim().toLowerCase();
+  const clubNameValue = String(club.name || "").trim().toLowerCase();
+  const clubShortNameValue = String(club.short_name || "").trim().toLowerCase();
+  const resolvedClubIds = normalizeClubList(upload.resolved_club_ids || upload.club_ids || upload.club_id || "");
+  const resolvedClubNames = normalizeClubList(upload.resolved_club_names || upload.club_names || upload.club_name || "");
+  return (
+    (clubIdValue && resolvedClubIds.includes(clubIdValue)) ||
+    (clubNameValue && (resolvedClubNames.includes(clubNameValue) || resolvedClubNames.includes(clubShortNameValue))) ||
+    (clubShortNameValue && resolvedClubNames.includes(clubShortNameValue))
+  );
+}
+
+function filterArchivesForClub(dashboard, club) {
+  const source = Array.isArray(dashboard?.all_archive_uploads) && dashboard.all_archive_uploads.length
+    ? dashboard.all_archive_uploads
+    : Array.isArray(dashboard?.archive_uploads)
+      ? dashboard.archive_uploads
+      : [];
+  return source.filter((upload) => archiveMatchesClub(upload, club));
 }
 
 function archiveBelongsToSelectedClub(upload, dashboard = payload) {
@@ -212,14 +329,14 @@ function reviewTemplateForUpload(upload) {
 
 function renderClubSelect(dashboard = payload) {
   const clubs = availableClubs(dashboard);
-  const current = clubId() || clubs[0]?.id || "";
+  const current = selectedClubId || focusedClub(dashboard)?.id || clubId() || clubs[0]?.id || "";
   clubSelect.innerHTML = optionMarkup(clubs, "id", (club) => `${club.name} · ${club.season || "Season TBD"}`);
   clubSelect.value = current;
 }
 
 function renderClubStats(dashboard) {
   const summary = dashboard?.summary || {};
-  const club = dashboard?.club || {};
+  const club = focusedClub(dashboard);
   clubStats.innerHTML = `
     <article class="summary-card"><span>Selected club</span><strong>${escapeHtml(club.name || "TBD")}</strong></article>
     <article class="summary-card"><span>Members</span><strong>${summary.member_count || 0}</strong></article>
@@ -231,9 +348,9 @@ function renderClubStats(dashboard) {
 }
 
 function renderClubDetail(dashboard) {
-  const club = dashboard?.club || {};
-  const members = dashboard?.members || [];
-  const teams = dashboard?.teams || [];
+  const club = focusedClub(dashboard);
+  const members = Array.isArray(dashboard?.members) ? dashboard.members : [];
+  const teams = Array.isArray(dashboard?.teams) ? dashboard.teams : [];
   const memberCards = members.length
     ? members
         .map(
@@ -396,12 +513,18 @@ async function loadClubView(targetClubId = "", uploadsOverride = null) {
     ? await getJson(`/api/dashboard?focus_club_id=${encodeURIComponent(requestedClubId)}`, true)
     : await getJson("/api/dashboard", true);
   const clubs = availableClubs(payload);
-  const resolvedClubId = requestedClubId || payload?.focus_club?.id || payload?.club?.id || clubs[0]?.id || "";
-  const club = clubs.find((item) => item.id === resolvedClubId) || payload?.focus_club || payload?.club || { id: resolvedClubId, name: "Selected club" };
-  if (!club?.id) {
+  const resolvedClub = clubs.find((item) => item.id === requestedClubId)
+    || payload?.focus_club
+    || payload?.club
+    || clubs[0]
+    || { id: requestedClubId, name: "Selected club" };
+  const resolvedClubId = resolvedClub?.id || requestedClubId || clubs[0]?.id || "";
+  if (!resolvedClubId) {
     setStatus("No club selected.", "error");
     return;
   }
+  const club = resolvedClub;
+  selectedClubId = club.id || resolvedClubId;
   setPrimaryClubId(club.id);
   clubSelect.value = club.id;
   if (!Array.isArray(auth?.clubs) || !auth.clubs.length) {
@@ -410,6 +533,15 @@ async function loadClubView(targetClubId = "", uploadsOverride = null) {
       clubs: clubs,
     };
   }
+  payload = {
+    ...payload,
+    club,
+    focus_club: club,
+    members: filterMembersForClub(payload, club),
+    teams: (Array.isArray(payload?.teams) ? payload.teams : []).filter((team) => clubMatchesSelection(team, club)),
+    fixtures: filterFixturesForClub(payload, club),
+    archive_uploads: filterArchivesForClub(payload, club),
+  };
   renderClubStats(payload);
   renderClubDetail(payload);
   renderFixtures(payload);
@@ -427,6 +559,7 @@ async function loadReviewQueue() {
 
 async function refreshAll() {
   auth = await getJson("/api/auth/me", true);
+  renderRoleBadge();
   const targetClubId = clubId() || auth.user.current_club_id || auth.user.primary_club_id || "";
   const queue = await loadReviewQueue();
   await loadClubView(targetClubId, queue);
@@ -523,7 +656,7 @@ clubDetail?.addEventListener("click", async (event) => {
   if (!club) return;
   if (clubDeleteButton) {
     const clubName = club.name || "this club";
-    if (!window.confirm(`Delete ${clubName} and remove its club-only data?`)) {
+    if (!confirmTypedDelete(`Delete ${clubName} and remove its club-only data?`, clubName)) {
       return;
     }
     try {
@@ -538,7 +671,7 @@ clubDetail?.addEventListener("click", async (event) => {
     const memberId = memberDeleteButton.dataset.memberDelete;
     const member = (payload?.members || []).find((item) => String(item.id || "") === String(memberId || ""));
     const memberName = member?.name || "this player";
-    if (!window.confirm(`Remove ${memberName} from ${club.name || "this club"}?`)) {
+    if (!confirmTypedDelete(`Remove ${memberName} from ${club.name || "this club"}?`, memberName)) {
       return;
     }
     try {
@@ -553,8 +686,9 @@ clubDetail?.addEventListener("click", async (event) => {
 
 clubSelect?.addEventListener("change", async () => {
   try {
+    selectedClubId = clubSelect.value;
     const queue = reviewQueue.length ? reviewQueue : await loadReviewQueue();
-    await loadClubView(clubSelect.value, queue);
+    await loadClubView(selectedClubId, queue);
   } catch (error) {
     setStatus(error.message, "error");
   }
@@ -562,8 +696,9 @@ clubSelect?.addEventListener("change", async () => {
 
 loadClubButton?.addEventListener("click", async () => {
   try {
+    selectedClubId = clubSelect.value || selectedClubId;
     const queue = reviewQueue.length ? reviewQueue : await loadReviewQueue();
-    await loadClubView(clubSelect.value, queue);
+    await loadClubView(selectedClubId, queue);
   } catch (error) {
     setStatus(error.message, "error");
   }
@@ -573,7 +708,7 @@ archiveSearchInput?.addEventListener("input", () => renderArchives(payload, revi
 refreshButton?.addEventListener("click", async () => {
   try {
     const queue = await loadReviewQueue();
-    await loadClubView(clubSelect.value, queue);
+    await loadClubView(selectedClubId || clubSelect.value, queue);
   } catch (error) {
     setStatus(error.message, "error");
   }
@@ -589,3 +724,5 @@ requireAuth()
     }
   })
   .catch((error) => setStatus(error.message, "error"));
+
+renderRoleBadge();
