@@ -138,6 +138,9 @@ This section captures the user requirements in the order they were given and ref
 95. Let player profile pages show all fixtures, totals, rankings, and involvement across all clubs the player belongs to.
 96. Use a more professional typography system with cleaner font sizes and a consistent `Inter` / serif pairing.
 97. Make the clubs page and dashboard feel more polished and less oversized.
+98. Keep the Admin Center club-specific so selecting another club switches the archive review queue and club data to that club.
+99. Show uploaded scorecards clubwise inside the Admin Center, with the archive cards aligned under the Archives area.
+100. Let superadmin Amit S review and approve club scorecards before they are added into the club's performance history.
 
 ## Current behavior summary
 
@@ -156,6 +159,8 @@ This section captures the user requirements in the order they were given and ref
 - Summary milestone counts use `25+`, `50+`, and `100+` bands.
 - Player availability is now set per scheduled game, not as one season-wide toggle.
 - The player profile is the cross-club career view, while the club dashboard stays club-local.
+- The Admin Center now renders the selected club first, filters its archive review queue by the active club, and groups uploaded scorecards clubwise for review.
+- Historical scorecards stay in the archive-review flow until superadmin approval attaches them back to the correct club.
 - The local UI is designed as the web baseline before a later native iPhone app conversion.
 - The repo now has an Azure App Service deployment plan checked in under `.azure/plan.md`, App Service infrastructure under `infra/`, and a GitHub Actions workflow under `.github/workflows/deploy.yml`.
 - Runtime data such as SQLite, uploads, duplicates, and cache files are treated as server data, while JSON snapshots are kept as the recovery source in Git.

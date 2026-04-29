@@ -55,6 +55,30 @@ function selectedClub() {
   return clubs.find((club) => club.id === clubId()) || clubs[0] || null;
 }
 
+function selectedClubKeys(dashboard = payload) {
+  const club = dashboard?.club || dashboard?.focus_club || selectedClub() || {};
+  const clubIdValue = String(club.id || club.club_id || "").trim().toLowerCase();
+  const clubNameValue = String(club.name || "").trim().toLowerCase();
+  const clubShortNameValue = String(club.short_name || "").trim().toLowerCase();
+  return { clubIdValue, clubNameValue, clubShortNameValue };
+}
+
+function archiveBelongsToSelectedClub(upload, dashboard = payload) {
+  const { clubIdValue, clubNameValue, clubShortNameValue } = selectedClubKeys(dashboard);
+  if (!clubIdValue && !clubNameValue && !clubShortNameValue) {
+    return true;
+  }
+  const resolvedClubId = String(upload.resolved_club_id || upload.club_id || "").trim().toLowerCase();
+  const resolvedClubName = String(upload.resolved_club_name || upload.club_name || "").trim().toLowerCase();
+  if (clubIdValue) {
+    return resolvedClubId === clubIdValue;
+  }
+  return (
+    (clubNameValue && (resolvedClubName === clubNameValue || resolvedClubName === clubShortNameValue)) ||
+    (clubShortNameValue && resolvedClubName === clubShortNameValue)
+  );
+}
+
 function renderClubSelect(dashboard = payload) {
   const clubs = availableClubs(dashboard);
   const current = clubId() || clubs[0]?.id || "";
@@ -126,6 +150,9 @@ function renderArchives(dashboard, uploadsOverride = null) {
   const query = String(archiveSearchInput?.value || "").trim().toLowerCase();
   const sourceUploads = Array.isArray(uploadsOverride) ? uploadsOverride : (dashboard?.archive_uploads || []);
   const uploads = sourceUploads.filter((upload) => {
+    if (!archiveBelongsToSelectedClub(upload, dashboard)) {
+      return false;
+    }
     if (!query) return true;
     return [
       upload.file_name,
@@ -350,7 +377,7 @@ archiveQueue?.addEventListener("click", async (event) => {
 
 clubSelect?.addEventListener("change", async () => {
   try {
-    const queue = await loadReviewQueue();
+    const queue = reviewQueue.length ? reviewQueue : await loadReviewQueue();
     await loadClubView(clubSelect.value, queue);
   } catch (error) {
     setStatus(error.message, "error");
@@ -359,7 +386,7 @@ clubSelect?.addEventListener("change", async () => {
 
 loadClubButton?.addEventListener("click", async () => {
   try {
-    const queue = await loadReviewQueue();
+    const queue = reviewQueue.length ? reviewQueue : await loadReviewQueue();
     await loadClubView(clubSelect.value, queue);
   } catch (error) {
     setStatus(error.message, "error");

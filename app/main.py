@@ -41,6 +41,7 @@ try:
         archive_record_from_file,
         build_dashboard,
         canonical_phone,
+        canonical_archive_uploads,
         create_duplicate_record_from_bytes,
         default_scorecard,
         default_match_scorebook,
@@ -74,6 +75,7 @@ except ModuleNotFoundError:
         archive_record_from_file,
         build_dashboard,
         canonical_phone,
+        canonical_archive_uploads,
         create_duplicate_record_from_bytes,
         default_scorecard,
         default_match_scorebook,
@@ -1545,10 +1547,89 @@ def _admin_center_html(request: Request) -> HTMLResponse:
         raise HTTPException(status_code=403, detail="Only club administrators can open the admin center.")
     store = load_store()
     club = _selected_club(store, current_club_id)
+    role = _effective_role_name(user_row, current_club_id)
+    review_uploads: list[dict[str, Any]] = []
+    for upload in canonical_archive_uploads(store.get("archive_uploads", [])):
+        status = str(upload.get("status") or "").strip().lower()
+        if status in {"approved", "applied to match", "deleted"}:
+            continue
+        inferred_club = _resolve_archive_club(upload, store.get("clubs", []))
+        resolved_club_id = str(upload.get("club_id") or (inferred_club.get("id") if inferred_club else "") or "").strip()
+        resolved_club_name = str(upload.get("club_name") or (inferred_club.get("name") if inferred_club else "") or "Unassigned").strip() or "Unassigned"
+        if role != "superadmin" and resolved_club_id != str(club.get("id") or "").strip():
+            continue
+        review_uploads.append(
+            {
+                **upload,
+                "resolved_club_id": resolved_club_id,
+                "resolved_club_name": resolved_club_name,
+            }
+        )
     club_options = "\n".join(
         f'<option value="{html.escape(item["id"])}">{html.escape(item["name"])} · {html.escape(item["season"] or "Season TBD")}</option>'
         for item in _sorted_club_choices(store, current_club_id)
     )
+    review_groups: dict[str, list[dict[str, Any]]] = {}
+    for upload in review_uploads:
+        key = f'{upload.get("resolved_club_id") or ""}::{upload.get("resolved_club_name") or "Unassigned"}'
+        review_groups.setdefault(key, []).append(upload)
+    review_queue_html = ""
+    if review_uploads:
+        review_queue_html = "".join(
+            f"""
+            <section class="admin-review-group">
+              <div class="panel-head compact-head">
+                <div>
+                  <p class="section-kicker">Club review queue</p>
+                  <h3>{html.escape(group[0].get('resolved_club_name') or 'Unassigned')} · {len(group)}</h3>
+                </div>
+              </div>
+              <div class="archive-list">
+                {''.join(
+                    f'''
+                      <article class="detail-card" data-admin-upload="{html.escape(str(upload.get('id') or ''))}">
+                        <strong>{html.escape(upload.get('file_name') or '')}</strong>
+                        <p>{html.escape(upload.get('club_name') or upload.get('resolved_club_name') or 'Club TBD')} · {html.escape(upload.get('season') or 'Season TBD')}</p>
+                        <small>{html.escape(upload.get('archive_date') or 'Date TBD')} · {html.escape(upload.get('status') or 'Pending review')}</small>
+                        <p>{html.escape(upload.get('extracted_summary') or 'Review the extracted draft before approving.')}</p>
+                        <label class="stack-label">
+                          Reviewed extraction JSON
+                          <textarea class="admin-review-text" rows="10" spellcheck="false">{html.escape(json.dumps({
+                              "meta": {
+                                  "source": upload.get("ocr_engine") or "manual-review",
+                                  "confidence": upload.get("confidence") or "review",
+                                  "status": upload.get("status") or "Pending review",
+                              },
+                              "archive": {
+                                  "id": upload.get("id"),
+                                  "file_name": upload.get("file_name"),
+                                  "season": upload.get("season"),
+                                  "club_name": upload.get("club_name") or upload.get("resolved_club_name") or "Unassigned",
+                                  "archive_date": upload.get("archive_date"),
+                                  "archive_year": upload.get("archive_year"),
+                              },
+                              "draft_scorecard": upload.get("draft_scorecard") or {},
+                              "suggested_performances": upload.get("suggested_performances") or [],
+                              "raw_extracted_text": upload.get("raw_extracted_text") or "",
+                          }, indent=2))}</textarea>
+                        </label>
+                        <div class="inline-actions">
+                          <button class="secondary-button" type="button" data-action="extract">Re-extract</button>
+                          <button class="secondary-button" type="button" data-action="save">Save review</button>
+                          <button class="primary-button" type="button" data-action="approve">Approve</button>
+                          <button class="secondary-button" type="button" data-action="delete">Delete</button>
+                        </div>
+                      </article>
+                    '''
+                    for upload in group
+                )}
+              </div>
+            </section>
+            """
+            for group in review_groups.values()
+        )
+    else:
+        review_queue_html = '<p class="empty-state">No archives match this club or search.</p>'
     body = f"""
     <!DOCTYPE html>
     <html lang="en">
@@ -1588,7 +1669,7 @@ def _admin_center_html(request: Request) -> HTMLResponse:
               <div id="adminClubDetail" class="detail-stack"></div>
             </div>
 
-            <div class="split-grid">
+            <div class="detail-stack">
               <div class="stack-card">
                 <div class="panel-head compact-head">
                   <div>
@@ -1621,7 +1702,7 @@ def _admin_center_html(request: Request) -> HTMLResponse:
                   <input id="adminArchiveSearch" type="search" placeholder="Search archived scorecards" />
                   <button id="adminRefreshButton" class="secondary-button" type="button">Refresh queue</button>
                 </div>
-                <div id="adminReviewQueue" class="detail-stack"></div>
+                <div id="adminReviewQueue" class="detail-stack">{review_queue_html}</div>
               </div>
             </div>
           </section>
