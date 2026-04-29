@@ -821,6 +821,12 @@ button:hover,
   box-shadow: 0 14px 28px rgba(214, 40, 57, 0.2);
 }
 
+.danger-button.armed-delete {
+  outline: 3px solid rgba(214, 40, 57, 0.26);
+  box-shadow: 0 16px 30px rgba(214, 40, 57, 0.28);
+  transform: translateY(-1px);
+}
+
 .member-card {
   display: grid;
   grid-template-columns: 64px 1fr;
@@ -1217,6 +1223,18 @@ button:hover,
 .admin-member-card {
   display: grid;
   gap: 8px;
+}
+
+.admin-delete-form {
+  display: grid;
+  gap: 10px;
+  margin-top: 8px;
+  padding-top: 10px;
+  border-top: 1px solid rgba(90, 167, 255, 0.12);
+}
+
+.admin-delete-form input {
+  min-height: 44px;
 }
 
 .compact-summary-grid {

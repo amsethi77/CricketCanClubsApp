@@ -1,6 +1,7 @@
 const { requireAuth, getJson, postJson, putJson, deleteJson, setPrimaryClubId, optionMarkup } = window.HeartlakePages;
 
 const statusBanner = document.getElementById("adminCenterStatus");
+const clubForm = document.getElementById("adminClubForm");
 const clubSelect = document.getElementById("adminClubSelect");
 const loadClubButton = document.getElementById("adminLoadClubButton");
 const clubStats = document.getElementById("adminClubStats");
@@ -25,6 +26,8 @@ let payload = null;
 let auth = null;
 let reviewQueue = [];
 let selectedClubId = "";
+let pendingDelete = { key: "", expiresAt: 0 };
+let pendingDeleteTimer = null;
 
 function setStatus(message, tone = "info") {
   if (!statusBanner) return;
@@ -52,13 +55,43 @@ function escapeHtml(value) {
     .replace(/>/g, "&gt;");
 }
 
-function confirmTypedDelete(message, expectedValue) {
+function confirmTypedDelete(message, expectedValue, button = null) {
   const expected = String(expectedValue || "").trim();
-  if (!expected) {
-    return window.confirm(message);
+  const key = expected ? `delete:${expected.toLowerCase()}` : `delete:${String(message || "").toLowerCase()}`;
+  const now = Date.now();
+  if (pendingDelete.key === key && pendingDelete.expiresAt > now) {
+    pendingDelete = { key: "", expiresAt: 0 };
+    if (pendingDeleteTimer) {
+      clearTimeout(pendingDeleteTimer);
+      pendingDeleteTimer = null;
+    }
+    if (button) {
+      button.textContent = button.dataset.originalLabel || button.textContent;
+      button.classList.remove("armed-delete");
+    }
+    return true;
   }
-  const response = window.prompt(`${message}\n\nType ${expected} to confirm deletion.`);
-  return String(response || "").trim() === expected;
+  pendingDelete = { key, expiresAt: now + 5000 };
+  if (pendingDeleteTimer) {
+    clearTimeout(pendingDeleteTimer);
+  }
+  pendingDeleteTimer = window.setTimeout(() => {
+    if (pendingDelete.key === key) {
+      pendingDelete = { key: "", expiresAt: 0 };
+      if (button) {
+        button.textContent = button.dataset.originalLabel || button.textContent;
+        button.classList.remove("armed-delete");
+      }
+      setStatus("Delete confirmation timed out.", "info");
+    }
+  }, 5000);
+  if (button) {
+    button.dataset.originalLabel = button.dataset.originalLabel || button.textContent;
+    button.textContent = `Click again: ${button.dataset.originalLabel}`;
+    button.classList.add("armed-delete");
+  }
+  setStatus(`${message} Click the same delete button again within 5 seconds to confirm.`, "warning");
+  return false;
 }
 
 function clubId() {
@@ -88,6 +121,38 @@ function selectedClub() {
 function focusedClub(dashboard = payload) {
   return dashboard?.focus_club || dashboard?.club || selectedClub() || {};
 }
+
+function renderedClubId() {
+  return String(clubDetail?.querySelector("[data-admin-club]")?.dataset?.adminClub || selectedClubId || clubId() || "").trim();
+}
+
+async function deleteClubRosterItem(targetType, targetId) {
+  const club = focusedClub(payload);
+  const activeClubId = renderedClubId() || club.id || "";
+  if (!club || !activeClubId) {
+    throw new Error("No club is currently loaded.");
+  }
+  if (targetType === "club") {
+    const clubName = club.name || "this club";
+    if (!confirmTypedDelete(`Delete ${clubName} and remove its club-only data?`, clubName)) {
+      return;
+    }
+    await deleteJson(`/api/admin/clubs/${encodeURIComponent(activeClubId)}`, true);
+    setStatus(`${clubName} deleted.`, "success");
+    await refreshAll();
+    return;
+  }
+  const member = (payload?.members || payload?.all_members || []).find((item) => String(item.id || "") === String(targetId || ""));
+  const memberName = member?.name || "this player";
+  if (!confirmTypedDelete(`Remove ${memberName} from ${club.name || "this club"}?`, memberName)) {
+    return;
+  }
+  await deleteJson(`/api/admin/clubs/${encodeURIComponent(activeClubId)}/members/${encodeURIComponent(targetId)}`, true);
+  setStatus(`${memberName} removed from ${club.name || "the club"}.`, "success");
+  await refreshAll();
+}
+
+window.HeartlakeAdminCenterDelete = deleteClubRosterItem;
 
 function selectedClubKeys(dashboard = payload) {
   const club = dashboard?.club || dashboard?.focus_club || selectedClub() || {};
@@ -360,9 +425,13 @@ function renderClubDetail(dashboard) {
               <p>${escapeHtml(member.full_name || "")}</p>
               <small>${escapeHtml(member.role || "player")} · ${escapeHtml(member.phone || "No mobile")}</small>
               <small>${escapeHtml(member.team_name || "")}</small>
-              <div class="inline-actions">
-                <button class="danger-button" type="button" data-member-delete="${escapeHtml(member.id || "")}">Remove from club</button>
-              </div>
+              <form class="admin-delete-form" method="post" action="/api/admin/clubs/${encodeURIComponent(club.id || "")}/members/${encodeURIComponent(member.id || "")}/delete">
+                <label class="stack-label">
+                  Type the exact player name to confirm removal
+                  <input name="confirmation" type="text" placeholder="${escapeHtml(member.name || "")}" autocomplete="off" required />
+                </label>
+                <button class="danger-button" type="submit">Remove from club</button>
+              </form>
             </article>
           `
         )
@@ -373,9 +442,13 @@ function renderClubDetail(dashboard) {
       <strong>${escapeHtml(club.name || "Selected club")}</strong>
       <p>${escapeHtml(club.short_name || "")} · ${escapeHtml(club.season || "Season TBD")}</p>
       <small>${members.length} players · ${teams.length} teams · ${escapeHtml(club.city || "City TBD")} · ${escapeHtml(club.country || "Country TBD")}</small>
-      <div class="inline-actions">
-        <button class="danger-button" type="button" data-club-delete="${escapeHtml(club.id || "")}">Delete club</button>
-      </div>
+      <form class="admin-delete-form" method="post" action="/api/admin/clubs/${encodeURIComponent(club.id || "")}/delete">
+        <label class="stack-label">
+          Type the exact club name to confirm deletion
+          <input name="confirmation" type="text" placeholder="${escapeHtml(club.name || "")}" autocomplete="off" required />
+        </label>
+        <button class="danger-button" type="submit">Delete club</button>
+      </form>
     </article>
     <article class="stack-card admin-roster-panel">
       <div class="panel-head compact-head">
@@ -605,7 +678,8 @@ fixtureList?.addEventListener("click", async (event) => {
     setStatus(`Loaded ${fixture.date_label || fixture.date || "fixture"} into the editor.`, "success");
   }
   if (deleteButton) {
-    if (!window.confirm("Delete this fixture?")) {
+    const fixture = payload?.fixtures?.find((item) => item.id === deleteButton.dataset.fixtureDelete);
+    if (!confirmTypedDelete("Delete this fixture?", fixture?.date_label || fixture?.date || "fixture", deleteButton)) {
       return;
     }
     try {
@@ -627,7 +701,7 @@ archiveQueue?.addEventListener("click", async (event) => {
   const uploadId = card.dataset.adminUpload;
   const textarea = card.querySelector(".admin-review-text");
   try {
-    if (button.dataset.action === "extract") {
+  if (button.dataset.action === "extract") {
       await postJson(`/api/archive/${uploadId}/extract`, {}, true);
       setStatus("Scorecard re-extracted.", "success");
     } else if (button.dataset.action === "save") {
@@ -637,50 +711,13 @@ archiveQueue?.addEventListener("click", async (event) => {
       await postJson(`/api/admin/archive/${uploadId}/approve`, {}, true);
       setStatus("Archive approved.", "success");
     } else if (button.dataset.action === "delete") {
-      if (!window.confirm("Delete this archive record?")) {
-        return;
-      }
+      if (!confirmTypedDelete("Delete this archive record?", uploadId, button)) return;
       await deleteJson(`/api/admin/archive/${uploadId}`, true);
       setStatus("Archive deleted.", "success");
     }
     await refreshAll();
   } catch (error) {
     setStatus(error.message, "error");
-  }
-});
-
-clubDetail?.addEventListener("click", async (event) => {
-  const clubDeleteButton = event.target.closest("[data-club-delete]");
-  const memberDeleteButton = event.target.closest("[data-member-delete]");
-  const club = selectedClub();
-  if (!club) return;
-  if (clubDeleteButton) {
-    const clubName = club.name || "this club";
-    if (!confirmTypedDelete(`Delete ${clubName} and remove its club-only data?`, clubName)) {
-      return;
-    }
-    try {
-      await deleteJson(`/api/admin/clubs/${encodeURIComponent(club.id)}`, true);
-      setStatus(`${clubName} deleted.`, "success");
-      await refreshAll();
-    } catch (error) {
-      setStatus(error.message, "error");
-    }
-  }
-  if (memberDeleteButton) {
-    const memberId = memberDeleteButton.dataset.memberDelete;
-    const member = (payload?.members || []).find((item) => String(item.id || "") === String(memberId || ""));
-    const memberName = member?.name || "this player";
-    if (!confirmTypedDelete(`Remove ${memberName} from ${club.name || "this club"}?`, memberName)) {
-      return;
-    }
-    try {
-      await deleteJson(`/api/admin/clubs/${encodeURIComponent(club.id)}/members/${encodeURIComponent(memberId)}`, true);
-      setStatus(`${memberName} removed from ${club.name || "the club"}.`, "success");
-      await refreshAll();
-    } catch (error) {
-      setStatus(error.message, "error");
-    }
   }
 });
 
@@ -694,7 +731,8 @@ clubSelect?.addEventListener("change", async () => {
   }
 });
 
-loadClubButton?.addEventListener("click", async () => {
+clubForm?.addEventListener("submit", async (event) => {
+  event.preventDefault();
   try {
     selectedClubId = clubSelect.value || selectedClubId;
     const queue = reviewQueue.length ? reviewQueue : await loadReviewQueue();

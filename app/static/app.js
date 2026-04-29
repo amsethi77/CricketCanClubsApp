@@ -1211,11 +1211,27 @@ function renderPlayingXiSection(match) {
   }
 
   const canManageLineup = canManageLineupSelection();
-  const isLiveSeason = String(state.selectedSeasonYear || "").trim() === String(new Date().getFullYear());
+  const currentYear = String(new Date().getFullYear());
+  const selectedSeasonYear = normalizeSeasonYear(state.selectedSeasonYear);
+  const isLiveSeason = selectedSeasonYear === currentYear;
   const canEditLineup = canManageLineup && isLiveSeason;
   const candidates = lineupCandidateRows(match);
   const selectedNames = new Set(selectedPlayingXiNames(match));
   const selectedCount = selectedNames.size;
+  const section = elements.selectedPlayingXiForm.closest("[data-live-only]");
+
+  if (section) {
+    section.hidden = !isLiveSeason;
+    section.classList.toggle("live-locked", !isLiveSeason);
+    section.dataset.liveMode = isLiveSeason ? "live" : "historical";
+  }
+
+  if (!isLiveSeason) {
+    elements.selectedPlayingXiForm.innerHTML = "";
+    elements.selectedWhatsAppAlerts.innerHTML = "";
+    elements.selectedPlayingXiCount.textContent = "";
+    return;
+  }
 
   if (elements.selectedPlayingXiTitle) {
     elements.selectedPlayingXiTitle.textContent = `${focusClubName()} playing XI`;
@@ -1552,6 +1568,13 @@ function formatMetric(value, decimals = 2) {
   return Number.isFinite(numeric) ? numeric.toFixed(decimals).replace(/\.00$/, "") : "0";
 }
 
+function normalizeSeasonYear(value) {
+  const text = String(value || "").trim();
+  if (!text) return "";
+  const match = text.match(/(20\d{2})/);
+  return match ? match[1] : text;
+}
+
 function populateRankingYearSelect(dashboard) {
   const years = dashboard.season_years || dashboard.ranking_years || [];
   const defaultYear = dashboard.selected_season_year || dashboard.default_season_year || dashboard.default_ranking_year || years[0] || "";
@@ -1651,6 +1674,7 @@ function setLiveSeasonMode(isLiveSeason, selectedYear) {
   const lockedMessage = `Viewing ${selectedYear} season. Live scheduling, scoring, availability, and commentary are disabled for historical seasons.`;
   const activeMessage = `Viewing ${selectedYear} season. Live scheduling, scoring, availability, and commentary are enabled.`;
   document.querySelectorAll("[data-live-only]").forEach((section) => {
+    section.hidden = !isLiveSeason;
     section.classList.toggle("live-locked", !isLiveSeason);
     section.dataset.liveMode = isLiveSeason ? "live" : "historical";
     const controls = section.querySelectorAll("input, select, textarea, button");
@@ -2330,7 +2354,9 @@ function renderDashboard(dashboard) {
     window.localStorage.setItem("heartlakeSelectedSeasonYear", state.selectedSeasonYear);
     document.cookie = `heartlakeSelectedSeasonYear=${encodeURIComponent(state.selectedSeasonYear)}; path=/; samesite=lax`;
   }
-  setLiveSeasonMode(String(state.selectedSeasonYear || "").trim() === currentYear, state.selectedSeasonYear || currentYear);
+  const normalizedSelectedYear = normalizeSeasonYear(state.selectedSeasonYear || currentYear);
+  const isLiveSeason = normalizedSelectedYear === currentYear;
+  setLiveSeasonMode(isLiveSeason, state.selectedSeasonYear || currentYear);
   if (!state.selectedMatchId || !dashboard.fixtures.some((match) => match.id === state.selectedMatchId)) {
     state.selectedMatchId = dashboard.upcoming_match.id;
   }
@@ -2352,7 +2378,6 @@ function renderDashboard(dashboard) {
   const match = currentMatch();
   const landingNextMatch = dashboard.landing_upcoming_matches?.[0] || dashboard.upcoming_match || {};
   const selectedYear = state.selectedSeasonYear || currentYear;
-  const isLiveSeason = String(state.selectedSeasonYear || "").trim() === currentYear;
   const totalFixtures = dashboard.summary?.fixture_count ?? (dashboard.fixtures || []).length;
   const playedMatches = dashboard.summary?.matches_played ?? 0;
   const pendingMatches = Math.max(0, totalFixtures - playedMatches);

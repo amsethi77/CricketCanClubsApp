@@ -7,6 +7,7 @@ import secrets
 import sqlite3
 from copy import deepcopy
 from urllib import request
+from urllib.parse import urlencode
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -148,6 +149,21 @@ def _page_response(filename: str) -> FileResponse:
 
 def _redirect_to_signin() -> RedirectResponse:
     response = RedirectResponse(url="/signin", status_code=303)
+    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    response.headers["Pragma"] = "no-cache"
+    return response
+
+
+def _redirect_to_admin_center(club_id: str = "", notice: str = "", tone: str = "success") -> RedirectResponse:
+    params: list[tuple[str, str]] = []
+    if club_id:
+        params.append(("club_id", str(club_id)))
+    if notice:
+        params.append(("notice", str(notice)))
+    if tone:
+        params.append(("tone", str(tone)))
+    query = f"?{urlencode(params)}" if params else ""
+    response = RedirectResponse(url=f"/admin-center{query}", status_code=303)
     response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
     response.headers["Pragma"] = "no-cache"
     return response
@@ -2225,8 +2241,11 @@ def _admin_center_html(request: Request) -> HTMLResponse:
     if _effective_role_name(user_row, current_club_id) != "superadmin":
         raise HTTPException(status_code=403, detail="Only superadmin can open the admin center.")
     store = load_store()
-    club = _selected_club(store, current_club_id)
+    selected_club_id = str(request.query_params.get("club_id") or current_club_id or "").strip()
+    club = _selected_club(store, selected_club_id)
     role = _effective_role_name(user_row, current_club_id)
+    notice = html.escape(str(request.query_params.get("notice") or "").strip())
+    notice_tone = html.escape(str(request.query_params.get("tone") or "info").strip() or "info")
     review_uploads: list[dict[str, Any]] = []
     for upload in canonical_archive_uploads(store.get("archive_uploads", [])):
         status = str(upload.get("status") or "").strip().lower()
@@ -2248,8 +2267,8 @@ def _admin_center_html(request: Request) -> HTMLResponse:
             }
         )
     club_options = "\n".join(
-        f'<option value="{html.escape(item["id"])}">{html.escape(item["name"])} · {html.escape(item["season"] or "Season TBD")}</option>'
-        for item in _sorted_club_choices(store, current_club_id)
+        f'<option value="{html.escape(item["id"])}"{" selected" if item["id"] == selected_club_id else ""}>{html.escape(item["name"])} · {html.escape(item["season"] or "Season TBD")}</option>'
+        for item in _sorted_club_choices(store, selected_club_id)
     )
     review_groups: dict[str, list[dict[str, Any]]] = {}
     for upload in review_uploads:
@@ -2281,9 +2300,13 @@ def _admin_center_html(request: Request) -> HTMLResponse:
           <strong>{html.escape(club.get('name') or 'Selected club')}</strong>
           <p>{html.escape(club.get('short_name') or '')} · {html.escape(club.get('season') or 'Season TBD')}</p>
           <small>{len(club_members)} players · {len(club_teams)} teams · {html.escape(club.get('city') or 'City TBD')} · {html.escape(club.get('country') or 'Country TBD')}</small>
-          <div class="inline-actions">
-            <button class="danger-button" type="button" data-club-delete="{html.escape(str(club.get('id') or ''))}">Delete club</button>
-          </div>
+          <form class="admin-delete-form" method="post" action="/api/admin/clubs/{html.escape(str(club.get('id') or ''))}/delete">
+            <label class="stack-label">
+              Type the exact club name to confirm deletion
+              <input name="confirmation" type="text" placeholder="{html.escape(club.get('name') or '')}" autocomplete="off" required />
+            </label>
+            <button class="danger-button" type="submit">Delete club</button>
+          </form>
         </article>
         <article class="stack-card admin-roster-panel">
           <div class="panel-head compact-head">
@@ -2295,14 +2318,18 @@ def _admin_center_html(request: Request) -> HTMLResponse:
           <div class="archive-list">
             {''.join(
                 f'''
-                <article class="detail-card admin-member-card" data-admin-member="{html.escape(str(member.get("id") or ""))}">
+                  <article class="detail-card admin-member-card" data-admin-member="{html.escape(str(member.get("id") or ""))}">
                   <strong>{html.escape(member.get("name") or "Player")}</strong>
                   <p>{html.escape(member.get("full_name") or "")}</p>
                   <small>{html.escape(member.get("role") or "player")} · {html.escape(member.get("phone") or "No mobile")}</small>
                   <small>{html.escape(member.get("team_name") or "")}</small>
-                  <div class="inline-actions">
-                    <button class="danger-button" type="button" data-member-delete="{html.escape(str(member.get("id") or ""))}">Remove from club</button>
-                  </div>
+                  <form class="admin-delete-form" method="post" action="/api/admin/clubs/{html.escape(str(club.get('id') or ''))}/members/{html.escape(str(member.get('id') or ''))}/delete">
+                    <label class="stack-label">
+                      Type the exact player name to confirm removal
+                      <input name="confirmation" type="text" placeholder="{html.escape(member.get('name') or '')}" autocomplete="off" required />
+                    </label>
+                    <button class="danger-button" type="submit">Remove from club</button>
+                  </form>
                 </article>
                 '''
                 for member in club_members
@@ -2363,7 +2390,7 @@ def _admin_center_html(request: Request) -> HTMLResponse:
         <meta charset="UTF-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1.0" />
         <title>Admin Center · Heartlake Clubs</title>
-        <link rel="stylesheet" href="/assets/styles.css?v=20260429e" />
+        <link rel="stylesheet" href="/assets/styles.css?v=20260429f" />
       </head>
       <body>
         <div class="page-shell">
@@ -2387,7 +2414,7 @@ def _admin_center_html(request: Request) -> HTMLResponse:
               <h1>{html.escape(club.get('name', 'Selected club'))} control room</h1>
               <div id="adminRoleBadge" class="hero-badge admin-role-badge">Loading role...</div>
               <p class="lede">Select a club, review that club’s data, edit fixtures, and manage archives from one place.</p>
-              <div id="adminCenterStatus" class="status-banner" hidden></div>
+              <div id="adminCenterStatus" class="status-banner {notice_tone}"{" hidden" if not notice else ""}>{notice}</div>
               <div class="summary-grid compact-summary-grid" id="adminClubStats"></div>
             </div>
 
@@ -2400,10 +2427,10 @@ def _admin_center_html(request: Request) -> HTMLResponse:
                   </div>
                 </div>
                 <p class="lede">Superadmin only. Select a club first, then remove the club or remove players from that club’s roster.</p>
-                <div class="toolbar-actions">
-                  <select id="adminClubSelect">{club_options}</select>
-                  <button id="adminLoadClubButton" class="secondary-button" type="button">Load club</button>
-                </div>
+                <form id="adminClubForm" class="toolbar-actions" method="get" action="/admin-center">
+                  <select id="adminClubSelect" name="club_id">{club_options}</select>
+                  <button id="adminLoadClubButton" class="secondary-button" type="submit">Load club</button>
+                </form>
                 <div id="adminClubDetail" class="detail-stack">{club_detail_html}</div>
               </div>
               <div class="stack-card">
@@ -2444,7 +2471,7 @@ def _admin_center_html(request: Request) -> HTMLResponse:
           </section>
         </div>
         <script src="/assets/multipage.js?v=20260429d"></script>
-        <script src="/assets/admin_center.js?v=20260429j"></script>
+        <script src="/assets/admin_center.js?v=20260429l"></script>
       </body>
     </html>
     """
@@ -2893,10 +2920,10 @@ def register(request: RegisterRequest, response: Response) -> dict[str, Any]:
                 (mobile or None, email or None),
             ).fetchone()
 
-            if existing:
-                raise HTTPException(status_code=409, detail="User already exists.")
-
             existing_user_for_member = None
+            reusable_existing_user = existing if existing and not existing["member_id"] else None
+            if existing and existing["member_id"]:
+                raise HTTPException(status_code=409, detail="User already exists.")
 
             # -----------------------------
             # ✅ CREATE MEMBER NOW (SAFE POINT)
@@ -2915,7 +2942,7 @@ def register(request: RegisterRequest, response: Response) -> dict[str, Any]:
                 _attach_creator_to_club(store, selected_club, member)
                 save_store(store)
 
-            existing_user_for_member = _existing_user_for_member(connection, member_id or "")
+            existing_user_for_member = reusable_existing_user or _existing_user_for_member(connection, member_id or "")
 
             # -----------------------------
             # ✅ CREATE OR REUSE USER
@@ -3610,8 +3637,24 @@ def create_member(request: MemberCreateRequest, x_auth_token: str | None = Heade
     if str(selected_club.get("id") or "").strip() != str(current_club_id or "").strip():
         raise HTTPException(status_code=403, detail="You can only invite players into your selected club.")
     phone = canonical_phone(request.phone)
-    if phone and any(canonical_phone(member.get("phone", "")) == phone for member in store["members"]):
-        raise HTTPException(status_code=409, detail="A player with this mobile number already exists.")
+    existing_member = next(
+        (
+            member
+            for member in store["members"]
+            if (
+                phone
+                and canonical_phone(member.get("phone", "")) == phone
+            )
+            or (
+                str(member.get("name") or "").strip().lower() == str(request.name or "").strip().lower()
+            )
+            or (
+                str(member.get("full_name") or "").strip().lower() == str(request.full_name or "").strip().lower()
+                and str(request.full_name or "").strip()
+            )
+        ),
+        None,
+    )
     aliases = request.aliases
     if isinstance(aliases, str):
         aliases = [alias.strip() for alias in aliases.split(",") if alias.strip()]
@@ -3623,27 +3666,66 @@ def create_member(request: MemberCreateRequest, x_auth_token: str | None = Heade
         team_memberships = [club_team_name]
     elif club_team_name and club_team_name not in team_memberships:
         team_memberships.insert(0, club_team_name)
-    member = {
-        "id": str(uuid.uuid4())[:8],
-        "name": request.name,
-        "full_name": request.full_name,
-        "gender": _normalize_gender(request.gender),
-        "team_name": club_team_name,
-        "team_memberships": team_memberships,
-        "aliases": aliases,
-        "age": request.age,
-        "role": request.role,
-        "batting_style": request.batting_style,
-        "bowling_style": request.bowling_style,
-        "notes": request.notes,
-        "picture": member_initials(request.name),
-        "picture_url": request.picture_url,
-        "phone": phone,
-        "email": request.email,
-        "jersey_number": request.jersey_number,
-    }
-    store["members"].append(member)
+    if existing_member:
+        member = existing_member
+        member["name"] = request.name or member.get("name") or ""
+        member["full_name"] = request.full_name or member.get("full_name") or request.name or ""
+        member["gender"] = _normalize_gender(request.gender) or member.get("gender", "")
+        member["team_name"] = club_team_name
+        existing_memberships = list(member.get("team_memberships") or [])
+        merged_memberships = []
+        seen_memberships: set[str] = set()
+        for value in list(team_memberships) + existing_memberships:
+            clean = str(value or "").strip()
+            key = clean.lower()
+            if not clean or key in seen_memberships:
+                continue
+            seen_memberships.add(key)
+            merged_memberships.append(clean)
+        member["team_memberships"] = merged_memberships
+        member["aliases"] = list(dict.fromkeys([*(member.get("aliases") or []), *aliases]))
+        member["age"] = request.age or member.get("age", 0)
+        member["role"] = request.role or member.get("role", "")
+        member["batting_style"] = request.batting_style or member.get("batting_style", "")
+        member["bowling_style"] = request.bowling_style or member.get("bowling_style", "")
+        member["notes"] = request.notes or member.get("notes", "")
+        member["picture"] = member.get("picture") or member_initials(member["name"] or request.name)
+        member["picture_url"] = request.picture_url or member.get("picture_url", "")
+        member["phone"] = phone or member.get("phone", "")
+        member["email"] = request.email or member.get("email", "")
+        member["jersey_number"] = request.jersey_number or member.get("jersey_number", "")
+    else:
+        member = {
+            "id": str(uuid.uuid4())[:8],
+            "name": request.name,
+            "full_name": request.full_name,
+            "gender": _normalize_gender(request.gender),
+            "team_name": club_team_name,
+            "team_memberships": team_memberships,
+            "aliases": aliases,
+            "age": request.age,
+            "role": request.role,
+            "batting_style": request.batting_style,
+            "bowling_style": request.bowling_style,
+            "notes": request.notes,
+            "picture": member_initials(request.name),
+            "picture_url": request.picture_url,
+            "phone": phone,
+            "email": request.email,
+            "jersey_number": request.jersey_number,
+        }
+        store["members"].append(member)
     _attach_creator_to_club(store, selected_club, member)
+    with _auth_connection() as connection:
+        existing_user = connection.execute(
+            "SELECT * FROM app_users WHERE mobile = ? OR email = ?",
+            (phone or None, str(request.email or "").strip().lower() or None),
+        ).fetchone()
+        if existing_user and not existing_user["member_id"]:
+            connection.execute(
+                "UPDATE app_users SET member_id = ?, primary_club_id = ? WHERE id = ?",
+                (member["id"], selected_club.get("id", ""), int(existing_user["id"])),
+            )
     save_store(store)
     return current_dashboard(load_store(), current_club_id)
 
@@ -3694,13 +3776,8 @@ def update_member(member_id: str, request: MemberUpdateRequest, x_auth_token: st
     return current_dashboard(load_store())
 
 
-@app.delete("/api/admin/clubs/{club_id}/members/{member_id}")
-def delete_club_member(
-    club_id: str,
-    member_id: str,
-    x_auth_token: str | None = Header(default=None),
-) -> dict[str, Any]:
-    _require_superadmin(x_auth_token)
+def _delete_club_member_core(club_id: str, member_id: str, token: str | None, confirmation: str = "") -> dict[str, Any]:
+    _require_superadmin(token)
     store = load_store()
     club = next((item for item in store.get("clubs", []) if str(item.get("id") or "").strip() == str(club_id or "").strip()), None)
     if not club:
@@ -3710,6 +3787,10 @@ def delete_club_member(
         raise HTTPException(status_code=404, detail="Player not found.")
     if not member_in_club(member, str(club.get("id") or ""), str(club.get("name") or "")):
         raise HTTPException(status_code=403, detail="This player is not part of the selected club.")
+
+    expected = str(member.get("name") or "").strip()
+    if str(confirmation or "").strip() != expected:
+        raise HTTPException(status_code=400, detail=f'Type "{expected}" exactly to confirm removal.')
 
     keep_member, removed_name = _retarget_member_team_memberships(member, club)
     if not keep_member:
@@ -3725,15 +3806,14 @@ def delete_club_member(
     return {
         "message": f"{member.get('name') or 'Player'} removed from {club.get('name') or 'the club'}.",
         "dashboard": current_dashboard(refreshed, club.get("id", "")),
+        "club_id": str(club.get("id") or "").strip(),
+        "club_name": str(club.get("name") or "").strip(),
+        "member_name": str(member.get("name") or "").strip(),
     }
 
 
-@app.delete("/api/admin/clubs/{club_id}")
-def delete_club(
-    club_id: str,
-    x_auth_token: str | None = Header(default=None),
-) -> dict[str, Any]:
-    _require_superadmin(x_auth_token)
+def _delete_club_core(club_id: str, token: str | None, confirmation: str = "") -> dict[str, Any]:
+    _require_superadmin(token)
     store = load_store()
     club = next((item for item in store.get("clubs", []) if str(item.get("id") or "").strip() == str(club_id or "").strip()), None)
     if not club:
@@ -3742,6 +3822,10 @@ def delete_club(
     removed_club_id = str(club.get("id") or "").strip()
     removed_club_name = str(club.get("name") or "").strip()
     removed_short_name = str(club.get("short_name") or "").strip()
+
+    expected = str(club.get("name") or "").strip()
+    if str(confirmation or "").strip() != expected:
+        raise HTTPException(status_code=400, detail=f'Type "{expected}" exactly to confirm club deletion.')
 
     replacement_club = next(
         (
@@ -3843,7 +3927,53 @@ def delete_club(
     return {
         "message": f"{club.get('name') or 'Club'} removed from the database.",
         "dashboard": current_dashboard(refreshed, replacement_club_id),
+        "club_id": replacement_club_id,
+        "club_name": removed_club_name,
     }
+
+
+@app.delete("/api/admin/clubs/{club_id}/members/{member_id}")
+def delete_club_member(
+    club_id: str,
+    member_id: str,
+    x_auth_token: str | None = Header(default=None),
+) -> dict[str, Any]:
+    return _delete_club_member_core(club_id, member_id, x_auth_token)
+
+
+@app.post("/api/admin/clubs/{club_id}/members/{member_id}/delete")
+def delete_club_member_form(
+    request: Request,
+    club_id: str,
+    member_id: str,
+    confirmation: str = Form(default=""),
+) -> Response:
+    try:
+        result = _delete_club_member_core(club_id, member_id, _auth_token_from_request(request), confirmation)
+        return _redirect_to_admin_center(result.get("club_id", club_id), result.get("message", "Player removed."), "success")
+    except HTTPException as exc:
+        return _redirect_to_admin_center(club_id, str(exc.detail), "error")
+
+
+@app.delete("/api/admin/clubs/{club_id}")
+def delete_club(
+    club_id: str,
+    x_auth_token: str | None = Header(default=None),
+) -> dict[str, Any]:
+    return _delete_club_core(club_id, x_auth_token)
+
+
+@app.post("/api/admin/clubs/{club_id}/delete")
+def delete_club_form(
+    request: Request,
+    club_id: str,
+    confirmation: str = Form(default=""),
+) -> Response:
+    try:
+        result = _delete_club_core(club_id, _auth_token_from_request(request), confirmation)
+        return _redirect_to_admin_center(result.get("club_id", ""), result.get("message", "Club removed."), "success")
+    except HTTPException as exc:
+        return _redirect_to_admin_center(club_id, str(exc.detail), "error")
 
 
 @app.post("/api/matches/{match_id}/details")
