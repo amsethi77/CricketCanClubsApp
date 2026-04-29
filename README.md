@@ -1,6 +1,6 @@
-# Heartlake Cricket Club Website
+# CricketClubApp
 
-Local-first website for Heartlake Cricket Club. This is the web version we can test quickly before turning the same product into a native app.
+Local-first website for CricketClubApp. This is the web version we can test quickly before turning the same product into a native app.
 
 ## What it includes
 
@@ -26,7 +26,7 @@ This section captures the user requirements in the order they were given and ref
 
 ### Original feature scope
 
-1. Create a cricket website app for Heartlake Club.
+1. Create a cricket website app for CricketClubApp Club.
 2. Add team members and profile creation with picture, age, and related details.
 3. Add scoring.
 4. Add visiting teams.
@@ -46,7 +46,7 @@ This section captures the user requirements in the order they were given and ref
 
 16. Process files from the uploads directory automatically.
 17. Ignore duplicate uploads and move duplicates into a duplicate-review folder together with the original file.
-18. Add players found in reviewed Heartlake scorecards into the Heartlake player list and into the database.
+18. Add players found in reviewed CricketClubApp scorecards into the CricketClubApp player list and into the database.
 19. Store players against their team name in the system.
 20. Support player full names and aliases and let the system detect them.
 21. Do not hard-code aliases or full-name mappings in code; persist them in the database.
@@ -54,10 +54,10 @@ This section captures the user requirements in the order they were given and ref
 23. Treat `Amit S` and `Amit Sethi` as the same player.
 24. Treat `Amit`, `Amit G`, and `Amit Gaba` as the same player.
 25. Keep `Amit S` and `Amit G` as different players.
-26. `John` from Heartlake can also play for `Coca Cola XI`.
+26. `John` from CricketClubApp can also play for `Coca Cola XI`.
 27. `Vinay` in the Coca Cola team is the same person as `Vinny`.
-28. `Imran XI` is Imran's primary team and `Heartlake` is secondary.
-29. Credit Imran's catches against Heartlake when he played for another team.
+28. `Imran XI` is Imran's primary team and `CricketClubApp` is secondary.
+29. Credit Imran's catches against CricketClubApp when he played for another team.
 
 ### Season and archive rules
 
@@ -67,7 +67,7 @@ This section captures the user requirements in the order they were given and ref
 33. Retrieve archive date from the scorecard itself when possible; otherwise use image metadata.
 34. Allow retrieval of old scorecards by exact date, by player, or by year.
 35. Treat all currently loaded uploaded scorecards as `2025 Season` unless an explicit historical year is provided.
-36. Keep the top-level site season anchored to the running Heartlake season, not to a historical club season.
+36. Keep the top-level site season anchored to the running CricketClubApp season, not to a historical club season.
 
 ### Player stats, rankings, and chat behavior
 
@@ -156,7 +156,7 @@ This section captures the user requirements in the order they were given and ref
 
 ## Current behavior summary
 
-- `2026 Summer Season` is the running Heartlake season shown in the site header.
+- `2026 Summer Season` is the running CricketClubApp season shown in the site header.
 - Historical archive scorecards are stored separately from live fixtures.
 - Reviewed historical scorecards count as confirmed historical match history in chat/stat answers.
 - Chat uses persisted member names, full names, aliases, memberships, fixtures, archives, and rankings as its source of truth.
@@ -182,7 +182,7 @@ This section captures the user requirements in the order they were given and ref
 - The local UI is designed as the web baseline before a later native iPhone app conversion.
 - The repo now has an Azure App Service deployment plan checked in under `.azure/plan.md`, App Service infrastructure under `infra/`, and a GitHub Actions workflow under `.github/workflows/deploy.yml`.
 - Runtime data such as SQLite, uploads, duplicates, and cache files are treated as server data, while JSON snapshots are kept as the recovery source in Git.
-- Dashboard availability now uses the signed-in auth token, and fixture/availability flows are tested against the live selected club rather than the default Heartlake club.
+- Dashboard availability now uses the signed-in auth token, and fixture/availability flows are tested against the live selected club rather than the default CricketClubApp.
 
 ## Run locally
 
@@ -207,8 +207,8 @@ Open `http://127.0.0.1:8091`
 - `app/static/clubs.html`: primary-club selection
 - `app/static/season_setup.html`: club-admin season planning
 - `app/static/player_availability.html`: logged-in player availability
-- `app/data/seed.json`: Heartlake seed data
-- `app/data/heartlake.db`: local SQLite database used for persistence at runtime
+- `app/data/seed.json`: CricketClubApp seed data
+- `app/data/cricketclubapp.db`: local SQLite database used for persistence at runtime
 - `app/uploads/`: accepted scorecard images
 - `app/duplicates/`: duplicate-review bundles containing both the original and duplicate file
 
@@ -244,13 +244,13 @@ Use the website AI box with natural-language questions like these:
 - `Show old scorecards from 2025`
 - `Search Amit Gaba and show his stats`
 - `Follow Amit Sethi`
-- `Set Heartlake Cricket Club as my primary club`
+- `Set CricketClubApp as my primary club`
 
 ## Archive Review Prompt Examples
 
 When reviewing imported historical scorecards, use prompts or pasted review notes in this style:
 
-- `Heartlake 182/8 vs Coca Cola, extras 36`
+- `CricketClubApp 182/8 vs Coca Cola, extras 36`
 - `Amit S 68, John 24, Checkley 4, Navesh 8, Steve 10`
 - `Map Amit to Amit G only when the scorecard clearly refers to Amit Gaba`
 - `Treat Amit S and Amit Sethi as the same saved player only when that alias exists in the database`

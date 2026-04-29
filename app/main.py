@@ -26,10 +26,28 @@ import logging
 logger = logging.getLogger("CricketClubApp")
 
 if not logger.handlers:
-    logging.basicConfig(
-        level=logging.DEBUG,
-        format="%(asctime)s [%(levelname)s] [%(name)s] %(message)s",
-    )
+    app_env = str(
+        os.getenv("APP_ENV")
+        or os.getenv("ENVIRONMENT")
+        or os.getenv("AZURE_ENVIRONMENT")
+        or os.getenv("WEBSITE_INSTANCE_ID")
+        or "local"
+    ).strip().lower()
+    log_level = logging.DEBUG if app_env in {"local", "dev", "development", "debug", ""} else logging.ERROR
+    root_logger = logging.getLogger()
+    root_logger.setLevel(log_level)
+    if not root_logger.handlers:
+        stream_handler = logging.StreamHandler()
+        stream_handler.setLevel(log_level)
+        stream_handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] [%(name)s] %(message)s"))
+        root_logger.addHandler(stream_handler)
+    else:
+        for handler in root_logger.handlers:
+            handler.setLevel(log_level)
+            if handler.formatter is None:
+                handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] [%(name)s] %(message)s"))
+    logger.setLevel(log_level)
+    logger.propagate = True
 
 try:
     from cricket_brain import answer_question, get_llm_status
@@ -117,7 +135,7 @@ STATIC_DIR = BASE_DIR / "static"
 
 
 app = FastAPI(
-    title="Heartlake Cricket Club",
+    title="CricketClubApp",
     version="0.2.0",
     description="Local website for club operations, scoring, availability, archive recovery, and AI-assisted queries.",
 )
@@ -131,6 +149,44 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def _log_http_requests(request: Request, call_next):
+    start = datetime.utcnow()
+    path = request.url.path
+    query = request.url.query
+    if logger.isEnabledFor(logging.DEBUG):
+        logger.debug(
+            "HTTP request start → method=%s path=%s query=%s auth_cookie=%s",
+            request.method,
+            path,
+            query or "",
+            bool(request.cookies.get("cricketClubAppAuthToken")),
+        )
+    try:
+        response = await call_next(request)
+    except Exception:
+        logger.exception("HTTP request error → method=%s path=%s", request.method, path)
+        raise
+    duration_ms = int((datetime.utcnow() - start).total_seconds() * 1000)
+    if logger.isEnabledFor(logging.DEBUG):
+        logger.debug(
+            "HTTP request complete → method=%s path=%s status=%s duration_ms=%s",
+            request.method,
+            path,
+            getattr(response, "status_code", 0),
+            duration_ms,
+        )
+    elif getattr(response, "status_code", 200) >= 400:
+        logger.error(
+            "HTTP request failed → method=%s path=%s status=%s duration_ms=%s",
+            request.method,
+            path,
+            getattr(response, "status_code", 0),
+            duration_ms,
+        )
+    return response
 
 app.mount("/assets", StaticFiles(directory=STATIC_DIR), name="assets")
 app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
@@ -182,20 +238,20 @@ def normalize_name(name: str) -> str:
     return (name or "").strip().lower()
 
 def _set_auth_cookies(response: Response, token: str, club_id: str = "") -> None:
-    response.set_cookie("heartlakeAuthToken", token, httponly=False, samesite="lax", path="/")
-    response.set_cookie("heartlakePrimaryClubId", club_id or "", httponly=False, samesite="lax", path="/")
+    response.set_cookie("cricketClubAppAuthToken", token, httponly=False, samesite="lax", path="/")
+    response.set_cookie("cricketClubAppPrimaryClubId", club_id or "", httponly=False, samesite="lax", path="/")
 
 
 def _clear_auth_cookies(response: Response) -> None:
-    response.delete_cookie("heartlakeAuthToken", path="/")
-    response.delete_cookie("heartlakePrimaryClubId", path="/")
+    response.delete_cookie("cricketClubAppAuthToken", path="/")
+    response.delete_cookie("cricketClubAppPrimaryClubId", path="/")
 
 
 def _auth_token_from_request(request: Request, x_auth_token: str | None = None) -> str:
     token = str(x_auth_token or "").strip()
     if token:
         return token
-    return str(request.cookies.get("heartlakeAuthToken") or "").strip()
+    return str(request.cookies.get("cricketClubAppAuthToken") or "").strip()
 
 
 def _clubs_page_html(request: Request, search: str = "", focus_club_id: str = "") -> HTMLResponse:
@@ -522,7 +578,7 @@ def _clubs_page_html(request: Request, search: str = "", focus_club_id: str = ""
       <head>
         <meta charset="UTF-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-        <title>Select Club · Heartlake Clubs</title>
+        <title>Select Club · CricketClubApp</title>
         <link rel="stylesheet" href="/assets/styles.css?v=20260429f" />
       </head>
       <body>
@@ -626,7 +682,7 @@ class MemberCreateRequest(BaseModel):
     name: str
     full_name: str = ""
     gender: str = ""
-    team_name: str = "Heartlake"
+    team_name: str = "Club"
     club_id: str = ""
     team_memberships: list[str] | str = []
     aliases: list[str] | str = []
@@ -1578,6 +1634,41 @@ def _unlink_member_from_auth(member_id: str) -> None:
             )
 
 
+def _unlink_member_from_club_auth(member_id: str, club_id: str, fallback_primary_club_id: str = "") -> None:
+    clean_member_id = str(member_id or "").strip()
+    clean_club_id = str(club_id or "").strip()
+    if not clean_member_id or not clean_club_id:
+        return
+    with _auth_connection() as connection:
+        user_rows = connection.execute(
+            "SELECT id, primary_club_id FROM app_users WHERE member_id = ?",
+            (clean_member_id,),
+        ).fetchall()
+        user_ids = [int(row["id"]) for row in user_rows]
+        connection.execute(
+            "DELETE FROM app_user_club_roles WHERE club_id = ? AND user_id IN ({})".format(",".join("?" for _ in user_ids)) if user_ids else "DELETE FROM app_user_club_roles WHERE club_id = ?",
+            (clean_club_id, *user_ids) if user_ids else (clean_club_id,),
+        )
+        connection.execute(
+            "DELETE FROM app_player_season_availability WHERE club_id = ? AND user_id IN ({})".format(",".join("?" for _ in user_ids)) if user_ids else "DELETE FROM app_player_season_availability WHERE club_id = ?",
+            (clean_club_id, *user_ids) if user_ids else (clean_club_id,),
+        )
+        for row in user_rows:
+            current_primary = str(row["primary_club_id"] or "").strip()
+            if current_primary.lower() != clean_club_id.lower():
+                continue
+            replacement = str(fallback_primary_club_id or "").strip() or None
+            connection.execute(
+                "UPDATE app_users SET primary_club_id = ? WHERE id = ?",
+                (replacement, int(row["id"])),
+            )
+        if user_ids and fallback_primary_club_id:
+            connection.execute(
+                "UPDATE app_auth_sessions SET current_club_id = ? WHERE user_id IN ({}) AND current_club_id = ?".format(",".join("?" for _ in user_ids)),
+                (fallback_primary_club_id, *user_ids, clean_club_id),
+            )
+
+
 def _retarget_club_links_after_deletion(removed_club_id: str, replacement_club_id: str = "") -> None:
     removed = str(removed_club_id or "").strip()
     if not removed:
@@ -1647,6 +1738,9 @@ def _retarget_member_team_memberships(member: dict[str, Any], removed_club: dict
             if not member["club_memberships"]:
                 member.pop("club_memberships", None)
         return True, ""
+    member["team_name"] = ""
+    if "club_memberships" in member:
+        member.pop("club_memberships", None)
     return False, str(member.get("name") or "").strip()
 
 
@@ -2453,7 +2547,7 @@ def _admin_center_html(request: Request) -> HTMLResponse:
                   <small>{html.escape(member.get("team_name") or "")}</small>
                   <form class="admin-delete-form" method="post" action="/api/admin/clubs/{html.escape(str(club.get('id') or ''))}/members/{html.escape(str(member.get('id') or ''))}/delete">
                     <label class="stack-label">
-                      Type the exact player name to confirm removal
+                      Type the exact player name to confirm unlinking from this club
                       <input name="confirmation" type="text" placeholder="{html.escape(member.get('name') or '')}" autocomplete="off" required />
                     </label>
                     <button class="danger-button" type="submit">Remove from club</button>
@@ -2480,14 +2574,18 @@ def _admin_center_html(request: Request) -> HTMLResponse:
                         <p>{html.escape(upload.get('club_name') or upload.get('resolved_club_name') or 'Club TBD')} · {html.escape(upload.get('season') or 'Season TBD')}</p>
                         <small>{html.escape(upload.get('archive_date') or 'Date TBD')} · {html.escape(upload.get('status') or 'Pending review')}</small>
                         <p>{html.escape(upload.get('extracted_summary') or 'Review the extracted draft before approving.')}</p>
-                        <label class="stack-label">
-                          Reviewed extraction JSON
-                          <textarea class="admin-review-text" rows="10" spellcheck="false">{html.escape(json.dumps(template_value, indent=2))}</textarea>
-                        </label>
+                        <form class="admin-review-form" method="post" action="/api/admin/archive/{html.escape(str(upload.get('id') or ''))}/review-form">
+                          <label class="stack-label">
+                            Reviewed extraction JSON
+                            <textarea class="admin-review-text" name="text" rows="10" spellcheck="false">{html.escape(json.dumps(template_value, indent=2))}</textarea>
+                          </label>
+                          <div class="inline-actions">
+                            <button class="secondary-button" type="submit" data-action="save">Save review</button>
+                            <button class="primary-button" type="submit" data-action="approve" formaction="/api/admin/archive/{html.escape(str(upload.get('id') or ''))}/approve-form">Approve</button>
+                          </div>
+                        </form>
                         <div class="inline-actions">
                           <button class="secondary-button" type="button" data-action="extract">Re-extract</button>
-                          <button class="secondary-button" type="button" data-action="save">Save review</button>
-                          <button class="primary-button" type="button" data-action="approve">Approve</button>
                           <button class="secondary-button" type="button" data-action="delete">Delete</button>
                         </div>
                       </article>
@@ -2517,7 +2615,7 @@ def _admin_center_html(request: Request) -> HTMLResponse:
       <head>
         <meta charset="UTF-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-        <title>Admin Center · Heartlake Clubs</title>
+        <title>Admin Center · CricketClubApp</title>
         <link rel="stylesheet" href="/assets/styles.css?v=20260429f" />
       </head>
       <body>
@@ -2551,7 +2649,7 @@ def _admin_center_html(request: Request) -> HTMLResponse:
                 <div class="panel-head compact-head">
                   <div>
                     <p class="section-kicker">Club Controls</p>
-                    <h2>Delete club and players</h2>
+                    <h2>Delete club and unlink players</h2>
                   </div>
                 </div>
                 <p class="lede">Superadmin only. Select a club first, then remove the club or remove players from that club’s roster.</p>
@@ -2599,7 +2697,7 @@ def _admin_center_html(request: Request) -> HTMLResponse:
           </section>
         </div>
         <script src="/assets/multipage.js?v=20260429d"></script>
-        <script src="/assets/admin_center.js?v=20260429l"></script>
+        <script src="/assets/admin_center.js?v=20260429m"></script>
       </body>
     </html>
     """
@@ -2666,10 +2764,10 @@ def _signin_redirect_page(token: str, club_id: str) -> HTMLResponse:
           </head>
           <body>
             <script>
-              window.localStorage.setItem("heartlakeAuthToken", {safe_token});
-              window.localStorage.setItem("heartlakePrimaryClubId", {safe_club_id});
-              document.cookie = "heartlakeAuthToken=" + encodeURIComponent({safe_token}) + "; path=/; samesite=lax";
-              document.cookie = "heartlakePrimaryClubId=" + encodeURIComponent({safe_club_id}) + "; path=/; samesite=lax";
+              window.localStorage.setItem("cricketClubAppAuthToken", {safe_token});
+              window.localStorage.setItem("cricketClubAppPrimaryClubId", {safe_club_id});
+              document.cookie = "cricketClubAppAuthToken=" + encodeURIComponent({safe_token}) + "; path=/; samesite=lax";
+              document.cookie = "cricketClubAppPrimaryClubId=" + encodeURIComponent({safe_club_id}) + "; path=/; samesite=lax";
               window.location.href = "/clubs";
             </script>
             <p>Signing you in...</p>
@@ -2731,6 +2829,7 @@ def register_page() -> FileResponse:
 
 @app.get("/clubs")
 def clubs_page(request: Request, search: str = "", focus_club_id: str = "") -> Response:
+    logger.debug("Clubs page requested → search=%s focus_club_id=%s", search, focus_club_id)
     session = _require_page_session(request)
     if isinstance(session, RedirectResponse):
         return session
@@ -2740,6 +2839,7 @@ def clubs_page(request: Request, search: str = "", focus_club_id: str = "") -> R
 @app.post("/clubs/select")
 def clubs_select(request: Request, club_id: str = Form(...), search: str = Form(default="")) -> Response:
     token = _auth_token_from_request(request)
+    logger.debug("Club selection requested → club_id=%s search=%s token_present=%s", club_id, search, bool(token))
     if not token:
         return HTMLResponse(
             """
@@ -2783,8 +2883,8 @@ def signout_page() -> HTMLResponse:
           </head>
           <body>
             <script>
-              window.localStorage.removeItem("heartlakeAuthToken");
-              window.localStorage.removeItem("heartlakePrimaryClubId");
+              window.localStorage.removeItem("cricketClubAppAuthToken");
+              window.localStorage.removeItem("cricketClubAppPrimaryClubId");
               window.location.href = "/signin";
             </script>
             <p>Signing you out...</p>
@@ -2824,6 +2924,7 @@ def player_profile_page(request: Request) -> Response:
 
 @app.get("/dashboard")
 def dashboard_page(request: Request) -> Response:
+    logger.debug("Dashboard page requested")
     session = _require_page_session(request)
     if isinstance(session, RedirectResponse):
         return session
@@ -2839,9 +2940,10 @@ def health() -> dict[str, Any]:
 def dashboard(request: Request, focus_club_id: str | None = None) -> dict[str, Any]:
     resolved_focus_club_id = (
         focus_club_id
-        or str(request.cookies.get("heartlakePrimaryClubId") or "").strip()
+        or str(request.cookies.get("cricketClubAppPrimaryClubId") or "").strip()
         or None
     )
+    logger.debug("Dashboard API requested → focus_club_id=%s resolved_focus_club_id=%s", focus_club_id or "", resolved_focus_club_id or "")
     dashboard_data = current_dashboard(load_store(), resolved_focus_club_id)
     token = _auth_token_from_request(request)
     if token:
@@ -3376,6 +3478,7 @@ def signin_quick_form(
 @app.get("/api/auth/me")
 def auth_me(x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
     user_row, current_club_id = _auth_user_from_token(x_auth_token)
+    logger.debug("Auth me requested → user_id=%s current_club_id=%s", user_row["id"], current_club_id or "")
     store = load_store()
     return {
         "user": _auth_user_payload(user_row, current_club_id),
@@ -3388,6 +3491,12 @@ def select_club(request: SelectClubRequest, x_auth_token: str | None = Header(de
     user_row, _ = _auth_user_from_token(x_auth_token)
     store = load_store()
     selected_club = _selected_club(store, request.club_id)
+    logger.debug(
+        "Select club API requested → user_id=%s club_id=%s club_name=%s",
+        user_row["id"],
+        selected_club.get("id", ""),
+        selected_club.get("name", ""),
+    )
     with _auth_connection() as connection:
         connection.execute(
             "UPDATE app_auth_sessions SET current_club_id = ? WHERE token = ?",
@@ -3918,21 +4027,20 @@ def _delete_club_member_core(club_id: str, member_id: str, token: str | None, co
 
     expected = str(member.get("name") or "").strip()
     if str(confirmation or "").strip() != expected:
-        raise HTTPException(status_code=400, detail=f'Type "{expected}" exactly to confirm removal.')
+        raise HTTPException(status_code=400, detail=f'Type "{expected}" exactly to confirm removal from the club.')
 
     keep_member, removed_name = _retarget_member_team_memberships(member, club)
-    if not keep_member:
-        store["members"] = [
-            item
-            for item in store.get("members", [])
-            if str(item.get("id") or "").strip() != str(member_id or "").strip()
-        ]
-        _prune_member_references(store, member_id, removed_name or str(member.get("name") or ""), club)
-        _unlink_member_from_auth(member_id)
+    remaining_memberships = list(member.get("club_memberships", []) or [])
+    fallback_primary_club_id = ""
+    if remaining_memberships:
+        fallback_primary_club_id = str(remaining_memberships[0].get("club_id") or "").strip()
+    elif keep_member:
+        fallback_primary_club_id = str(member.get("team_memberships", [{}])[0].get("club_id") or "").strip() if member.get("team_memberships") else ""
+    _unlink_member_from_club_auth(member_id, str(club.get("id") or ""), fallback_primary_club_id)
     save_store(store)
     refreshed = load_store()
     return {
-        "message": f"{member.get('name') or 'Player'} removed from {club.get('name') or 'the club'}.",
+        "message": f"{member.get('name') or 'Player'} removed from {club.get('name') or 'the club'} roster.",
         "dashboard": current_dashboard(refreshed, club.get("id", "")),
         "club_id": str(club.get("id") or "").strip(),
         "club_name": str(club.get("name") or "").strip(),
@@ -4393,10 +4501,12 @@ def reset_scores(x_auth_token: str | None = Header(default=None)) -> dict[str, A
 @app.post("/api/archive/{upload_id}/extract")
 def extract_archive(upload_id: str, focus_club_id: str | None = None, x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
     _require_permission(x_auth_token, "manage_scorecards")
+    logger.debug("Archive extract requested → upload_id=%s focus_club_id=%s", upload_id, focus_club_id or "")
     store = load_store()
     try:
         extracted = extract_archive_by_id(store, upload_id)
     except ValueError as exc:
+        logger.error("Archive extract failed → upload_id=%s error=%s", upload_id, exc)
         raise HTTPException(status_code=404, detail=str(exc))
     save_store(store)
     refreshed = load_store()
@@ -4411,11 +4521,13 @@ def extract_archive(upload_id: str, focus_club_id: str | None = None, x_auth_tok
 @app.post("/api/archive/{upload_id}/import-extraction")
 def import_archive_extraction(upload_id: str, request: ArchiveImportRequest, focus_club_id: str | None = None, x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
     _require_permission(x_auth_token, "manage_scorecards")
+    logger.debug("Archive import requested → upload_id=%s focus_club_id=%s text_len=%s", upload_id, focus_club_id or "", len(request.text or ""))
     store = load_store()
     selected_club = _selected_club(store, focus_club_id)
     try:
         upload = get_archive_or_404(store, upload_id)
     except ValueError as exc:
+        logger.error("Archive import failed → upload_id=%s error=%s", upload_id, exc)
         raise HTTPException(status_code=404, detail=str(exc))
 
     upload["club_id"] = upload.get("club_id") or selected_club.get("id", "")
@@ -4441,10 +4553,12 @@ def import_archive_extraction(upload_id: str, request: ArchiveImportRequest, foc
 @app.post("/api/admin/archive/{upload_id}/review")
 def save_archive_review(upload_id: str, request: ArchiveReviewRequest, x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
     user_row, current_club_id = _require_permission(x_auth_token, "manage_scorecards")
+    logger.debug("Archive review save requested → upload_id=%s club_id=%s text_len=%s", upload_id, current_club_id or "", len(request.text or ""))
     store = load_store()
     try:
         upload = get_archive_or_404(store, upload_id)
     except ValueError as exc:
+        logger.error("Archive review save failed → upload_id=%s error=%s", upload_id, exc)
         raise HTTPException(status_code=404, detail=str(exc))
 
     club = _selected_club(store, current_club_id)
@@ -4461,6 +4575,29 @@ def save_archive_review(upload_id: str, request: ArchiveReviewRequest, x_auth_to
     }
 
 
+@app.post("/api/admin/archive/{upload_id}/review-form")
+def save_archive_review_form(
+    request: Request,
+    upload_id: str,
+    text: str = Form(default=""),
+) -> Response:
+    try:
+        logger.debug("Archive review form submitted → upload_id=%s text_len=%s", upload_id, len(text or ""))
+        result = save_archive_review(
+            upload_id,
+            ArchiveReviewRequest(text=text),
+            x_auth_token=_auth_token_from_request(request),
+        )
+        archive = result.get("archive", {}) if isinstance(result, dict) else {}
+        return _redirect_to_admin_center(
+            str(archive.get("club_id") or result.get("dashboard", {}).get("club", {}).get("id") or ""),
+            result.get("message", "Reviewed extraction saved."),
+            "success",
+        )
+    except HTTPException as exc:
+        return _redirect_to_admin_center("", str(exc.detail), "error")
+
+
 @app.post("/api/scorecards/upload")
 async def upload_scorecard(
     request: Request,
@@ -4471,6 +4608,7 @@ async def upload_scorecard(
     file: UploadFile = File(...),
 ) -> dict[str, Any]:
     _require_permission(_auth_token_from_request(request, x_auth_token), "manage_scorecards")
+    logger.debug("Scorecard upload requested → match_id=%s season=%s focus_club_id=%s filename=%s", match_id or "", season or "", focus_club_id or "", file.filename or "")
     store = load_store()
     selected_club = _selected_club(store, focus_club_id)
     related_club_ids = _archive_match_club_ids(store, selected_club.get("id", ""), match_id or "")
@@ -4482,6 +4620,7 @@ async def upload_scorecard(
     incoming_hash = file_sha256_from_bytes(content)
     for existing in store["archive_uploads"]:
         if existing.get("file_hash") == incoming_hash:
+            logger.debug("Duplicate scorecard upload detected → filename=%s hash=%s", file.filename or "", incoming_hash)
             duplicate_record = create_duplicate_record_from_bytes(
                 original_path=Path(existing["file_path"]),
                 duplicate_file_name=file.filename or f"duplicate{suffix}",
@@ -4517,6 +4656,7 @@ async def upload_scorecard(
     record = extract_archive_by_id(store, record["id"])
     record["extraction_template"] = scorecard_template_from_archive(record)
     save_store(store)
+    logger.debug("Scorecard upload saved → archive_id=%s club_id=%s file=%s", record.get("id", ""), record.get("club_id", ""), record.get("file_name", ""))
     return {
                 "message": f"Scorecard image '{record.get('original_file_name') or file.filename or file_token}' uploaded successfully and queued for admin review.",
                 "dashboard": current_dashboard(load_store(), selected_club.get("id", "")),
@@ -4639,10 +4779,12 @@ def approve_archive(
     x_auth_token: str | None = Header(default=None),
 ) -> dict[str, Any]:
     user_row, current_club_id = _require_permission(x_auth_token, "manage_scorecards")
+    logger.debug("Archive approve requested → upload_id=%s club_id=%s has_text=%s", upload_id, current_club_id or "", bool(request and str(request.text or "").strip()))
     store = load_store()
     try:
         upload = get_archive_or_404(store, upload_id)
     except ValueError as exc:
+        logger.error("Archive approve failed → upload_id=%s error=%s", upload_id, exc)
         raise HTTPException(status_code=404, detail=str(exc))
     club = _selected_club(store, current_club_id)
     inferred_club = _resolve_archive_club(upload, store.get("clubs", [])) or club
@@ -4677,6 +4819,29 @@ def approve_archive(
         ],
         "dashboard": current_dashboard(refreshed, updated.get("club_id") or club.get("id", "")),
     }
+
+
+@app.post("/api/admin/archive/{upload_id}/approve-form")
+def approve_archive_form(
+    request: Request,
+    upload_id: str,
+    text: str = Form(default=""),
+) -> Response:
+    try:
+        logger.debug("Archive approve form submitted → upload_id=%s text_len=%s", upload_id, len(text or ""))
+        result = approve_archive(
+            upload_id,
+            ArchiveReviewRequest(text=text) if text else None,
+            x_auth_token=_auth_token_from_request(request),
+        )
+        archive = result.get("archive", {}) if isinstance(result, dict) else {}
+        return _redirect_to_admin_center(
+            str(archive.get("club_id") or result.get("dashboard", {}).get("club", {}).get("id") or ""),
+            result.get("message", "Archive approved."),
+            "success",
+        )
+    except HTTPException as exc:
+        return _redirect_to_admin_center("", str(exc.detail), "error")
 
 
 @app.delete("/api/admin/archive/{upload_id}")

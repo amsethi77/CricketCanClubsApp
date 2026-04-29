@@ -3,12 +3,12 @@ console.error("🚨 REGISTER JS FINAL LOADED - 20260428");
 document.addEventListener("DOMContentLoaded", () => {
   console.error("🚨 DOM READY");
 
-  if (!window.HeartlakePages) {
+  if (!window.CricketClubAppPages) {
     console.error("❌ ClubPages not available");
     return;
   }
 
-  const { getJson, postJson, setAuthToken, setPrimaryClubId, optionMarkup } = window.HeartlakePages;
+  const { getJson, postJson, setAuthToken, setPrimaryClubId, optionMarkup } = window.CricketClubAppPages;
 
   const form = document.getElementById("registerForm");
   const roleSelect = document.getElementById("registerRole");

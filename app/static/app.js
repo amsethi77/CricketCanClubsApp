@@ -74,7 +74,7 @@ function getCookieValue(name) {
 
 const savedChatHistory = (() => {
   try {
-    return JSON.parse(window.sessionStorage.getItem("heartlakeChatHistory") || "[]");
+    return JSON.parse(window.sessionStorage.getItem("cricketClubAppChatHistory") || "[]");
   } catch {
     return [];
   }
@@ -90,20 +90,34 @@ const state = {
   selectedPlayerName: null,
   selectedAvailabilityPlayerName: null,
   selectedTeamName: null,
-  selectedFocusClubId: getCookieValue("heartlakePrimaryClubId") || window.localStorage.getItem("heartlakePrimaryClubId") || null,
+  selectedFocusClubId: getCookieValue("cricketClubAppPrimaryClubId") || window.localStorage.getItem("cricketClubAppPrimaryClubId") || null,
   selectedSeasonYear: null,
   expandedLists: (() => {
     try {
-      return JSON.parse(window.sessionStorage.getItem("heartlakeExpandedLists") || "{}");
+      return JSON.parse(window.sessionStorage.getItem("cricketClubAppExpandedLists") || "{}");
     } catch {
       return {};
     }
   })(),
   chatHistory: Array.isArray(savedChatHistory) ? savedChatHistory : [],
   chatSessionId:
-    window.sessionStorage.getItem("heartlakeChatSessionId") ||
+    window.sessionStorage.getItem("cricketClubAppChatSessionId") ||
     (window.crypto?.randomUUID ? window.crypto.randomUUID() : `chat-${Date.now()}`),
 };
+
+const dashboardDebugEnabled = ["localhost", "127.0.0.1", ""].includes(String(window.location.hostname || "").trim());
+
+function dashboardDebug(...args) {
+  if (dashboardDebugEnabled && typeof console !== "undefined" && console.debug) {
+    console.debug("[Dashboard]", ...args);
+  }
+}
+
+function dashboardError(...args) {
+  if (typeof console !== "undefined" && console.error) {
+    console.error("[Dashboard]", ...args);
+  }
+}
 
 const ARCHIVE_SEASON_LABEL = "2025 Season";
 const DEFAULT_LIST_LIMIT = 5;
@@ -279,9 +293,9 @@ const elements = {
   archiveScorecards: document.getElementById("archiveScorecards"),
   archiveApplyForm: document.getElementById("archiveApplyForm"),
   archiveSelect: document.getElementById("archiveSelect"),
-  archiveHeartlakeRunsInput: document.getElementById("archiveHeartlakeRunsInput"),
-  archiveHeartlakeWicketsInput: document.getElementById("archiveHeartlakeWicketsInput"),
-  archiveHeartlakeOversInput: document.getElementById("archiveHeartlakeOversInput"),
+  archiveCricketClubAppRunsInput: document.getElementById("archiveCricketClubAppRunsInput"),
+  archiveCricketClubAppWicketsInput: document.getElementById("archiveCricketClubAppWicketsInput"),
+  archiveCricketClubAppOversInput: document.getElementById("archiveCricketClubAppOversInput"),
   archiveOpponentRunsInput: document.getElementById("archiveOpponentRunsInput"),
   archiveOpponentWicketsInput: document.getElementById("archiveOpponentWicketsInput"),
   archiveOpponentOversInput: document.getElementById("archiveOpponentOversInput"),
@@ -299,10 +313,10 @@ if (elements.scorecardLabel && elements.scorecardLabel.textContent === "Loading.
   elements.scorecardLabel.textContent = "0";
 }
 
-window.sessionStorage.setItem("heartlakeChatSessionId", state.chatSessionId);
+window.sessionStorage.setItem("cricketClubAppChatSessionId", state.chatSessionId);
 
 async function getJson(url) {
-  const token = window.localStorage.getItem("heartlakeAuthToken") || getCookieValue("heartlakeAuthToken") || "";
+  const token = window.localStorage.getItem("cricketClubAppAuthToken") || getCookieValue("cricketClubAppAuthToken") || "";
   const response = await fetch(url, {
     headers: token ? { "X-Auth-Token": token } : undefined,
   });
@@ -311,7 +325,7 @@ async function getJson(url) {
 }
 
 async function postJson(url, payload) {
-  const token = window.localStorage.getItem("heartlakeAuthToken") || getCookieValue("heartlakeAuthToken") || "";
+  const token = window.localStorage.getItem("cricketClubAppAuthToken") || getCookieValue("cricketClubAppAuthToken") || "";
   const response = await fetch(url, {
     method: "POST",
     headers: token ? { "Content-Type": "application/json", "X-Auth-Token": token } : { "Content-Type": "application/json" },
@@ -350,7 +364,7 @@ function setStatus(message, tone = "info") {
 }
 
 function saveExpandedLists() {
-  window.sessionStorage.setItem("heartlakeExpandedLists", JSON.stringify(state.expandedLists || {}));
+  window.sessionStorage.setItem("cricketClubAppExpandedLists", JSON.stringify(state.expandedLists || {}));
 }
 
 function isListExpanded(key) {
@@ -413,15 +427,20 @@ function isPlayerFollowed(playerName) {
   return Boolean(state.dashboard?.viewer_profile?.followed_player_names?.includes(playerName));
 }
 
-async function runAction(action, successMessage = "") {
+async function runAction(action, successMessage = "", label = "dashboard action") {
+  dashboardDebug(`Action start → ${label}`);
   try {
     const result = await action();
+    dashboardDebug(`Action success → ${label}`, {
+      hasResult: result !== null && result !== undefined,
+      type: typeof result,
+    });
     if (successMessage) {
       setStatus(successMessage, "success");
     }
     return result;
   } catch (error) {
-    console.error(error);
+    dashboardError(`Action failed → ${label}`, error);
     setStatus(error.message || "Something went wrong.", "error");
     return null;
   }
@@ -785,7 +804,7 @@ function syncPlayerEditForm(player) {
     elements.editPlayerGender.value = player.gender || "";
   }
   elements.editPlayerAliases.value = (player.aliases || []).join(", ");
-  elements.editPlayerTeamName.value = player.team_name || "Heartlake";
+  elements.editPlayerTeamName.value = player.team_name || "Club";
   elements.editPlayerTeamMemberships.value = (player.team_memberships || [])
     .map((membership) => (typeof membership === "string" ? membership : membership.display_name || membership.team_name || ""))
     .filter(Boolean)
@@ -949,7 +968,7 @@ function addMessage(role, text) {
   elements.chatMessages.scrollTop = elements.chatMessages.scrollHeight;
   state.chatHistory.push({ role, text });
   state.chatHistory = state.chatHistory.slice(-12);
-  window.sessionStorage.setItem("heartlakeChatHistory", JSON.stringify(state.chatHistory));
+  window.sessionStorage.setItem("cricketClubAppChatHistory", JSON.stringify(state.chatHistory));
 }
 
 function restoreChatHistory() {
@@ -1125,15 +1144,15 @@ function renderViewerProfile(dashboard) {
   const focusClub = dashboard.focus_club || dashboard.club || {};
   state.selectedFocusClubId = focusClub.id || profile.primary_club_id || state.selectedFocusClubId;
   if (state.selectedFocusClubId) {
-    window.localStorage.setItem("heartlakePrimaryClubId", state.selectedFocusClubId);
-    document.cookie = `heartlakePrimaryClubId=${encodeURIComponent(state.selectedFocusClubId)}; path=/; samesite=lax`;
+    window.localStorage.setItem("cricketClubAppPrimaryClubId", state.selectedFocusClubId);
+    document.cookie = `cricketClubAppPrimaryClubId=${encodeURIComponent(state.selectedFocusClubId)}; path=/; samesite=lax`;
   }
   elements.viewerDisplayNameInput.value = profile.display_name || "";
   elements.viewerMobileInput.value = profile.mobile || "";
   elements.viewerEmailInput.value = profile.email || "";
   document.title = `${focusClub.name || "Club"} Matchday Hub`;
   elements.heroEyebrow.textContent = `${focusClub.short_name || focusClub.name || "Club"} Matchday Hub`;
-  elements.focusClubBadge.textContent = `Primary club: ${focusClub.name || dashboard.club.name || "Heartlake Cricket Club"}`;
+  elements.focusClubBadge.textContent = `Primary club: ${focusClub.name || dashboard.club.name || "Club"}`;
   populatePrimaryClubSelect(dashboard.clubs || []);
   renderLandingPlayerResults();
   renderLandingEvents(dashboard.landing_upcoming_events || []);
@@ -1317,9 +1336,9 @@ function renderFormValues(match) {
   elements.heartlakeRunsInput.placeholder = `${clubShort} runs`;
   elements.heartlakeWicketsInput.placeholder = `${clubShort} wickets`;
   elements.heartlakeOversInput.placeholder = `${clubShort} overs`;
-  elements.archiveHeartlakeRunsInput.placeholder = `${clubShort} runs`;
-  elements.archiveHeartlakeWicketsInput.placeholder = `${clubShort} wickets`;
-  elements.archiveHeartlakeOversInput.placeholder = `${clubShort} overs`;
+  elements.archiveCricketClubAppRunsInput.placeholder = `${clubShort} runs`;
+  elements.archiveCricketClubAppWicketsInput.placeholder = `${clubShort} wickets`;
+  elements.archiveCricketClubAppOversInput.placeholder = `${clubShort} overs`;
   elements.captainInput.value = match.heartlake_captain || "";
   elements.venueInput.value = match.details.venue || "";
   elements.matchTypeInput.value = match.details.match_type || "";
@@ -1351,7 +1370,7 @@ function renderScorebook(match) {
     inningsList.find((item) => Number(item.inning_number) === inningsNumber) ||
     inningsList[0] || {
       inning_number: inningsNumber,
-      batting_team: "Heartlake",
+      batting_team: focusClubShortName() || "Club",
       bowling_team: match.opponent || "Opponent",
       overs_limit: Number(match.details?.overs || 20),
       status: "Not started",
@@ -1676,6 +1695,10 @@ function currentViewerProfilePayload(selectedSeasonYear = state.selectedSeasonYe
 }
 
 function setLiveSeasonMode(isLiveSeason, selectedYear) {
+  dashboardDebug("Live season mode updated.", {
+    isLiveSeason,
+    selectedYear: selectedYear || "",
+  });
   const lockedMessage = `Viewing ${selectedYear} season. Live scheduling, scoring, availability, and commentary are disabled for historical seasons.`;
   const activeMessage = `Viewing ${selectedYear} season. Live scheduling, scoring, availability, and commentary are enabled.`;
   document.querySelectorAll("[data-live-only]").forEach((section) => {
@@ -2214,8 +2237,10 @@ function dashboardArchiveUploads(dashboard = state.dashboard) {
 }
 
 function loadArchiveIntoEditor(archiveId) {
+  dashboardDebug("Loading archive into editor.", { archiveId: archiveId || "" });
   const upload = dashboardArchiveUploads().find((item) => item.id === archiveId);
   if (!upload) {
+    dashboardDebug("Archive not found for editor load.", { archiveId: archiveId || "" });
     return;
   }
   elements.archiveSelect.value = archiveId;
@@ -2259,7 +2284,7 @@ function renderTeamPage() {
   elements.teamSummary.innerHTML = `
     <article class="summary-card"><span>Team</span><strong>${team.display_name || team.name}</strong></article>
     <article class="summary-card"><span>Roster Size</span><strong>${roster.length}</strong></article>
-    <article class="summary-card"><span>Fixtures</span><strong>${team.name === "Heartlake" ? state.dashboard.summary.fixture_count : fixtureInfo?.fixture_count || 0}</strong></article>
+    <article class="summary-card"><span>Fixtures</span><strong>${team.name === clubName ? state.dashboard.summary.fixture_count : fixtureInfo?.fixture_count || 0}</strong></article>
     <article class="summary-card"><span>Top Scorer</span><strong>${scoreRows[0]?.player_name || "TBD"}</strong><p>${scoreRows[0]?.runs || 0} runs</p></article>
   `;
 
@@ -2314,9 +2339,9 @@ function syncArchiveDraft() {
   const upload = dashboardArchiveUploads().find((item) => item.id === uploadId);
   if (!upload) return;
   const draft = upload.draft_scorecard || {};
-  elements.archiveHeartlakeRunsInput.value = draft.heartlake_runs || "";
-  elements.archiveHeartlakeWicketsInput.value = draft.heartlake_wickets || "";
-  elements.archiveHeartlakeOversInput.value = draft.heartlake_overs || "";
+  elements.archiveCricketClubAppRunsInput.value = draft.heartlake_runs || "";
+  elements.archiveCricketClubAppWicketsInput.value = draft.heartlake_wickets || "";
+  elements.archiveCricketClubAppOversInput.value = draft.heartlake_overs || "";
   elements.archiveOpponentRunsInput.value = draft.opponent_runs || "";
   elements.archiveOpponentWicketsInput.value = draft.opponent_wickets || "";
   elements.archiveOpponentOversInput.value = draft.opponent_overs || "";
@@ -2338,6 +2363,12 @@ function updateWhatsappLink(match) {
 }
 
 function renderDashboard(dashboard) {
+  dashboardDebug("Rendering dashboard.", {
+    focusClub: dashboard?.focus_club?.name || dashboard?.club?.name || "",
+    members: Array.isArray(dashboard?.members) ? dashboard.members.length : 0,
+    fixtures: Array.isArray(dashboard?.fixtures) ? dashboard.fixtures.length : 0,
+    archives: Array.isArray(dashboard?.archive_uploads) ? dashboard.archive_uploads.length : 0,
+  });
   state.dashboard = dashboard;
   const roles = effectiveViewerRoles();
   const role = effectiveViewerRole();
@@ -2350,14 +2381,14 @@ function renderDashboard(dashboard) {
   if (elements.archiveApplyForm) elements.archiveApplyForm.hidden = !state.isAdmin;
   state.selectedFocusClubId = dashboard.focus_club?.id || dashboard.viewer_profile?.primary_club_id || state.selectedFocusClubId;
   if (state.selectedFocusClubId) {
-    window.localStorage.setItem("heartlakePrimaryClubId", state.selectedFocusClubId);
-    document.cookie = `heartlakePrimaryClubId=${encodeURIComponent(state.selectedFocusClubId)}; path=/; samesite=lax`;
+    window.localStorage.setItem("cricketClubAppPrimaryClubId", state.selectedFocusClubId);
+    document.cookie = `cricketClubAppPrimaryClubId=${encodeURIComponent(state.selectedFocusClubId)}; path=/; samesite=lax`;
   }
   const currentYear = String(new Date().getFullYear());
   state.selectedSeasonYear = dashboard.selected_season_year || dashboard.default_season_year || state.selectedSeasonYear || currentYear;
   if (state.selectedSeasonYear) {
-    window.localStorage.setItem("heartlakeSelectedSeasonYear", state.selectedSeasonYear);
-    document.cookie = `heartlakeSelectedSeasonYear=${encodeURIComponent(state.selectedSeasonYear)}; path=/; samesite=lax`;
+    window.localStorage.setItem("cricketClubAppSelectedSeasonYear", state.selectedSeasonYear);
+    document.cookie = `cricketClubAppSelectedSeasonYear=${encodeURIComponent(state.selectedSeasonYear)}; path=/; samesite=lax`;
   }
   const normalizedSelectedYear = normalizeSeasonYear(state.selectedSeasonYear || currentYear);
   const isLiveSeason = normalizedSelectedYear === currentYear;
@@ -2458,38 +2489,58 @@ function renderDashboard(dashboard) {
 }
 
 async function loadDashboard() {
+  dashboardDebug("Loading dashboard for selected club.", {
+    selectedClubId: state.selectedFocusClubId || "",
+    selectedSeasonYear: state.selectedSeasonYear || "",
+  });
   try {
-    state.viewerAuth = await window.HeartlakePages.authMe();
+    state.viewerAuth = await window.CricketClubAppPages.authMe();
+    dashboardDebug("Viewer auth refreshed.", {
+      hasUser: Boolean(state.viewerAuth?.user),
+      role: state.viewerAuth?.user?.effective_role || state.viewerAuth?.user?.role || "",
+    });
   } catch {
     state.viewerAuth = null;
+    dashboardDebug("Viewer auth refresh failed; continuing without auth payload.");
   }
   const query = state.selectedFocusClubId ? `?focus_club_id=${encodeURIComponent(state.selectedFocusClubId)}` : "";
-  const dashboard = await runAction(() => getJson(`/api/dashboard${query}`), "Club dashboard loaded.");
+  const dashboard = await runAction(() => getJson(`/api/dashboard${query}`), "Club dashboard loaded.", "load dashboard");
   if (dashboard) {
+    dashboardDebug("Dashboard loaded.", {
+      focusClub: dashboard.focus_club?.name || dashboard.club?.name || "",
+      members: Array.isArray(dashboard.members) ? dashboard.members.length : 0,
+      fixtures: Array.isArray(dashboard.fixtures) ? dashboard.fixtures.length : 0,
+      archives: Array.isArray(dashboard.archive_uploads) ? dashboard.archive_uploads.length : 0,
+    });
     renderDashboard(dashboard);
   }
 }
 
 elements.activeMatchSelect.addEventListener("change", () => {
+  dashboardDebug("Active match changed.", { matchId: elements.activeMatchSelect.value || "" });
   state.selectedMatchId = elements.activeMatchSelect.value;
   renderDashboard(state.dashboard);
 });
 
 elements.playerProfileSelect.addEventListener("change", () => {
+  dashboardDebug("Player profile changed.", { playerName: elements.playerProfileSelect.value || "" });
   state.selectedPlayerName = elements.playerProfileSelect.value;
   renderDashboard(state.dashboard);
 });
 
 elements.teamProfileSelect.addEventListener("change", () => {
+  dashboardDebug("Team profile changed.", { teamName: elements.teamProfileSelect.value || "" });
   state.selectedTeamName = elements.teamProfileSelect.value;
   renderDashboard(state.dashboard);
 });
 
 elements.rankingYearSelect.addEventListener("change", async () => {
+  dashboardDebug("Ranking year changed.", { selectedSeasonYear: elements.rankingYearSelect.value || "" });
   state.selectedSeasonYear = elements.rankingYearSelect.value;
   const dashboard = await runAction(
     () => postJson("/api/viewer-profile", currentViewerProfilePayload(state.selectedSeasonYear)),
-    "Season updated."
+    "Season updated.",
+    "update ranking year"
   );
   if (dashboard) {
     renderDashboard(dashboard);
@@ -2515,10 +2566,15 @@ elements.playerSearchInput.addEventListener("input", () => {
 
 elements.viewerProfileForm.addEventListener("submit", async (event) => {
   event.preventDefault();
+  dashboardDebug("Viewer profile form submitted.", {
+    primaryClubId: elements.primaryClubSelect.value || "",
+    selectedSeasonYear: state.selectedSeasonYear || "",
+  });
   const payload = currentViewerProfilePayload(state.selectedSeasonYear);
   const dashboard = await runAction(
     () => postJson("/api/viewer-profile", payload),
-    "Primary club and local profile saved."
+    "Primary club and local profile saved.",
+    "save viewer profile"
   );
   if (dashboard) {
     renderDashboard(dashboard);
@@ -2526,10 +2582,12 @@ elements.viewerProfileForm.addEventListener("submit", async (event) => {
 });
 
 elements.primaryClubSelect.addEventListener("change", async () => {
+  dashboardDebug("Primary club changed.", { clubId: elements.primaryClubSelect.value || "" });
   const payload = currentViewerProfilePayload(state.selectedSeasonYear);
   const dashboard = await runAction(
     () => postJson("/api/viewer-profile", payload),
-    "Primary club updated."
+    "Primary club updated.",
+    "change primary club"
   );
   if (dashboard) {
     renderDashboard(dashboard);
@@ -2548,6 +2606,7 @@ elements.landingPlayerSearchInput.addEventListener("input", () => {
 
 elements.detailsForm.addEventListener("submit", async (event) => {
   event.preventDefault();
+  dashboardDebug("Match details form submitted.", { matchId: state.selectedMatchId || "" });
   const payload = {
     heartlake_captain: elements.captainInput.value,
     venue: elements.venueInput.value,
@@ -2565,13 +2624,15 @@ elements.detailsForm.addEventListener("submit", async (event) => {
   };
   const dashboard = await runAction(
     () => postJson(`/api/matches/${state.selectedMatchId}/details`, payload),
-    "Match setup saved."
+    "Match setup saved.",
+    "save match details"
   );
   if (dashboard) renderDashboard(dashboard);
 });
 
 elements.scoreForm.addEventListener("submit", async (event) => {
   event.preventDefault();
+  dashboardDebug("Scorecard form submitted.", { matchId: state.selectedMatchId || "" });
   const payload = {
     heartlake_runs: elements.heartlakeRunsInput.value,
     heartlake_wickets: elements.heartlakeWicketsInput.value,
@@ -2585,7 +2646,8 @@ elements.scoreForm.addEventListener("submit", async (event) => {
   };
   const dashboard = await runAction(
     () => postJson(`/api/matches/${state.selectedMatchId}/scorecard`, payload),
-    "Online scorecard updated."
+    "Online scorecard updated.",
+    "save live scorecard"
   );
   if (dashboard) renderDashboard(dashboard);
 });
@@ -2596,6 +2658,10 @@ elements.scorebookInningsSelect.addEventListener("change", () => {
 
 elements.scorebookSetupForm.addEventListener("submit", async (event) => {
   event.preventDefault();
+  dashboardDebug("Scorebook innings setup submitted.", {
+    matchId: state.selectedMatchId || "",
+    innings: elements.scorebookInningsSelect.value || "1",
+  });
   const batters = Array.from(elements.scorebookBatters.querySelectorAll("[data-batter-slot]")).map((input) => input.value.trim());
   const bowlers = Array.from(elements.scorebookBowlers.querySelectorAll("[data-bowler-slot]")).map((input) => input.value.trim());
   const payload = {
@@ -2610,7 +2676,8 @@ elements.scorebookSetupForm.addEventListener("submit", async (event) => {
   };
   const dashboard = await runAction(
     () => postJson(`/api/matches/${state.selectedMatchId}/scorebook/setup`, payload),
-    "Innings scorebook saved."
+    "Innings scorebook saved.",
+    "save scorebook setup"
   );
   if (dashboard) {
     renderDashboard(dashboard);
@@ -2619,6 +2686,12 @@ elements.scorebookSetupForm.addEventListener("submit", async (event) => {
 
 elements.scorebookBallForm.addEventListener("submit", async (event) => {
   event.preventDefault();
+  dashboardDebug("Scorebook ball submitted.", {
+    matchId: state.selectedMatchId || "",
+    innings: elements.scorebookInningsSelect.value || "1",
+    over: elements.scorebookOverNumberInput.value || "",
+    ball: elements.scorebookBallNumberInput.value || "",
+  });
   const payload = {
     innings_number: Number(elements.scorebookInningsSelect.value || 1),
     over_number: Number(elements.scorebookOverNumberInput.value || 1),
@@ -2637,7 +2710,8 @@ elements.scorebookBallForm.addEventListener("submit", async (event) => {
   };
   const dashboard = await runAction(
     () => postJson(`/api/matches/${state.selectedMatchId}/scorebook/ball`, payload),
-    "Delivery logged."
+    "Delivery logged.",
+    "save scorebook ball"
   );
   if (dashboard) {
     renderDashboard(dashboard);
@@ -2648,6 +2722,11 @@ elements.scorebookBallForm.addEventListener("submit", async (event) => {
 });
 
 async function saveDashboardAvailability() {
+  dashboardDebug("Saving availability.", {
+    matchId: state.selectedMatchId || "",
+    playerName: currentAvailabilityPlayerName() || "",
+    status: elements.availabilityStatusSelect.value || "",
+  });
   const payload = {
     player_name: currentAvailabilityPlayerName(),
     status: elements.availabilityStatusSelect.value,
@@ -2656,7 +2735,8 @@ async function saveDashboardAvailability() {
   };
   const dashboard = await runAction(
     () => postJson(`/api/matches/${state.selectedMatchId}/availability`, payload),
-    "Availability updated."
+    "Availability updated.",
+    "save dashboard availability"
   );
   if (dashboard) {
     renderDashboard(dashboard);
@@ -2666,6 +2746,9 @@ async function saveDashboardAvailability() {
 
 async function savePlayingXiSelection() {
   if (!elements.selectedPlayingXiForm) return;
+  dashboardDebug("Saving playing XI.", {
+    matchId: state.selectedMatchId || "",
+  });
   const selectedPlayers = Array.from(elements.selectedPlayingXiForm.querySelectorAll("input[type=checkbox][name=playing_xi]:checked"))
     .map((input) => input.value.trim())
     .filter(Boolean)
@@ -2676,7 +2759,8 @@ async function savePlayingXiSelection() {
         player_names: selectedPlayers,
         club_id: state.selectedFocusClubId || currentMatch().club_id || "",
       }),
-    "Playing XI saved."
+    "Playing XI saved.",
+    "save playing xi"
   );
   if (dashboard) {
     renderDashboard(dashboard);
@@ -2685,6 +2769,9 @@ async function savePlayingXiSelection() {
 
 function autoFillPlayingXiSelection() {
   if (!elements.selectedPlayingXiForm) return;
+  dashboardDebug("Auto-filling playing XI.", {
+    matchId: state.selectedMatchId || "",
+  });
   const eligible = lineupCandidateRows(currentMatch())
     .filter((member) => isEligibleForLineup(member.availability_status))
     .slice(0, 11)
@@ -2695,7 +2782,7 @@ function autoFillPlayingXiSelection() {
   elements.selectedPlayingXiCount.textContent = `${eligible.length}/11 selected`;
 }
 
-window.HeartlakeDashboard = {
+window.CricketClubAppDashboard = {
   saveDashboardAvailability,
   savePlayingXiSelection,
 };
@@ -2755,12 +2842,19 @@ elements.availabilityPlayerSelect.addEventListener("change", () => {
   if (!state.canManageOtherAvailability) {
     return;
   }
+  dashboardDebug("Availability player changed.", {
+    playerName: elements.availabilityPlayerSelect.value || "",
+  });
   state.selectedAvailabilityPlayerName = elements.availabilityPlayerSelect.value || state.selectedAvailabilityPlayerName;
   autoSaveDashboardAvailability();
 });
 
 elements.performanceForm.addEventListener("submit", async (event) => {
   event.preventDefault();
+  dashboardDebug("Performance form submitted.", {
+    matchId: state.selectedMatchId || "",
+    playerName: elements.performancePlayerSelect.value || "",
+  });
   const payload = {
     player_name: elements.performancePlayerSelect.value,
     runs: Number(elements.performanceRunsInput.value || 0),
@@ -2774,7 +2868,8 @@ elements.performanceForm.addEventListener("submit", async (event) => {
   };
   const dashboard = await runAction(
     () => postJson(`/api/matches/${state.selectedMatchId}/performances`, payload),
-    "Player performance saved."
+    "Player performance saved.",
+    "save player performance"
   );
   if (dashboard) {
     renderDashboard(dashboard);
@@ -2784,13 +2879,18 @@ elements.performanceForm.addEventListener("submit", async (event) => {
 
 elements.commentaryForm.addEventListener("submit", async (event) => {
   event.preventDefault();
+  dashboardDebug("Commentary form submitted.", {
+    matchId: state.selectedMatchId || "",
+    mode: elements.commentaryMode.value || "",
+  });
   const payload = {
     mode: elements.commentaryMode.value,
     text: elements.commentaryText.value,
   };
   const dashboard = await runAction(
     () => postJson(`/api/matches/${state.selectedMatchId}/commentary`, payload),
-    "Commentary saved to the selected match."
+    "Commentary saved to the selected match.",
+    "save commentary"
   );
   if (dashboard) {
     renderDashboard(dashboard);
@@ -2800,11 +2900,14 @@ elements.commentaryForm.addEventListener("submit", async (event) => {
 
 elements.memberForm.addEventListener("submit", async (event) => {
   event.preventDefault();
+  dashboardDebug("Member form submitted.", {
+    clubId: state.selectedFocusClubId || state.dashboard?.club?.id || "",
+  });
   const form = new FormData(elements.memberForm);
   const payload = Object.fromEntries(form.entries());
   payload.age = Number(payload.age);
   payload.club_id = state.selectedFocusClubId || state.dashboard?.club?.id || "";
-  const dashboard = await runAction(() => postJson("/api/members", payload), "Player profile created.");
+  const dashboard = await runAction(() => postJson("/api/members", payload), "Player profile created.", "create player profile");
   if (dashboard) {
     renderDashboard(dashboard);
     elements.memberForm.reset();
@@ -2813,6 +2916,9 @@ elements.memberForm.addEventListener("submit", async (event) => {
 
 elements.playerEditForm.addEventListener("submit", async (event) => {
   event.preventDefault();
+  dashboardDebug("Player edit form submitted.", {
+    playerName: currentPlayer()?.name || "",
+  });
   const player = currentPlayer();
   if (!player) {
     setStatus("Choose a player first.", "error");
@@ -2837,7 +2943,8 @@ elements.playerEditForm.addEventListener("submit", async (event) => {
   };
   const dashboard = await runAction(
     () => postJson(`/api/members/${player.id}`, payload),
-    "Player profile updated."
+    "Player profile updated.",
+    "update player profile"
   );
   if (dashboard) {
     const nextName = payload.name || player.name;
@@ -2896,6 +3003,12 @@ elements.landingMatches.addEventListener("click", (event) => {
 
 elements.uploadForm.addEventListener("submit", async (event) => {
   event.preventDefault();
+  dashboardDebug("Scorecard upload form submitted.", {
+    matchId: state.selectedMatchId || "",
+    clubId: state.selectedFocusClubId || "",
+    fileName: elements.uploadFile.files[0]?.name || "",
+    season: elements.uploadSeason.value || "",
+  });
   const body = new FormData();
   if (elements.uploadFile.files[0]) body.append("file", elements.uploadFile.files[0]);
   body.append("match_id", state.selectedMatchId);
@@ -2903,6 +3016,10 @@ elements.uploadForm.addEventListener("submit", async (event) => {
   body.append("focus_club_id", state.selectedFocusClubId || "");
   const data = await runAction(
     async () => {
+      dashboardDebug("Uploading scorecard image.", {
+        fileName: elements.uploadFile.files[0]?.name || "",
+        clubId: state.selectedFocusClubId || "",
+      });
       const response = await fetch("/api/scorecards/upload", {
         method: "POST",
         body,
@@ -2913,7 +3030,8 @@ elements.uploadForm.addEventListener("submit", async (event) => {
       }
       return payload;
     },
-    ""
+    "",
+    "upload scorecard"
   );
   if (data?.dashboard) {
     renderDashboard(data.dashboard);
@@ -2925,16 +3043,31 @@ elements.uploadForm.addEventListener("submit", async (event) => {
 
 for (const eventName of ["input", "change"]) {
   elements.archiveSearchInput.addEventListener(eventName, () => {
+    dashboardDebug("Archive search filter changed.", {
+      search: elements.archiveSearchInput.value || "",
+      date: elements.archiveDateInput.value || "",
+      year: elements.archiveYearSelect.value || "",
+    });
     const uploads = dashboardArchiveUploads();
     renderArchive(uploads);
     renderArchiveScorecards(uploads);
   });
   elements.archiveDateInput.addEventListener(eventName, () => {
+    dashboardDebug("Archive date filter changed.", {
+      search: elements.archiveSearchInput.value || "",
+      date: elements.archiveDateInput.value || "",
+      year: elements.archiveYearSelect.value || "",
+    });
     const uploads = dashboardArchiveUploads();
     renderArchive(uploads);
     renderArchiveScorecards(uploads);
   });
   elements.archiveYearSelect.addEventListener(eventName, () => {
+    dashboardDebug("Archive year filter changed.", {
+      search: elements.archiveSearchInput.value || "",
+      date: elements.archiveDateInput.value || "",
+      year: elements.archiveYearSelect.value || "",
+    });
     const uploads = dashboardArchiveUploads();
     renderArchive(uploads);
     renderArchiveScorecards(uploads);
@@ -2942,6 +3075,7 @@ for (const eventName of ["input", "change"]) {
 }
 
 elements.archiveClearFilters.addEventListener("click", () => {
+  dashboardDebug("Archive filters cleared.");
   elements.archiveSearchInput.value = "";
   elements.archiveDateInput.value = "";
   elements.archiveYearSelect.value = "";
@@ -2951,9 +3085,11 @@ elements.archiveClearFilters.addEventListener("click", () => {
 });
 
 elements.resetScoresButton.addEventListener("click", async () => {
+  dashboardDebug("Reset scores requested.");
   const data = await runAction(
     () => postJson("/api/archive/reset-scores", {}),
-    ""
+    "",
+    "reset archive scores"
   );
   if (data?.dashboard) {
     renderDashboard(data.dashboard);
@@ -2971,6 +3107,10 @@ elements.archiveImportSelect.addEventListener("change", () => {
 
 elements.archiveImportForm.addEventListener("submit", async (event) => {
   event.preventDefault();
+  dashboardDebug("Archive import form submitted.", {
+    archiveId: elements.archiveImportSelect.value || "",
+    textLength: elements.archiveImportText.value.trim().length,
+  });
   if (!elements.archiveImportSelect.value) {
     setStatus("Choose an archive scorecard first.", "error");
     return;
@@ -2985,7 +3125,8 @@ elements.archiveImportForm.addEventListener("submit", async (event) => {
       postJson(clubScopedApi(`/api/archive/${elements.archiveImportSelect.value}/import-extraction`), {
         text,
       }),
-    ""
+    "",
+    "import archive extraction"
   );
   if (!data?.dashboard) return;
   renderDashboard(data.dashboard);
@@ -2997,9 +3138,13 @@ elements.archiveImportForm.addEventListener("submit", async (event) => {
 elements.archiveScorecards.addEventListener("click", (event) => {
   const extractButton = event.target.closest("[data-archive-extract]");
   if (extractButton) {
+    dashboardDebug("Archive extract requested.", {
+      archiveId: extractButton.dataset.archiveExtract || "",
+    });
     runAction(
       () => postJson(clubScopedApi(`/api/archive/${extractButton.dataset.archiveExtract}/extract`), {}),
-      ""
+      "",
+      "re-extract archive"
     ).then((data) => {
       if (!data?.dashboard) return;
       renderDashboard(data.dashboard);
@@ -3011,6 +3156,9 @@ elements.archiveScorecards.addEventListener("click", (event) => {
   }
   const reviewButton = event.target.closest("[data-archive-review-json]");
   if (reviewButton) {
+    dashboardDebug("Archive review payload requested.", {
+      archiveId: reviewButton.dataset.archiveReviewJson || "",
+    });
     const upload = dashboardArchiveUploads().find((item) => item.id === reviewButton.dataset.archiveReviewJson);
     if (!upload) return;
     elements.archiveImportSelect.value = upload.id;
@@ -3023,17 +3171,24 @@ elements.archiveScorecards.addEventListener("click", (event) => {
   }
   const button = event.target.closest("[data-archive-load]");
   if (!button) return;
+  dashboardDebug("Archive load requested.", {
+    archiveId: button.dataset.archiveLoad || "",
+  });
   loadArchiveIntoEditor(button.dataset.archiveLoad);
 });
 
 elements.archiveApplyForm.addEventListener("submit", async (event) => {
   event.preventDefault();
+  dashboardDebug("Archive apply form submitted.", {
+    archiveId: elements.archiveSelect.value || "",
+    matchId: state.selectedMatchId || "",
+  });
   if (!elements.archiveSelect.value) return;
   const payload = {
     match_id: state.selectedMatchId,
-    heartlake_runs: elements.archiveHeartlakeRunsInput.value,
-    heartlake_wickets: elements.archiveHeartlakeWicketsInput.value,
-    heartlake_overs: elements.archiveHeartlakeOversInput.value,
+    heartlake_runs: elements.archiveCricketClubAppRunsInput.value,
+    heartlake_wickets: elements.archiveCricketClubAppWicketsInput.value,
+    heartlake_overs: elements.archiveCricketClubAppOversInput.value,
     opponent_runs: elements.archiveOpponentRunsInput.value,
     opponent_wickets: elements.archiveOpponentWicketsInput.value,
     opponent_overs: elements.archiveOpponentOversInput.value,
@@ -3042,7 +3197,8 @@ elements.archiveApplyForm.addEventListener("submit", async (event) => {
   };
   const dashboard = await runAction(
     () => postJson(clubScopedApi(`/api/archive/${elements.archiveSelect.value}/apply`), payload),
-    "Archive scorecard applied to the selected match."
+    "Archive scorecard applied to the selected match.",
+    "apply archive to match"
   );
   if (dashboard) {
     renderDashboard(dashboard);
@@ -3101,7 +3257,7 @@ elements.chatForm.addEventListener("submit", async (event) => {
 });
 
 window.addEventListener("storage", (event) => {
-  if (event.key !== "heartlakePrimaryClubId") {
+  if (event.key !== "cricketClubAppPrimaryClubId") {
     return;
   }
   state.selectedFocusClubId = event.newValue || null;

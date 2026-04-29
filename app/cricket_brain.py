@@ -429,9 +429,9 @@ def _player_participation_entries(store: dict[str, Any], member: dict[str, Any])
                 "date": str(match.get("date", "") or ""),
                 "month": str(match.get("date", "") or "")[:7],
                 "team": "heartlake",
-                "team_label": "Heartlake",
+                "team_label": "Club",
                 "club": "heartlake cricket club",
-                "club_label": "Heartlake Cricket Club",
+                "club_label": "Club",
                 "opponent": str(match.get("opponent", "") or ""),
                 **totals,
             }
@@ -819,9 +819,9 @@ def _player_context_snippets(
             [
                 f"[player] {_display_name(member)}",
                 f"aliases: {', '.join(member.get('aliases', [])) or 'none'}",
-                f"team: {member.get('team_name', 'Heartlake')}",
-                f"teams: {', '.join(team.get('team_name') if isinstance(team, dict) else str(team) for team in (member.get('team_memberships') or [])) or member.get('team_name', 'Heartlake')}",
-                f"clubs: {', '.join(club.get('club_name') for club in (member.get('club_memberships') or []) if club.get('club_name')) or store['club'].get('name', 'Heartlake Cricket Club')}",
+                f"team: {member.get('team_name', 'Club')}",
+                f"teams: {', '.join(team.get('team_name') if isinstance(team, dict) else str(team) for team in (member.get('team_memberships') or [])) or member.get('team_name', 'Club')}",
+                f"clubs: {', '.join(club.get('club_name') for club in (member.get('club_memberships') or []) if club.get('club_name')) or store['club'].get('name', 'Club')}",
                 f"age: {member.get('age') or 'unknown'}",
                 f"role: {member.get('role') or 'unknown'}",
                 f"phone: {member.get('phone') or 'unknown'}",
@@ -861,7 +861,7 @@ def _fixture_context_snippets(fixtures: list[dict[str, Any]]) -> list[dict[str, 
                 f"captain: {match.get('heartlake_captain') or 'unassigned'}",
                 f"availability: {', '.join(match.get('availability', [])) or 'none'}",
                 (
-                    f"scorecard: Heartlake {match.get('scorecard', {}).get('heartlake_runs') or '--'}/"
+                    f"scorecard: Club {match.get('scorecard', {}).get('heartlake_runs') or '--'}/"
                     f"{match.get('scorecard', {}).get('heartlake_wickets') or '--'} "
                     f"Opponent {match.get('scorecard', {}).get('opponent_runs') or '--'}/"
                     f"{match.get('scorecard', {}).get('opponent_wickets') or '--'}"
@@ -888,7 +888,7 @@ def _archive_context_snippets(archives: list[dict[str, Any]]) -> list[dict[str, 
                 f"season: {archive.get('season')}",
                 f"summary: {archive.get('extracted_summary')}",
                 (
-                    f"scorecard: Heartlake {archive.get('draft_scorecard', {}).get('heartlake_runs') or '--'}/"
+                    f"scorecard: Club {archive.get('draft_scorecard', {}).get('heartlake_runs') or '--'}/"
                     f"{archive.get('draft_scorecard', {}).get('heartlake_wickets') or '--'} "
                     f"Opponent {archive.get('draft_scorecard', {}).get('opponent_runs') or '--'}/"
                     f"{archive.get('draft_scorecard', {}).get('opponent_wickets') or '--'}"
@@ -905,7 +905,7 @@ def _club_context_snippet(store: dict[str, Any], summary: dict[str, Any]) -> dic
     next_match = next((match for match in fixtures if match["status"] != "Completed"), fixtures[0] if fixtures else {})
     text = "\n".join(
         [
-            f"[club] {store['club'].get('name', 'Heartlake Cricket Club')}",
+            f"[club] {store['club'].get('name', 'Club')}",
             f"live_season: {store['club'].get('season')}",
             f"fixture_count: {summary.get('fixture_count', 0)}",
             f"member_count: {summary.get('member_count', 0)}",
@@ -1010,7 +1010,7 @@ def _rag_answer(question: str, store: dict[str, Any], grounded_facts: str = "", 
     grounded_block = grounded_facts.strip()
 
     system_prompt = (
-        "You answer questions about persisted Heartlake cricket data using only the supplied context.\n"
+        "You answer questions about persisted club cricket data using only the supplied context.\n"
         "Rules:\n"
         "- Do not guess or invent facts.\n"
         "- If the answer is not supported by context, say you could not find it in the stored data.\n"
@@ -1639,7 +1639,7 @@ def _heuristic_answer(question: str, store: dict[str, Any], history: list[dict[s
             answer = f"No fixture availability is stored yet for {store['club'].get('name', 'this club')}."
     elif "captain" in q:
         answer = (
-            f"{summary['matches_without_captain']} fixtures still need a Heartlake captain assigned. "
+            f"{summary['matches_without_captain']} fixtures still need a club captain assigned. "
             "Use the Match Setup form to lock in captain, toss, venue, and scorer details."
         )
     elif "score" in q or "scorecard" in q:
@@ -1648,7 +1648,7 @@ def _heuristic_answer(question: str, store: dict[str, Any], history: list[dict[s
             latest = completed[-1]
             answer = (
                 f"The latest scored match is {latest['date_label']} vs {latest['opponent']}: "
-                f"Heartlake {latest['heartlake_score'] or '--'} and Opponent {latest['opponent_score'] or '--'}. "
+                f"Club {latest['heartlake_score'] or '--'} and Opponent {latest['opponent_score'] or '--'}. "
                 f"Result: {latest['scorecard']['result']}."
             )
         else:

@@ -34,10 +34,28 @@ let reviewQueue = [];
 let selectedClubId = "";
 let pendingDelete = { key: "", expiresAt: 0 };
 let pendingDeleteTimer = null;
+const adminDebugEnabled = ["localhost", "127.0.0.1", ""].includes(String(window.location.hostname || "").trim());
+
+function adminDebug(...args) {
+  if (adminDebugEnabled && typeof console !== "undefined" && console.debug) {
+    console.debug("[AdminCenter]", ...args);
+  }
+}
+
+function adminError(...args) {
+  if (typeof console !== "undefined" && console.error) {
+    console.error("[AdminCenter]", ...args);
+  }
+}
+
+function setActionStatus(message, tone = "info") {
+  setStatus(message, tone);
+}
 
 function bootstrapAdminCenter() {
-  const pages = window.HeartlakePages;
+  const pages = window.CricketClubAppPages;
   if (!pages) {
+    adminDebug("Shared helpers not ready yet; retrying bootstrap.");
     return false;
   }
   ({
@@ -71,6 +89,11 @@ function bootstrapAdminCenter() {
   refreshButton = document.getElementById("adminRefreshButton");
   archiveQueue = document.getElementById("adminReviewQueue");
   roleBadge = document.getElementById("adminRoleBadge");
+  adminDebug("Bootstrap complete.", {
+    hasClubForm: !!clubForm,
+    hasClubSelect: !!clubSelect,
+    hasArchiveQueue: !!archiveQueue,
+  });
   return true;
 }
 
@@ -139,6 +162,59 @@ function confirmTypedDelete(message, expectedValue, button = null) {
   return false;
 }
 
+async function runArchiveAction(action, uploadId, button = null, reviewText = "") {
+  const card = archiveQueue?.querySelector(`[data-admin-upload="${uploadId}"]`);
+  if (!card) {
+    const error = new Error("Archive card not found.");
+    adminError("Archive action failed.", error);
+    setStatus(error.message, "error");
+    return false;
+  }
+  const textarea = card.querySelector(".admin-review-text");
+  try {
+    if (action === "extract") {
+      adminDebug("Archive re-extract requested.", { uploadId });
+      setActionStatus("Re-extracting archive...", "warning");
+      await postJson(`/api/archive/${uploadId}/extract`, {}, true);
+      setStatus("Scorecard re-extracted.", "success");
+    } else if (action === "save") {
+      const textValue = String(reviewText || textarea?.value || "").trim();
+      if (!textValue) {
+        setStatus("Paste the reviewed JSON before saving.", "error");
+        return false;
+      }
+      adminDebug("Archive review save requested.", { uploadId, textLength: textValue.length });
+      setActionStatus("Saving reviewed JSON...", "warning");
+      await postJson(`/api/admin/archive/${uploadId}/review`, { text: textValue }, true);
+      setStatus("Reviewed extraction saved.", "success");
+    } else if (action === "approve") {
+      const textValue = String(reviewText || textarea?.value || "").trim();
+      if (!textValue) {
+        setStatus("Paste the reviewed JSON before approving.", "error");
+        return false;
+      }
+      adminDebug("Archive approve requested.", { uploadId, textLength: textValue.length });
+      setActionStatus("Saving JSON and approving archive...", "warning");
+      await postJson(`/api/admin/archive/${uploadId}/approve`, { text: textValue }, true);
+      setStatus("Archive approved.", "success");
+    } else if (action === "delete") {
+      adminDebug("Archive delete requested.", { uploadId });
+      if (!confirmTypedDelete("Delete this archive record?", uploadId, button)) return false;
+      setActionStatus("Deleting archive record...", "warning");
+      await deleteJson(`/api/admin/archive/${uploadId}`, true);
+      setStatus("Archive deleted.", "success");
+    } else {
+      return false;
+    }
+    await refreshAll();
+    return true;
+  } catch (error) {
+    adminError("Archive action failed.", error);
+    setStatus(error.message, "error");
+    return false;
+  }
+}
+
 function clubId() {
   return selectedClubId || clubSelect?.value || auth?.user?.current_club_id || auth?.user?.primary_club_id || "";
 }
@@ -175,16 +251,25 @@ async function deleteClubRosterItem(targetType, targetId) {
   const club = focusedClub(payload);
   const activeClubId = renderedClubId() || club.id || "";
   if (!club || !activeClubId) {
-    throw new Error("No club is currently loaded.");
+    const error = new Error("No club is currently loaded.");
+    adminError("Club action blocked.", error);
+    setStatus(error.message, "error");
+    return;
   }
   if (targetType === "club") {
     const clubName = club.name || "this club";
     if (!confirmTypedDelete(`Delete ${clubName} and remove its club-only data?`, clubName)) {
       return;
     }
-    await deleteJson(`/api/admin/clubs/${encodeURIComponent(activeClubId)}`, true);
-    setStatus(`${clubName} deleted.`, "success");
-    await refreshAll();
+    try {
+      setActionStatus(`Deleting ${clubName}...`, "warning");
+      await deleteJson(`/api/admin/clubs/${encodeURIComponent(activeClubId)}`, true);
+      setStatus(`${clubName} deleted.`, "success");
+      await refreshAll();
+    } catch (error) {
+      adminError("Club delete failed.", error);
+      setStatus(error.message, "error");
+    }
     return;
   }
   const member = (payload?.members || payload?.all_members || []).find((item) => String(item.id || "") === String(targetId || ""));
@@ -192,12 +277,18 @@ async function deleteClubRosterItem(targetType, targetId) {
   if (!confirmTypedDelete(`Remove ${memberName} from ${club.name || "this club"}?`, memberName)) {
     return;
   }
-  await deleteJson(`/api/admin/clubs/${encodeURIComponent(activeClubId)}/members/${encodeURIComponent(targetId)}`, true);
-  setStatus(`${memberName} removed from ${club.name || "the club"}.`, "success");
-  await refreshAll();
+  try {
+    setActionStatus(`Unlinking ${memberName} from ${club.name || "the club"}...`, "warning");
+    await deleteJson(`/api/admin/clubs/${encodeURIComponent(activeClubId)}/members/${encodeURIComponent(targetId)}`, true);
+    setStatus(`${memberName} removed from ${club.name || "the club"}.`, "success");
+    await refreshAll();
+  } catch (error) {
+    adminError("Member unlink failed.", error);
+    setStatus(error.message, "error");
+  }
 }
 
-window.HeartlakeAdminCenterDelete = deleteClubRosterItem;
+window.CricketClubAppAdminCenterDelete = deleteClubRosterItem;
 
 function selectedClubKeys(dashboard = payload) {
   const club = dashboard?.club || dashboard?.focus_club || selectedClub() || {};
@@ -439,6 +530,10 @@ function reviewTemplateForUpload(upload) {
 
 function renderClubSelect(dashboard = payload) {
   const clubs = availableClubs(dashboard);
+  adminDebug("Rendering club selector.", {
+    clubCount: clubs.length,
+    selectedClubId,
+  });
   const current = selectedClubId || focusedClub(dashboard)?.id || clubId() || clubs[0]?.id || "";
   clubSelect.innerHTML = optionMarkup(clubs, "id", (club) => `${club.name} · ${club.season || "Season TBD"}`);
   clubSelect.value = current;
@@ -458,6 +553,10 @@ function renderClubStats(dashboard) {
 }
 
 function renderClubDetail(dashboard) {
+  adminDebug("Rendering club detail.", {
+    clubId: focusedClub(dashboard)?.id || "",
+    memberCount: Array.isArray(dashboard?.members) ? dashboard.members.length : 0,
+  });
   const club = focusedClub(dashboard);
   const members = Array.isArray(dashboard?.members) ? dashboard.members : [];
   const teams = Array.isArray(dashboard?.teams) ? dashboard.teams : [];
@@ -543,9 +642,14 @@ function renderFixtures(dashboard) {
     : `<p class="empty-state">No fixtures created for this club yet.</p>`;
 }
 
-function renderArchives(dashboard, uploadsOverride = null) {
+function renderArchives(dashboard) {
+  adminDebug("Rendering archive queue.", {
+    clubId: focusedClub(dashboard)?.id || "",
+    sourceCount: Array.isArray(dashboard?.archive_uploads) ? dashboard.archive_uploads.length : 0,
+    search: String(archiveSearchInput?.value || "").trim(),
+  });
   const query = String(archiveSearchInput?.value || "").trim().toLowerCase();
-  const sourceUploads = Array.isArray(uploadsOverride) ? uploadsOverride : (dashboard?.archive_uploads || []);
+  const sourceUploads = Array.isArray(dashboard?.archive_uploads) ? dashboard.archive_uploads : [];
   const uploads = sourceUploads.filter((upload) => {
     if (!archiveBelongsToSelectedClub(upload, dashboard)) {
       return false;
@@ -604,15 +708,19 @@ function renderArchives(dashboard, uploadsOverride = null) {
                     <p>${escapeHtml(upload.club_name || upload.resolved_club_name || "Club TBD")} · ${escapeHtml(upload.season || "Season TBD")}</p>
                     <small>${escapeHtml(upload.archive_date || "Date TBD")} · ${escapeHtml(upload.status || "Pending review")}</small>
                     <p>${escapeHtml(upload.extracted_summary || "Review the extracted draft before approving.")}</p>
-                    <label class="stack-label">
-                      Reviewed extraction JSON
-                      <textarea class="admin-review-text" rows="10" spellcheck="false">${escapeHtml(reviewText)}</textarea>
-                    </label>
+                    <form class="admin-review-form" method="post" action="/api/admin/archive/${upload.id}/review-form">
+                      <label class="stack-label">
+                        Reviewed extraction JSON
+                        <textarea class="admin-review-text" name="text" rows="10" spellcheck="false">${escapeHtml(reviewText)}</textarea>
+                      </label>
+                      <div class="inline-actions">
+                        <button class="secondary-button" type="submit" data-action="save">Save review</button>
+                        <button class="primary-button" type="submit" data-action="approve" formaction="/api/admin/archive/${upload.id}/approve-form">Approve</button>
+                      </div>
+                    </form>
                     <div class="inline-actions">
-                      <button class="secondary-button" type="button" data-action="extract">Re-extract</button>
-                      <button class="secondary-button" type="button" data-action="save">Save review</button>
-                      <button class="primary-button" type="button" data-action="approve">Approve</button>
-                      <button class="secondary-button" type="button" data-action="delete">Delete</button>
+                      <button class="secondary-button" type="button" data-action="extract" onclick="return window.CricketClubAppAdminCenterArchiveAction(this, 'extract');">Re-extract</button>
+                      <button class="secondary-button" type="button" data-action="delete" onclick="return window.CricketClubAppAdminCenterArchiveAction(this, 'delete');">Delete</button>
                     </div>
                   </article>
                 `;
@@ -626,6 +734,7 @@ function renderArchives(dashboard, uploadsOverride = null) {
 }
 
 async function loadClubView(targetClubId = "", uploadsOverride = null) {
+  adminDebug("Loading club view.", { targetClubId, selectedClubId });
   const requestedClubId = targetClubId || clubId() || auth?.user?.current_club_id || auth?.user?.primary_club_id || "";
   payload = requestedClubId
     ? await getJson(`/api/dashboard?focus_club_id=${encodeURIComponent(requestedClubId)}`, true)
@@ -663,150 +772,180 @@ async function loadClubView(targetClubId = "", uploadsOverride = null) {
   renderClubStats(payload);
   renderClubDetail(payload);
   renderFixtures(payload);
-  renderArchives(payload, uploadsOverride);
+  renderArchives(payload);
   renderClubSelect(payload);
   populateFixtureForm();
   setStatus(`Loaded ${payload.club?.name || club.name}.`, "success");
+  adminDebug("Club view loaded.", {
+    clubId: payload.club?.id || "",
+    fixtureCount: Array.isArray(payload.fixtures) ? payload.fixtures.length : 0,
+    archiveCount: Array.isArray(payload.archive_uploads) ? payload.archive_uploads.length : 0,
+  });
 }
 
 async function loadReviewQueue() {
+  adminDebug("Loading review queue.");
   const data = await getJson("/api/admin/review-queue", true);
   reviewQueue = data?.queue || [];
+  adminDebug("Review queue loaded.", { count: reviewQueue.length });
   return reviewQueue;
 }
 
 async function refreshAll() {
+  adminDebug("Refreshing admin center.");
   auth = await getJson("/api/auth/me", true);
   renderRoleBadge();
-  const targetClubId = clubId() || auth.user.current_club_id || auth.user.primary_club_id || "";
+  const targetClubId = clubId() || auth?.user?.current_club_id || auth?.user?.primary_club_id || "";
   const queue = await loadReviewQueue();
   await loadClubView(targetClubId, queue);
+  adminDebug("Refresh complete.", { targetClubId, queueCount: queue.length });
 }
 
-fixtureForm?.addEventListener("submit", async (event) => {
-  event.preventDefault();
-  const club = selectedClub();
-  if (!club) return;
-  const body = {
-    club_id: club.id,
-    season_year: Number(fixtureYearInput.value || new Date().getFullYear()),
-    date: fixtureDateInput.value,
-    date_label: fixtureDateLabelInput.value.trim(),
-    opponent: fixtureOpponentInput.value.trim(),
-    venue: fixtureVenueInput.value.trim(),
-    match_type: fixtureTypeInput.value.trim(),
-    scheduled_time: fixtureTimeInput.value.trim(),
-    overs: fixtureOversInput.value.trim(),
-  };
-  try {
-    if (fixtureIdInput.value) {
-      await putJson(`/api/admin/clubs/${encodeURIComponent(club.id)}/fixtures/${encodeURIComponent(fixtureIdInput.value)}`, body, true);
-      setStatus("Fixture updated.", "success");
-    } else {
-      await postJson("/api/season-setup/fixtures", body, true);
-      setStatus("Fixture created.", "success");
-    }
-    await refreshAll();
-  } catch (error) {
-    setStatus(error.message, "error");
-  }
-});
+let adminCenterHandlersBound = false;
 
-fixtureList?.addEventListener("click", async (event) => {
-  const editButton = event.target.closest("[data-fixture-load]");
-  const deleteButton = event.target.closest("[data-fixture-delete]");
-  const club = selectedClub();
-  if (editButton) {
-    const fixture = payload?.fixtures?.find((item) => item.id === editButton.dataset.fixtureLoad);
-    if (!fixture) return;
-    populateFixtureForm(fixture);
-    setStatus(`Loaded ${fixture.date_label || fixture.date || "fixture"} into the editor.`, "success");
-  }
-  if (deleteButton) {
-    const fixture = payload?.fixtures?.find((item) => item.id === deleteButton.dataset.fixtureDelete);
-    if (!confirmTypedDelete("Delete this fixture?", fixture?.date_label || fixture?.date || "fixture", deleteButton)) {
-      return;
-    }
+function bindAdminCenterHandlers() {
+  if (adminCenterHandlersBound) return;
+  adminCenterHandlersBound = true;
+
+  fixtureForm?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const club = selectedClub();
+    if (!club) return;
+    const body = {
+      club_id: club.id,
+      season_year: Number(fixtureYearInput.value || new Date().getFullYear()),
+      date: fixtureDateInput.value,
+      date_label: fixtureDateLabelInput.value.trim(),
+      opponent: fixtureOpponentInput.value.trim(),
+      venue: fixtureVenueInput.value.trim(),
+      match_type: fixtureTypeInput.value.trim(),
+      scheduled_time: fixtureTimeInput.value.trim(),
+      overs: fixtureOversInput.value.trim(),
+    };
     try {
-      await deleteJson(`/api/admin/clubs/${encodeURIComponent(club.id)}/fixtures/${encodeURIComponent(deleteButton.dataset.fixtureDelete)}`, true);
-      populateFixtureForm();
-      setStatus("Fixture deleted.", "success");
+      setActionStatus(fixtureIdInput.value ? "Updating fixture..." : "Creating fixture...", "warning");
+      adminDebug("Saving fixture.", { clubId: club.id, fixtureId: fixtureIdInput.value || "" });
+      if (fixtureIdInput.value) {
+        await putJson(`/api/admin/clubs/${encodeURIComponent(club.id)}/fixtures/${encodeURIComponent(fixtureIdInput.value)}`, body, true);
+        setStatus("Fixture updated.", "success");
+      } else {
+        await postJson("/api/season-setup/fixtures", body, true);
+        setStatus("Fixture created.", "success");
+      }
       await refreshAll();
     } catch (error) {
+      adminError("Fixture save failed.", error);
       setStatus(error.message, "error");
     }
-  }
-});
+  });
 
-archiveQueue?.addEventListener("click", async (event) => {
-  const button = event.target.closest("button[data-action]");
-  if (!button) return;
-  const card = button.closest("[data-admin-upload]");
-  if (!card) return;
-  const uploadId = card.dataset.adminUpload;
-  const textarea = card.querySelector(".admin-review-text");
-  try {
-    if (button.dataset.action === "extract") {
-      await postJson(`/api/archive/${uploadId}/extract`, {}, true);
-      setStatus("Scorecard re-extracted.", "success");
-    } else if (button.dataset.action === "save") {
-      await postJson(`/api/admin/archive/${uploadId}/review`, { text: textarea?.value || "" }, true);
-      setStatus("Reviewed extraction saved.", "success");
-    } else if (button.dataset.action === "approve") {
-      await postJson(`/api/admin/archive/${uploadId}/approve`, { text: textarea?.value || "" }, true);
-      setStatus("Archive approved.", "success");
-    } else if (button.dataset.action === "delete") {
-      if (!confirmTypedDelete("Delete this archive record?", uploadId, button)) return;
-      await deleteJson(`/api/admin/archive/${uploadId}`, true);
-      setStatus("Archive deleted.", "success");
+  fixtureList?.addEventListener("click", async (event) => {
+    const editButton = event.target.closest("[data-fixture-load]");
+    const deleteButton = event.target.closest("[data-fixture-delete]");
+    const club = selectedClub();
+    if (editButton) {
+      const fixture = payload?.fixtures?.find((item) => item.id === editButton.dataset.fixtureLoad);
+      if (!fixture) return;
+      adminDebug("Fixture loaded into editor.", { fixtureId: fixture.id, date: fixture.date_label || fixture.date || "" });
+      populateFixtureForm(fixture);
+      setStatus(`Loaded ${fixture.date_label || fixture.date || "fixture"} into the editor.`, "success");
     }
-    await refreshAll();
-  } catch (error) {
-    setStatus(error.message, "error");
-  }
-});
+    if (deleteButton) {
+      const fixture = payload?.fixtures?.find((item) => item.id === deleteButton.dataset.fixtureDelete);
+      if (!confirmTypedDelete("Delete this fixture?", fixture?.date_label || fixture?.date || "fixture", deleteButton)) {
+        return;
+      }
+      try {
+        await deleteJson(`/api/admin/clubs/${encodeURIComponent(club.id)}/fixtures/${encodeURIComponent(deleteButton.dataset.fixtureDelete)}`, true);
+        populateFixtureForm();
+        setStatus("Fixture deleted.", "success");
+        await refreshAll();
+      } catch (error) {
+        setStatus(error.message, "error");
+      }
+    }
+  });
 
-clubSelect?.addEventListener("change", async () => {
-  try {
-    selectedClubId = clubSelect.value;
-    const queue = reviewQueue.length ? reviewQueue : await loadReviewQueue();
-    await loadClubView(selectedClubId, queue);
-  } catch (error) {
-    setStatus(error.message, "error");
-  }
-});
+  archiveQueue?.addEventListener("submit", async (event) => {
+    const form = event.target.closest("form.admin-review-form");
+    if (!form) return;
+    event.preventDefault();
+    const button = event.submitter || form.querySelector("button[data-action='save']");
+    const card = form.closest("[data-admin-upload]");
+    if (!card) return;
+    const uploadId = card.dataset.adminUpload;
+    const action = String(button?.dataset?.action || "save").trim();
+    const textValue = form.querySelector(".admin-review-text")?.value || "";
+    await runArchiveAction(action, uploadId, button, textValue);
+  });
 
-clubForm?.addEventListener("submit", async (event) => {
-  event.preventDefault();
-  try {
-    selectedClubId = clubSelect.value || selectedClubId;
-    const queue = reviewQueue.length ? reviewQueue : await loadReviewQueue();
-    await loadClubView(selectedClubId, queue);
-  } catch (error) {
-    setStatus(error.message, "error");
-  }
-});
+  archiveQueue?.addEventListener("click", async (event) => {
+    const button = event.target.closest("button[data-action]");
+    if (!button) return;
+    if (button.type === "submit") return;
+    const card = button.closest("[data-admin-upload]");
+    if (!card) return;
+    const uploadId = card.dataset.adminUpload;
+    await runArchiveAction(button.dataset.action, uploadId, button);
+  });
 
-archiveSearchInput?.addEventListener("input", () => renderArchives(payload, reviewQueue));
-refreshButton?.addEventListener("click", async () => {
-  try {
-    const queue = await loadReviewQueue();
-    await loadClubView(selectedClubId || clubSelect.value, queue);
-  } catch (error) {
-    setStatus(error.message, "error");
-  }
-});
+  clubSelect?.addEventListener("change", async () => {
+    try {
+      selectedClubId = clubSelect.value;
+      adminDebug("Club changed.", { selectedClubId });
+      const queue = reviewQueue.length ? reviewQueue : await loadReviewQueue();
+      await loadClubView(selectedClubId, queue);
+    } catch (error) {
+      adminError("Club change failed.", error);
+      setStatus(error.message, "error");
+    }
+  });
+
+  clubForm?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    try {
+      selectedClubId = clubSelect.value || selectedClubId;
+      adminDebug("Load club submitted.", { selectedClubId });
+      const queue = reviewQueue.length ? reviewQueue : await loadReviewQueue();
+      await loadClubView(selectedClubId, queue);
+    } catch (error) {
+      adminError("Load club failed.", error);
+      setStatus(error.message, "error");
+    }
+  });
+
+  archiveSearchInput?.addEventListener("input", () => {
+    adminDebug("Archive search updated.", { value: archiveSearchInput.value });
+    renderArchives(payload);
+  });
+  refreshButton?.addEventListener("click", async () => {
+    try {
+      adminDebug("Review queue refresh clicked.");
+      setActionStatus("Refreshing review queue...", "warning");
+      const queue = await loadReviewQueue();
+      await loadClubView(selectedClubId || clubSelect.value);
+      adminDebug("Review queue refreshed.", { count: queue.length });
+    } catch (error) {
+      adminError("Review queue refresh failed.", error);
+      setStatus(error.message, "error");
+    }
+  });
+}
 
 async function startAdminCenter() {
   if (!bootstrapAdminCenter()) {
-    window.addEventListener("load", startAdminCenter, { once: true });
+    adminDebug("Bootstrap deferred because shared helpers were not ready.");
+    window.setTimeout(startAdminCenter, 25);
     return;
   }
+  bindAdminCenterHandlers();
   try {
+    adminDebug("Starting admin auth refresh.");
     const result = await requireAuth();
     if (!result) return;
     await refreshAll();
   } catch (error) {
+    adminError("Admin center startup failed.", error);
     setStatus(error.message, "error");
   }
 }
@@ -814,3 +953,4 @@ async function startAdminCenter() {
 startAdminCenter();
 
 renderRoleBadge();
+window.CricketClubAppAdminCenterArchiveAction = async (button, action) => runArchiveAction(action, button?.closest?.("[data-admin-upload]")?.dataset?.adminUpload || "", button);

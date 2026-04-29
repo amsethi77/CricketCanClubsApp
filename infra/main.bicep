@@ -33,32 +33,32 @@ var appSettings = [
     value: '8000'
   }
   {
-    name: 'HEARTLAKE_DATA_ROOT'
-    value: '/home/site/heartlake'
+    name: 'CRICKETCLUBAPP_DATA_ROOT'
+    value: '/home/site/cricketclubapp'
   }
   {
-    name: 'HEARTLAKE_SEED_FILE'
-    value: '/home/site/heartlake/seed.json'
+    name: 'CRICKETCLUBAPP_SEED_FILE'
+    value: '/home/site/cricketclubapp/seed.json'
   }
   {
-    name: 'HEARTLAKE_DATABASE_FILE'
-    value: '/home/site/heartlake/heartlake.db'
+    name: 'CRICKETCLUBAPP_DATABASE_FILE'
+    value: '/home/site/cricketclubapp/cricketclubapp.db'
   }
   {
-    name: 'HEARTLAKE_CACHE_FILE'
-    value: '/home/site/heartlake/store_cache.json'
+    name: 'CRICKETCLUBAPP_CACHE_FILE'
+    value: '/home/site/cricketclubapp/store_cache.json'
   }
   {
-    name: 'HEARTLAKE_DASHBOARD_CACHE_FILE'
-    value: '/home/site/heartlake/dashboard_cache.json'
+    name: 'CRICKETCLUBAPP_DASHBOARD_CACHE_FILE'
+    value: '/home/site/cricketclubapp/dashboard_cache.json'
   }
   {
-    name: 'HEARTLAKE_UPLOAD_DIR'
-    value: '/home/site/heartlake/uploads'
+    name: 'CRICKETCLUBAPP_UPLOAD_DIR'
+    value: '/home/site/cricketclubapp/uploads'
   }
   {
-    name: 'HEARTLAKE_DUPLICATE_DIR'
-    value: '/home/site/heartlake/duplicates'
+    name: 'CRICKETCLUBAPP_DUPLICATE_DIR'
+    value: '/home/site/cricketclubapp/duplicates'
   }
 ]
 

@@ -1,1 +1,1 @@
-# Heartlake Cricket App package
+# CricketClubApp Cricket App package

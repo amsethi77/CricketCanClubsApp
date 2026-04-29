@@ -1,4 +1,4 @@
-const { requireAuth, postJson, getPrimaryClubId, setPrimaryClubId } = window.HeartlakePages;
+const { requireAuth, postJson, getPrimaryClubId, setPrimaryClubId } = window.CricketClubAppPages;
 
 const title = document.getElementById("seasonSetupTitle");
 const summary = document.getElementById("seasonSetupSummary");
@@ -108,7 +108,7 @@ requireAuth()
     }
     const clubId = getPrimaryClubId() || auth.user.current_club_id || auth.user.primary_club_id || "";
     setPrimaryClubId(clubId);
-    payload = await window.HeartlakePages.getJson("/api/season-setup/data", true);
+    payload = await window.CricketClubAppPages.getJson("/api/season-setup/data", true);
     title.textContent = `${payload.club.name} season setup`;
     summary.textContent = `Club default season ${payload.club.season || "TBD"} · ${payload.fixtures.length} fixture(s) stored`;
     seasonYearInput.value = Number(payload.selected_year || MIN_SEASON_YEAR);

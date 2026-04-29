@@ -11,8 +11,8 @@ This template provisions:
 - `webAppName`: the final App Service name
 
 ## Data Safety
-Runtime files are stored in App Service persistent storage under `/home/site/heartlake`:
-- `heartlake.db`
+Runtime files are stored in App Service persistent storage under `/home/site/cricketclubapp`:
+- `cricketclubapp.db`
 - `store_cache.json`
 - `dashboard_cache.json`
 - `uploads/`

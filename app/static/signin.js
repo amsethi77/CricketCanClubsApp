@@ -1,4 +1,4 @@
-const { postJson, setAuthToken, setPrimaryClubId } = window.HeartlakePages;
+const { postJson, setAuthToken, setPrimaryClubId } = window.CricketClubAppPages;
 
 const form = document.getElementById("signinForm");
 const identifierInput = document.getElementById("signinIdentifier");

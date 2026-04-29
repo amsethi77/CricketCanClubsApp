@@ -1,4 +1,4 @@
-const { requireAuth, postJson, getJson, getPrimaryClubId, setPrimaryClubId, optionMarkup } = window.HeartlakePages;
+const { requireAuth, postJson, getJson, getPrimaryClubId, setPrimaryClubId, optionMarkup } = window.CricketClubAppPages;
 
 const heading = document.getElementById("availabilityPageTitle");
 const summary = document.getElementById("availabilityPageSummary");

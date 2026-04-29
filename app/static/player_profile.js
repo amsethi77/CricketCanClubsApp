@@ -1,4 +1,4 @@
-const { requireAuth, postJson, getJson, optionMarkup, setPrimaryClubId } = window.HeartlakePages;
+const { requireAuth, postJson, getJson, optionMarkup, setPrimaryClubId } = window.CricketClubAppPages;
 
 const title = document.getElementById("playerProfileTitle");
 const summary = document.getElementById("playerProfileSummary");

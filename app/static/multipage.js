@@ -1,5 +1,5 @@
-const TOKEN_KEY = "heartlakeAuthToken";
-const CLUB_KEY = "heartlakePrimaryClubId";
+const TOKEN_KEY = "cricketClubAppAuthToken";
+const CLUB_KEY = "cricketClubAppPrimaryClubId";
 
 function getAuthToken() {
   return window.localStorage.getItem(TOKEN_KEY) || "";
@@ -129,7 +129,7 @@ if (document.readyState === "loading") {
   syncAdminOnlyElements();
 }
 
-window.HeartlakePages = {
+window.CricketClubAppPages = {
   getAuthToken,
   setAuthToken,
   getPrimaryClubId,

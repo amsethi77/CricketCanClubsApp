@@ -4,7 +4,7 @@
 Validated
 
 ## Goal
-Deploy the Heartlake / CricketCanClubs club website to Azure App Service with GitHub Actions, while preserving the current FastAPI app, SQLite persistence, static UI, archive uploads, and club-scoped workflows.
+Deploy the CricketClubApp / CricketCanClubs club website to Azure App Service with GitHub Actions, while preserving the current FastAPI app, SQLite persistence, static UI, archive uploads, and club-scoped workflows.
 
 ## Workspace Analysis
 - Project type: Python FastAPI web application with static frontend assets.
@@ -33,7 +33,7 @@ Deploy the Heartlake / CricketCanClubs club website to Azure App Service with Gi
 ## Recommended Azure Architecture
 - Azure App Service on Linux
 - GitHub Actions deployment from the repo main branch
-- Persistent App Service storage for SQLite/uploads/duplicates under `/home/site/heartlake`
+- Persistent App Service storage for SQLite/uploads/duplicates under `/home/site/cricketclubapp`
 - Azure DNS for `criccanclubs.ca`
 - Optional Azure Blob Storage later for larger archive backups or media offload
 
@@ -76,14 +76,14 @@ Deploy the Heartlake / CricketCanClubs club website to Azure App Service with Gi
 - Keep SQLite for the first Azure release
 - Back up the database and upload folders regularly
 - Preserve:
-  - `app/data/heartlake.db`
+  - `app/data/cricketclubapp.db`
   - `app/data/*.db`
   - `app/data/*_cache.json`
   - `app/uploads/`
   - `app/duplicates/`
   - user/profile data
 - Treat these as runtime state, not source code:
-  - store them in App Service persistent storage under `/home/site/heartlake`
+  - store them in App Service persistent storage under `/home/site/cricketclubapp`
   - exclude them from Git and deployment artifacts
   - restore them from backup or initial seed on first deploy
 - To avoid data loss, also generate checked-in JSON snapshots from the current persisted state:

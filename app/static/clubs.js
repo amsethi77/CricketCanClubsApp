@@ -1,4 +1,4 @@
-const { requireAuth, postJson, setPrimaryClubId, signOut, getPrimaryClubId, getJson } = window.HeartlakePages;
+const { requireAuth, postJson, setPrimaryClubId, signOut, getPrimaryClubId, getJson } = window.CricketClubAppPages;
 
 const greeting = document.getElementById("clubsGreeting");
 const clubsList = document.getElementById("clubsList");
@@ -409,6 +409,6 @@ function renderClubs() {
     })
     .catch((error) => setStatus(error.message, "error"));
 
-window.HeartlakeClubSearch = {
+window.CricketClubAppClubSearch = {
   refresh: () => window.location.reload(),
 };
