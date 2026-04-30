@@ -22,14 +22,12 @@ BASE_DIR = Path(__file__).resolve().parent
 REPO_DIR = BASE_DIR.parent
 DATA_ROOT = Path(os.getenv("CRICKETCLUBAPP_DATA_ROOT", str(BASE_DIR / "data")))
 DATA_FILE = Path(os.getenv("CRICKETCLUBAPP_SEED_FILE", str(BASE_DIR / "data" / "seed.json")))
-DATABASE_FILE = Path(os.getenv("CRICKETCLUBAPP_DATABASE_FILE", str(DATA_ROOT / "cricketclubapp.db")))
+CANONICAL_DATABASE_NAME = "cricketclubapp.db"
+DATABASE_FILE = Path(os.getenv("CRICKETCLUBAPP_DATABASE_FILE", str(DATA_ROOT / CANONICAL_DATABASE_NAME)))
 CACHE_FILE = Path(os.getenv("CRICKETCLUBAPP_CACHE_FILE", str(DATA_ROOT / "store_cache.json")))
 DASHBOARD_CACHE_FILE = Path(os.getenv("CRICKETCLUBAPP_DASHBOARD_CACHE_FILE", str(DATA_ROOT / "dashboard_cache.json")))
 UPLOAD_DIR = Path(os.getenv("CRICKETCLUBAPP_UPLOAD_DIR", str(BASE_DIR / "uploads")))
 DUPLICATE_DIR = Path(os.getenv("CRICKETCLUBAPP_DUPLICATE_DIR", str(DATA_ROOT / "duplicates")))
-LEGACY_RUNTIME_DATABASE_FILE = DATA_ROOT / "heartlake.db"
-if not DATABASE_FILE.exists() and LEGACY_RUNTIME_DATABASE_FILE.exists():
-    DATABASE_FILE = LEGACY_RUNTIME_DATABASE_FILE
 LEGACY_UPLOAD_DIR = DATA_ROOT / "uploads"
 VISION_OCR_SCRIPT = REPO_DIR / "tools" / "vision_ocr.swift"
 DATA_ROOT.mkdir(parents=True, exist_ok=True)
@@ -6197,6 +6195,7 @@ def build_dashboard(store: dict[str, Any], llm_status: dict[str, Any], focus_clu
     ]
     selected_year = _resolve_dashboard_season_year(store)
     season_label = _season_label_for_year(selected_year)
+    season_years = _dashboard_season_years(store)
     season_fixtures = _filter_fixtures_by_year(_club_owned_fixtures(store, focus_club), selected_year)
     season_archives = _filter_archives_by_year(_club_owned_archives(global_archives, focus_club), selected_year)
     season_store = dict(focused_store)
@@ -6297,11 +6296,7 @@ def build_dashboard(store: dict[str, Any], llm_status: dict[str, Any], focus_clu
         for member in store.get("members", [])
         if member.get("name") in store.get("viewer_profile", {}).get("followed_player_names", [])
     ]
-    season_years = _dashboard_season_years(store)
-    rankings_by_year = {
-        year: build_rankings_for_year(focused_store, year)
-        for year in season_years
-    }
+    rankings_by_year = {year: build_rankings_for_year(focused_store, year) for year in season_years}
     dashboard = {
         "club": focus_club or focused_store["club"],
         "clubs": ordered_clubs,

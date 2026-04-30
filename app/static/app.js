@@ -83,6 +83,7 @@ const savedChatHistory = (() => {
 const state = {
   dashboard: null,
   viewerAuth: null,
+  dashboardBootstrapped: false,
   isAdmin: false,
   canManageOtherAvailability: false,
   canManageLineupSelection: false,
@@ -2505,6 +2506,20 @@ async function loadDashboard() {
     state.viewerAuth = null;
     dashboardDebug("Signed in user could not be loaded yet.");
   }
+  if (!state.dashboardBootstrapped) {
+    const sessionClubId = String(
+      state.viewerAuth?.user?.current_club_id ||
+      state.viewerAuth?.user?.primary_club_id ||
+      ""
+    ).trim();
+    if (sessionClubId) {
+      state.selectedFocusClubId = sessionClubId;
+      dashboardDebug("Initial club resolved from signed-in session.", {
+        selectedClubId: sessionClubId,
+        role: state.viewerAuth?.user?.effective_role || state.viewerAuth?.user?.role || "",
+      });
+    }
+  }
   const query = state.selectedFocusClubId ? `?focus_club_id=${encodeURIComponent(state.selectedFocusClubId)}` : "";
   const dashboard = await runAction(() => getJson(`/api/dashboard${query}`), "Club dashboard loaded.", "load dashboard");
   if (dashboard) {
@@ -2515,6 +2530,7 @@ async function loadDashboard() {
       archives: Array.isArray(dashboard.archive_uploads) ? dashboard.archive_uploads.length : 0,
     });
     renderDashboard(dashboard);
+    state.dashboardBootstrapped = true;
   }
 }
 

@@ -5,6 +5,7 @@ import os
 import re
 import secrets
 import sqlite3
+import threading
 from copy import deepcopy
 from urllib import request
 from urllib.parse import urlencode
@@ -24,6 +25,9 @@ import sqlite3
 import logging
 
 logger = logging.getLogger("CricketClubApp")
+
+_AUTH_SCHEMA_BOOTSTRAP_LOCK = threading.Lock()
+_AUTH_SCHEMA_BOOTSTRAP_DONE = False
 
 if not logger.handlers:
     app_env = str(
@@ -1229,10 +1233,11 @@ def _archive_match_club_ids(store: dict[str, Any], club_id: str, match_id: str =
 
 def _auth_connection() -> sqlite3.Connection:
     logger.debug("🗄️ Opening DB connection: %s", DATABASE_FILE)
-    DATABASE_FILE.parent.mkdir(exist_ok=True)
-    connection = sqlite3.connect(DATABASE_FILE)
+    DATABASE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    connection = sqlite3.connect(DATABASE_FILE, timeout=30)
     connection.row_factory = sqlite3.Row
     connection.execute("PRAGMA foreign_keys = ON")
+    connection.execute("PRAGMA busy_timeout = 30000")
     return connection
 
 
@@ -1302,10 +1307,17 @@ def _sync_role_permissions(connection: sqlite3.Connection) -> None:
 
 
 def ensure_auth_schema() -> None:
-    with _auth_connection() as connection:
-        connection.executescript(
-            """
-            CREATE TABLE IF NOT EXISTS app_users (
+    global _AUTH_SCHEMA_BOOTSTRAP_DONE
+    if _AUTH_SCHEMA_BOOTSTRAP_DONE:
+        return
+    with _AUTH_SCHEMA_BOOTSTRAP_LOCK:
+        if _AUTH_SCHEMA_BOOTSTRAP_DONE:
+            return
+        with _auth_connection() as connection:
+            try:
+                connection.executescript(
+                    """
+                    CREATE TABLE IF NOT EXISTS app_users (
               id INTEGER PRIMARY KEY AUTOINCREMENT,
               display_name TEXT NOT NULL,
               mobile TEXT UNIQUE,
@@ -1319,7 +1331,7 @@ def ensure_auth_schema() -> None:
               FOREIGN KEY (primary_club_id) REFERENCES clubs(id) ON DELETE SET NULL
             );
 
-            CREATE TABLE IF NOT EXISTS app_auth_sessions (
+                    CREATE TABLE IF NOT EXISTS app_auth_sessions (
               token TEXT PRIMARY KEY,
               user_id INTEGER NOT NULL,
               current_club_id TEXT,
@@ -1328,14 +1340,14 @@ def ensure_auth_schema() -> None:
               FOREIGN KEY (current_club_id) REFERENCES clubs(id) ON DELETE SET NULL
             );
 
-            CREATE TABLE IF NOT EXISTS app_roles (
+                    CREATE TABLE IF NOT EXISTS app_roles (
               role_name TEXT PRIMARY KEY,
               display_name TEXT NOT NULL,
               description TEXT,
               created_at TEXT NOT NULL
             );
 
-            CREATE TABLE IF NOT EXISTS app_role_permissions (
+                    CREATE TABLE IF NOT EXISTS app_role_permissions (
               role_name TEXT NOT NULL,
               permission TEXT NOT NULL,
               description TEXT,
@@ -1344,7 +1356,7 @@ def ensure_auth_schema() -> None:
               FOREIGN KEY (role_name) REFERENCES app_roles(role_name) ON DELETE CASCADE
             );
 
-            CREATE TABLE IF NOT EXISTS app_user_club_roles (
+                    CREATE TABLE IF NOT EXISTS app_user_club_roles (
               user_id INTEGER NOT NULL,
               club_id TEXT NOT NULL,
               role_name TEXT NOT NULL,
@@ -1355,7 +1367,7 @@ def ensure_auth_schema() -> None:
               FOREIGN KEY (role_name) REFERENCES app_roles(role_name) ON DELETE RESTRICT
             );
 
-            CREATE TABLE IF NOT EXISTS app_player_season_availability (
+                    CREATE TABLE IF NOT EXISTS app_player_season_availability (
               user_id INTEGER NOT NULL,
               club_id TEXT NOT NULL,
               status TEXT,
@@ -1366,7 +1378,7 @@ def ensure_auth_schema() -> None:
               FOREIGN KEY (club_id) REFERENCES clubs(id) ON DELETE CASCADE
             );
 
-            CREATE TABLE IF NOT EXISTS app_audit_log (
+                    CREATE TABLE IF NOT EXISTS app_audit_log (
               id INTEGER PRIMARY KEY AUTOINCREMENT,
               created_at TEXT NOT NULL,
               actor_user_id INTEGER,
@@ -1380,11 +1392,17 @@ def ensure_auth_schema() -> None:
               source TEXT,
               FOREIGN KEY (actor_user_id) REFERENCES app_users(id) ON DELETE SET NULL
             );
-            """
-        )
-        _seed_role_catalog(connection)
-        _sync_role_permissions(connection)
-        _migrate_multi_role_assignments(connection)
+                    """
+                )
+                _seed_role_catalog(connection)
+                _sync_role_permissions(connection)
+                _migrate_multi_role_assignments(connection)
+            except sqlite3.OperationalError as exc:
+                if "locked" not in str(exc).lower():
+                    raise
+                logger.warning("Auth schema bootstrap skipped because the database is busy. Login will retry on the next request.")
+                return
+        _AUTH_SCHEMA_BOOTSTRAP_DONE = True
 
 
 def _audit_event(
@@ -2858,16 +2876,18 @@ def _admin_center_html(request: Request) -> HTMLResponse:
                 review_llm_model = str(upload.get("review_llm_model") or "").strip()
                 review_llm_notes = str(upload.get("review_llm_notes") or "").strip()
                 review_summary = _review_summary_text(upload)
-                raw_output_html = (
-                    f"""
-                        <details class="audit-raw-panel">
-                          <summary>View raw LLM output</summary>
-                          <pre class="audit-details">{html.escape(review_llm_notes[:12000])}</pre>
-                        </details>
-                    """
-                    if review_llm_notes
-                    else ""
+                llm_chip_html = "".join(
+                    f'<span class="audit-chip">{html.escape(chip)}</span>'
+                    for chip in llm_chips
                 )
+                raw_output_html = ""
+                if review_llm_notes:
+                    raw_output_html = (
+                        "<details class=\"audit-raw-panel\">"
+                        "<summary>View raw LLM output</summary>"
+                        f"<pre class=\"audit-details\">{html.escape(review_llm_notes[:12000])}</pre>"
+                        "</details>"
+                    )
                 rendered_cards.append(
                     f"""
                       <article class="detail-card" data-admin-upload="{html.escape(str(upload.get('id') or ''))}">
@@ -2877,7 +2897,7 @@ def _admin_center_html(request: Request) -> HTMLResponse:
                         <p>{html.escape(upload.get('extracted_summary') or 'Review the extracted draft before approving.')}</p>
                         <small>{html.escape(f'LLM review: {review_llm_model}' if review_llm_model else 'LLM review pending')}</small>
                         <p class="audit-details">{html.escape(review_summary)}</p>
-                        {f'<div class="audit-chip-row">{"".join(f"<span class=\"audit-chip\">{html.escape(chip)}</span>" for chip in llm_chips)}</div>' if llm_chips else ''}
+                        {f'<div class="audit-chip-row">{llm_chip_html}</div>' if llm_chip_html else ''}
                         {f'<p class="audit-details">{html.escape(llm_details)}</p>' if llm_details else ''}
                         {raw_output_html}
                         <form class="admin-review-form" method="post" action="/api/admin/archive/{html.escape(str(upload.get('id') or ''))}/review-form">

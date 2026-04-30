@@ -4,13 +4,13 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PORT=8000 \
     WEBSITES_PORT=8000 \
-    HEARTLAKE_DATA_ROOT=/home/site/heartlake \
-    HEARTLAKE_SEED_FILE=/home/site/heartlake/seed.json \
-    HEARTLAKE_DATABASE_FILE=/home/site/heartlake/heartlake.db \
-    HEARTLAKE_CACHE_FILE=/home/site/heartlake/store_cache.json \
-    HEARTLAKE_DASHBOARD_CACHE_FILE=/home/site/heartlake/dashboard_cache.json \
-    HEARTLAKE_UPLOAD_DIR=/home/site/heartlake/uploads \
-    HEARTLAKE_DUPLICATE_DIR=/home/site/heartlake/duplicates
+    CRICKETCLUBAPP_DATA_ROOT=/home/site/cricketclubapp \
+    CRICKETCLUBAPP_SEED_FILE=/home/site/cricketclubapp/seed.json \
+    CRICKETCLUBAPP_DATABASE_FILE=/home/site/cricketclubapp/cricketclubapp.db \
+    CRICKETCLUBAPP_CACHE_FILE=/home/site/cricketclubapp/store_cache.json \
+    CRICKETCLUBAPP_DASHBOARD_CACHE_FILE=/home/site/cricketclubapp/dashboard_cache.json \
+    CRICKETCLUBAPP_UPLOAD_DIR=/home/site/cricketclubapp/uploads \
+    CRICKETCLUBAPP_DUPLICATE_DIR=/home/site/cricketclubapp/duplicates
 
 WORKDIR /app
 
@@ -25,7 +25,7 @@ COPY app /app/app
 COPY tools /app/tools
 COPY README.md /app/README.md
 
-RUN mkdir -p /home/site/heartlake/uploads /home/site/heartlake/duplicates
+RUN mkdir -p /home/site/cricketclubapp/uploads /home/site/cricketclubapp/duplicates
 
 EXPOSE 8000
 
