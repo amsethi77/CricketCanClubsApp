@@ -10,6 +10,7 @@ import subprocess
 import uuid
 from collections import Counter, defaultdict
 from datetime import datetime, timezone
+from copy import deepcopy
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any
@@ -81,6 +82,15 @@ VISION_LLM_MODEL_PREFERENCES = [
     "gemma3:12b",
     "gemma3:4b",
     "llama3.2-vision",
+]
+
+TEXT_LLM_MODEL_PREFERENCES = [
+    "llama3.2:latest",
+    "llama3.1:8b",
+    "mistral:latest",
+    "phi4:latest",
+    "qwen2.5:latest",
+    "qwen2.5:7b",
 ]
 
 logger = logging.getLogger("CricketClubStore")
@@ -1414,6 +1424,184 @@ def scorecard_template_from_archive(archive: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _merge_scorecard_template_payload(base: Any, overlay: Any) -> Any:
+    if isinstance(base, dict) and isinstance(overlay, dict):
+        merged = dict(base)
+        for key, value in overlay.items():
+            if key not in merged:
+                merged[key] = deepcopy(value)
+                continue
+            merged[key] = _merge_scorecard_template_payload(merged[key], value)
+        return merged
+    if isinstance(base, list) and isinstance(overlay, list):
+        if not base:
+            return deepcopy(overlay)
+        merged_list: list[Any] = []
+        for index in range(max(len(base), len(overlay))):
+            if index < len(base) and index < len(overlay):
+                merged_list.append(_merge_scorecard_template_payload(base[index], overlay[index]))
+            elif index < len(base):
+                merged_list.append(deepcopy(base[index]))
+            else:
+                merged_list.append(deepcopy(overlay[index]))
+        return merged_list
+    if base in (None, "", [], {}):
+        return deepcopy(overlay)
+    return deepcopy(base)
+
+
+def _review_candidate_archive_entries(
+    store: dict[str, Any] | None,
+    archive: dict[str, Any] | None,
+    limit: int = 8,
+) -> list[dict[str, Any]]:
+    if not isinstance(store, dict):
+        return []
+    archive_id = str((archive or {}).get("id") or "").strip()
+    archive_date = str((archive or {}).get("archive_date") or (archive or {}).get("scorecard_date") or "").strip()
+    archive_family = str((archive or {}).get("family_key") or "").strip()
+    archive_club_ids = set(_coerce_archive_string_list((archive or {}).get("club_ids")))
+    archive_club_id = str((archive or {}).get("club_id") or "").strip()
+    archive_club_name = str((archive or {}).get("club_name") or "").strip().lower()
+    candidates: list[dict[str, Any]] = []
+    for candidate in canonical_archive_uploads(store.get("archive_uploads", [])):
+        candidate_id = str(candidate.get("id") or "").strip()
+        if not candidate_id or candidate_id == archive_id:
+            continue
+        candidate_club_ids = _coerce_archive_string_list(candidate.get("club_ids"))
+        same_club = bool(
+            archive_club_ids.intersection(candidate_club_ids)
+            or (archive_club_id and archive_club_id in candidate_club_ids)
+            or (archive_club_name and archive_club_name in str(candidate.get("club_name") or "").strip().lower())
+        )
+        same_date = bool(archive_date and str(candidate.get("archive_date") or candidate.get("scorecard_date") or "").strip() == archive_date)
+        same_family = bool(archive_family and str(candidate.get("family_key") or "").strip() == archive_family)
+        same_match = bool(
+            str(candidate.get("match_id") or "").strip()
+            and str(candidate.get("match_id") or "").strip() == str((archive or {}).get("match_id") or "").strip()
+        )
+        if not (same_family or same_match or same_date or same_club):
+            continue
+        candidates.append(
+            {
+                "id": candidate_id,
+                "file_name": candidate.get("file_name") or "",
+                "club_id": candidate.get("club_id") or "",
+                "club_name": candidate.get("club_name") or "",
+                "archive_date": candidate.get("archive_date") or "",
+                "season": candidate.get("season") or "",
+                "status": candidate.get("status") or "",
+                "family_key": candidate.get("family_key") or "",
+                "extracted_summary": candidate.get("extracted_summary") or "",
+                "has_template": bool(candidate.get("extraction_template")),
+            }
+        )
+        if len(candidates) >= limit:
+            break
+    return candidates
+
+
+def _review_llm_prompt(
+    template: dict[str, Any],
+    review_text: str,
+    archive: dict[str, Any] | None = None,
+    candidate_archives: list[dict[str, Any]] | None = None,
+) -> str:
+    archive_bits = []
+    if isinstance(archive, dict):
+        for key in ("file_name", "club_name", "club_id", "archive_date", "season"):
+            value = str(archive.get(key) or "").strip()
+            if value:
+                archive_bits.append(f"{key}: {value}")
+    archive_text = "\n".join(archive_bits) or "No archive metadata provided."
+    candidate_text = json.dumps(candidate_archives or [], indent=2)[:8000]
+    return (
+        "You are reviewing a cricket scorecard JSON for admin approval before it can be published.\n"
+        "Return JSON only.\n"
+        "Keep the same scorecard schema with meta, match, innings, and validation.\n"
+        "Preserve every existing non-empty value exactly as-is.\n"
+        "Only fill missing or null fields when the value is directly supported by the provided review JSON.\n"
+        "Do not remove keys, do not rename keys, and do not invent player names or scores.\n"
+        "If the review JSON contains both innings, keep both innings objects.\n"
+        "If the archive appears to belong with a companion archive or the other club, report that in review_assessment.\n"
+        "If one innings is missing but a companion archive clearly carries the other innings, combine the evidence in the returned template.\n"
+        "Never mix unrelated clubs or unrelated matches.\n"
+        "If a field is uncertain, leave it null.\n"
+        "Use the review JSON as the main source of truth.\n\n"
+        f"Archive metadata:\n{archive_text}\n\n"
+        f"Candidate archives:\n{candidate_text}\n\n"
+        f"Current template JSON:\n{json.dumps(template, indent=2)[:20000]}\n\n"
+        f"Review JSON:\n{str(review_text or '')[:20000]}\n"
+    )
+
+
+def review_scorecard_template_with_llm(
+    template: dict[str, Any],
+    review_text: str,
+    *,
+    archive: dict[str, Any] | None = None,
+    store: dict[str, Any] | None = None,
+) -> tuple[dict[str, Any], str, str, dict[str, Any]]:
+    model = preferred_text_llm_model()
+    if not model:
+        return template, "LLM review unavailable: no local Ollama text model was found.", "", {}
+    candidate_archives = _review_candidate_archive_entries(store, archive)
+    try:
+        response = httpx.post(
+            f"{_ollama_base_url()}/api/chat",
+            json={
+                "model": model,
+                "stream": False,
+                "options": {"temperature": 0},
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": _review_llm_prompt(template, review_text, archive, candidate_archives),
+                    }
+                ],
+            },
+            timeout=300.0,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        content = str(payload.get("message", {}).get("content", "") or "").strip()
+        parsed = _extract_json_payload(content)
+        if not isinstance(parsed, dict):
+            return template, content or "LLM review returned text but no JSON could be parsed.", model, {}
+        assessment = parsed.get("review_assessment") if isinstance(parsed.get("review_assessment"), dict) else {}
+        if not _is_scorecard_template_payload(parsed) and isinstance(parsed.get("extraction_template"), dict):
+            parsed = parsed["extraction_template"]
+        if not _is_scorecard_template_payload(parsed):
+            return template, content or "LLM review returned JSON, but not the expected scorecard template.", model, assessment
+        merged = _merge_scorecard_template_payload(template, parsed)
+        if store and archive and isinstance(assessment, dict):
+            companion_ids = [
+                str(item).strip()
+                for item in assessment.get("possible_companion_archive_ids", [])
+                if str(item).strip()
+            ]
+            for companion_id in companion_ids[:2]:
+                companion = next(
+                    (
+                        item
+                        for item in canonical_archive_uploads(store.get("archive_uploads", []))
+                        if str(item.get("id") or "").strip() == companion_id
+                    ),
+                    None,
+                )
+                if not companion:
+                    continue
+                companion_template = companion.get("extraction_template")
+                if not isinstance(companion_template, dict):
+                    companion_template = scorecard_template_from_archive(companion)
+                merged = _merge_scorecard_template_payload(merged, companion_template)
+        if _is_scorecard_template_payload(merged):
+            return merged, content, model, assessment
+    except Exception:
+        return template, "LLM review failed while contacting the local model.", model, {}
+    return template, "LLM review completed.", model, {}
+
+
 def normalize_archive(item: dict[str, Any]) -> dict[str, Any]:
     normalized = dict(item)
     normalized.setdefault("id", str(uuid.uuid4())[:8])
@@ -1445,6 +1633,15 @@ def normalize_archive(item: dict[str, Any]) -> dict[str, Any]:
     normalized.setdefault("suggested_performances", [])
     normalized.setdefault("draft_scorecard", default_scorecard())
     normalized.setdefault("extraction_template", scorecard_template_from_archive(normalized))
+    normalized.setdefault("review_template_json", "")
+    normalized.setdefault("review_source_json", "")
+    normalized.setdefault("review_llm_model", "")
+    normalized.setdefault("review_llm_notes", "")
+    normalized.setdefault("review_llm_assessment", {})
+    if not str(normalized.get("review_template_json") or "").strip():
+        template = normalized.get("extraction_template")
+        if isinstance(template, dict):
+            normalized["review_template_json"] = json.dumps(template, indent=2)
     normalized.setdefault("family_key", "")
     normalized.setdefault("family_variant_count", 1)
     normalized.setdefault("family_hidden_count", 0)
@@ -1636,6 +1833,21 @@ def preferred_vision_llm_model() -> str:
     return ""
 
 
+def preferred_text_llm_model() -> str:
+    configured = (
+        os.environ.get("ARCHIVE_REVIEW_MODEL", "").strip()
+        or os.environ.get("ARCHIVE_TEXT_MODEL", "").strip()
+        or os.environ.get("OLLAMA_MODEL", "").strip()
+    )
+    models = available_ollama_models()
+    if configured and configured in models:
+        return configured
+    for candidate in TEXT_LLM_MODEL_PREFERENCES:
+        if candidate in models:
+            return candidate
+    return ""
+
+
 def local_ocr_available() -> bool:
     return bool(shutil.which("tesseract") and shutil.which("sips"))
 
@@ -1794,6 +2006,16 @@ def _extract_json_payload(text: str) -> dict[str, Any] | None:
         except Exception:
             continue
     return None
+
+
+def _is_scorecard_template_payload(payload: Any) -> bool:
+    return (
+        isinstance(payload, dict)
+        and isinstance(payload.get("meta"), dict)
+        and isinstance(payload.get("match"), dict)
+        and isinstance(payload.get("innings"), list)
+        and isinstance(payload.get("validation"), dict)
+    )
 
 
 def _safe_int(value: Any) -> int | None:
@@ -3066,6 +3288,11 @@ def _schema_tables() -> str:
       ocr_processed_at TEXT,
       ocr_pipeline TEXT,
       extracted_summary TEXT,
+      review_template_json TEXT,
+      review_source_json TEXT,
+      review_llm_model TEXT,
+      review_llm_notes TEXT,
+      review_llm_assessment TEXT,
       FOREIGN KEY (club_id) REFERENCES clubs(id) ON DELETE SET NULL
     );
 
@@ -3764,8 +3991,9 @@ def _write_relational_state(connection: sqlite3.Connection, store: dict[str, Any
                   id, club_id, club_ids, club_names, match_id, applied_to_match_id, season, status, confidence, created_at,
                   preview_url, file_name, file_path, file_hash, file_size, source, scorecard_date,
                   photo_taken_at, photo_date_source, archive_date, archive_year, archive_date_source,
-                  raw_extracted_text, ocr_engine, ocr_processed_at, ocr_pipeline, extracted_summary
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                  raw_extracted_text, ocr_engine, ocr_processed_at, ocr_pipeline, extracted_summary,
+                  review_template_json, review_source_json, review_llm_model, review_llm_notes, review_llm_assessment
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     archive.get("id", ""),
@@ -3795,6 +4023,11 @@ def _write_relational_state(connection: sqlite3.Connection, store: dict[str, Any
                     archive.get("ocr_processed_at", ""),
                     archive.get("ocr_pipeline", ""),
                     archive.get("extracted_summary", ""),
+                    archive.get("review_template_json", ""),
+                    archive.get("review_source_json", ""),
+                    archive.get("review_llm_model", ""),
+                    archive.get("review_llm_notes", ""),
+                    json.dumps(archive.get("review_llm_assessment") or {}, indent=2) if isinstance(archive.get("review_llm_assessment"), dict) else str(archive.get("review_llm_assessment") or ""),
                 ),
             )
             draft = archive.get("draft_scorecard", {})
@@ -4383,6 +4616,11 @@ def _read_relational_state(connection: sqlite3.Connection) -> dict[str, Any]:
                 },
                 "suggested_performances": suggested_performances,
                 "extracted_summary": row["extracted_summary"] or "",
+                "review_template_json": row["review_template_json"] or "",
+                "review_source_json": row["review_source_json"] or "",
+                "review_llm_model": row["review_llm_model"] or "",
+                "review_llm_notes": row["review_llm_notes"] or "",
+                "review_llm_assessment": json.loads(row["review_llm_assessment"]) if row["review_llm_assessment"] else {},
             }
         )
     for archive in archive_uploads:
@@ -4486,6 +4724,11 @@ def ensure_database() -> None:
         for column_name, ddl in [
             ("club_ids", "ALTER TABLE archives ADD COLUMN club_ids TEXT"),
             ("club_names", "ALTER TABLE archives ADD COLUMN club_names TEXT"),
+            ("review_template_json", "ALTER TABLE archives ADD COLUMN review_template_json TEXT"),
+            ("review_source_json", "ALTER TABLE archives ADD COLUMN review_source_json TEXT"),
+            ("review_llm_model", "ALTER TABLE archives ADD COLUMN review_llm_model TEXT"),
+            ("review_llm_notes", "ALTER TABLE archives ADD COLUMN review_llm_notes TEXT"),
+            ("review_llm_assessment", "ALTER TABLE archives ADD COLUMN review_llm_assessment TEXT"),
         ]:
             if column_name not in existing_archive_columns:
                 try:

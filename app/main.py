@@ -83,6 +83,7 @@ try:
         _resolve_archive_club,
         reset_score_data,
         resolve_member_name,
+        review_scorecard_template_with_llm,
         scorecard_template_from_archive,
         save_store,
         scoped_store_for_club,
@@ -123,6 +124,7 @@ except ModuleNotFoundError:
         _resolve_archive_club,
         reset_score_data,
         resolve_member_name,
+        review_scorecard_template_with_llm,
         scorecard_template_from_archive,
         save_store,
         scoped_store_for_club,
@@ -158,7 +160,7 @@ async def _log_http_requests(request: Request, call_next):
     query = request.url.query
     if logger.isEnabledFor(logging.DEBUG):
         logger.debug(
-            "HTTP request start → method=%s path=%s query=%s auth_cookie=%s",
+            "HTTP request started. method=%s path=%s query=%s auth_cookie=%s",
             request.method,
             path,
             query or "",
@@ -167,12 +169,12 @@ async def _log_http_requests(request: Request, call_next):
     try:
         response = await call_next(request)
     except Exception:
-        logger.exception("HTTP request error → method=%s path=%s", request.method, path)
+        logger.exception("HTTP request error. method=%s path=%s", request.method, path)
         raise
     duration_ms = int((datetime.utcnow() - start).total_seconds() * 1000)
     if logger.isEnabledFor(logging.DEBUG):
         logger.debug(
-            "HTTP request complete → method=%s path=%s status=%s duration_ms=%s",
+            "HTTP request complete. method=%s path=%s status=%s duration_ms=%s",
             request.method,
             path,
             getattr(response, "status_code", 0),
@@ -180,7 +182,7 @@ async def _log_http_requests(request: Request, call_next):
         )
     elif getattr(response, "status_code", 200) >= 400:
         logger.error(
-            "HTTP request failed → method=%s path=%s status=%s duration_ms=%s",
+            "HTTP request failed. method=%s path=%s status=%s duration_ms=%s",
             request.method,
             path,
             getattr(response, "status_code", 0),
@@ -846,8 +848,15 @@ def _apply_archive_review_text(
     if isinstance(payload, dict):
         template_payload = _canonical_scorecard_template_payload(payload)
         if template_payload is not None:
+            logger.debug(
+                "Archive review enrichment started. file_name=%s club_id=%s",
+                upload.get("file_name") or "",
+                upload.get("club_id") or "",
+            )
             draft, suggested, extracted_summary = _scorecard_template_review_data(store, template_payload)
+            template_payload = _enrich_scorecard_template_payload(template_payload, draft=draft, archive=upload)
             upload["extraction_template"] = template_payload
+            upload["review_source_json"] = review_text[:12000]
             upload["draft_scorecard"] = draft
             upload["suggested_performances"] = suggested
             upload["raw_extracted_text"] = review_text[:12000]
@@ -861,6 +870,26 @@ def _apply_archive_review_text(
                 or upload.get("extracted_summary")
                 or "Reviewed archive scorecard."
             )
+            reviewed_template, llm_notes, llm_model, llm_assessment = review_scorecard_template_with_llm(
+                template_payload,
+                review_text,
+                archive=upload,
+                store=store,
+            )
+            logger.debug(
+                "Archive review enrichment finished. file_name=%s model=%s used_llm=%s",
+                upload.get("file_name") or "",
+                llm_model or "",
+                bool(llm_notes or llm_model),
+            )
+            if isinstance(reviewed_template, dict):
+                upload["extraction_template"] = reviewed_template
+                upload["review_template_json"] = json.dumps(reviewed_template, indent=2)
+            else:
+                upload["review_template_json"] = json.dumps(template_payload, indent=2)
+            upload["review_llm_model"] = llm_model or upload.get("review_llm_model") or ""
+            upload["review_llm_notes"] = llm_notes[:12000] if llm_notes else upload.get("review_llm_notes") or "LLM review completed."
+            upload["review_llm_assessment"] = llm_assessment or upload.get("review_llm_assessment") or {}
             return
         if "draft_scorecard" in payload:
             draft = payload.get("draft_scorecard")
@@ -873,9 +902,11 @@ def _apply_archive_review_text(
             template = payload.get("extraction_template")
             if isinstance(template, dict) and _is_scorecard_template_payload(template):
                 upload["extraction_template"] = deepcopy(template)
+                upload["review_source_json"] = review_text[:12000]
         elif "match" in payload or "innings" in payload:
             parsed = parse_imported_extraction(store, review_text)
             upload.update(parsed)
+            upload["review_source_json"] = review_text[:12000]
         else:
             draft = default_scorecard(_extract_field(payload, "result") or upload.get("extracted_summary") or "Reviewed archive")
             draft.update(
@@ -903,6 +934,7 @@ def _apply_archive_review_text(
                 confidence=str(_extract_field(payload, "confidence") or upload.get("confidence") or "review"),
                 extracted_summary=str(_extract_field(payload, "extracted_summary") or upload.get("extracted_summary") or "Reviewed archive scorecard."),
             )
+            upload["review_source_json"] = review_text[:12000]
 
         upload["raw_extracted_text"] = str(_extract_field(payload, "raw_extracted_text") or review_text)[:12000]
         meta = payload.get("meta") if isinstance(payload.get("meta"), dict) else {}
@@ -928,8 +960,29 @@ def _apply_archive_review_text(
                 confidence=upload["confidence"],
                 extracted_summary=upload["extracted_summary"],
             )
+        reviewed_template, llm_notes, llm_model, llm_assessment = review_scorecard_template_with_llm(
+            upload.get("extraction_template") or {},
+            review_text,
+            archive=upload,
+            store=store,
+        )
+        logger.debug(
+            "Archive review enrichment finished. file_name=%s model=%s used_llm=%s",
+            upload.get("file_name") or "",
+            llm_model or "",
+            bool(llm_notes or llm_model),
+        )
+        if isinstance(reviewed_template, dict):
+            upload["extraction_template"] = reviewed_template
+            upload["review_template_json"] = json.dumps(reviewed_template, indent=2)
+        else:
+            upload["review_template_json"] = json.dumps(upload.get("extraction_template") or {}, indent=2)
+        upload["review_llm_model"] = llm_model or upload.get("review_llm_model") or ""
+        upload["review_llm_notes"] = llm_notes[:12000] if llm_notes else upload.get("review_llm_notes") or "LLM review completed."
+        upload["review_llm_assessment"] = llm_assessment or upload.get("review_llm_assessment") or {}
     else:
         upload["raw_extracted_text"] = review_text[:12000]
+        upload["review_source_json"] = review_text[:12000]
         upload["ocr_engine"] = upload.get("ocr_engine") or "manual-review"
         upload["ocr_pipeline"] = upload.get("ocr_pipeline") or "Admin reviewed extraction"
         upload["confidence"] = upload.get("confidence") or "review"
@@ -944,6 +997,48 @@ def _apply_archive_review_text(
             confidence=upload["confidence"],
             extracted_summary=upload.get("extracted_summary") or "Reviewed archive scorecard.",
         )
+        reviewed_template, llm_notes, llm_model, llm_assessment = review_scorecard_template_with_llm(
+            upload.get("extraction_template") or {},
+            review_text,
+            archive=upload,
+            store=store,
+        )
+        logger.debug(
+            "Archive review enrichment finished. file_name=%s model=%s used_llm=%s",
+            upload.get("file_name") or "",
+            llm_model or "",
+            bool(llm_notes or llm_model),
+        )
+        if isinstance(reviewed_template, dict):
+            upload["extraction_template"] = reviewed_template
+            upload["review_template_json"] = json.dumps(reviewed_template, indent=2)
+        else:
+            upload["review_template_json"] = json.dumps(upload.get("extraction_template") or {}, indent=2)
+        upload["review_llm_model"] = llm_model or upload.get("review_llm_model") or ""
+        upload["review_llm_notes"] = llm_notes[:12000] if llm_notes else upload.get("review_llm_notes") or "LLM review completed."
+        upload["review_llm_assessment"] = llm_assessment or upload.get("review_llm_assessment") or {}
+
+
+def _archive_scorecard_update_from_review(upload: dict[str, Any], request: ArchiveReviewRequest | None = None) -> dict[str, str]:
+    draft = upload.get("draft_scorecard") if isinstance(upload.get("draft_scorecard"), dict) else {}
+
+    def pick(*values: Any) -> str:
+        for value in values:
+            text = str(value or "").strip()
+            if text:
+                return text
+        return ""
+
+    return {
+        "heartlake_runs": pick(getattr(request, "heartlake_runs", None), draft.get("heartlake_runs"), draft.get("total_runs")),
+        "heartlake_wickets": pick(getattr(request, "heartlake_wickets", None), draft.get("heartlake_wickets"), draft.get("wickets")),
+        "heartlake_overs": pick(getattr(request, "heartlake_overs", None), draft.get("heartlake_overs"), draft.get("overs")),
+        "opponent_runs": pick(getattr(request, "opponent_runs", None), draft.get("opponent_runs")),
+        "opponent_wickets": pick(getattr(request, "opponent_wickets", None), draft.get("opponent_wickets")),
+        "opponent_overs": pick(getattr(request, "opponent_overs", None), draft.get("opponent_overs")),
+        "result": pick(getattr(request, "result", None), draft.get("result"), upload.get("result"), upload.get("extracted_summary"), "Reviewed archive"),
+        "live_summary": pick(getattr(request, "live_summary", None), draft.get("live_summary"), upload.get("live_summary"), upload.get("extracted_summary")),
+    }
 
     inferred_club = _resolve_archive_club(upload, store.get("clubs", []))
     if inferred_club:
@@ -1043,7 +1138,7 @@ def _selected_club(store: dict[str, Any], focus_club_id: str | None = None) -> d
         or ""
     ).strip()
 
-    logger.debug("🔍 Selecting club → requested=%s", requested)
+    logger.debug("Selecting club. requested=%s", requested)
 
     club = next(
         (
@@ -1055,7 +1150,7 @@ def _selected_club(store: dict[str, Any], focus_club_id: str | None = None) -> d
     )
 
     if not club:
-        logger.warning("⚠️ Club not found → fallback used")
+        logger.warning("Club not found. Fallback club used.")
 
     return club or store.get("club", {})
 
@@ -1270,11 +1365,64 @@ def ensure_auth_schema() -> None:
               FOREIGN KEY (user_id) REFERENCES app_users(id) ON DELETE CASCADE,
               FOREIGN KEY (club_id) REFERENCES clubs(id) ON DELETE CASCADE
             );
+
+            CREATE TABLE IF NOT EXISTS app_audit_log (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              created_at TEXT NOT NULL,
+              actor_user_id INTEGER,
+              actor_display_name TEXT,
+              club_id TEXT,
+              club_name TEXT,
+              action TEXT NOT NULL,
+              entity_type TEXT NOT NULL,
+              entity_id TEXT,
+              details_json TEXT,
+              source TEXT,
+              FOREIGN KEY (actor_user_id) REFERENCES app_users(id) ON DELETE SET NULL
+            );
             """
         )
         _seed_role_catalog(connection)
         _sync_role_permissions(connection)
         _migrate_multi_role_assignments(connection)
+
+
+def _audit_event(
+    action: str,
+    entity_type: str,
+    entity_id: str = "",
+    *,
+    actor: sqlite3.Row | None = None,
+    club_id: str = "",
+    club_name: str = "",
+    details: dict[str, Any] | None = None,
+    source: str = "",
+) -> None:
+    ensure_auth_schema()
+    actor_id = int(actor["id"]) if actor is not None and actor["id"] is not None else None
+    actor_name = str(actor["display_name"] or actor["mobile"] or "system") if actor is not None else "system"
+    payload = json.dumps(details or {}, ensure_ascii=False, separators=(",", ":"))
+    with _auth_connection() as connection:
+        connection.execute(
+            """
+            INSERT INTO app_audit_log (
+              created_at, actor_user_id, actor_display_name, club_id, club_name,
+              action, entity_type, entity_id, details_json, source
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                now_iso(),
+                actor_id,
+                actor_name,
+                str(club_id or "").strip() or None,
+                str(club_name or "").strip() or None,
+                str(action or "").strip(),
+                str(entity_type or "").strip(),
+                str(entity_id or "").strip() or None,
+                payload,
+                str(source or "").strip() or None,
+            ),
+        )
 
 
 def _migrate_multi_role_assignments(connection: sqlite3.Connection) -> None:
@@ -2095,6 +2243,78 @@ def _scorecard_template_review_data(store: dict[str, Any], template: dict[str, A
     return draft, suggested, extracted_summary
 
 
+def _parse_team_names_from_summary(summary: str) -> tuple[str, str]:
+    batting = ""
+    bowling = ""
+    text = str(summary or "")
+    batting_match = re.search(r"Batting team:\s*([^|]+)", text, flags=re.IGNORECASE)
+    bowling_match = re.search(r"Bowling team:\s*([^|]+)", text, flags=re.IGNORECASE)
+    if batting_match:
+        batting = batting_match.group(1).strip()
+    if bowling_match:
+        bowling = bowling_match.group(1).strip()
+    return batting, bowling
+
+
+def _enrich_scorecard_template_payload(
+    template: dict[str, Any],
+    *,
+    draft: dict[str, Any] | None = None,
+    archive: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    enriched = deepcopy(template)
+    match = enriched.get("match") if isinstance(enriched.get("match"), dict) else {}
+    teams = match.get("teams") if isinstance(match.get("teams"), dict) else {}
+    innings = enriched.get("innings") if isinstance(enriched.get("innings"), list) else []
+    first_innings = innings[0] if len(innings) > 0 and isinstance(innings[0], dict) else {}
+    second_innings = innings[1] if len(innings) > 1 and isinstance(innings[1], dict) else {}
+    summary_source = ""
+    if isinstance(draft, dict):
+        summary_source = str(draft.get("live_summary") or "")
+    if not summary_source and isinstance(archive, dict):
+        summary_source = str(archive.get("live_summary") or archive.get("extracted_summary") or "")
+    parsed_batting_team, parsed_bowling_team = _parse_team_names_from_summary(summary_source)
+    batting_team = _string_value(first_innings.get("batting_team") or teams.get("team_1") or parsed_batting_team)
+    bowling_team = _string_value(first_innings.get("bowling_team") or teams.get("team_2") or parsed_bowling_team)
+    if batting_team or bowling_team:
+        teams["team_1"] = batting_team or teams.get("team_1") or None
+        teams["team_2"] = bowling_team or teams.get("team_2") or None
+        match["teams"] = teams
+        first_innings["batting_team"] = batting_team or first_innings.get("batting_team") or None
+        first_innings["bowling_team"] = bowling_team or first_innings.get("bowling_team") or None
+        if second_innings:
+            second_innings["batting_team"] = second_innings.get("batting_team") or bowling_team or None
+            second_innings["bowling_team"] = second_innings.get("bowling_team") or batting_team or None
+    if isinstance(archive, dict):
+        match.setdefault("date", archive.get("archive_date") or archive.get("scorecard_date") or archive.get("photo_taken_at") or None)
+        match.setdefault("match_id", archive.get("match_id") or None)
+        match.setdefault("format", archive.get("match_format") or None)
+        match.setdefault("venue", archive.get("venue") or None)
+        match.setdefault("overs_limit", archive.get("overs_limit") or None)
+    validation = enriched.get("validation") if isinstance(enriched.get("validation"), dict) else {}
+    if draft:
+        draft_result = _string_value(draft.get("result"))
+        if draft_result and draft_result not in {
+            "Imported from pasted extraction",
+            "Imported from pasted extraction?",
+            "Reviewed archive",
+            "Imported from ChatGPT/manual extraction",
+        }:
+            validation.setdefault("expected_result", draft_result)
+        validation.setdefault("inning_1_total", draft.get("heartlake_runs") or None)
+        validation.setdefault("inning_2_total", draft.get("opponent_runs") or None)
+    validation.setdefault("notes", "Template preserved for admin review.")
+    enriched["match"] = match
+    if innings:
+        if len(innings) > 0:
+            innings[0] = first_innings
+        if len(innings) > 1:
+            innings[1] = second_innings
+        enriched["innings"] = innings
+    enriched["validation"] = validation
+    return enriched
+
+
 def _scorecard_template_from_review_payload(
     store: dict[str, Any],
     payload: dict[str, Any],
@@ -2122,6 +2342,7 @@ def _scorecard_template_from_review_payload(
         )
     else:
         template = deepcopy(template)
+    template = _enrich_scorecard_template_payload(template, draft=draft)
     if isinstance(template.get("meta"), dict):
         template["meta"].setdefault("source", ocr_engine or None)
         template["meta"].setdefault("processed_by", ocr_pipeline or None)
@@ -2466,8 +2687,73 @@ def _admin_center_html(request: Request) -> HTMLResponse:
     selected_club_id = str(request.query_params.get("club_id") or current_club_id or "").strip()
     club = _selected_club(store, selected_club_id)
     role = _effective_role_name(user_row, current_club_id)
+    logger.debug(
+        "Admin Center opened by %s for club %s.",
+        user_row["display_name"] or user_row["mobile"] or "admin",
+        club.get("name") or club.get("short_name") or selected_club_id or "",
+    )
     notice = html.escape(str(request.query_params.get("notice") or "").strip())
     notice_tone = html.escape(str(request.query_params.get("tone") or "info").strip() or "info")
+
+    def _review_assessment_bits(upload: dict[str, Any]) -> tuple[list[str], str]:
+        assessment = upload.get("review_llm_assessment")
+        if not isinstance(assessment, dict):
+            return [], ""
+        chips: list[str] = []
+        if assessment.get("has_both_innings") is True:
+            chips.append("Both innings found")
+        if assessment.get("has_both_innings") is False:
+            chips.append("Single innings only")
+        duplicate_ids = [
+            str(item).strip()
+            for item in assessment.get("possible_duplicate_archive_ids", [])
+            if str(item).strip()
+        ]
+        companion_ids = [
+            str(item).strip()
+            for item in assessment.get("possible_companion_archive_ids", [])
+            if str(item).strip()
+        ]
+        if duplicate_ids:
+            chips.append(f"Possible duplicates: {', '.join(duplicate_ids)}")
+        if companion_ids:
+            chips.append(f"Possible companion archives: {', '.join(companion_ids)}")
+        review_notes = str(assessment.get("review_notes") or "").strip()
+        if review_notes:
+            chips.append(review_notes)
+        details = " · ".join(chips)
+        return chips, details
+
+    def _review_summary_text(upload: dict[str, Any]) -> str:
+        assessment = upload.get("review_llm_assessment")
+        chips: list[str] = []
+        if isinstance(assessment, dict):
+            if assessment.get("has_both_innings") is True:
+                chips.append("Both innings detected")
+            if assessment.get("has_both_innings") is False:
+                chips.append("Single innings only")
+            duplicate_count = len(
+                [
+                    str(item).strip()
+                    for item in assessment.get("possible_duplicate_archive_ids", [])
+                    if str(item).strip()
+                ]
+            )
+            companion_count = len(
+                [
+                    str(item).strip()
+                    for item in assessment.get("possible_companion_archive_ids", [])
+                    if str(item).strip()
+                ]
+            )
+            if duplicate_count:
+                chips.append(f"{duplicate_count} possible duplicate{'s' if duplicate_count != 1 else ''}")
+            if companion_count:
+                chips.append(f"{companion_count} possible companion archive{'s' if companion_count != 1 else ''}")
+        if not chips and str(upload.get("review_llm_model") or "").strip():
+            chips.append("LLM reviewed and enriched the template")
+        return " · ".join(chips) or "Review the extracted JSON before approving."
+
     review_uploads: list[dict[str, Any]] = []
     for upload in canonical_archive_uploads(store.get("archive_uploads", [])):
         status = str(upload.get("status") or "").strip().lower()
@@ -2477,7 +2763,7 @@ def _admin_center_html(request: Request) -> HTMLResponse:
         inferred_club = _resolve_archive_club(upload, store.get("clubs", []))
         resolved_club_id = str((club_ids[0] if club_ids else upload.get("club_id")) or (inferred_club.get("id") if inferred_club else "") or "").strip()
         resolved_club_name = " / ".join(club_names) if club_names else str(upload.get("club_name") or (inferred_club.get("name") if inferred_club else "") or "Unassigned").strip() or "Unassigned"
-        if role != "superadmin" and not archive_belongs_to_club(upload, club, store.get("clubs", []), store.get("members", []), store.get("fixtures", [])):
+        if not archive_belongs_to_club(upload, club, store.get("clubs", []), store.get("members", []), store.get("fixtures", [])):
             continue
         review_uploads.append(
             {
@@ -2567,6 +2853,21 @@ def _admin_center_html(request: Request) -> HTMLResponse:
             rendered_cards: list[str] = []
             for upload in group:
                 template_value = upload.get("extraction_template") if isinstance(upload.get("extraction_template"), dict) else scorecard_template_from_archive(upload)
+                template_text = str(upload.get("review_template_json") or "").strip() or json.dumps(template_value, indent=2)
+                llm_chips, llm_details = _review_assessment_bits(upload)
+                review_llm_model = str(upload.get("review_llm_model") or "").strip()
+                review_llm_notes = str(upload.get("review_llm_notes") or "").strip()
+                review_summary = _review_summary_text(upload)
+                raw_output_html = (
+                    f"""
+                        <details class="audit-raw-panel">
+                          <summary>View raw LLM output</summary>
+                          <pre class="audit-details">{html.escape(review_llm_notes[:12000])}</pre>
+                        </details>
+                    """
+                    if review_llm_notes
+                    else ""
+                )
                 rendered_cards.append(
                     f"""
                       <article class="detail-card" data-admin-upload="{html.escape(str(upload.get('id') or ''))}">
@@ -2574,10 +2875,15 @@ def _admin_center_html(request: Request) -> HTMLResponse:
                         <p>{html.escape(upload.get('club_name') or upload.get('resolved_club_name') or 'Club TBD')} · {html.escape(upload.get('season') or 'Season TBD')}</p>
                         <small>{html.escape(upload.get('archive_date') or 'Date TBD')} · {html.escape(upload.get('status') or 'Pending review')}</small>
                         <p>{html.escape(upload.get('extracted_summary') or 'Review the extracted draft before approving.')}</p>
+                        <small>{html.escape(f'LLM review: {review_llm_model}' if review_llm_model else 'LLM review pending')}</small>
+                        <p class="audit-details">{html.escape(review_summary)}</p>
+                        {f'<div class="audit-chip-row">{"".join(f"<span class=\"audit-chip\">{html.escape(chip)}</span>" for chip in llm_chips)}</div>' if llm_chips else ''}
+                        {f'<p class="audit-details">{html.escape(llm_details)}</p>' if llm_details else ''}
+                        {raw_output_html}
                         <form class="admin-review-form" method="post" action="/api/admin/archive/{html.escape(str(upload.get('id') or ''))}/review-form">
                           <label class="stack-label">
                             Reviewed extraction JSON
-                            <textarea class="admin-review-text" name="text" rows="10" spellcheck="false">{html.escape(json.dumps(template_value, indent=2))}</textarea>
+                            <textarea class="admin-review-text" name="text" rows="10" spellcheck="false">{html.escape(template_text)}</textarea>
                           </label>
                           <div class="inline-actions">
                             <button class="secondary-button" type="submit" data-action="save">Save review</button>
@@ -2645,6 +2951,34 @@ def _admin_center_html(request: Request) -> HTMLResponse:
             </div>
 
             <div class="detail-stack">
+              <div class="stack-card">
+                <div class="panel-head compact-head">
+                  <div>
+                    <p class="section-kicker">Archives</p>
+                    <h2>Review queue</h2>
+                  </div>
+                </div>
+                <div class="toolbar-actions">
+                  <input id="adminArchiveSearch" type="search" placeholder="Search archived scorecards" />
+                  <button id="adminRefreshButton" class="secondary-button" type="button">Refresh queue</button>
+                </div>
+                <div id="adminReviewQueue" class="detail-stack">{review_queue_html}</div>
+              </div>
+              <div class="stack-card">
+                <div class="panel-head compact-head">
+                  <div>
+                    <p class="section-kicker">Audit</p>
+                    <h2>Change history</h2>
+                  </div>
+                </div>
+                <p class="lede">Track who added, reviewed, changed, or removed club data. This stays club-scoped so the history matches the club you selected.</p>
+                <div class="toolbar-actions">
+                  <button id="adminAuditRefreshButton" class="secondary-button" type="button">Refresh audit log</button>
+                </div>
+                <div id="adminAuditLog" class="detail-stack">
+                  <p class="empty-state">Audit log will load after the page finishes loading.</p>
+                </div>
+              </div>
               <div class="stack-card admin-controls-panel">
                 <div class="panel-head compact-head">
                   <div>
@@ -2680,19 +3014,6 @@ def _admin_center_html(request: Request) -> HTMLResponse:
                 </form>
                 <div id="adminFixtureList" class="detail-stack"></div>
               </div>
-              <div class="stack-card">
-                <div class="panel-head compact-head">
-                  <div>
-                    <p class="section-kicker">Archives</p>
-                    <h2>Review queue</h2>
-                  </div>
-                </div>
-                <div class="toolbar-actions">
-                  <input id="adminArchiveSearch" type="search" placeholder="Search archived scorecards" />
-                  <button id="adminRefreshButton" class="secondary-button" type="button">Refresh queue</button>
-                </div>
-                <div id="adminReviewQueue" class="detail-stack">{review_queue_html}</div>
-              </div>
             </div>
           </section>
         </div>
@@ -2715,6 +3036,18 @@ def admin_center_page(request: Request) -> Response:
     session = _require_page_session(request)
     if isinstance(session, RedirectResponse):
         return session
+    try:
+        token = _auth_token_from_request(request)
+        user_row, current_club_id = _auth_user_from_token(token)
+        store = load_store()
+        club = _selected_club(store, str(request.query_params.get("club_id") or current_club_id or "").strip())
+        logger.debug(
+            "Admin Center page requested by %s for club %s.",
+            user_row["display_name"] or user_row["mobile"] or "admin",
+            club.get("name") or club.get("short_name") or current_club_id or "",
+        )
+    except Exception:
+        logger.debug("Admin Center page requested.")
     return _admin_center_html(request)
 
 
@@ -2829,7 +3162,7 @@ def register_page() -> FileResponse:
 
 @app.get("/clubs")
 def clubs_page(request: Request, search: str = "", focus_club_id: str = "") -> Response:
-    logger.debug("Clubs page requested → search=%s focus_club_id=%s", search, focus_club_id)
+    logger.debug("Clubs page opened. search=%s focus_club_id=%s", search or "", focus_club_id or "")
     session = _require_page_session(request)
     if isinstance(session, RedirectResponse):
         return session
@@ -2839,7 +3172,7 @@ def clubs_page(request: Request, search: str = "", focus_club_id: str = "") -> R
 @app.post("/clubs/select")
 def clubs_select(request: Request, club_id: str = Form(...), search: str = Form(default="")) -> Response:
     token = _auth_token_from_request(request)
-    logger.debug("Club selection requested → club_id=%s search=%s token_present=%s", club_id, search, bool(token))
+    logger.debug("Club selected. club_id=%s search=%s token_present=%s", club_id or "", search or "", bool(token))
     if not token:
         return HTMLResponse(
             """
@@ -2924,7 +3257,7 @@ def player_profile_page(request: Request) -> Response:
 
 @app.get("/dashboard")
 def dashboard_page(request: Request) -> Response:
-    logger.debug("Dashboard page requested")
+    logger.debug("Dashboard page opened.")
     session = _require_page_session(request)
     if isinstance(session, RedirectResponse):
         return session
@@ -2943,7 +3276,7 @@ def dashboard(request: Request, focus_club_id: str | None = None) -> dict[str, A
         or str(request.cookies.get("cricketClubAppPrimaryClubId") or "").strip()
         or None
     )
-    logger.debug("Dashboard API requested → focus_club_id=%s resolved_focus_club_id=%s", focus_club_id or "", resolved_focus_club_id or "")
+    logger.debug("Dashboard loaded. focus_club_id=%s resolved_focus_club_id=%s", focus_club_id or "", resolved_focus_club_id or "")
     dashboard_data = current_dashboard(load_store(), resolved_focus_club_id)
     token = _auth_token_from_request(request)
     if token:
@@ -3006,7 +3339,7 @@ def auth_roles() -> dict[str, Any]:
 def register(request: RegisterRequest, response: Response) -> dict[str, Any]:
     ensure_auth_schema()
 
-    logger.debug("🔵 [START] Register API called")
+    logger.debug("Registration started.")
 
     try:
         # -----------------------------
@@ -3050,7 +3383,7 @@ def register(request: RegisterRequest, response: Response) -> dict[str, Any]:
         input_name = raw_name.strip()
         normalized_input = normalize_name(input_name)
 
-        logger.debug("👤 Input → %s | normalized → %s", input_name, normalized_input)
+        logger.debug("Registration input received. input=%s normalized=%s", input_name or "", normalized_input or "")
 
         requested_club_id = str(request.primary_club_id or "").strip()
         requested_club_name = str(request.club_name or "").strip()
@@ -3126,7 +3459,7 @@ def register(request: RegisterRequest, response: Response) -> dict[str, Any]:
                 "created_at": now_iso(),
             }
 
-            logger.debug("🆕 Prepared member (not saved yet) → %s", display_name)
+            logger.debug("Registration member prepared. member=%s", display_name or "")
 
         # -----------------------------
         # ✅ MOBILE / EMAIL
@@ -3163,7 +3496,7 @@ def register(request: RegisterRequest, response: Response) -> dict[str, Any]:
                 save_store(store)
 
                 member = member_to_create
-                logger.info("✅ Member created → %s", member["name"])
+                logger.info("Member created during registration. member=%s", member["name"])
 
             if member:
                 member_id = member.get("id")
@@ -3252,7 +3585,22 @@ def register(request: RegisterRequest, response: Response) -> dict[str, Any]:
         # -----------------------------
         _set_auth_cookies(response, token, requested_club_id)
 
-        logger.info("🎉 SUCCESS → user_id=%s", user_id)
+        logger.info("Registration done by %s. user_id=%s club_id=%s", user_row["display_name"] or user_row["mobile"] or "user", user_id, requested_club_id or "")
+        _audit_event(
+            "auth.register",
+            "user",
+            str(user_id),
+            actor=user_row,
+            club_id=requested_club_id or "",
+            club_name=str(selected_club.get("name") or ""),
+            details={
+                "display_name": request.display_name.strip() or input_name or "",
+                "role": effective_role,
+                "mobile": mobile,
+                "email": email,
+            },
+            source="api",
+        )
 
         return {
             "token": token,
@@ -3265,7 +3613,7 @@ def register(request: RegisterRequest, response: Response) -> dict[str, Any]:
     # ❌ ERROR HANDLING (FIXED)
     # -----------------------------
     except sqlite3.IntegrityError as e:
-        logger.warning("⚠️ Integrity error: %s", str(e))
+        logger.warning("Registration integrity error. %s", str(e))
 
         raise HTTPException(
             status_code=409,
@@ -3273,7 +3621,7 @@ def register(request: RegisterRequest, response: Response) -> dict[str, Any]:
         )
 
     except Exception:
-        logger.exception("🔥 Register API FAILED")
+        logger.exception("Registration failed.")
 
         raise HTTPException(
             status_code=500,
@@ -3288,7 +3636,7 @@ def signin(request: SignInRequest, response: Response) -> dict[str, Any]:
     password = (request.password or "").strip()
     player_name = (request.player_name or "").strip()
 
-    logger.debug("🔐 Signin attempt → identifier=%s player=%s", identifier, player_name)
+    logger.debug("Sign in attempt. identifier=%s player=%s", identifier or "", player_name or "")
 
     store = load_store()
 
@@ -3298,9 +3646,8 @@ def signin(request: SignInRequest, response: Response) -> dict[str, Any]:
     with _auth_connection() as connection:
         user_row = None
 
-        # ✅ STEP 1 — PASSWORD LOGIN
         if password:
-            logger.debug("🔑 Trying password login")
+            logger.debug("Trying password login.")
 
             user_row = connection.execute(
                 """
@@ -3312,11 +3659,10 @@ def signin(request: SignInRequest, response: Response) -> dict[str, Any]:
             ).fetchone()
 
             if user_row:
-                logger.debug("✅ Password login success → user_id=%s", user_row["id"])
+                logger.debug("Login done by %s. method=password user_id=%s", user_row["display_name"] or user_row["mobile"] or "user", user_row["id"])
 
-        # ✅ STEP 2 — DIRECT USER LOGIN (NO PASSWORD)
         if not user_row:
-            logger.debug("📱 Trying direct user lookup")
+            logger.debug("Trying direct user lookup.")
 
             user_row = connection.execute(
                 """
@@ -3329,11 +3675,10 @@ def signin(request: SignInRequest, response: Response) -> dict[str, Any]:
             ).fetchone()
 
             if user_row:
-                logger.debug("✅ Direct user match → user_id=%s", user_row["id"])
+                logger.debug("Login done by %s. method=direct user_id=%s", user_row["display_name"] or user_row["mobile"] or "user", user_row["id"])
 
-        # ✅ STEP 3 — MEMBER NAME LOGIN
         if not user_row and player_name:
-            logger.debug("🔍 Falling back to player name lookup")
+            logger.debug("Falling back to player name lookup.")
 
             resolved_name = resolve_member_name(store, player_name)
             normalized_input = normalize_name(resolved_name)
@@ -3347,7 +3692,7 @@ def signin(request: SignInRequest, response: Response) -> dict[str, Any]:
             )
 
             if member:
-                logger.debug("👤 Member matched → %s", member.get("name"))
+                logger.debug("Member matched for sign in. member=%s", member.get("name") or "")
 
                 primary_club = _primary_club_for_member(store, member)
 
@@ -3362,11 +3707,11 @@ def signin(request: SignInRequest, response: Response) -> dict[str, Any]:
                 ).fetchone()
 
                 if existing_user:
-                    logger.debug("♻️ Reusing existing user → id=%s", existing_user["id"])
+                    logger.debug("Existing user reused for sign in. user_id=%s", existing_user["id"])
                     user_row = existing_user
 
                 else:
-                    logger.debug("🆕 Creating user from member")
+                    logger.debug("Creating user from matched member.")
 
                     cursor = connection.execute(
                         """
@@ -3391,15 +3736,13 @@ def signin(request: SignInRequest, response: Response) -> dict[str, Any]:
                         (int(cursor.lastrowid),),
                     ).fetchone()
 
-        # ❌ FINAL FAILURE
         if not user_row:
-            logger.warning("❌ Login failed")
+            logger.warning("Login failed.")
             raise HTTPException(
                 status_code=401,
                 detail="Invalid sign-in. Use mobile/email or player name."
             )
 
-        # ✅ CREATE SESSION
         token = secrets.token_urlsafe(24)
         current_club_id = user_row["primary_club_id"] or ""
 
@@ -3411,7 +3754,21 @@ def signin(request: SignInRequest, response: Response) -> dict[str, Any]:
             (token, int(user_row["id"]), current_club_id or None, now_iso()),
         )
 
-    logger.info("🎉 Login successful → user_id=%s", user_row["id"])
+    logger.info("Login done by %s. user_id=%s club_id=%s", user_row["display_name"] or user_row["mobile"] or "user", user_row["id"], current_club_id or "")
+    _audit_event(
+        "auth.signin",
+        "user",
+        str(user_row["id"]),
+        actor=user_row,
+        club_id=current_club_id or "",
+        club_name="",
+        details={
+            "method": "password" if password else ("direct" if identifier_phone or identifier_email else "member"),
+            "identifier": identifier,
+            "player_name": player_name,
+        },
+        source="api",
+    )
 
     _set_auth_cookies(response, token, current_club_id)
 
@@ -3428,7 +3785,7 @@ def signin_quick_form(
     player_name: str = Form(default=""),
 ) -> HTMLResponse:
     logger.debug(
-        "🔐 Quick signin → identifier=%s player=%s",
+        "Quick sign in started. identifier=%s player=%s",
         identifier,
         player_name
     )
@@ -3454,7 +3811,7 @@ def signin_quick_form(
         )
 
         logger.debug(
-            "✅ Quick signin success → user_id=%s club=%s",
+            "Quick sign in completed. user_id=%s club=%s",
             user.get("id"),
             club_id
         )
@@ -3468,17 +3825,17 @@ def signin_quick_form(
         return redirect
 
     except HTTPException as exc:
-        logger.warning("❌ Quick signin failed → %s", exc.detail)
+        logger.warning("Quick sign in failed. %s", exc.detail)
         return _signin_error_page(str(exc.detail))
 
     except Exception:
-        logger.exception("🔥 Quick signin unexpected error")
+        logger.exception("Quick sign in unexpected error.")
         return _signin_error_page("Unexpected error during sign-in")
 
 @app.get("/api/auth/me")
 def auth_me(x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
     user_row, current_club_id = _auth_user_from_token(x_auth_token)
-    logger.debug("Auth me requested → user_id=%s current_club_id=%s", user_row["id"], current_club_id or "")
+    logger.debug("Auth profile requested. user_id=%s current_club_id=%s", user_row["id"], current_club_id or "")
     store = load_store()
     return {
         "user": _auth_user_payload(user_row, current_club_id),
@@ -3492,7 +3849,7 @@ def select_club(request: SelectClubRequest, x_auth_token: str | None = Header(de
     store = load_store()
     selected_club = _selected_club(store, request.club_id)
     logger.debug(
-        "Select club API requested → user_id=%s club_id=%s club_name=%s",
+        "Selected club saved. user_id=%s club_id=%s club_name=%s",
         user_row["id"],
         selected_club.get("id", ""),
         selected_club.get("name", ""),
@@ -3502,6 +3859,16 @@ def select_club(request: SelectClubRequest, x_auth_token: str | None = Header(de
             "UPDATE app_auth_sessions SET current_club_id = ? WHERE token = ?",
             (selected_club.get("id", "") or None, x_auth_token),
         )
+    _audit_event(
+        "club.select",
+        "club",
+        str(selected_club.get("id") or ""),
+        actor=user_row,
+        club_id=str(selected_club.get("id") or ""),
+        club_name=str(selected_club.get("name") or ""),
+        details={"source": "api", "selected_by": user_row["display_name"] or user_row["mobile"] or "user"},
+        source="api",
+    )
     return {
         "user": _auth_user_payload(user_row, selected_club.get("id", "")),
         "club": selected_club,
@@ -3634,6 +4001,22 @@ def create_season_fixture(request: SeasonFixtureRequest, x_auth_token: str | Non
     _touch_fixture_audit(new_fixture, user_row, created=True)
     store.setdefault("fixtures", []).append(new_fixture)
     save_store(store)
+    _audit_event(
+        "fixture.create",
+        "fixture",
+        new_fixture["id"],
+        actor=user_row,
+        club_id=club.get("id", ""),
+        club_name=club.get("name", ""),
+        details={
+            "date_label": request.date_label,
+            "date": request.date,
+            "opponent": request.opponent,
+            "season_year": season_year,
+            "match_type": request.match_type,
+        },
+        source="api",
+    )
     return season_setup_data(x_auth_token)
 
 
@@ -3685,6 +4068,22 @@ def update_season_fixture(
     )
     _touch_fixture_audit(fixture, user_row)
     save_store(store)
+    _audit_event(
+        "fixture.update",
+        "fixture",
+        fixture_id,
+        actor=user_row,
+        club_id=club.get("id", ""),
+        club_name=club.get("name", ""),
+        details={
+            "date_label": request.date_label,
+            "date": request.date,
+            "opponent": request.opponent,
+            "season_year": season_year,
+            "match_type": request.match_type,
+        },
+        source="api",
+    )
     return season_setup_data(x_auth_token)
 
 
@@ -3694,9 +4093,18 @@ def delete_season_fixture(
     fixture_id: str,
     x_auth_token: str | None = Header(default=None),
 ) -> dict[str, Any]:
-    _require_permission(x_auth_token, "manage_fixtures")
+    user_row, _ = _require_permission(x_auth_token, "manage_fixtures")
     store = load_store()
     club = _selected_club(store, club_id)
+    fixture = next(
+        (
+            item
+            for item in store.get("fixtures", [])
+            if str(item.get("id") or "").strip() == fixture_id
+            and str(item.get("club_id") or "").strip() == str(club.get("id") or "").strip()
+        ),
+        None,
+    )
     before = len(store.get("fixtures", []))
     store["fixtures"] = [
         item
@@ -3709,6 +4117,19 @@ def delete_season_fixture(
     if len(store.get("fixtures", [])) == before:
         raise HTTPException(status_code=404, detail="Fixture not found.")
     save_store(store)
+    _audit_event(
+        "fixture.delete",
+        "fixture",
+        fixture_id,
+        actor=user_row,
+        club_id=club.get("id", ""),
+        club_name=club.get("name", ""),
+        details={
+            "date_label": (fixture or {}).get("date_label") or (fixture or {}).get("date") or "",
+            "opponent": (fixture or {}).get("opponent") or "",
+        },
+        source="api",
+    )
     return season_setup_data(x_auth_token)
 
 
@@ -3757,6 +4178,20 @@ def save_player_availability(request: PlayerAvailabilitySelfRequest, x_auth_toke
     else:
         match["availability_notes"].pop(member["name"], None)
     save_store(store)
+    _audit_event(
+        "availability.update",
+        "fixture",
+        request.fixture_id,
+        actor=user_row,
+        club_id=str(club.get("id") or ""),
+        club_name=str(club.get("name") or ""),
+        details={
+            "player_name": member.get("name") or "",
+            "status": request.status,
+            "note": request.note,
+        },
+        source="api",
+    )
     return player_availability_data(x_auth_token)
 
 
@@ -3786,6 +4221,19 @@ def save_player_season_availability(
                 now_iso(),
             ),
         )
+    _audit_event(
+        "availability.season.update",
+        "club",
+        str(club.get("id") or ""),
+        actor=user_row,
+        club_id=str(club.get("id") or ""),
+        club_name=str(club.get("name") or ""),
+        details={
+            "status": request.status,
+            "note": request.note,
+        },
+        source="api",
+    )
     return player_availability_data(x_auth_token)
 
 
@@ -3852,6 +4300,29 @@ def save_player_profile(request: PlayerSelfProfileRequest, x_auth_token: str | N
                 (selected_primary_club_id, x_auth_token),
             )
         current_club_id = selected_primary_club_id
+        selected_club = _selected_club(store, selected_primary_club_id)
+        _audit_event(
+            "club.select",
+            "club",
+            selected_primary_club_id,
+            actor=user_row,
+            club_id=selected_primary_club_id,
+            club_name=str(selected_club.get("name") or selected_club.get("short_name") or ""),
+            details={"source": "viewer.profile", "selected_by": user_row["display_name"] or user_row["mobile"] or "user"},
+            source="api",
+        )
+    _audit_event(
+        "player.profile.update",
+        "member",
+        str(member.get("id") or ""),
+        actor=user_row,
+        club_id=str(current_club_id or ""),
+        club_name=str(_selected_club(store, current_club_id).get("name") or ""),
+        details={
+            "fields": sorted(list(updates.keys()) + (["primary_club_id"] if selected_primary_club_id else [])),
+        },
+        source="api",
+    )
 
     return player_profile_data(x_auth_token)
 
@@ -3964,17 +4435,34 @@ def create_member(request: MemberCreateRequest, x_auth_token: str | None = Heade
                 (member["id"], selected_club.get("id", ""), int(existing_user["id"])),
             )
     save_store(store)
+    _audit_event(
+        "player.create",
+        "member",
+        str(member.get("id") or ""),
+        actor=user_row,
+        club_id=str(selected_club.get("id") or ""),
+        club_name=str(selected_club.get("name") or ""),
+        details={
+            "name": member.get("name") or "",
+            "full_name": member.get("full_name") or "",
+            "phone": phone or "",
+            "role": request.role or "",
+            "team_name": club_team_name,
+        },
+        source="api",
+    )
     return current_dashboard(load_store(), current_club_id)
 
 
 @app.post("/api/members/{member_id}")
 def update_member(member_id: str, request: MemberUpdateRequest, x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
-    _require_permission(x_auth_token, "manage_players")
+    user_row, current_club_id = _require_permission(x_auth_token, "manage_players")
     store = load_store()
     member = next((item for item in store["members"] if item.get("id") == member_id), None)
     if not member:
         raise HTTPException(status_code=404, detail="Player not found.")
 
+    before = dict(member)
     updates = request.model_dump(exclude_none=True)
     if "phone" in updates:
         updates["phone"] = canonical_phone(updates["phone"])
@@ -4010,10 +4498,26 @@ def update_member(member_id: str, request: MemberUpdateRequest, x_auth_token: st
                     performance["player_name"] = member["name"]
 
     save_store(store)
+    club = _selected_club(store, current_club_id)
+    _audit_event(
+        "player.update",
+        "member",
+        member_id,
+        actor=user_row,
+        club_id=club.get("id", ""),
+        club_name=club.get("name", ""),
+        details={
+            "before_name": before.get("name", ""),
+            "after_name": member.get("name", ""),
+            "fields": sorted(updates.keys()),
+        },
+        source="api",
+    )
     return current_dashboard(load_store())
 
 
 def _delete_club_member_core(club_id: str, member_id: str, token: str | None, confirmation: str = "") -> dict[str, Any]:
+    user_row, _ = _auth_user_from_token(token)
     _require_superadmin(token)
     store = load_store()
     club = next((item for item in store.get("clubs", []) if str(item.get("id") or "").strip() == str(club_id or "").strip()), None)
@@ -4039,6 +4543,19 @@ def _delete_club_member_core(club_id: str, member_id: str, token: str | None, co
     _unlink_member_from_club_auth(member_id, str(club.get("id") or ""), fallback_primary_club_id)
     save_store(store)
     refreshed = load_store()
+    _audit_event(
+        "player.unlink",
+        "member",
+        member_id,
+        actor=user_row,
+        club_id=str(club.get("id") or ""),
+        club_name=str(club.get("name") or ""),
+        details={
+            "member_name": member.get("name") or "",
+            "fallback_primary_club_id": fallback_primary_club_id,
+        },
+        source="api",
+    )
     return {
         "message": f"{member.get('name') or 'Player'} removed from {club.get('name') or 'the club'} roster.",
         "dashboard": current_dashboard(refreshed, club.get("id", "")),
@@ -4049,6 +4566,7 @@ def _delete_club_member_core(club_id: str, member_id: str, token: str | None, co
 
 
 def _delete_club_core(club_id: str, token: str | None, confirmation: str = "") -> dict[str, Any]:
+    user_row, _ = _auth_user_from_token(token)
     _require_superadmin(token)
     store = load_store()
     club = next((item for item in store.get("clubs", []) if str(item.get("id") or "").strip() == str(club_id or "").strip()), None)
@@ -4160,6 +4678,20 @@ def _delete_club_core(club_id: str, token: str | None, confirmation: str = "") -
     _retarget_club_links_after_deletion(removed_club_id, replacement_club_id)
     save_store(store)
     refreshed = load_store()
+    _audit_event(
+        "club.delete",
+        "club",
+        removed_club_id,
+        actor=user_row,
+        club_id=removed_club_id,
+        club_name=removed_club_name,
+        details={
+            "replacement_club_id": replacement_club_id,
+            "removed_members": removed_member_names,
+            "retained_archive_count": len(cleaned_archives),
+        },
+        source="api",
+    )
     return {
         "message": f"{club.get('name') or 'Club'} removed from the database.",
         "dashboard": current_dashboard(refreshed, replacement_club_id),
@@ -4231,6 +4763,20 @@ def update_match_details(match_id: str, request: MatchDetailsRequest, x_auth_tok
             match["details"][key] = value
     _touch_fixture_audit(match, user_row)
     save_store(store)
+    _audit_event(
+        "player.update",
+        "member",
+        member_id,
+        actor=user_row,
+        club_id=str(current_club_id or ""),
+        club_name=str(_selected_club(store, current_club_id).get("name") or ""),
+        details={
+            "before_name": before.get("name", ""),
+            "after_name": member.get("name", ""),
+            "fields": sorted(updates.keys()),
+        },
+        source="api",
+    )
     return current_dashboard(load_store())
 
 
@@ -4500,17 +5046,30 @@ def reset_scores(x_auth_token: str | None = Header(default=None)) -> dict[str, A
 
 @app.post("/api/archive/{upload_id}/extract")
 def extract_archive(upload_id: str, focus_club_id: str | None = None, x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
-    _require_permission(x_auth_token, "manage_scorecards")
-    logger.debug("Archive extract requested → upload_id=%s focus_club_id=%s", upload_id, focus_club_id or "")
+    user_row, current_club_id = _require_permission(x_auth_token, "manage_scorecards")
+    logger.debug("Archive re-extract requested. upload_id=%s focus_club_id=%s", upload_id, focus_club_id or "")
     store = load_store()
     try:
         extracted = extract_archive_by_id(store, upload_id)
     except ValueError as exc:
-        logger.error("Archive extract failed → upload_id=%s error=%s", upload_id, exc)
+        logger.error("Archive re-extract failed. upload_id=%s error=%s", upload_id, exc)
         raise HTTPException(status_code=404, detail=str(exc))
     save_store(store)
     refreshed = load_store()
     extracted = get_archive_or_404(refreshed, upload_id)
+    _audit_event(
+        "archive.extract",
+        "archive_upload",
+        upload_id,
+        actor=user_row,
+        club_id=str(extracted.get("club_id") or focus_club_id or current_club_id or ""),
+        club_name=str(extracted.get("club_name") or ""),
+        details={
+            "file_name": extracted.get("file_name") or "",
+            "status": extracted.get("status") or "",
+        },
+        source="api",
+    )
     return {
         "message": f"Processed {extracted['file_name']} for OCR review.",
         "archive": extracted,
@@ -4520,14 +5079,14 @@ def extract_archive(upload_id: str, focus_club_id: str | None = None, x_auth_tok
 
 @app.post("/api/archive/{upload_id}/import-extraction")
 def import_archive_extraction(upload_id: str, request: ArchiveImportRequest, focus_club_id: str | None = None, x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
-    _require_permission(x_auth_token, "manage_scorecards")
-    logger.debug("Archive import requested → upload_id=%s focus_club_id=%s text_len=%s", upload_id, focus_club_id or "", len(request.text or ""))
+    user_row, current_club_id = _require_permission(x_auth_token, "manage_scorecards")
+    logger.debug("Archive import requested. upload_id=%s focus_club_id=%s text_len=%s", upload_id, focus_club_id or "", len(request.text or ""))
     store = load_store()
     selected_club = _selected_club(store, focus_club_id)
     try:
         upload = get_archive_or_404(store, upload_id)
     except ValueError as exc:
-        logger.error("Archive import failed → upload_id=%s error=%s", upload_id, exc)
+        logger.error("Archive import failed. upload_id=%s error=%s", upload_id, exc)
         raise HTTPException(status_code=404, detail=str(exc))
 
     upload["club_id"] = upload.get("club_id") or selected_club.get("id", "")
@@ -4543,6 +5102,19 @@ def import_archive_extraction(upload_id: str, request: ArchiveImportRequest, foc
     save_store(store)
     refreshed = load_store()
     updated = get_archive_or_404(refreshed, upload_id)
+    _audit_event(
+        "archive.import",
+        "archive_upload",
+        upload_id,
+        actor=user_row,
+        club_id=str(updated.get("club_id") or focus_club_id or current_club_id or ""),
+        club_name=str(updated.get("club_name") or ""),
+        details={
+            "file_name": updated.get("file_name") or "",
+            "text_length": len(request.text or ""),
+        },
+        source="api",
+    )
     return {
         "message": f"Imported extracted scorecard into {updated['file_name']} for review.",
         "archive": updated,
@@ -4553,12 +5125,12 @@ def import_archive_extraction(upload_id: str, request: ArchiveImportRequest, foc
 @app.post("/api/admin/archive/{upload_id}/review")
 def save_archive_review(upload_id: str, request: ArchiveReviewRequest, x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
     user_row, current_club_id = _require_permission(x_auth_token, "manage_scorecards")
-    logger.debug("Archive review save requested → upload_id=%s club_id=%s text_len=%s", upload_id, current_club_id or "", len(request.text or ""))
+    logger.debug("Archive review saved. upload_id=%s club_id=%s text_len=%s", upload_id, current_club_id or "", len(request.text or ""))
     store = load_store()
     try:
         upload = get_archive_or_404(store, upload_id)
     except ValueError as exc:
-        logger.error("Archive review save failed → upload_id=%s error=%s", upload_id, exc)
+        logger.error("Archive review save failed. upload_id=%s error=%s", upload_id, exc)
         raise HTTPException(status_code=404, detail=str(exc))
 
     club = _selected_club(store, current_club_id)
@@ -4568,6 +5140,20 @@ def save_archive_review(upload_id: str, request: ArchiveReviewRequest, x_auth_to
     save_store(store)
     refreshed = load_store()
     updated = get_archive_or_404(refreshed, upload_id)
+    _audit_event(
+        "archive.review.save",
+        "archive_upload",
+        upload_id,
+        actor=user_row,
+        club_id=str(updated.get("club_id") or club.get("id") or ""),
+        club_name=str(updated.get("club_name") or club.get("name") or ""),
+        details={
+            "file_name": updated.get("file_name") or "",
+            "text_length": len(request.text or ""),
+            "status": updated.get("status") or "",
+        },
+        source="api",
+    )
     return {
         "message": f"Reviewed draft saved for {updated['file_name']}.",
         "archive": updated,
@@ -4582,7 +5168,7 @@ def save_archive_review_form(
     text: str = Form(default=""),
 ) -> Response:
     try:
-        logger.debug("Archive review form submitted → upload_id=%s text_len=%s", upload_id, len(text or ""))
+        logger.debug("Archive review form submitted. upload_id=%s text_len=%s", upload_id, len(text or ""))
         result = save_archive_review(
             upload_id,
             ArchiveReviewRequest(text=text),
@@ -4607,8 +5193,9 @@ async def upload_scorecard(
     x_auth_token: str | None = Header(default=None),
     file: UploadFile = File(...),
 ) -> dict[str, Any]:
-    _require_permission(_auth_token_from_request(request, x_auth_token), "manage_scorecards")
-    logger.debug("Scorecard upload requested → match_id=%s season=%s focus_club_id=%s filename=%s", match_id or "", season or "", focus_club_id or "", file.filename or "")
+    token = _auth_token_from_request(request, x_auth_token)
+    user_row, _ = _require_permission(token, "manage_scorecards")
+    logger.debug("Scorecard upload started. match_id=%s season=%s focus_club_id=%s filename=%s", match_id or "", season or "", focus_club_id or "", file.filename or "")
     store = load_store()
     selected_club = _selected_club(store, focus_club_id)
     related_club_ids = _archive_match_club_ids(store, selected_club.get("id", ""), match_id or "")
@@ -4620,7 +5207,7 @@ async def upload_scorecard(
     incoming_hash = file_sha256_from_bytes(content)
     for existing in store["archive_uploads"]:
         if existing.get("file_hash") == incoming_hash:
-            logger.debug("Duplicate scorecard upload detected → filename=%s hash=%s", file.filename or "", incoming_hash)
+            logger.debug("Duplicate scorecard upload found. filename=%s hash=%s", file.filename or "", incoming_hash)
             duplicate_record = create_duplicate_record_from_bytes(
                 original_path=Path(existing["file_path"]),
                 duplicate_file_name=file.filename or f"duplicate{suffix}",
@@ -4656,7 +5243,21 @@ async def upload_scorecard(
     record = extract_archive_by_id(store, record["id"])
     record["extraction_template"] = scorecard_template_from_archive(record)
     save_store(store)
-    logger.debug("Scorecard upload saved → archive_id=%s club_id=%s file=%s", record.get("id", ""), record.get("club_id", ""), record.get("file_name", ""))
+    logger.debug("Scorecard upload saved. archive_id=%s club_id=%s file=%s", record.get("id", ""), record.get("club_id", ""), record.get("file_name", ""))
+    _audit_event(
+        "archive.upload",
+        "archive_upload",
+        str(record.get("id") or ""),
+        actor=user_row,
+        club_id=str(record.get("club_id") or ""),
+        club_name=str(record.get("club_name") or ""),
+        details={
+            "file_name": record.get("file_name") or "",
+            "season": record.get("season") or "",
+            "status": record.get("status") or "",
+        },
+        source="api",
+    )
     return {
                 "message": f"Scorecard image '{record.get('original_file_name') or file.filename or file_token}' uploaded successfully and queued for admin review.",
                 "dashboard": current_dashboard(load_store(), selected_club.get("id", "")),
@@ -4738,6 +5339,20 @@ def apply_archive(upload_id: str, request: ArchiveApplyRequest, focus_club_id: s
     upload["applied_to_match_id"] = request.match_id
     _touch_fixture_audit(match, user_row)
     save_store(store)
+    _audit_event(
+        "archive.apply",
+        "archive_upload",
+        upload_id,
+        actor=user_row,
+        club_id=str(upload.get("club_id") or ""),
+        club_name=str(upload.get("club_name") or ""),
+        details={
+            "match_id": request.match_id,
+            "file_name": upload.get("file_name") or "",
+            "result": request.result or "",
+        },
+        source="api",
+    )
     return current_dashboard(load_store(), focus_club_id or upload.get("club_id"))
 
 
@@ -4772,6 +5387,62 @@ def admin_review_queue(x_auth_token: str | None = Header(default=None)) -> dict[
     }
 
 
+@app.get("/api/admin/audit-log")
+def admin_audit_log(
+    limit: int = 50,
+    club_id: str = "",
+    x_auth_token: str | None = Header(default=None),
+) -> dict[str, Any]:
+    user_row, current_club_id = _require_permission(x_auth_token, "manage_scorecards")
+    role = _effective_role_name(user_row, current_club_id)
+    if role != "superadmin":
+        raise HTTPException(status_code=403, detail="Only superadmin can open the audit log.")
+    clean_limit = max(1, min(200, int(limit or 50)))
+    clean_club_id = str(club_id or "").strip()
+    with _auth_connection() as connection:
+        if clean_club_id:
+            rows = connection.execute(
+                """
+                SELECT *
+                FROM app_audit_log
+                WHERE club_id = ?
+                ORDER BY created_at DESC, id DESC
+                LIMIT ?
+                """,
+                (clean_club_id, clean_limit),
+            ).fetchall()
+        else:
+            rows = connection.execute(
+                """
+                SELECT *
+                FROM app_audit_log
+                ORDER BY created_at DESC, id DESC
+                LIMIT ?
+                """,
+                (clean_limit,),
+            ).fetchall()
+    return {
+        "user": _auth_user_payload(user_row, current_club_id),
+        "club": _selected_club(load_store(), clean_club_id or current_club_id),
+        "entries": [
+            {
+                "id": row["id"],
+                "created_at": row["created_at"],
+                "actor_user_id": row["actor_user_id"],
+                "actor_display_name": row["actor_display_name"],
+                "club_id": row["club_id"],
+                "club_name": row["club_name"],
+                "action": row["action"],
+                "entity_type": row["entity_type"],
+                "entity_id": row["entity_id"],
+                "details": json.loads(row["details_json"] or "{}"),
+                "source": row["source"],
+            }
+            for row in rows
+        ],
+    }
+
+
 @app.post("/api/admin/archive/{upload_id}/approve")
 def approve_archive(
     upload_id: str,
@@ -4779,12 +5450,12 @@ def approve_archive(
     x_auth_token: str | None = Header(default=None),
 ) -> dict[str, Any]:
     user_row, current_club_id = _require_permission(x_auth_token, "manage_scorecards")
-    logger.debug("Archive approve requested → upload_id=%s club_id=%s has_text=%s", upload_id, current_club_id or "", bool(request and str(request.text or "").strip()))
+    logger.debug("Archive approve requested. upload_id=%s club_id=%s has_text=%s", upload_id, current_club_id or "", bool(request and str(request.text or "").strip()))
     store = load_store()
     try:
         upload = get_archive_or_404(store, upload_id)
     except ValueError as exc:
-        logger.error("Archive approve failed → upload_id=%s error=%s", upload_id, exc)
+        logger.error("Archive approve failed. upload_id=%s error=%s", upload_id, exc)
         raise HTTPException(status_code=404, detail=str(exc))
     club = _selected_club(store, current_club_id)
     inferred_club = _resolve_archive_club(upload, store.get("clubs", [])) or club
@@ -4808,6 +5479,20 @@ def approve_archive(
     save_store(store)
     refreshed = load_store()
     updated = get_archive_or_404(refreshed, upload_id)
+    _audit_event(
+        "archive.approve",
+        "archive_upload",
+        upload_id,
+        actor=user_row,
+        club_id=str(updated.get("club_id") or club.get("id") or ""),
+        club_name=str(updated.get("club_name") or club.get("name") or ""),
+        details={
+            "file_name": updated.get("file_name") or "",
+            "status": updated.get("status") or "",
+            "reviewed_by": updated.get("reviewed_by") or "",
+        },
+        source="api",
+    )
     return {
         "message": f"{updated['file_name']} approved and added to reviewed history.",
         "archive": updated,
@@ -4828,7 +5513,7 @@ def approve_archive_form(
     text: str = Form(default=""),
 ) -> Response:
     try:
-        logger.debug("Archive approve form submitted → upload_id=%s text_len=%s", upload_id, len(text or ""))
+        logger.debug("Archive approve form submitted. upload_id=%s text_len=%s", upload_id, len(text or ""))
         result = approve_archive(
             upload_id,
             ArchiveReviewRequest(text=text) if text else None,

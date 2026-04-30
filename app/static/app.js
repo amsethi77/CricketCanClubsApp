@@ -428,10 +428,10 @@ function isPlayerFollowed(playerName) {
 }
 
 async function runAction(action, successMessage = "", label = "dashboard action") {
-  dashboardDebug(`Action start → ${label}`);
+  dashboardDebug(`Action started: ${label}`);
   try {
     const result = await action();
-    dashboardDebug(`Action success → ${label}`, {
+    dashboardDebug(`Action completed: ${label}`, {
       hasResult: result !== null && result !== undefined,
       type: typeof result,
     });
@@ -440,7 +440,7 @@ async function runAction(action, successMessage = "", label = "dashboard action"
     }
     return result;
   } catch (error) {
-    dashboardError(`Action failed → ${label}`, error);
+    dashboardError(`Action failed: ${label}`, error);
     setStatus(error.message || "Something went wrong.", "error");
     return null;
   }
@@ -2300,15 +2300,16 @@ function renderTeamPage() {
             matches: 0,
           };
           const pending = pendingMap[member.name] || { runs: 0, matches: 0 };
-          const storedRuns = Number(stats.runs || 0) + Number(pending.runs || 0);
+          const confirmedRuns = Number(stats.runs || 0);
+          const archiveRuns = Number(pending.runs || 0);
           return `
             <article class="member-card clickable-card" data-player="${member.name}">
               ${member.picture_url ? `<img class="avatar-image" src="${member.picture_url}" alt="${member.name}" />` : `<div class="avatar-fallback">${member.picture}</div>`}
               <div>
                 <h3>${displayName}</h3>
                 <p>${member.role} · Age ${member.age || "TBD"}</p>
-                <p class="member-stats">${storedRuns} stored runs · ${stats.wickets} wickets · ${stats.matches} applied matches</p>
-                <small>${pending.runs ? `${stats.runs} confirmed + ${pending.runs} reviewed historical archive runs` : `${stats.runs} confirmed runs`}</small>
+                <p class="member-stats">${confirmedRuns} confirmed runs · ${stats.wickets} wickets · ${stats.matches} applied matches</p>
+                <small>${archiveRuns ? `${confirmedRuns} confirmed + ${archiveRuns} reviewed historical archive runs` : `${confirmedRuns} confirmed runs`}</small>
                 <small>${member.notes || "No profile notes yet."}</small>
               </div>
             </article>
@@ -2321,13 +2322,14 @@ function renderTeamPage() {
     emptyMessage: `<p class="empty-state">No player score entries are stored yet for ${team.display_name || team.name}.</p>`,
     renderItem: (item) => {
             const pending = pendingMap[item.player_name] || { runs: 0, matches: 0 };
-            const storedRuns = Number(item.runs || 0) + Number(pending.runs || 0);
+            const confirmedRuns = Number(item.runs || 0);
+            const archiveRuns = Number(pending.runs || 0);
             return `
               <article class="leader-card clickable-card" data-player="${item.player_name}">
                 <strong>${item.player_name}</strong>
                 <p>${item.matches} applied matches</p>
-                <p>${storedRuns} stored runs · ${item.wickets} wickets · ${item.catches} catches</p>
-                <small>${pending.runs ? `${item.runs} confirmed + ${pending.runs} reviewed historical archive runs` : `${item.runs} confirmed runs`}</small>
+                <p>${confirmedRuns} confirmed runs · ${item.wickets} wickets · ${item.catches} catches</p>
+                <small>${archiveRuns ? `${confirmedRuns} confirmed + ${archiveRuns} reviewed historical archive runs` : `${confirmedRuns} confirmed runs`}</small>
               </article>
             `;
           },
@@ -2495,13 +2497,13 @@ async function loadDashboard() {
   });
   try {
     state.viewerAuth = await window.CricketClubAppPages.authMe();
-    dashboardDebug("Viewer auth refreshed.", {
+    dashboardDebug("Signed in user loaded.", {
       hasUser: Boolean(state.viewerAuth?.user),
       role: state.viewerAuth?.user?.effective_role || state.viewerAuth?.user?.role || "",
     });
   } catch {
     state.viewerAuth = null;
-    dashboardDebug("Viewer auth refresh failed; continuing without auth payload.");
+    dashboardDebug("Signed in user could not be loaded yet.");
   }
   const query = state.selectedFocusClubId ? `?focus_club_id=${encodeURIComponent(state.selectedFocusClubId)}` : "";
   const dashboard = await runAction(() => getJson(`/api/dashboard${query}`), "Club dashboard loaded.", "load dashboard");
@@ -2582,7 +2584,11 @@ elements.viewerProfileForm.addEventListener("submit", async (event) => {
 });
 
 elements.primaryClubSelect.addEventListener("change", async () => {
-  dashboardDebug("Primary club changed.", { clubId: elements.primaryClubSelect.value || "" });
+  const selectedOption = elements.primaryClubSelect.selectedOptions?.[0];
+  dashboardDebug("Selected club changed.", {
+    clubId: elements.primaryClubSelect.value || "",
+    clubLabel: selectedOption?.textContent || "",
+  });
   const payload = currentViewerProfilePayload(state.selectedSeasonYear);
   const dashboard = await runAction(
     () => postJson("/api/viewer-profile", payload),
@@ -2590,6 +2596,10 @@ elements.primaryClubSelect.addEventListener("change", async () => {
     "change primary club"
   );
   if (dashboard) {
+    dashboardDebug("Selected club saved.", {
+      clubId: dashboard?.viewer_profile?.primary_club_id || "",
+      clubName: dashboard?.focus_club?.name || dashboard?.club?.name || "",
+    });
     renderDashboard(dashboard);
   }
 });

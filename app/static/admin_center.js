@@ -26,6 +26,8 @@ let fixtureList;
 let archiveSearchInput;
 let refreshButton;
 let archiveQueue;
+let auditRefreshButton;
+let auditLog;
 let roleBadge;
 
 let payload = null;
@@ -52,10 +54,115 @@ function setActionStatus(message, tone = "info") {
   setStatus(message, tone);
 }
 
+function prettyAuditAction(action) {
+  const text = String(action || "").trim();
+  if (!text) return "Updated item";
+  const labels = {
+    "auth.register": "Registration done",
+    "auth.signin": "Login done",
+    "club.select": "Selected club",
+    "player.create": "Player added",
+    "player.update": "Player updated",
+    "player.unlink": "Player unlinked",
+    "club.delete": "Club deleted",
+    "fixture.create": "Fixture created",
+    "fixture.update": "Fixture updated",
+    "fixture.delete": "Fixture deleted",
+    "availability.update": "Availability updated",
+    "availability.season.update": "Season availability updated",
+    "player.profile.update": "Player profile updated",
+    "archive.upload": "Scorecard uploaded",
+    "archive.extract": "Scorecard re-extracted",
+    "archive.import": "Extracted scorecard imported",
+    "archive.review.save": "Reviewed JSON saved",
+    "archive.approve": "Scorecard approved",
+    "archive.apply": "Archive applied",
+  };
+  return labels[text] || text.replace(/[_\.]+/g, " ").replace(/\b\w/g, (match) => match.toUpperCase());
+}
+
+function formatAuditDetail(details) {
+  if (!details || typeof details !== "object") return "";
+  const pairs = Object.entries(details)
+    .filter(([, value]) => value !== null && value !== undefined && value !== "")
+    .slice(0, 4)
+    .map(([key, value]) => {
+      const label = key.replace(/_/g, " ");
+      const text = Array.isArray(value)
+        ? value.join(", ")
+        : typeof value === "object"
+          ? JSON.stringify(value)
+          : String(value);
+      return `${label}: ${text}`;
+    });
+  return pairs.join(" · ");
+}
+
+function formatReviewAssessment(upload) {
+  const assessment = upload?.review_llm_assessment;
+  if (!assessment || typeof assessment !== "object") return "";
+  const bits = [];
+  if (assessment.has_both_innings === true) bits.push("Both innings detected");
+  if (assessment.has_both_innings === false) bits.push("Single innings only");
+  const duplicateIds = Array.isArray(assessment.possible_duplicate_archive_ids)
+    ? assessment.possible_duplicate_archive_ids.filter(Boolean)
+    : [];
+  const companionIds = Array.isArray(assessment.possible_companion_archive_ids)
+    ? assessment.possible_companion_archive_ids.filter(Boolean)
+    : [];
+  if (duplicateIds.length) bits.push(`Possible duplicates: ${duplicateIds.join(", ")}`);
+  if (companionIds.length) bits.push(`Companion archives: ${companionIds.join(", ")}`);
+  if (assessment.review_notes) bits.push(String(assessment.review_notes));
+  return bits.join(" · ");
+}
+
+function reviewAssessmentChips(upload) {
+  const assessment = upload?.review_llm_assessment;
+  if (!assessment || typeof assessment !== "object") return [];
+  const chips = [];
+  if (assessment.has_both_innings === true) chips.push("Both innings found");
+  if (assessment.has_both_innings === false) chips.push("Single innings only");
+  const duplicates = Array.isArray(assessment.possible_duplicate_archive_ids)
+    ? assessment.possible_duplicate_archive_ids.filter(Boolean)
+    : [];
+  const companions = Array.isArray(assessment.possible_companion_archive_ids)
+    ? assessment.possible_companion_archive_ids.filter(Boolean)
+    : [];
+  if (duplicates.length) chips.push(`Possible duplicates: ${duplicates.join(", ")}`);
+  if (companions.length) chips.push(`Possible companion archives: ${companions.join(", ")}`);
+  if (assessment.review_notes) chips.push(String(assessment.review_notes));
+  return chips;
+}
+
+function reviewSummaryText(upload) {
+  const assessment = upload?.review_llm_assessment;
+  const chips = [];
+  if (assessment && typeof assessment === "object") {
+    if (assessment.has_both_innings === true) chips.push("Both innings detected");
+    if (assessment.has_both_innings === false) chips.push("Single innings only");
+    const duplicateCount = Array.isArray(assessment.possible_duplicate_archive_ids)
+      ? assessment.possible_duplicate_archive_ids.filter(Boolean).length
+      : 0;
+    const companionCount = Array.isArray(assessment.possible_companion_archive_ids)
+      ? assessment.possible_companion_archive_ids.filter(Boolean).length
+      : 0;
+    if (duplicateCount) chips.push(`${duplicateCount} possible duplicate${duplicateCount === 1 ? "" : "s"}`);
+    if (companionCount) chips.push(`${companionCount} possible companion archive${companionCount === 1 ? "" : "s"}`);
+  }
+  if (!chips.length && String(upload?.review_llm_model || "").trim()) {
+    chips.push("LLM reviewed and enriched the template");
+  }
+  return chips.join(" · ") || "Review the extracted JSON before approving.";
+}
+
+function reviewRawOutput(upload) {
+  return String(upload?.review_llm_notes || "").trim();
+}
+
 function bootstrapAdminCenter() {
   const pages = window.CricketClubAppPages;
   if (!pages) {
-    adminDebug("Shared helpers not ready yet; retrying bootstrap.");
+    adminDebug("Shared helpers are not ready yet. Retrying.");
     return false;
   }
   ({
@@ -88,11 +195,14 @@ function bootstrapAdminCenter() {
   archiveSearchInput = document.getElementById("adminArchiveSearch");
   refreshButton = document.getElementById("adminRefreshButton");
   archiveQueue = document.getElementById("adminReviewQueue");
+  auditRefreshButton = document.getElementById("adminAuditRefreshButton");
+  auditLog = document.getElementById("adminAuditLog");
   roleBadge = document.getElementById("adminRoleBadge");
-  adminDebug("Bootstrap complete.", {
+  adminDebug("Admin Center ready.", {
     hasClubForm: !!clubForm,
     hasClubSelect: !!clubSelect,
     hasArchiveQueue: !!archiveQueue,
+    hasAuditLog: !!auditLog,
   });
   return true;
 }
@@ -173,7 +283,7 @@ async function runArchiveAction(action, uploadId, button = null, reviewText = ""
   const textarea = card.querySelector(".admin-review-text");
   try {
     if (action === "extract") {
-      adminDebug("Archive re-extract requested.", { uploadId });
+      adminDebug("Review started for archive image.", { uploadId });
       setActionStatus("Re-extracting archive...", "warning");
       await postJson(`/api/archive/${uploadId}/extract`, {}, true);
       setStatus("Scorecard re-extracted.", "success");
@@ -183,7 +293,7 @@ async function runArchiveAction(action, uploadId, button = null, reviewText = ""
         setStatus("Paste the reviewed JSON before saving.", "error");
         return false;
       }
-      adminDebug("Archive review save requested.", { uploadId, textLength: textValue.length });
+      adminDebug("Saving reviewed JSON for archive.", { uploadId, textLength: textValue.length });
       setActionStatus("Saving reviewed JSON...", "warning");
       await postJson(`/api/admin/archive/${uploadId}/review`, { text: textValue }, true);
       setStatus("Reviewed extraction saved.", "success");
@@ -193,12 +303,12 @@ async function runArchiveAction(action, uploadId, button = null, reviewText = ""
         setStatus("Paste the reviewed JSON before approving.", "error");
         return false;
       }
-      adminDebug("Archive approve requested.", { uploadId, textLength: textValue.length });
+      adminDebug("Approving reviewed scorecard.", { uploadId, textLength: textValue.length });
       setActionStatus("Saving JSON and approving archive...", "warning");
       await postJson(`/api/admin/archive/${uploadId}/approve`, { text: textValue }, true);
       setStatus("Archive approved.", "success");
     } else if (action === "delete") {
-      adminDebug("Archive delete requested.", { uploadId });
+      adminDebug("Deleting archive record.", { uploadId });
       if (!confirmTypedDelete("Delete this archive record?", uploadId, button)) return false;
       setActionStatus("Deleting archive record...", "warning");
       await deleteJson(`/api/admin/archive/${uploadId}`, true);
@@ -400,23 +510,12 @@ function filterArchivesForClub(dashboard, club) {
   return source.filter((upload) => archiveMatchesClub(upload, club));
 }
 
-function archiveBelongsToSelectedClub(upload, dashboard = payload) {
-  const { clubIdValue, clubNameValue, clubShortNameValue } = selectedClubKeys(dashboard);
-  if (!clubIdValue && !clubNameValue && !clubShortNameValue) {
+function archiveBelongsToSelectedClub(upload) {
+  const club = selectedClub();
+  if (!club) {
     return true;
   }
-  const resolvedClubId = String(upload.resolved_club_id || upload.club_id || "").trim().toLowerCase();
-  const resolvedClubName = String(upload.resolved_club_name || upload.club_name || "").trim().toLowerCase();
-  const resolvedClubIds = normalizeClubList(upload.resolved_club_ids || upload.club_ids || resolvedClubId);
-  const resolvedClubNames = normalizeClubList(upload.resolved_club_names || upload.club_names || resolvedClubName);
-  if (clubIdValue && resolvedClubIds.includes(clubIdValue)) {
-    return true;
-  }
-  return clubNameValue
-    ? resolvedClubNames.includes(clubNameValue) || resolvedClubNames.includes(clubShortNameValue)
-    : clubShortNameValue
-      ? resolvedClubNames.includes(clubShortNameValue)
-      : false;
+  return archiveMatchesClub(upload, club);
 }
 
 function blankTemplatePlayer(didNotBat = false) {
@@ -528,6 +627,13 @@ function reviewTemplateForUpload(upload) {
   };
 }
 
+function reviewTextForUpload(upload) {
+  const exact = String(upload?.review_template_json || "").trim();
+  if (exact) return exact;
+  const template = reviewTemplateForUpload(upload);
+  return JSON.stringify(template, null, 2);
+}
+
 function renderClubSelect(dashboard = payload) {
   const clubs = availableClubs(dashboard);
   adminDebug("Rendering club selector.", {
@@ -553,7 +659,7 @@ function renderClubStats(dashboard) {
 }
 
 function renderClubDetail(dashboard) {
-  adminDebug("Rendering club detail.", {
+  adminDebug("Showing club details.", {
     clubId: focusedClub(dashboard)?.id || "",
     memberCount: Array.isArray(dashboard?.members) ? dashboard.members.length : 0,
   });
@@ -643,15 +749,16 @@ function renderFixtures(dashboard) {
 }
 
 function renderArchives(dashboard) {
-  adminDebug("Rendering archive queue.", {
-    clubId: focusedClub(dashboard)?.id || "",
+  const club = selectedClub();
+  adminDebug("Showing archive queue.", {
+    clubId: club?.id || focusedClub(dashboard)?.id || "",
     sourceCount: Array.isArray(dashboard?.archive_uploads) ? dashboard.archive_uploads.length : 0,
     search: String(archiveSearchInput?.value || "").trim(),
   });
   const query = String(archiveSearchInput?.value || "").trim().toLowerCase();
   const sourceUploads = Array.isArray(dashboard?.archive_uploads) ? dashboard.archive_uploads : [];
   const uploads = sourceUploads.filter((upload) => {
-    if (!archiveBelongsToSelectedClub(upload, dashboard)) {
+    if (!archiveBelongsToSelectedClub(upload)) {
       return false;
     }
     if (!query) return true;
@@ -701,13 +808,29 @@ function renderArchives(dashboard) {
           <div class="archive-list">
             ${group.uploads
               .map((upload) => {
-                const reviewText = JSON.stringify(reviewTemplateForUpload(upload), null, 2);
+                const reviewText = reviewTextForUpload(upload);
+                const reviewSummary = reviewSummaryText(upload);
+                const reviewRaw = reviewRawOutput(upload);
                 return `
                   <article class="detail-card" data-admin-upload="${upload.id}">
                     <strong>${escapeHtml(upload.file_name)}</strong>
                     <p>${escapeHtml(upload.club_name || upload.resolved_club_name || "Club TBD")} · ${escapeHtml(upload.season || "Season TBD")}</p>
                     <small>${escapeHtml(upload.archive_date || "Date TBD")} · ${escapeHtml(upload.status || "Pending review")}</small>
                     <p>${escapeHtml(upload.extracted_summary || "Review the extracted draft before approving.")}</p>
+                    <small>${escapeHtml(upload.review_llm_model ? `LLM review: ${upload.review_llm_model}` : "LLM review pending")}</small>
+                    <p class="audit-details">${escapeHtml(reviewSummary)}</p>
+                    ${reviewAssessmentChips(upload).length ? `
+                      <div class="audit-chip-row">
+                        ${reviewAssessmentChips(upload).map((chip) => `<span class="audit-chip">${escapeHtml(chip)}</span>`).join("")}
+                      </div>
+                    ` : ""}
+                    ${formatReviewAssessment(upload) ? `<p class="audit-details">${escapeHtml(formatReviewAssessment(upload))}</p>` : ""}
+                    ${reviewRaw ? `
+                      <details class="audit-raw-panel">
+                        <summary>View raw LLM output</summary>
+                        <pre class="audit-details">${escapeHtml(reviewRaw)}</pre>
+                      </details>
+                    ` : ""}
                     <form class="admin-review-form" method="post" action="/api/admin/archive/${upload.id}/review-form">
                       <label class="stack-label">
                         Reviewed extraction JSON
@@ -733,8 +856,37 @@ function renderArchives(dashboard) {
     .join("");
 }
 
+function renderAuditLog(entries = []) {
+  if (!auditLog) return;
+  adminDebug("Rendering audit log.", {
+    entryCount: Array.isArray(entries) ? entries.length : 0,
+    clubId: selectedClubId || clubId() || "",
+  });
+  if (!Array.isArray(entries) || !entries.length) {
+    auditLog.innerHTML = `<p class="empty-state">No audit entries found for this club yet.</p>`;
+    return;
+  }
+  auditLog.innerHTML = entries
+    .map((entry) => {
+      const actionLabel = prettyAuditAction(entry.action);
+      const details = formatAuditDetail(entry.details);
+      const when = entry.created_at ? new Date(entry.created_at).toLocaleString() : "Time unavailable";
+      const actor = entry.actor_display_name || entry.actor_user_id || "Unknown";
+      const clubLabel = entry.club_name || entry.club_id || "Club";
+      return `
+        <article class="detail-card audit-entry">
+          <strong>${escapeHtml(actionLabel)}</strong>
+          <p>${escapeHtml(actor)} · ${escapeHtml(clubLabel)} · ${escapeHtml(when)}</p>
+          <small>${escapeHtml(entry.entity_type || "item")} ${escapeHtml(entry.entity_id || "")}</small>
+          ${details ? `<p class="audit-details">${escapeHtml(details)}</p>` : ""}
+        </article>
+      `;
+    })
+    .join("");
+}
+
 async function loadClubView(targetClubId = "", uploadsOverride = null) {
-  adminDebug("Loading club view.", { targetClubId, selectedClubId });
+  adminDebug("Loading selected club.", { targetClubId, selectedClubId });
   const requestedClubId = targetClubId || clubId() || auth?.user?.current_club_id || auth?.user?.primary_club_id || "";
   payload = requestedClubId
     ? await getJson(`/api/dashboard?focus_club_id=${encodeURIComponent(requestedClubId)}`, true)
@@ -776,7 +928,7 @@ async function loadClubView(targetClubId = "", uploadsOverride = null) {
   renderClubSelect(payload);
   populateFixtureForm();
   setStatus(`Loaded ${payload.club?.name || club.name}.`, "success");
-  adminDebug("Club view loaded.", {
+  adminDebug("Selected club loaded.", {
     clubId: payload.club?.id || "",
     fixtureCount: Array.isArray(payload.fixtures) ? payload.fixtures.length : 0,
     archiveCount: Array.isArray(payload.archive_uploads) ? payload.archive_uploads.length : 0,
@@ -784,21 +936,32 @@ async function loadClubView(targetClubId = "", uploadsOverride = null) {
 }
 
 async function loadReviewQueue() {
-  adminDebug("Loading review queue.");
+  adminDebug("Loading archive review queue.");
   const data = await getJson("/api/admin/review-queue", true);
   reviewQueue = data?.queue || [];
-  adminDebug("Review queue loaded.", { count: reviewQueue.length });
+  adminDebug("Archive review queue loaded.", { count: reviewQueue.length });
   return reviewQueue;
 }
 
+async function loadAuditLog(targetClubId = "") {
+  const clubFilter = String(targetClubId || selectedClubId || clubId() || auth?.user?.current_club_id || auth?.user?.primary_club_id || "").trim();
+  adminDebug("Loading audit log.", { clubFilter });
+  const query = clubFilter ? `?club_id=${encodeURIComponent(clubFilter)}&limit=50` : "?limit=50";
+  const data = await getJson(`/api/admin/audit-log${query}`, true);
+  renderAuditLog(data?.entries || []);
+  adminDebug("Audit log loaded.", { count: Array.isArray(data?.entries) ? data.entries.length : 0, clubFilter });
+  return data?.entries || [];
+}
+
 async function refreshAll() {
-  adminDebug("Refreshing admin center.");
+  adminDebug("Refreshing Admin Center.");
   auth = await getJson("/api/auth/me", true);
   renderRoleBadge();
   const targetClubId = clubId() || auth?.user?.current_club_id || auth?.user?.primary_club_id || "";
   const queue = await loadReviewQueue();
   await loadClubView(targetClubId, queue);
-  adminDebug("Refresh complete.", { targetClubId, queueCount: queue.length });
+  await loadAuditLog(targetClubId);
+  adminDebug("Admin Center refreshed.", { targetClubId, queueCount: queue.length });
 }
 
 let adminCenterHandlersBound = false;
@@ -824,7 +987,7 @@ function bindAdminCenterHandlers() {
     };
     try {
       setActionStatus(fixtureIdInput.value ? "Updating fixture..." : "Creating fixture...", "warning");
-      adminDebug("Saving fixture.", { clubId: club.id, fixtureId: fixtureIdInput.value || "" });
+      adminDebug("Saving fixture for selected club.", { clubId: club.id, fixtureId: fixtureIdInput.value || "" });
       if (fixtureIdInput.value) {
         await putJson(`/api/admin/clubs/${encodeURIComponent(club.id)}/fixtures/${encodeURIComponent(fixtureIdInput.value)}`, body, true);
         setStatus("Fixture updated.", "success");
@@ -892,9 +1055,12 @@ function bindAdminCenterHandlers() {
   clubSelect?.addEventListener("change", async () => {
     try {
       selectedClubId = clubSelect.value;
-      adminDebug("Club changed.", { selectedClubId });
-      const queue = reviewQueue.length ? reviewQueue : await loadReviewQueue();
-      await loadClubView(selectedClubId, queue);
+      const selectedOption = clubSelect.selectedOptions?.[0];
+      adminDebug("Selected club changed.", {
+        selectedClubId,
+        clubLabel: selectedOption?.textContent || "",
+      });
+      await refreshAll();
     } catch (error) {
       adminError("Club change failed.", error);
       setStatus(error.message, "error");
@@ -905,9 +1071,12 @@ function bindAdminCenterHandlers() {
     event.preventDefault();
     try {
       selectedClubId = clubSelect.value || selectedClubId;
-      adminDebug("Load club submitted.", { selectedClubId });
-      const queue = reviewQueue.length ? reviewQueue : await loadReviewQueue();
-      await loadClubView(selectedClubId, queue);
+      const selectedOption = clubSelect.selectedOptions?.[0];
+      adminDebug("Load club requested.", {
+        selectedClubId,
+        clubLabel: selectedOption?.textContent || "",
+      });
+      await refreshAll();
     } catch (error) {
       adminError("Load club failed.", error);
       setStatus(error.message, "error");
@@ -920,13 +1089,24 @@ function bindAdminCenterHandlers() {
   });
   refreshButton?.addEventListener("click", async () => {
     try {
-      adminDebug("Review queue refresh clicked.");
+      adminDebug("Refresh archive queue clicked.");
       setActionStatus("Refreshing review queue...", "warning");
-      const queue = await loadReviewQueue();
-      await loadClubView(selectedClubId || clubSelect.value);
-      adminDebug("Review queue refreshed.", { count: queue.length });
+      await refreshAll();
+      adminDebug("Archive queue refreshed.", { count: reviewQueue.length });
     } catch (error) {
       adminError("Review queue refresh failed.", error);
+      setStatus(error.message, "error");
+    }
+  });
+
+  auditRefreshButton?.addEventListener("click", async () => {
+    try {
+      adminDebug("Refresh audit log clicked.");
+      setActionStatus("Refreshing audit log...", "warning");
+      await loadAuditLog();
+      setStatus("Audit log refreshed.", "success");
+    } catch (error) {
+      adminError("Audit log refresh failed.", error);
       setStatus(error.message, "error");
     }
   });
@@ -934,13 +1114,13 @@ function bindAdminCenterHandlers() {
 
 async function startAdminCenter() {
   if (!bootstrapAdminCenter()) {
-    adminDebug("Bootstrap deferred because shared helpers were not ready.");
+    adminDebug("Bootstrap paused because shared helpers are not ready.");
     window.setTimeout(startAdminCenter, 25);
     return;
   }
   bindAdminCenterHandlers();
   try {
-    adminDebug("Starting admin auth refresh.");
+    adminDebug("Starting Admin Center sign-in check.");
     const result = await requireAuth();
     if (!result) return;
     await refreshAll();
