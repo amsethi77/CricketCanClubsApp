@@ -152,7 +152,7 @@ const elements = {
   clubSearchResults: document.getElementById("clubSearchResults"),
   landingPlayerSearchInput: document.getElementById("landingPlayerSearchInput"),
   landingPlayerResults: document.getElementById("landingPlayerResults"),
-  landingEvents: document.getElementById("landingEvents"),
+  landingRecentScorecards: document.getElementById("landingRecentScorecards"),
   landingMatches: document.getElementById("landingMatches"),
   landingClubStats: document.getElementById("landingClubStats"),
   clubDirectory: document.getElementById("clubDirectory"),
@@ -399,16 +399,97 @@ function renderLimitedCollection(items, { key, renderItem, emptyMessage, limit =
 }
 
 function statsByPlayer() {
-  return Object.fromEntries((state.dashboard?.player_stats || state.dashboard?.all_player_stats || []).map((item) => [item.player_name, item]));
+  return buildPlayerIndex(state.dashboard?.player_stats || state.dashboard?.all_player_stats || []);
 }
 
 function combinedStatsByPlayer() {
-  return Object.fromEntries((state.dashboard?.combined_player_stats || state.dashboard?.all_combined_player_stats || []).map((item) => [item.player_name, item]));
+  return buildPlayerIndex(state.dashboard?.combined_player_stats || state.dashboard?.all_combined_player_stats || []);
 }
 
 function displayPlayerName(member) {
   if (!member) return "";
   return member.full_name || member.name || "";
+}
+
+function normalizePlayerName(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, " ");
+}
+
+function playerNameVariants(member) {
+  if (!member) return [];
+  const values = [
+    member.name,
+    member.full_name,
+    ...(member.aliases || []),
+  ]
+    .map((item) => normalizePlayerName(item))
+    .filter(Boolean);
+  return Array.from(new Set(values));
+}
+
+function playerNameMatches(candidateName, playerName) {
+  const candidate = normalizePlayerName(candidateName);
+  if (!candidate) return false;
+  const targetMember = findMemberByName(playerName);
+  if (targetMember) {
+    return playerNameVariants(targetMember).includes(candidate);
+  }
+  return candidate === normalizePlayerName(playerName);
+}
+
+function findMemberByName(playerName) {
+  const members = state.dashboard?.members || state.dashboard?.all_members || [];
+  const target = normalizePlayerName(playerName);
+  if (!target) return null;
+  return (
+    members.find((member) => playerNameVariants(member).includes(target)) ||
+    members.find((member) => normalizePlayerName(member.name) === target) ||
+    members.find((member) => normalizePlayerName(member.full_name) === target) ||
+    null
+  );
+}
+
+function buildPlayerIndex(rows) {
+  const members = state.dashboard?.members || state.dashboard?.all_members || [];
+  const index = Object.create(null);
+  const rowsByCanonical = new Map();
+  for (const row of rows || []) {
+    const rowName = normalizePlayerName(row?.player_name);
+    const member = findMemberByName(rowName) || findMemberByName(row?.full_name);
+    const canonicalName = member?.name || row?.player_name || "";
+    if (!rowsByCanonical.has(canonicalName)) {
+      rowsByCanonical.set(canonicalName, []);
+    }
+    rowsByCanonical.get(canonicalName).push(row);
+    if (rowName) {
+      index[rowName] = row;
+    }
+    if (normalizePlayerName(row?.full_name)) {
+      index[normalizePlayerName(row.full_name)] = row;
+    }
+  }
+  for (const member of members) {
+    const canonicalName = member?.name || "";
+    const variants = playerNameVariants(member);
+    const matchedRow =
+      rowsByCanonical.get(canonicalName)?.[0] ||
+      rows.find((row) => {
+        const rowName = normalizePlayerName(row?.player_name);
+        return variants.includes(rowName) || variants.includes(normalizePlayerName(row?.full_name));
+      }) ||
+      null;
+    if (!matchedRow) {
+      continue;
+    }
+    for (const variant of variants) {
+      index[variant] = matchedRow;
+    }
+    index[normalizePlayerName(canonicalName)] = matchedRow;
+  }
+  return index;
 }
 
 function focusClubName() {
@@ -494,11 +575,11 @@ function currentPlayer() {
   const members = clubMembers.length ? clubMembers : (state.dashboard.all_members || []);
   const viewerMemberName = getViewerMemberNameFromAuth();
   return (
-    clubMembers.find((member) => member.name === state.selectedPlayerName) ||
-    clubMembers.find((member) => member.name === viewerMemberName) ||
+    findMemberByName(state.selectedPlayerName) ||
+    findMemberByName(viewerMemberName) ||
     clubMembers[0] ||
-    members.find((member) => member.name === state.selectedPlayerName) ||
-    members.find((member) => member.name === viewerMemberName) ||
+    findMemberByName(state.selectedPlayerName) ||
+    findMemberByName(viewerMemberName) ||
     members[0] ||
     null
   );
@@ -842,7 +923,7 @@ function playerMembershipSummary(player) {
 
 function clubRankForPlayer(clubRanking, playerName, key) {
   const list = clubRanking?.[key] || [];
-  return list.find((item) => item.player_name === playerName) || null;
+  return list.find((item) => playerNameMatches(item.player_name, playerName)) || null;
 }
 
 function populateArchiveSelect(uploads) {
@@ -1022,16 +1103,25 @@ function renderLandingClubStats(stats) {
   `;
 }
 
-function renderLandingEvents(items) {
-  elements.landingEvents.innerHTML = renderLimitedCollection(items || [], {
-    key: "landing-events",
-    emptyMessage: `<p class="empty-state">No upcoming events stored for this club yet.</p>`,
-    renderItem: (item) => `
-      <article class="detail-card">
-        <strong>${item.title}</strong>
-        <small>${item.subtitle || "Schedule details coming soon."}</small>
-      </article>
-    `,
+function renderLandingRecentScorecards(items) {
+  if (!elements.landingRecentScorecards) {
+    return;
+  }
+  const scorecards = (items || []).slice(0, 4);
+  elements.landingRecentScorecards.innerHTML = renderLimitedCollection(scorecards, {
+    key: "landing-recent-scorecards",
+    emptyMessage: `<p class="empty-state">No recent scorecards have been uploaded for this club yet.</p>`,
+    renderItem: (item) => {
+      const status = archiveReviewStatus(item);
+      const archiveDate = archiveDateLabel(item) || item.created_at || "Date TBD";
+      return `
+        <article class="detail-card clickable-card" data-archive="${item.id}">
+          <strong>${item.file_name}</strong>
+          <p>${archiveDate}</p>
+          <small>${item.season || ARCHIVE_SEASON_LABEL} · ${status}</small>
+        </article>
+      `;
+    },
   });
 }
 
@@ -1123,7 +1213,12 @@ function renderLandingPlayerResults() {
         key: "landing-player-results",
         emptyMessage: `<p class="empty-state">No players match that search.</p>`,
         renderItem: (member) => {
-          const stats = statMap[member.name] || { runs: 0, matches: 0, wickets: 0, catches: 0 };
+          const stats =
+            statMap[normalizePlayerName(member.name)] ||
+            statMap[normalizePlayerName(member.full_name)] ||
+            statMap[normalizePlayerName((member.aliases || [])[0])] ||
+            statMap[member.name] ||
+            { runs: 0, matches: 0, wickets: 0, catches: 0 };
           return `
             <article class="detail-card">
               <strong>${displayPlayerName(member)}</strong>
@@ -1156,7 +1251,7 @@ function renderViewerProfile(dashboard) {
   elements.focusClubBadge.textContent = `Primary club: ${focusClub.name || dashboard.club.name || "Club"}`;
   populatePrimaryClubSelect(dashboard.clubs || []);
   renderLandingPlayerResults();
-  renderLandingEvents(dashboard.landing_upcoming_events || []);
+  renderLandingRecentScorecards(dashboard.archive_uploads || []);
   renderLandingMatches(dashboard.landing_upcoming_matches || []);
   renderLandingClubStats(dashboard.landing_club_stats || {});
 }
@@ -1454,7 +1549,7 @@ function renderScorebook(match) {
 }
 
 function renderMembers(members) {
-  const statMap = statsByPlayer();
+  const statMap = combinedStatsByPlayer();
   const pendingMap = Object.fromEntries((state.dashboard.player_pending_stats || []).map((item) => [item.player_name, item]));
   elements.memberList.innerHTML = renderLimitedCollection(members, {
     key: "member-list",
@@ -1466,7 +1561,11 @@ function renderMembers(members) {
       const displayName = member.full_name ? `${member.name} (${member.full_name})` : member.name;
       const aliases = (member.aliases || []).length ? `<small>Aliases: ${(member.aliases || []).join(", ")}</small>` : "";
       const stats = statMap[member.name] || { runs: 0, wickets: 0, catches: 0, matches: 0 };
-      const pending = pendingMap[member.name] || { runs: 0, matches: 0 };
+      const pending =
+        pendingMap[member.name] ||
+        pendingMap[member.full_name] ||
+        pendingMap[(member.aliases || [])[0]] ||
+        { runs: 0, matches: 0 };
       const storedRuns = Number(stats.runs || 0) + Number(pending.runs || 0);
       return `
         <article class="member-card clickable-card" data-player="${member.name}">
@@ -1791,32 +1890,38 @@ function getHistoricalSeasonSummary(dashboard) {
 }
 
 function getPlayerAvailabilitySummary(playerName) {
-  return state.dashboard.availability_board.find((row) => row.player_name === playerName);
+  return state.dashboard.availability_board.find((row) => playerNameMatches(row.player_name, playerName));
 }
 
 function getPlayerSeasonProfile(playerName) {
   const members = state.dashboard.members || state.dashboard.all_members || [];
-  const player = members.find((member) => member.name === playerName);
+  const player = findMemberByName(playerName);
   const selectedYear = String(state.selectedSeasonYear || state.dashboard?.selected_season_year || state.dashboard?.default_season_year || "").trim();
   const combinedRecords = state.dashboard.combined_player_stats || state.dashboard.all_combined_player_stats || [];
-  const combinedRecord = combinedRecords.find((item) => item.player_name === playerName) || {
-    batting_average: 0,
-    strike_rate: 0,
-    batting_innings: 0,
-    outs: 0,
-  };
+  const combinedRecord =
+    combinedRecords.find((item) => playerNameMatches(item.player_name, playerName)) ||
+    combinedRecords.find((item) => playerNameMatches(item.full_name, playerName)) ||
+    {
+      batting_average: 0,
+      strike_rate: 0,
+      batting_innings: 0,
+      outs: 0,
+    };
   const membershipSummary = playerMembershipSummary(player || {});
   const clubIdSet = new Set((membershipSummary.clubMemberships || []).map((club) => club.club_id).filter(Boolean));
   const clubNameSet = new Set((membershipSummary.clubMemberships || []).map((club) => club.club_name).filter(Boolean));
   const pendingRecords = selectedYear ? (state.dashboard.player_pending_stats || []) : (state.dashboard.all_player_pending_stats || []);
-  const pending = pendingRecords.find((item) => item.player_name === playerName) || {
+  const pending =
+    pendingRecords.find((item) => playerNameMatches(item.player_name, playerName)) ||
+    pendingRecords.find((item) => playerNameMatches(item.full_name, playerName)) ||
+    {
     player_name: playerName,
     runs: 0,
     wickets: 0,
     catches: 0,
     matches: 0,
     sources: [],
-  };
+    };
   const allFixtures = state.dashboard.all_fixtures || state.dashboard.fixtures || [];
   const seasonFixtures = selectedYear ? allFixtures.filter((match) => fixtureSeasonYear(match) === selectedYear) : allFixtures;
   const relevantFixtures = membershipSummary.clubMemberships.length
@@ -1843,7 +1948,7 @@ function getPlayerSeasonProfile(playerName) {
   };
 
   relevantFixtures.forEach((match) => {
-    const entries = (match.performances || []).filter((item) => item.player_name === playerName);
+    const entries = (match.performances || []).filter((item) => playerNameMatches(item.player_name, playerName));
     const availabilityStatus = match.availability_statuses?.[playerName] || "no response";
     if (availabilityStatus === "available") {
       matchesAvailable += 1;
@@ -1895,6 +2000,14 @@ function getPlayerSeasonProfile(playerName) {
     .sort((a, b) => a.dateSort - b.dateSort || a.matchId.localeCompare(b.matchId))
     .slice(0, 5);
   const lastGame = playedAppearances[0] || null;
+  const seasonRuns = Number(combinedRecord.runs || runs || 0);
+  const seasonBalls = Number(combinedRecord.balls || balls || 0);
+  const seasonWickets = Number(combinedRecord.wickets || wickets || 0);
+  const seasonCatches = Number(combinedRecord.catches || catches || 0);
+  const seasonFours = Number(combinedRecord.fours || fours || 0);
+  const seasonSixes = Number(combinedRecord.sixes || sixes || 0);
+  const seasonMatches = Number(combinedRecord.matches || appearances.length || 0);
+  const seasonBattingInnings = Number(combinedRecord.batting_innings || appearances.length || 0);
 
   const clubRankings = membershipSummary.clubMemberships.map((club) => {
     const rankingBundle = state.dashboard.club_rankings?.[club.club_name] || {};
@@ -1924,17 +2037,17 @@ function getPlayerSeasonProfile(playerName) {
     upcomingGames,
     lastGame,
     totals: {
-      runs,
-      balls,
-      wickets,
-      catches,
-      fours,
-      sixes,
-      innings: appearances.length,
+      runs: seasonRuns,
+      balls: seasonBalls,
+      wickets: seasonWickets,
+      catches: seasonCatches,
+      fours: seasonFours,
+      sixes: seasonSixes,
+      innings: seasonBattingInnings,
       battingAverage: formatMetric(combinedRecord.batting_average || 0),
       strikeRate: formatMetric(combinedRecord.strike_rate || 0),
-      storedRuns: runs + Number(pending.runs || 0),
-      storedMatches: appearances.length + Number(pending.matches || 0),
+      storedRuns: seasonRuns,
+      storedMatches: seasonMatches,
       matchesAvailable,
       matchesMaybe,
       matchesUnavailable,
@@ -2001,7 +2114,7 @@ function renderPlayerProfile() {
   elements.playerSeasonSummary.innerHTML = `
     ${clubRankingCards}
     <article class="summary-card"><span>Clubs</span><strong>${profile.memberships.clubMemberships.length}</strong><p>${profile.memberships.clubMemberships.length ? "All linked clubs are included below" : "No club memberships stored"}</p></article>
-    <article class="summary-card"><span>Stored Runs</span><strong>${profile.totals.storedRuns}</strong><p>${profile.totals.runs} confirmed + ${profile.pending.runs || 0} reviewed historical archive runs</p></article>
+    <article class="summary-card"><span>Stored Runs</span><strong>${profile.totals.storedRuns}</strong><p>${profile.appearances.filter((item) => item.played).length} played fixtures · ${profile.pending.sources.length} reviewed archive scorecards</p></article>
     <article class="summary-card"><span>Confirmed Runs</span><strong>${profile.totals.runs}</strong></article>
     <article class="summary-card"><span>Batting Average</span><strong>${profile.totals.battingAverage}</strong></article>
     <article class="summary-card"><span>Balls</span><strong>${profile.totals.balls}</strong></article>
@@ -2010,7 +2123,7 @@ function renderPlayerProfile() {
     <article class="summary-card"><span>Confirmed Catches</span><strong>${profile.totals.catches}</strong></article>
     <article class="summary-card"><span>Boundaries</span><strong>${profile.totals.fours}x4 · ${profile.totals.sixes}x6</strong></article>
     <article class="summary-card"><span>Scored Matches</span><strong>${profile.totals.innings}</strong></article>
-    <article class="summary-card"><span>Historical Archive Runs</span><strong>${profile.pending.runs}</strong><p>${profile.pending.matches || 0} reviewed archive scorecards</p></article>
+    <article class="summary-card"><span>Historical Archive Runs</span><strong>${profile.pending.sources.length}</strong><p>${profile.pending.runs || 0} runs from reviewed archive scorecards</p></article>
     <article class="summary-card"><span>Availability</span><strong>${availability ? `${availability.matches_available} yes / ${availability.matches_unavailable} no / ${availability.matches_no_response || 0} no response` : "n/a"}</strong></article>
   `;
 
@@ -2294,13 +2407,19 @@ function renderTeamPage() {
     emptyMessage: `<p class="empty-state">No players are stored for ${team.display_name || team.name} yet.</p>`,
     renderItem: (member) => {
           const displayName = member.full_name ? `${member.name} (${member.full_name})` : member.name;
-          const stats = state.dashboard.player_stats.find((item) => item.player_name === member.name) || {
+          const stats =
+            state.dashboard.combined_player_stats.find((item) => playerNameMatches(item.player_name, member.name)) ||
+            state.dashboard.combined_player_stats.find((item) => playerNameMatches(item.full_name, member.name)) || {
             runs: 0,
             wickets: 0,
             catches: 0,
             matches: 0,
           };
-          const pending = pendingMap[member.name] || { runs: 0, matches: 0 };
+          const pending =
+            pendingMap[member.name] ||
+            pendingMap[member.full_name] ||
+            pendingMap[(member.aliases || [])[0]] ||
+            { runs: 0, matches: 0 };
           const confirmedRuns = Number(stats.runs || 0);
           const archiveRuns = Number(pending.runs || 0);
           return `
@@ -2485,6 +2604,7 @@ function renderDashboard(dashboard) {
   renderTeamPage();
   renderAvailabilityFixtureEditor(dashboard.fixtures);
   renderArchive(visibleArchiveUploads);
+  renderLandingRecentScorecards(visibleArchiveUploads);
   renderDuplicates(dashboard.duplicate_uploads || []);
   renderArchiveScorecards(visibleArchiveUploads);
   updateWhatsappLink(match);

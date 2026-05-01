@@ -264,6 +264,151 @@ h1 {
   line-height: 1;
 }
 
+.signin-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 0.96fr) minmax(0, 1.16fr);
+  gap: 18px;
+  align-items: start;
+}
+
+.signin-form-panel,
+.signin-stats-panel {
+  min-height: 100%;
+}
+
+.signin-stats-shell {
+  gap: 18px;
+}
+
+.signin-stats-head {
+  display: grid;
+  gap: 10px;
+}
+
+.signin-stats-title {
+  font-size: clamp(1.6rem, 2.8vw, 2.3rem);
+  letter-spacing: -0.02em;
+}
+
+.signin-stats-lede {
+  max-width: 72ch;
+}
+
+.signin-stats-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.signin-widget,
+.signin-widget-wide {
+  padding: 16px;
+  border-radius: 22px;
+  border: 1px solid rgba(90, 167, 255, 0.16);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(240, 247, 255, 0.92));
+  box-shadow: 0 14px 32px rgba(39, 74, 118, 0.08);
+}
+
+.signin-widget-wide {
+  grid-column: 1 / -1;
+}
+
+.signin-widget-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: start;
+  margin-bottom: 12px;
+}
+
+.signin-widget-kicker {
+  margin: 0 0 6px;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: var(--red);
+}
+
+.signin-widget-head h3 {
+  font-family: "Source Serif 4", Georgia, "Times New Roman", serif;
+  font-size: 1.1rem;
+  line-height: 1.15;
+}
+
+.signin-widget-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: rgba(90, 167, 255, 0.14);
+  color: var(--blue-deep);
+  font-size: 0.8rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.signin-leader-list,
+.signin-club-list {
+  display: grid;
+  gap: 10px;
+}
+
+.signin-leader-row,
+.signin-club-row {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.78);
+  border: 1px solid rgba(24, 63, 124, 0.08);
+}
+
+.signin-club-head {
+  display: flex;
+  align-items: start;
+  gap: 12px;
+}
+
+.signin-rank {
+  display: inline-flex;
+  width: 28px;
+  height: 28px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: linear-gradient(135deg, rgba(214, 40, 57, 0.14), rgba(90, 167, 255, 0.16));
+  color: var(--blue-deep);
+  font-weight: 800;
+  flex: 0 0 auto;
+}
+
+.signin-leader-copy {
+  display: grid;
+  gap: 2px;
+}
+
+.signin-leader-copy strong {
+  font-size: 0.96rem;
+  line-height: 1.2;
+}
+
+.signin-leader-copy small {
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.signin-empty {
+  padding: 14px 12px;
+  border-radius: 16px;
+  border: 1px dashed rgba(24, 63, 124, 0.14);
+  color: var(--muted);
+  background: rgba(255, 255, 255, 0.62);
+}
+
 .clubs-greeting {
   max-width: none;
   font-size: clamp(1.85rem, 2.8vw, 3rem);
@@ -1421,5 +1566,31 @@ button:hover,
   .team-summary-grid,
   .player-summary-grid {
     grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 1100px) {
+  .signin-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .signin-stats-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 640px) {
+  .signin-layout {
+    gap: 14px;
+  }
+
+  .signin-widget-head,
+  .signin-club-row,
+  .signin-leader-row {
+    flex-direction: column;
+  }
+
+  .signin-widget-pill {
+    align-self: start;
   }
 }

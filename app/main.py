@@ -64,6 +64,10 @@ try:
         UPLOAD_DIR,
         archive_record_from_file,
         build_dashboard,
+        build_summary,
+        build_batting_rankings,
+        build_bowling_rankings,
+        build_combined_player_stats,
         canonical_phone,
         canonical_archive_uploads,
         create_duplicate_record_from_bytes,
@@ -105,6 +109,10 @@ except ModuleNotFoundError:
         UPLOAD_DIR,
         archive_record_from_file,
         build_dashboard,
+        build_summary,
+        build_batting_rankings,
+        build_bowling_rankings,
+        build_combined_player_stats,
         canonical_phone,
         canonical_archive_uploads,
         create_duplicate_record_from_bytes,
@@ -361,6 +369,12 @@ def _clubs_page_html(request: Request, search: str = "", focus_club_id: str = ""
                 def _performance_matches_member(performance_name: str) -> bool:
                     return str(performance_name or "").strip().lower() in member_aliases
 
+                def _row_matches_member(row: dict[str, Any]) -> bool:
+                    return (
+                        str(row.get("player_name") or "").strip().lower() in member_aliases
+                        or str(row.get("full_name") or "").strip().lower() in member_aliases
+                    )
+
                 def _highest_score_for(year: str | None = None, club_id: str | None = None) -> int | None:
                     highest: int | None = None
                     for fixture in store.get("fixtures", []):
@@ -386,17 +400,17 @@ def _clubs_page_html(request: Request, search: str = "", focus_club_id: str = ""
                     return highest
 
                 snapshot_stats = next(
-                    (item for item in dashboard.get("member_summary_stats", []) if item.get("player_name") == member_name),
+                    (item for item in dashboard.get("member_summary_stats", []) if _row_matches_member(item)),
                     None,
                 ) or next(
-                    (item for item in dashboard.get("all_combined_player_stats", []) if item.get("player_name") == member_name),
+                    (item for item in dashboard.get("all_combined_player_stats", []) if _row_matches_member(item)),
                     {"runs": 0, "wickets": 0, "catches": 0},
                 )
                 all_fixtures = dashboard.get("all_fixtures", []) or []
                 appearances = [
                     fixture
                     for fixture in all_fixtures
-                    if any((performance.get("player_name") or "") == member_name for performance in fixture.get("performances", []))
+                    if any(_performance_matches_member(performance.get("player_name") or "") for performance in fixture.get("performances", []))
                 ]
                 appearances.sort(key=lambda item: str(item.get("date") or ""), reverse=True)
                 last_game = appearances[0] if appearances else None
@@ -404,7 +418,7 @@ def _clubs_page_html(request: Request, search: str = "", focus_club_id: str = ""
                     fixture
                     for fixture in all_fixtures
                     if str(fixture.get("status") or "").lower() == "scheduled"
-                    and any((performance.get("player_name") or "") == member_name for performance in fixture.get("performances", []))
+                    and any(_performance_matches_member(performance.get("player_name") or "") for performance in fixture.get("performances", []))
                 ]
                 upcoming_games.sort(key=lambda item: str(item.get("date") or ""))
                 next_game = upcoming_games[0] if upcoming_games else None
@@ -436,10 +450,7 @@ def _clubs_page_html(request: Request, search: str = "", focus_club_id: str = ""
                             item
                             for item in year_summary_rows
                             if str(item.get("season_year") or "").strip() == str(year)
-                            and (
-                                str(item.get("player_name") or "").strip() == member_name
-                                or str(item.get("player_name") or "").strip().lower() == member_name.lower()
-                            )
+                            and _row_matches_member(item)
                         ),
                         {},
                     )
@@ -1313,8 +1324,8 @@ def ensure_auth_schema() -> None:
     with _AUTH_SCHEMA_BOOTSTRAP_LOCK:
         if _AUTH_SCHEMA_BOOTSTRAP_DONE:
             return
-        with _auth_connection() as connection:
-            try:
+        try:
+            with _auth_connection() as connection:
                 connection.executescript(
                     """
                     CREATE TABLE IF NOT EXISTS app_users (
@@ -1397,11 +1408,14 @@ def ensure_auth_schema() -> None:
                 _seed_role_catalog(connection)
                 _sync_role_permissions(connection)
                 _migrate_multi_role_assignments(connection)
-            except sqlite3.OperationalError as exc:
-                if "locked" not in str(exc).lower():
-                    raise
-                logger.warning("Auth schema bootstrap skipped because the database is busy. Login will retry on the next request.")
-                return
+        except sqlite3.OperationalError as exc:
+            if "locked" not in str(exc).lower():
+                raise
+            logger.warning("Auth schema bootstrap skipped because the database is busy. Login will retry on the next request.")
+            return
+        except sqlite3.DatabaseError as exc:
+            logger.warning("Auth schema bootstrap skipped because the auth database is unhealthy: %s", exc)
+            return
         _AUTH_SCHEMA_BOOTSTRAP_DONE = True
 
 
@@ -1693,6 +1707,28 @@ def _auth_user_from_token(token: str | None) -> tuple[sqlite3.Row, str]:
     if not row:
         raise HTTPException(status_code=401, detail="Session expired. Sign in again.")
     return row, row["current_club_id"] or row["primary_club_id"] or ""
+
+
+def _safe_load_store_for_auth(context: str) -> dict[str, Any]:
+    try:
+        return load_store()
+    except Exception as exc:
+        logger.warning("%s: store unavailable, returning minimal auth payload: %s", context, exc)
+        return {
+            "clubs": [],
+            "members": [],
+            "fixtures": [],
+            "archive_uploads": [],
+            "duplicate_uploads": [],
+            "teams": [],
+            "insights": {},
+            "member_summary_stats": [],
+            "member_year_stats": [],
+            "member_club_stats": [],
+            "club_summary_stats": [],
+            "club_year_stats": [],
+            "viewer_profile": {},
+        }
 
 
 def _require_admin(token: str | None) -> tuple[sqlite3.Row, str]:
@@ -2684,7 +2720,7 @@ def parse_imported_extraction(store: dict[str, Any], text: str) -> dict[str, Any
 
 @app.get("/")
 def root() -> FileResponse:
-    return _page_response("signin.html")
+    return signin_page()
 
 
 @app.on_event("startup")
@@ -2693,8 +2729,148 @@ def startup_tasks() -> None:
 
 
 @app.get("/signin")
-def signin_page() -> FileResponse:
-    return _page_response("signin.html")
+def signin_page() -> HTMLResponse:
+    html_text = (STATIC_DIR / "signin.html").read_text(encoding="utf-8")
+    try:
+        stats = public_signin_stats()
+    except Exception:
+        logger.exception("Signin stats preload failed.")
+        stats = {"batting_leaders": [], "bowling_leaders": [], "club_leaders": []}
+
+    def _render_batting_rows(rows: list[dict[str, Any]]) -> str:
+        if not rows:
+            return '<div class="signin-empty">No batting leaders yet.</div>'
+        return "".join(
+            f"""
+            <div class="signin-leader-row">
+              <span class="signin-rank">{index}</span>
+              <div class="signin-leader-copy">
+                <strong>{html.escape(str(row.get('player_name') or 'Player'))}</strong>
+                <small>{int(row.get('runs') or 0)} runs · {float(row.get('batting_average') or 0.0):.1f} avg · {int(row.get('matches') or 0)} matches</small>
+              </div>
+            </div>
+            """
+            for index, row in enumerate(rows, start=1)
+        )
+
+    def _render_bowling_rows(rows: list[dict[str, Any]]) -> str:
+        if not rows:
+            return '<div class="signin-empty">No bowling leaders yet.</div>'
+        return "".join(
+            f"""
+            <div class="signin-leader-row">
+              <span class="signin-rank">{index}</span>
+              <div class="signin-leader-copy">
+                <strong>{html.escape(str(row.get('player_name') or 'Player'))}</strong>
+                <small>{int(row.get('wickets') or 0)} wickets · {float(row.get('wickets_per_match') or 0.0):.1f} wickets/match · {int(row.get('matches') or 0)} matches</small>
+              </div>
+            </div>
+            """
+            for index, row in enumerate(rows, start=1)
+        )
+
+    def _render_club_rows(rows: list[dict[str, Any]]) -> str:
+        if not rows:
+            return '<div class="signin-empty">No club results yet.</div>'
+        return "".join(
+            f"""
+            <div class="signin-club-row">
+              <div class="signin-club-head">
+                <span class="signin-rank">{index}</span>
+                <div class="signin-leader-copy">
+                  <strong>{html.escape(str(row.get('club_name') or 'Club'))}</strong>
+                  <small>{int(row.get('matches_won') or 0)} won · {int(row.get('matches_played') or 0)} played</small>
+                </div>
+              </div>
+              <span class="signin-widget-pill">{int(round(float(row.get('win_rate') or 0) * 100))}%</span>
+            </div>
+            """
+            for index, row in enumerate(rows, start=1)
+        )
+
+    batting_rows = list(stats.get("batting_leaders", []))
+    bowling_rows = list(stats.get("bowling_leaders", []))
+    club_rows = list(stats.get("club_leaders", []))
+
+    replacements = {
+        '<span id="signinBatsmenCount" class="signin-widget-pill">Loading</span>': f'<span id="signinBatsmenCount" class="signin-widget-pill">{len(batting_rows)} shown</span>',
+        '<span id="signinBowlersCount" class="signin-widget-pill">Loading</span>': f'<span id="signinBowlersCount" class="signin-widget-pill">{len(bowling_rows)} shown</span>',
+        '<span id="signinClubsCount" class="signin-widget-pill">Loading</span>': f'<span id="signinClubsCount" class="signin-widget-pill">{len(club_rows)} shown</span>',
+        '<div id="signinTopBatsmen" class="signin-leader-list" aria-live="polite"></div>': f'<div id="signinTopBatsmen" class="signin-leader-list" aria-live="polite">{_render_batting_rows(batting_rows)}</div>',
+        '<div id="signinTopBowlers" class="signin-leader-list" aria-live="polite"></div>': f'<div id="signinTopBowlers" class="signin-leader-list" aria-live="polite">{_render_bowling_rows(bowling_rows)}</div>',
+        '<div id="signinTopClubs" class="signin-club-list" aria-live="polite"></div>': f'<div id="signinTopClubs" class="signin-club-list" aria-live="polite">{_render_club_rows(club_rows)}</div>',
+    }
+    for needle, replacement in replacements.items():
+        html_text = html_text.replace(needle, replacement)
+
+    return HTMLResponse(
+        content=html_text,
+        headers={
+            "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+            "Pragma": "no-cache",
+        },
+    )
+
+
+@app.get("/api/public/signin-stats")
+def public_signin_stats() -> dict[str, Any]:
+    store = load_store()
+    members = list(store.get("members", []))
+    fixtures = list(store.get("fixtures", []))
+    archives = canonical_archive_uploads(store.get("archive_uploads", []))
+    combined_player_stats = build_combined_player_stats(fixtures, archives, members)
+
+    batting_leaders = [
+        {
+            "player_name": row.get("player_name", ""),
+            "runs": int(row.get("runs") or 0),
+            "batting_average": float(row.get("batting_average") or 0.0),
+            "matches": int(row.get("matches") or 0),
+        }
+        for row in build_batting_rankings(combined_player_stats)[:5]
+    ]
+    bowling_leaders = [
+        {
+            "player_name": row.get("player_name", ""),
+            "wickets": int(row.get("wickets") or 0),
+            "wickets_per_match": float(row.get("wickets_per_match") or 0.0),
+            "matches": int(row.get("matches") or 0),
+        }
+        for row in build_bowling_rankings(combined_player_stats)[:5]
+    ]
+
+    club_leaders = []
+    for club in store.get("clubs", []) or []:
+        club_store = scoped_store_for_club(store, club)
+        summary = build_summary(club_store)
+        matches_played = int(summary.get("matches_played") or 0)
+        matches_won = int(summary.get("matches_won") or 0)
+        if matches_played <= 0 and matches_won <= 0:
+            continue
+        club_leaders.append(
+            {
+                "club_id": club.get("id", ""),
+                "club_name": club.get("name", ""),
+                "matches_played": matches_played,
+                "matches_won": matches_won,
+                "win_rate": (matches_won / matches_played) if matches_played else 0.0,
+            }
+        )
+    club_leaders.sort(
+        key=lambda item: (
+            -float(item.get("win_rate", 0) or 0),
+            -int(item.get("matches_won", 0) or 0),
+            -int(item.get("matches_played", 0) or 0),
+            str(item.get("club_name") or ""),
+        )
+    )
+
+    return {
+        "batting_leaders": batting_leaders,
+        "bowling_leaders": bowling_leaders,
+        "club_leaders": club_leaders[:10],
+        "generated_at": now_iso(),
+    }
 
 
 def _admin_center_html(request: Request) -> HTMLResponse:
@@ -3658,8 +3834,6 @@ def signin(request: SignInRequest, response: Response) -> dict[str, Any]:
 
     logger.debug("Sign in attempt. identifier=%s player=%s", identifier or "", player_name or "")
 
-    store = load_store()
-
     identifier_phone = "".join(filter(str.isdigit, identifier)) if identifier else ""
     identifier_email = identifier.lower() if "@" in identifier else ""
 
@@ -3700,6 +3874,7 @@ def signin(request: SignInRequest, response: Response) -> dict[str, Any]:
         if not user_row and player_name:
             logger.debug("Falling back to player name lookup.")
 
+            store = _safe_load_store_for_auth("signin.member_lookup")
             resolved_name = resolve_member_name(store, player_name)
             normalized_input = normalize_name(resolved_name)
 
@@ -3792,6 +3967,8 @@ def signin(request: SignInRequest, response: Response) -> dict[str, Any]:
 
     _set_auth_cookies(response, token, current_club_id)
 
+    store = _safe_load_store_for_auth("signin.post_auth")
+
     return {
         "token": token,
         "user": _auth_user_payload(user_row, current_club_id),
@@ -3856,7 +4033,7 @@ def signin_quick_form(
 def auth_me(x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
     user_row, current_club_id = _auth_user_from_token(x_auth_token)
     logger.debug("Auth profile requested. user_id=%s current_club_id=%s", user_row["id"], current_club_id or "")
-    store = load_store()
+    store = _safe_load_store_for_auth("auth.me")
     return {
         "user": _auth_user_payload(user_row, current_club_id),
         "clubs": _sorted_club_choices(store, current_club_id),

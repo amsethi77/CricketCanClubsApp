@@ -10,28 +10,73 @@
       href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Source+Serif+4:opsz,wght@8..60;400;500;600;700&display=swap"
       rel="stylesheet"
     />
-    <link rel="stylesheet" href="/assets/tailwind.css?v=20260426a" />
-    <link rel="stylesheet" href="/assets/styles.css?v=20260426a" />
+    <link rel="stylesheet" href="/assets/tailwind.css?v=20260430b" />
+    <link rel="stylesheet" href="/assets/styles.css?v=20260430b" />
   </head>
   <body>
     <div class="page-shell">
-      <section class="panel onboarding-panel">
-        <div class="stack-card">
-          <p class="section-kicker">Sign In</p>
-          <h1 class="signin-title">Cricket Canada Clubs Login</h1>
-          <p class="lede">Sign in with mobile or email and password, or use your saved player mobile/email for quick access. Add player name only if needed.</p>
-          <div id="signinStatus" class="status-banner" hidden></div>
-          <form id="signinForm" class="form-grid" method="post" action="/signin/quick">
-            <input id="signinIdentifier" name="identifier" type="text" placeholder="Mobile or email" required />
-            <input id="signinPassword" name="password" type="password" placeholder="Password" />
-            <input id="signinPlayerName" name="player_name" type="text" placeholder="Player name for quick access" />
-            <button class="primary-button wide" type="submit">Sign in</button>
-          </form>
-          <a class="primary-link" href="/register">Create an account</a>
+      <section class="signin-layout">
+        <div class="panel onboarding-panel signin-form-panel">
+          <div class="stack-card">
+            <p class="section-kicker">Sign In</p>
+            <h1 class="signin-title">Cricket Canada Clubs Login</h1>
+            <p class="lede">Sign in with mobile or email and password, or use your saved player mobile/email for quick access. Add player name only if needed.</p>
+            <div id="signinStatus" class="status-banner" hidden></div>
+            <form id="signinForm" class="form-grid" method="post" action="/signin/quick">
+              <input id="signinIdentifier" name="identifier" type="text" placeholder="Mobile or email" required />
+              <input id="signinPassword" name="password" type="password" placeholder="Password" />
+              <input id="signinPlayerName" name="player_name" type="text" placeholder="Player name for quick access" />
+              <button class="primary-button wide" type="submit">Sign in</button>
+            </form>
+            <a class="primary-link" href="/register">Create an account</a>
+          </div>
         </div>
+        <aside class="panel onboarding-panel signin-stats-panel">
+          <div class="stack-card signin-stats-shell">
+            <div class="signin-stats-head">
+              <div>
+                <p class="section-kicker">League Leaders</p>
+                <h2 class="signin-stats-title">Who’s leading right now</h2>
+              </div>
+              <p class="lede signin-stats-lede">A quick snapshot of the current batting, bowling, and club standings across Cricket Canada Clubs.</p>
+            </div>
+            <div class="signin-stats-grid">
+              <article class="signin-widget">
+                <div class="signin-widget-head">
+                  <div>
+                    <p class="signin-widget-kicker">Batting</p>
+                    <h3>Top 5 Batsmen</h3>
+                  </div>
+                  <span id="signinBatsmenCount" class="signin-widget-pill">Loading</span>
+                </div>
+                <div id="signinTopBatsmen" class="signin-leader-list" aria-live="polite"></div>
+              </article>
+              <article class="signin-widget">
+                <div class="signin-widget-head">
+                  <div>
+                    <p class="signin-widget-kicker">Bowling</p>
+                    <h3>Top 5 Bowlers</h3>
+                  </div>
+                  <span id="signinBowlersCount" class="signin-widget-pill">Loading</span>
+                </div>
+                <div id="signinTopBowlers" class="signin-leader-list" aria-live="polite"></div>
+              </article>
+              <article class="signin-widget signin-widget-wide">
+                <div class="signin-widget-head">
+                  <div>
+                    <p class="signin-widget-kicker">Clubs</p>
+                    <h3>Top 10 Clubs by Win Rate</h3>
+                  </div>
+                  <span id="signinClubsCount" class="signin-widget-pill">Loading</span>
+                </div>
+                <div id="signinTopClubs" class="signin-club-list" aria-live="polite"></div>
+              </article>
+            </div>
+          </div>
+        </aside>
       </section>
     </div>
-    <script src="/assets/multipage.js?v=20260423e"></script>
-    <script src="/assets/signin.js?v=20260423c"></script>
+    <script src="/assets/multipage.js?v=20260430b"></script>
+    <script src="/assets/signin.js?v=20260430b"></script>
   </body>
 </html>

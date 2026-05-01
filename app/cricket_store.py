@@ -4855,17 +4855,45 @@ def sync_uploads_in_store(store: dict[str, Any]) -> bool:
     return changed
 
 
+def _write_text_atomic(path: Path, content: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with TemporaryDirectory(dir=str(path.parent)) as temp_dir:
+        temp_path = Path(temp_dir) / path.name
+        temp_path.write_text(content, encoding="utf-8")
+        temp_path.replace(path)
+
+
 def load_store() -> dict[str, Any]:
     logger.debug("Load store requested → database=%s cache=%s", DATABASE_FILE, CACHE_FILE)
-    ensure_database()
+    try:
+        ensure_database()
+    except sqlite3.DatabaseError as exc:
+        # Azure has occasionally booted with a stale schema bootstrap artifact even
+        # though the backing database file is still readable. Treat schema refresh
+        # failures as non-fatal so sign-in and read-only flows can continue.
+        logger.warning("Database bootstrap skipped during load because the store is still readable: %s", exc)
 
-    with _connection() as connection:
-        raw_store = _read_relational_state(connection)
+    try:
+        with _connection() as connection:
+            raw_store = _read_relational_state(connection)
+    except sqlite3.DatabaseError as exc:
+        logger.warning("Database read failed during load; falling back to cache: %s", exc)
+        if CACHE_FILE.exists():
+            cached_store = json.loads(CACHE_FILE.read_text(encoding="utf-8"))
+            store = normalize_store(cached_store)
+            logger.debug(
+                "Load store cache fallback complete → members=%s fixtures=%s archives=%s",
+                len(store.get("members", []) or []),
+                len(store.get("fixtures", []) or []),
+                len(store.get("archive_uploads", []) or []),
+            )
+            return store
+        raise
 
     store = normalize_store(raw_store)
 
     # ✅ cache only, NO DB writes
-    CACHE_FILE.write_text(json.dumps(store, indent=2), encoding="utf-8")
+    _write_text_atomic(CACHE_FILE, json.dumps(store, indent=2))
     logger.debug(
         "Load store complete → members=%s fixtures=%s archives=%s",
         len(store.get("members", []) or []),
@@ -4889,7 +4917,7 @@ def save_store(store: dict[str, Any]) -> None:
     ensure_database()
     with _connection() as connection:
         _write_relational_state(connection, normalized)
-    CACHE_FILE.write_text(json.dumps(normalized, indent=2), encoding="utf-8")
+    _write_text_atomic(CACHE_FILE, json.dumps(normalized, indent=2))
     logger.debug("Save store complete.")
 
 
@@ -5022,6 +5050,7 @@ def _finalize_batting_metrics(bucket: dict[str, Any]) -> None:
 
 
 def build_player_stats(fixtures: list[dict[str, Any]], members: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    member_names = {member["name"] for member in members}
     stats = {
         member["name"]: {
             "player_name": member["name"],
@@ -5045,7 +5074,9 @@ def build_player_stats(fixtures: list[dict[str, Any]], members: list[dict[str, A
     played_tracker: dict[str, set[str]] = defaultdict(set)
     for match in fixtures:
         for performance in match.get("performances", []):
-            name = performance["player_name"]
+            name = _canonical_member_name(members, performance["player_name"])
+            if name not in member_names:
+                name = str(performance.get("player_name") or "").strip()
             stats.setdefault(
                 name,
                 {
@@ -5161,7 +5192,7 @@ def build_player_pending_stats(archive_uploads: list[dict[str, Any]], members: l
             continue
         archive_key = upload.get("id") or upload.get("file_name", "")
         for performance in upload.get("suggested_performances", []):
-            name = performance.get("player_name", "")
+            name = _canonical_member_name(members, performance.get("player_name", ""))
             if not name or name not in member_names:
                 continue
             stats.setdefault(
@@ -6271,18 +6302,6 @@ def build_dashboard(store: dict[str, Any], llm_status: dict[str, Any], focus_clu
             str(club.get("name") or ""),
         )
     )
-    upcoming_events = [
-        {
-            "id": match.get("id", ""),
-            "title": f"{match.get('date_label', '')} vs {match.get('opponent', '')}".strip(),
-            "subtitle": " · ".join(
-                part for part in [match.get("details", {}).get("venue", ""), match.get("details", {}).get("scheduled_time", ""), match.get("status", "")]
-                if part
-            ),
-        }
-        for match in focus_fixtures
-        if match.get("status") != "Completed"
-    ]
     followed_players = [
         {
             "player_name": member.get("name", ""),
@@ -6338,7 +6357,6 @@ def build_dashboard(store: dict[str, Any], llm_status: dict[str, Any], focus_clu
         "llm": llm_status,
         "insights": focused_store["insights"],
         "viewer_profile": store.get("viewer_profile", dict(DEFAULT_VIEWER_PROFILE)),
-        "landing_upcoming_events": upcoming_events[:10],
         "landing_upcoming_matches": focus_fixtures[:10],
         "landing_club_stats": {
             "member_count": season_club_year_stats.get("member_count") if season_club_year_stats and season_club_year_stats.get("member_count") is not None else len(_club_member_names(store, focus_club)),
@@ -6365,5 +6383,5 @@ def build_dashboard(store: dict[str, Any], llm_status: dict[str, Any], focus_clu
         {**club, "season": season_label}
         for club in club_directory
     ]
-    DASHBOARD_CACHE_FILE.write_text(json.dumps(dashboard, indent=2), encoding="utf-8")
+    _write_text_atomic(DASHBOARD_CACHE_FILE, json.dumps(dashboard, indent=2))
     return dashboard
