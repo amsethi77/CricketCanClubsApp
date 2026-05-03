@@ -2724,6 +2724,9 @@ def member_in_club(member: dict[str, Any], club_id: str = "", club_name: str = "
             return True
         if target_name and membership_name and membership_name == target_name:
             return True
+    primary_club_id = str(member.get("primary_club_id") or "").strip().lower()
+    if target_id and primary_club_id and primary_club_id == target_id:
+        return True
     primary_team_name = str(member.get("team_name") or "").strip().lower()
     if target_name and primary_team_name == target_name:
         return True
@@ -2986,7 +2989,15 @@ def _member_team_memberships(member: dict[str, Any]) -> list[dict[str, Any]]:
     seen: set[str] = set()
     primary_team = str(member.get("team_name") or "Club").strip()
 
-    def append_membership(team_name: str, *, is_primary: bool = False) -> None:
+    def append_membership(
+        team_name: str,
+        *,
+        is_primary: bool = False,
+        club_id: str = "",
+        club_name: str = "",
+        team_type: str = "",
+        display_name: str = "",
+    ) -> None:
         clean_name = str(team_name or "").strip()
         if not clean_name:
             return
@@ -2995,11 +3006,35 @@ def _member_team_memberships(member: dict[str, Any]) -> list[dict[str, Any]]:
             for existing in memberships:
                 if existing["team_name"].lower() == key:
                     existing["is_primary"] = existing["is_primary"] or is_primary
+                    if club_id and not existing.get("club_id"):
+                        existing["club_id"] = club_id
+                    if club_name and not existing.get("club_name"):
+                        existing["club_name"] = club_name
+                    if team_type and not existing.get("team_type"):
+                        existing["team_type"] = team_type
+                    if display_name and not existing.get("display_name"):
+                        existing["display_name"] = display_name
             return
         seen.add(key)
-        memberships.append({"team_name": clean_name, "is_primary": bool(is_primary)})
+        membership = {"team_name": clean_name, "is_primary": bool(is_primary)}
+        if club_id:
+            membership["club_id"] = str(club_id).strip()
+        if club_name:
+            membership["club_name"] = str(club_name).strip()
+        if team_type:
+            membership["team_type"] = str(team_type).strip()
+        if display_name:
+            membership["display_name"] = str(display_name).strip()
+        memberships.append(membership)
 
-    append_membership(primary_team, is_primary=True)
+    append_membership(
+        primary_team,
+        is_primary=True,
+        club_id=str(member.get("primary_club_id") or "").strip(),
+        club_name=str(member.get("primary_club_name") or "").strip(),
+        display_name=str(member.get("primary_club_name") or member.get("team_name") or primary_team).strip(),
+        team_type="club" if str(member.get("primary_club_id") or "").strip() else "",
+    )
     for raw in member.get("team_memberships", []) or member.get("memberships", []) or []:
         if isinstance(raw, str):
             append_membership(raw, is_primary=str(raw).strip() == primary_team)
@@ -3008,6 +3043,10 @@ def _member_team_memberships(member: dict[str, Any]) -> list[dict[str, Any]]:
             append_membership(
                 raw.get("team_name") or raw.get("name") or raw.get("display_name") or "",
                 is_primary=bool(raw.get("is_primary")),
+                club_id=str(raw.get("club_id") or "").strip(),
+                club_name=str(raw.get("club_name") or "").strip(),
+                team_type=str(raw.get("team_type") or "").strip(),
+                display_name=str(raw.get("display_name") or "").strip(),
             )
     return memberships
 
@@ -4228,6 +4267,7 @@ def _read_relational_state(connection: sqlite3.Connection) -> dict[str, Any]:
     clubs_rows = connection.execute("SELECT * FROM clubs ORDER BY name").fetchall()
     teams_rows = connection.execute("SELECT * FROM teams ORDER BY display_name, name").fetchall()
     viewer_profile_row = connection.execute("SELECT * FROM app_user_profile WHERE id = 1").fetchone()
+    app_users_rows = connection.execute("SELECT member_id, primary_club_id FROM app_users").fetchall()
     members_rows = connection.execute("SELECT * FROM members ORDER BY name").fetchall()
     alias_rows = connection.execute("SELECT member_id, alias FROM member_aliases ORDER BY alias").fetchall()
     followed_rows = connection.execute("SELECT member_id FROM app_followed_players WHERE user_id = 1").fetchall()
@@ -4277,6 +4317,7 @@ def _read_relational_state(connection: sqlite3.Connection) -> dict[str, Any]:
     ).fetchall()
 
     club_dicts = [dict(row) for row in clubs_rows]
+    club_by_id = {str(club["id"]): club for club in club_dicts if str(club.get("id") or "").strip()}
     primary_club = next(
         (
             club
@@ -4308,6 +4349,12 @@ def _read_relational_state(connection: sqlite3.Connection) -> dict[str, Any]:
     for row in alias_rows:
         aliases_by_member[row["member_id"]].append(row["alias"])
 
+    primary_club_by_member: dict[str, str] = {
+        str(row["member_id"] or "").strip(): str(row["primary_club_id"] or "").strip()
+        for row in app_users_rows
+        if str(row["member_id"] or "").strip() and str(row["primary_club_id"] or "").strip()
+    }
+
     memberships_by_member: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for row in membership_rows:
         memberships_by_member[row["member_id"]].append(
@@ -4325,7 +4372,72 @@ def _read_relational_state(connection: sqlite3.Connection) -> dict[str, Any]:
     members = []
     member_id_to_name: dict[str, str] = {}
     for row in members_rows:
-        memberships = memberships_by_member.get(row["id"], [])
+        memberships = list(memberships_by_member.get(row["id"], []))
+        primary_club_id = primary_club_by_member.get(row["id"], "")
+        primary_club_row = club_by_id.get(primary_club_id, {}) if primary_club_id else {}
+        primary_club_name = str(primary_club_row.get("name") or "").strip()
+        primary_club_short_name = str(primary_club_row.get("short_name") or "").strip()
+        primary_team_name = primary_club_short_name or primary_club_name or "Club"
+        if primary_club_id and not any(str(item.get("club_id") or "").strip() == primary_club_id for item in memberships):
+            existing_club_ids = {
+                str(item.get("club_id") or "").strip()
+                for item in memberships
+                if str(item.get("club_id") or "").strip()
+            }
+            if len(existing_club_ids) <= 1:
+                memberships = [
+                    item
+                    for item in memberships
+                    if str(item.get("club_id") or "").strip() == primary_club_id
+                ]
+            team_id = ""
+            team_row = None
+            synthetic_team_id = f"team-{primary_club_id}-{_slug_token(primary_team_name, 'team')}"
+            team_row = team_id_to_row.get(synthetic_team_id)
+            if team_row:
+                team_id = str(team_row.get("id") or synthetic_team_id)
+                if primary_club_id and not str(team_row.get("club_id") or "").strip():
+                    team_row["club_id"] = primary_club_id
+                if primary_club_name and not str(team_row.get("club_name") or "").strip():
+                    team_row["club_name"] = primary_club_name
+            else:
+                existing_team = next(
+                    (
+                        team
+                        for team in team_dicts
+                        if str(team.get("name") or "").strip().lower() == primary_team_name.lower()
+                        or str(team.get("display_name") or "").strip().lower() == primary_team_name.lower()
+                    ),
+                    None,
+                )
+                if existing_team:
+                    team_id = str(existing_team.get("id") or synthetic_team_id)
+                    existing_team["club_id"] = primary_club_id
+                    existing_team["club_name"] = primary_club_name
+                else:
+                    team_id = synthetic_team_id
+                    synthetic_team = {
+                        "id": synthetic_team_id,
+                        "name": primary_team_name,
+                        "display_name": primary_club_name or primary_team_name,
+                        "type": "club",
+                        "club_id": primary_club_id,
+                        "club_name": primary_club_name,
+                    }
+                    team_dicts.append(synthetic_team)
+                    team_id_to_row[synthetic_team_id] = synthetic_team
+            memberships.insert(
+                0,
+                {
+                    "team_id": team_id,
+                    "team_name": primary_team_name,
+                    "display_name": primary_club_name or primary_team_name,
+                    "team_type": "club",
+                    "club_id": primary_club_id,
+                    "club_name": primary_club_name,
+                    "is_primary": True,
+                },
+            )
         primary_membership = next((item for item in memberships if item["is_primary"]), memberships[0] if memberships else None)
         member = {
             "id": row["id"],
@@ -4334,6 +4446,8 @@ def _read_relational_state(connection: sqlite3.Connection) -> dict[str, Any]:
             "gender": row["gender"] or "",
             "team_name": primary_membership["team_name"] if primary_membership else "Club",
             "team_memberships": memberships,
+            "primary_club_id": primary_club_id or (primary_membership.get("club_id") if primary_membership else ""),
+            "primary_club_name": primary_club_name or (primary_membership.get("club_name") if primary_membership else ""),
             "age": int(row["age"] or 0),
             "role": row["role"] or "",
             "batting_style": row["batting_style"] or "",

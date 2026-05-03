@@ -1201,7 +1201,7 @@ function renderClubSearchResults() {
 function renderLandingPlayerResults() {
   const query = elements.landingPlayerSearchInput.value.trim().toLowerCase();
   const statMap = combinedStatsByPlayer();
-  const members = state.dashboard?.all_members || state.dashboard?.members || [];
+  const members = state.dashboard?.members || [];
   const filtered = !query
     ? []
     : members.filter((member) => {
@@ -2378,7 +2378,7 @@ function renderTeamPage() {
   const clubName = focusClubName();
   const clubRankingBundle = state.dashboard.club_rankings?.[clubName] || {};
   const rosterRows = clubRankingBundle.player_stats || [];
-  const playerMap = new Map((state.dashboard.all_members || state.dashboard.members || []).map((member) => [member.name, member]));
+  const playerMap = new Map((state.dashboard.members || []).map((member) => [member.name, member]));
   const roster = rosterRows.map((item) => playerMap.get(item.player_name) || {
     name: item.player_name,
     full_name: "",

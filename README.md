@@ -153,6 +153,8 @@ This section captures the user requirements in the order they were given and ref
 110. Let captains and club admins select or deselect the playing XI from the players who have already marked themselves available for the upcoming fixture.
 111. Allow a player to hold multiple roles for the same club, and have the auth layer combine those roles for permissions instead of overwriting the previous one.
 112. Keep the Admin Center extraction/review JSON on the canonical scorecard template with `meta`, `match`, `innings`, and `validation` so scorecard processing stays consistent.
+113. Redesign the sign-in page so the login form stays on the left and the right side shows top batting, bowling, and club leader widgets.
+114. Remove the redundant `Upcoming Events` widget from the dashboard and replace that space with a more useful summary panel.
 
 ## Current behavior summary
 
@@ -171,6 +173,9 @@ This section captures the user requirements in the order they were given and ref
 - Summary milestone counts use `25+`, `50+`, and `100+` bands.
 - Player availability is now set per scheduled game, not as one season-wide toggle.
 - The player profile is the cross-club career view, while the club dashboard stays club-local.
+- The sign-in page now uses a split layout with the login form on the left and leader widgets on the right.
+- The sign-in page renders batting, bowling, and club leaderboards server-side so it stays visible even before the client script hydrates.
+- The dashboard landing page now replaces `Upcoming Events` with a more useful recent-scorecards summary.
 - The Admin Center now renders the selected club first, filters its archive review queue by the active club, and groups uploaded scorecards clubwise for review.
 - Historical scorecards stay in the archive-review flow until superadmin approval attaches them back to the correct club or clubs.
 - Shared archives can appear in both clubs' Admin Center queues when the scorecard clearly belongs to a two-club match.

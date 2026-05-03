@@ -2093,6 +2093,15 @@ def _attach_creator_to_club(store: dict[str, Any], club: dict[str, Any], member:
     )
     member["team_memberships"] = memberships
     member["team_name"] = team_name
+    member["primary_club_id"] = club_id
+    member["primary_club_name"] = club_name or team_name
+    member["club_memberships"] = [
+        {
+            "club_id": club_id,
+            "club_name": club_name,
+            "teams": [team_name],
+        }
+    ]
 
 
 def _primary_club_for_member(store: dict[str, Any], member: dict[str, Any]) -> dict[str, Any]:
