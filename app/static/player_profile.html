@@ -11,7 +11,7 @@
       rel="stylesheet"
     />
     <link rel="stylesheet" href="/assets/tailwind.css?v=20260426a" />
-    <link rel="stylesheet" href="/assets/styles.css?v=20260429e" />
+    <link rel="stylesheet" href="/assets/styles.css?v=20260503d" />
   </head>
   <body>
     <div class="page-shell">
@@ -25,7 +25,6 @@
           <a href="/admin-center" data-admin-only hidden>Admin center</a>
         </nav>
         <div class="topbar-actions">
-          <a class="primary-link" href="/clubs">Back to club selection</a>
           <a class="secondary-button" href="/signout">Sign out</a>
         </div>
       </header>
@@ -59,13 +58,39 @@
             <textarea id="profileNotes" placeholder="Notes"></textarea>
             <button class="primary-button wide" type="submit">Save player profile</button>
           </form>
+          <div class="detail-card">
+            <strong>Selected player details</strong>
+            <p class="lede">Read-only snapshot from the database for the signed-in player.</p>
+            <div id="playerProfileSnapshot" class="player-summary-grid"></div>
+          </div>
+          <div class="detail-card">
+            <strong>Recent match history</strong>
+            <p class="lede">Latest fixtures and reviewed scorecards linked to this player.</p>
+            <div class="review-table-wrap">
+              <table class="review-table">
+                <thead>
+                  <tr>
+                    <th>Date</th>
+                    <th>Source</th>
+                    <th>Club</th>
+                    <th>Opponent</th>
+                    <th>Runs</th>
+                    <th>Balls</th>
+                    <th>Wkts</th>
+                    <th>Catches</th>
+                    <th>Result</th>
+                  </tr>
+                </thead>
+                <tbody id="playerMatchHistory"></tbody>
+              </table>
+            </div>
+          </div>
           <div id="playerMemberships" class="detail-stack"></div>
           <a class="primary-link" href="/player-availability">Open player availability</a>
-          <a class="primary-link" href="/clubs">Back to club selection</a>
         </div>
       </section>
     </div>
-    <script src="/assets/multipage.js?v=20260429d"></script>
-    <script src="/assets/player_profile.js?v=20260423c"></script>
+    <script src="/assets/multipage.js?v=20260503g"></script>
+    <script src="/assets/player_profile.js?v=20260503b"></script>
   </body>
 </html>

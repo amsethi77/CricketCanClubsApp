@@ -92,7 +92,7 @@ const state = {
   selectedAvailabilityPlayerName: null,
   selectedTeamName: null,
   selectedFocusClubId: getCookieValue("cricketClubAppPrimaryClubId") || window.localStorage.getItem("cricketClubAppPrimaryClubId") || null,
-  selectedSeasonYear: null,
+  selectedSeasonYear: window.localStorage.getItem("cricketClubAppSelectedSeasonYear") || null,
   expandedLists: (() => {
     try {
       return JSON.parse(window.sessionStorage.getItem("cricketClubAppExpandedLists") || "{}");
@@ -117,6 +117,199 @@ function dashboardDebug(...args) {
 function dashboardError(...args) {
   if (typeof console !== "undefined" && console.error) {
     console.error("[Dashboard]", ...args);
+  }
+}
+
+const USER_BADGE_ID = "userIdentityBadge";
+const SESSION_STATE_KEY = "cricketClubAppSessionState";
+const SESSION_TOUCH_INTERVAL_MS = 60000;
+const SESSION_ACTIVITY_DEBOUNCE_MS = 1200;
+
+let sessionTouchTimer = null;
+let sessionTouchInFlight = false;
+let sessionLastTouchAt = 0;
+let sessionTicker = null;
+let sessionTrackingStarted = false;
+
+function formatRoleLabel(role) {
+  const normalized = String(role || "").trim().replaceAll("_", " ");
+  if (!normalized) return "Player";
+  return normalized.replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function formatInitials(name) {
+  const parts = String(name || "")
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+  if (!parts.length) return "CC";
+  return parts
+    .slice(0, 2)
+    .map((part) => part[0]?.toUpperCase() || "")
+    .join("")
+    .slice(0, 2);
+}
+
+function ensureUserBadge() {
+  const topbarActions = document.querySelector(".topbar-actions");
+  if (!topbarActions) {
+    return null;
+  }
+  let badge = document.getElementById(USER_BADGE_ID);
+  if (!badge) {
+    badge = document.createElement("div");
+    badge.id = USER_BADGE_ID;
+    badge.className = "user-chip";
+    badge.setAttribute("aria-live", "polite");
+    topbarActions.insertAdjacentElement("afterbegin", badge);
+  }
+  return badge;
+}
+
+function syncUserBadge(user) {
+  if (!user) {
+    const existing = document.getElementById(USER_BADGE_ID);
+    if (existing) {
+      existing.hidden = true;
+      existing.innerHTML = "";
+    }
+    return;
+  }
+  const badge = ensureUserBadge();
+  if (!badge) return;
+  badge.hidden = false;
+  badge.classList.remove("is-muted");
+  const name = String(user.display_name || user.full_name || user.mobile || "Signed in").trim();
+  const role = formatRoleLabel(user.effective_role || user.role || "player");
+  badge.innerHTML = `
+    <span class="user-chip-mark" aria-hidden="true">${formatInitials(name)}</span>
+    <span class="user-chip-copy">
+      <strong>${name}</strong>
+      <span>${role}</span>
+    </span>
+  `;
+}
+
+function safeParseSessionState() {
+  try {
+    return JSON.parse(window.sessionStorage.getItem(SESSION_STATE_KEY) || "null");
+  } catch {
+    return null;
+  }
+}
+
+function saveSessionState(session) {
+  if (session && typeof session === "object") {
+    window.sessionStorage.setItem(SESSION_STATE_KEY, JSON.stringify(session));
+  } else {
+    window.sessionStorage.removeItem(SESSION_STATE_KEY);
+  }
+}
+
+function formatSessionClock(isoValue) {
+  if (!isoValue) return "—";
+  const date = new Date(isoValue);
+  if (Number.isNaN(date.getTime())) return "—";
+  return date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+}
+
+function formatSessionDuration(seconds) {
+  const total = Math.max(0, Number(seconds || 0));
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const secs = total % 60;
+  if (hours) {
+    return `${hours}h ${minutes}m`;
+  }
+  if (minutes) {
+    return `${minutes}m${secs ? ` ${secs}s` : ""}`;
+  }
+  return `${secs}s`;
+}
+
+function syncSessionState(session) {
+  const normalized = session && typeof session === "object" ? session : null;
+  if (normalized) {
+    window.sessionStorage.setItem(SESSION_STATE_KEY, JSON.stringify(normalized));
+  } else {
+    window.sessionStorage.removeItem(SESSION_STATE_KEY);
+  }
+}
+
+async function refreshSessionState({ force = false } = {}) {
+  const token = window.localStorage.getItem("cricketClubAppAuthToken") || getCookieValue("cricketClubAppAuthToken") || "";
+  if (!token) {
+    syncSessionState(null);
+    return null;
+  }
+  const now = Date.now();
+  if (!force && sessionLastTouchAt && now - sessionLastTouchAt < SESSION_TOUCH_INTERVAL_MS) {
+    return safeParseSessionState();
+  }
+  if (sessionTouchInFlight) {
+    return safeParseSessionState();
+  }
+  sessionTouchInFlight = true;
+  try {
+    const auth = await getJson("/api/auth/me");
+    sessionLastTouchAt = Date.now();
+    state.viewerAuth = auth;
+    syncUserBadge(auth.user || null);
+    syncSessionState(auth.session || null);
+    return auth.session || null;
+  } catch (error) {
+    const message = String(error?.message || "").toLowerCase();
+    if (message.includes("session expired") || message.includes("sign in first")) {
+      signOut();
+      return null;
+    }
+    throw error;
+  } finally {
+    sessionTouchInFlight = false;
+  }
+}
+
+function noteSessionActivity() {
+  if (!getAuthToken()) {
+    return;
+  }
+  if (sessionTouchTimer) {
+    window.clearTimeout(sessionTouchTimer);
+  }
+  sessionTouchTimer = window.setTimeout(() => {
+    refreshSessionState().catch(() => {});
+  }, SESSION_ACTIVITY_DEBOUNCE_MS);
+}
+
+function startSessionTracking() {
+  if (sessionTrackingStarted) {
+    return;
+  }
+  sessionTrackingStarted = true;
+  const existingSession = safeParseSessionState();
+  if (existingSession) {
+    syncSessionState(existingSession);
+  }
+  const activityEvents = ["pointerdown", "click", "keydown", "input", "change", "submit", "touchstart"];
+  activityEvents.forEach((eventName) => {
+    document.addEventListener(eventName, noteSessionActivity, true);
+  });
+  window.addEventListener("focus", () => {
+    refreshSessionState().catch(() => {});
+  });
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) {
+      refreshSessionState().catch(() => {});
+    }
+  });
+  sessionTicker = window.setInterval(() => {
+    const session = safeParseSessionState();
+    if (session) {
+      syncSessionState(session);
+    }
+  }, 30000);
+  if (getAuthToken()) {
+    refreshSessionState({ force: true }).catch(() => {});
   }
 }
 
@@ -321,7 +514,14 @@ async function getJson(url) {
   const response = await fetch(url, {
     headers: token ? { "X-Auth-Token": token } : undefined,
   });
-  if (!response.ok) throw new Error("Request failed");
+  if (!response.ok) {
+    const message = await response.text();
+    let parsed = null;
+    try {
+      parsed = JSON.parse(message);
+    } catch {}
+    throw new Error(parsed?.detail || parsed?.message || message || "Request failed");
+  }
   return response.json();
 }
 
@@ -892,7 +1092,23 @@ function syncPlayerEditForm(player) {
     .filter(Boolean)
     .join(", ");
   elements.editPlayerAge.value = player.age || "";
-  elements.editPlayerRole.value = player.role || "";
+  const roleSelect = elements.editPlayerRole;
+  if (roleSelect) {
+    const canonicalRoles = [
+      { value: "player", label: "Player" },
+      { value: "captain", label: "Captain" },
+      { value: "club_admin", label: "Club Admin" },
+    ];
+    const currentRole = String(player.role || "").trim();
+    const options = [...canonicalRoles];
+    if (currentRole && !canonicalRoles.some((item) => item.value === currentRole)) {
+      options.unshift({ value: currentRole, label: currentRole });
+    }
+    roleSelect.innerHTML = options
+      .map((item) => `<option value="${item.value}">${item.label}</option>`)
+      .join("");
+    roleSelect.value = currentRole || "";
+  }
   elements.editPlayerBattingStyle.value = player.batting_style || "";
   elements.editPlayerBowlingStyle.value = player.bowling_style || "";
   elements.editPlayerJerseyNumber.value = player.jersey_number || "";
@@ -1085,12 +1301,30 @@ function renderSummary(summary, archiveCount = summary.archive_file_count ?? sum
   `;
 }
 
-function populatePrimaryClubSelect(clubs) {
-  elements.primaryClubSelect.innerHTML = (clubs || [])
+function populatePrimaryClubSelect(clubsOrDashboard) {
+  const dashboard = Array.isArray(clubsOrDashboard) ? { clubs: clubsOrDashboard } : (clubsOrDashboard || {});
+  const clubs = Array.isArray(dashboard.clubs) ? dashboard.clubs : [];
+  const currentClubId = String(
+    state.viewerAuth?.user?.current_club_id ||
+    state.viewerAuth?.user?.primary_club_id ||
+    dashboard.viewer_profile?.primary_club_id ||
+    dashboard.focus_club?.id ||
+    dashboard.club?.id ||
+    state.selectedFocusClubId ||
+    ""
+  ).trim();
+  const selectedClub =
+    clubs.find((club) => String(club.id || "").trim() === currentClubId) ||
+    dashboard.focus_club ||
+    dashboard.club ||
+    clubs[0] ||
+    null;
+  const visibleClubs = selectedClub ? [selectedClub] : [];
+  elements.primaryClubSelect.innerHTML = visibleClubs
     .map((club) => `<option value="${club.id}">${club.name}</option>`)
     .join("");
-  const selectedId = state.selectedFocusClubId || state.dashboard?.viewer_profile?.primary_club_id || clubs?.[0]?.id || "";
-  elements.primaryClubSelect.value = selectedId;
+  elements.primaryClubSelect.value = selectedClub?.id || "";
+  elements.primaryClubSelect.disabled = visibleClubs.length <= 1;
 }
 
 function renderLandingClubStats(stats) {
@@ -1249,7 +1483,8 @@ function renderViewerProfile(dashboard) {
   document.title = `${focusClub.name || "Club"} Matchday Hub`;
   elements.heroEyebrow.textContent = `${focusClub.short_name || focusClub.name || "Club"} Matchday Hub`;
   elements.focusClubBadge.textContent = `Primary club: ${focusClub.name || dashboard.club.name || "Club"}`;
-  populatePrimaryClubSelect(dashboard.clubs || []);
+  syncUserBadge(state.viewerAuth?.user || null);
+  populatePrimaryClubSelect(dashboard);
   renderLandingPlayerResults();
   renderLandingRecentScorecards(dashboard.archive_uploads || []);
   renderLandingMatches(dashboard.landing_upcoming_matches || []);
@@ -1701,7 +1936,11 @@ function normalizeSeasonYear(value) {
 
 function populateRankingYearSelect(dashboard) {
   const years = dashboard.season_years || dashboard.ranking_years || [];
-  const defaultYear = dashboard.selected_season_year || dashboard.default_season_year || dashboard.default_ranking_year || years[0] || "";
+  const currentYear = String(new Date().getFullYear());
+  const defaultYear =
+    years.includes(currentYear)
+      ? currentYear
+      : dashboard.selected_season_year || dashboard.default_season_year || dashboard.default_ranking_year || years[0] || currentYear;
   if (!state.selectedSeasonYear || !years.includes(state.selectedSeasonYear)) {
     state.selectedSeasonYear = defaultYear;
   }
@@ -2095,11 +2334,13 @@ function renderPlayerProfile() {
         <div class="avatar-fallback profile-avatar">${player.picture}</div>
         <div>
           <h3>${displayName}</h3>
-          <p>${player.gender || "Gender TBD"} · ${player.role} · Age ${player.age || "TBD"}</p>
+          <p>${player.gender || "Gender TBD"} · ${player.age || "TBD"} years</p>
           <p>${player.batting_style || "Batting style TBD"} / ${player.bowling_style || "Bowling style TBD"}</p>
+          <small>Role: ${player.role || "Player"}</small>
+          <small>Mobile: ${player.phone || "No mobile stored"}</small>
+          <small>Email: ${player.email || "No email stored"}</small>
           <small>Clubs: ${clubsLabel}</small>
           <small>Teams: ${teamsLabel}</small>
-          <small>${player.phone || "No mobile stored"} ${player.email ? "· " + player.email : ""}</small>
           ${(player.aliases || []).length ? `<small>Aliases: ${(player.aliases || []).join(", ")}</small>` : ""}
           <small>${player.notes || "No extra profile notes yet."}</small>
         </div>
@@ -2492,6 +2733,7 @@ function renderDashboard(dashboard) {
     archives: Array.isArray(dashboard?.archive_uploads) ? dashboard.archive_uploads.length : 0,
   });
   state.dashboard = dashboard;
+  syncUserBadge(dashboard?.user || state.viewerAuth?.user || null);
   const roles = effectiveViewerRoles();
   const role = effectiveViewerRole();
   state.isAdmin = roles.includes("superadmin") || role === "superadmin";
@@ -2508,6 +2750,9 @@ function renderDashboard(dashboard) {
   }
   const currentYear = String(new Date().getFullYear());
   state.selectedSeasonYear = dashboard.selected_season_year || dashboard.default_season_year || state.selectedSeasonYear || currentYear;
+  if (state.selectedSeasonYear) {
+    window.localStorage.setItem("cricketClubAppSelectedSeasonYear", state.selectedSeasonYear);
+  }
   if (state.selectedSeasonYear) {
     window.localStorage.setItem("cricketClubAppSelectedSeasonYear", state.selectedSeasonYear);
     document.cookie = `cricketClubAppSelectedSeasonYear=${encodeURIComponent(state.selectedSeasonYear)}; path=/; samesite=lax`;
@@ -2622,6 +2867,7 @@ async function loadDashboard() {
       hasUser: Boolean(state.viewerAuth?.user),
       role: state.viewerAuth?.user?.effective_role || state.viewerAuth?.user?.role || "",
     });
+    syncUserBadge(state.viewerAuth?.user || null);
   } catch {
     state.viewerAuth = null;
     dashboardDebug("Signed in user could not be loaded yet.");
@@ -2640,7 +2886,15 @@ async function loadDashboard() {
       });
     }
   }
-  const query = state.selectedFocusClubId ? `?focus_club_id=${encodeURIComponent(state.selectedFocusClubId)}` : "";
+  const queryParams = new URLSearchParams();
+  if (state.selectedFocusClubId) {
+    queryParams.set("focus_club_id", state.selectedFocusClubId);
+  }
+  const seasonYear = String(state.selectedSeasonYear || new Date().getFullYear()).trim();
+  if (seasonYear) {
+    queryParams.set("selected_season_year", seasonYear);
+  }
+  const query = queryParams.toString() ? `?${queryParams.toString()}` : "";
   const dashboard = await runAction(() => getJson(`/api/dashboard${query}`), "Club dashboard loaded.", "load dashboard");
   if (dashboard) {
     dashboardDebug("Dashboard loaded.", {
@@ -2673,15 +2927,31 @@ elements.teamProfileSelect.addEventListener("change", () => {
 });
 
 elements.rankingYearSelect.addEventListener("change", async () => {
-  dashboardDebug("Ranking year changed.", { selectedSeasonYear: elements.rankingYearSelect.value || "" });
-  state.selectedSeasonYear = elements.rankingYearSelect.value;
-  const dashboard = await runAction(
-    () => postJson("/api/viewer-profile", currentViewerProfilePayload(state.selectedSeasonYear)),
-    "Season updated.",
-    "update ranking year"
-  );
-  if (dashboard) {
-    renderDashboard(dashboard);
+  const selectedYear = elements.rankingYearSelect.value || "";
+  dashboardDebug("Ranking year changed.", { selectedSeasonYear: selectedYear });
+  state.selectedSeasonYear = selectedYear;
+  if (selectedYear) {
+    window.localStorage.setItem("cricketClubAppSelectedSeasonYear", selectedYear);
+  }
+  if (elements.seasonLabel) {
+    elements.seasonLabel.textContent = `${selectedYear} Season`;
+  }
+  if (elements.rankingYearSelect) {
+    elements.rankingYearSelect.value = selectedYear;
+  }
+  setStatus(`Switching to ${selectedYear} season...`, "info");
+  try {
+    const dashboard = await runAction(
+      () => postJson("/api/viewer-profile", currentViewerProfilePayload(selectedYear)),
+      `Viewing ${selectedYear} season.`,
+      "update ranking year"
+    );
+    if (dashboard) {
+      renderDashboard(dashboard);
+    }
+  } catch (error) {
+    dashboardError("Season switch failed.", error);
+    setStatus(error.message || "Something went wrong.", "error");
   }
 });
 

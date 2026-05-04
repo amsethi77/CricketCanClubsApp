@@ -105,6 +105,26 @@ if not logger.handlers:
     logger.setLevel(log_level)
 
 
+_STORE_CACHE_SIGNATURE: tuple[int, int] | None = None
+_STORE_CACHE_PAYLOAD: dict[str, Any] | None = None
+_DASHBOARD_CACHE: dict[tuple[str, str, str], dict[str, Any]] = {}
+
+
+def _database_signature() -> tuple[int, int]:
+    try:
+        stat_result = DATABASE_FILE.stat()
+        return stat_result.st_mtime_ns, stat_result.st_size
+    except FileNotFoundError:
+        return 0, 0
+
+
+def _store_cache_signature(store: dict[str, Any]) -> str:
+    signature = store.get("_cache_signature")
+    if isinstance(signature, str) and signature:
+        return signature
+    return "unknown-store"
+
+
 def now_iso() -> str:
     return datetime.utcnow().isoformat(timespec="seconds") + "Z"
 
@@ -4979,6 +4999,7 @@ def _write_text_atomic(path: Path, content: str) -> None:
 
 def load_store() -> dict[str, Any]:
     logger.debug("Load store requested → database=%s cache=%s", DATABASE_FILE, CACHE_FILE)
+    global _STORE_CACHE_SIGNATURE, _STORE_CACHE_PAYLOAD
     try:
         ensure_database()
     except sqlite3.DatabaseError as exc:
@@ -4986,6 +5007,16 @@ def load_store() -> dict[str, Any]:
         # though the backing database file is still readable. Treat schema refresh
         # failures as non-fatal so sign-in and read-only flows can continue.
         logger.warning("Database bootstrap skipped during load because the store is still readable: %s", exc)
+
+    current_signature = _database_signature()
+    if _STORE_CACHE_PAYLOAD is not None and _STORE_CACHE_SIGNATURE == current_signature:
+        logger.debug(
+            "Load store served from memory cache → members=%s fixtures=%s archives=%s",
+            len(_STORE_CACHE_PAYLOAD.get("members", []) or []),
+            len(_STORE_CACHE_PAYLOAD.get("fixtures", []) or []),
+            len(_STORE_CACHE_PAYLOAD.get("archive_uploads", []) or []),
+        )
+        return deepcopy(_STORE_CACHE_PAYLOAD)
 
     try:
         with _connection() as connection:
@@ -4995,6 +5026,9 @@ def load_store() -> dict[str, Any]:
         if CACHE_FILE.exists():
             cached_store = json.loads(CACHE_FILE.read_text(encoding="utf-8"))
             store = normalize_store(cached_store)
+            store["_cache_signature"] = f"{current_signature[0]}:{current_signature[1]}"
+            _STORE_CACHE_SIGNATURE = current_signature
+            _STORE_CACHE_PAYLOAD = deepcopy(store)
             logger.debug(
                 "Load store cache fallback complete → members=%s fixtures=%s archives=%s",
                 len(store.get("members", []) or []),
@@ -5005,9 +5039,14 @@ def load_store() -> dict[str, Any]:
         raise
 
     store = normalize_store(raw_store)
+    store["_cache_signature"] = f"{current_signature[0]}:{current_signature[1]}"
 
     # ✅ cache only, NO DB writes
     _write_text_atomic(CACHE_FILE, json.dumps(store, indent=2))
+    _STORE_CACHE_SIGNATURE = current_signature
+    _STORE_CACHE_PAYLOAD = deepcopy(store)
+    if _DASHBOARD_CACHE:
+        _DASHBOARD_CACHE.clear()
     logger.debug(
         "Load store complete → members=%s fixtures=%s archives=%s",
         len(store.get("members", []) or []),
@@ -5026,12 +5065,18 @@ def save_store(store: dict[str, Any]) -> None:
         len(store.get("archive_uploads", []) or []),
         len(store.get("duplicate_uploads", []) or []),
     )
+    global _STORE_CACHE_SIGNATURE, _STORE_CACHE_PAYLOAD
     normalized = normalize_store(store)
     sync_uploads_in_store(normalized)
     ensure_database()
     with _connection() as connection:
         _write_relational_state(connection, normalized)
+    _STORE_CACHE_SIGNATURE = _database_signature()
+    normalized["_cache_signature"] = f"{_STORE_CACHE_SIGNATURE[0]}:{_STORE_CACHE_SIGNATURE[1]}"
     _write_text_atomic(CACHE_FILE, json.dumps(normalized, indent=2))
+    _STORE_CACHE_PAYLOAD = deepcopy(normalized)
+    if _DASHBOARD_CACHE:
+        _DASHBOARD_CACHE.clear()
     logger.debug("Save store complete.")
 
 
@@ -6277,7 +6322,7 @@ def _club_dashboard_card(
         "name": str(club.get("name") or "").strip(),
         "short_name": str(club.get("short_name") or "").strip(),
         "season": _display_club_season(store, club),
-        "member_count": season_stats["member_count"] if season_stats and season_stats.get("member_count") is not None else len(member_names),
+        "member_count": len(member_names),
         "team_count": _club_team_count(store, club, member_names),
         "fixture_count": season_stats["fixture_count"] if season_stats and season_stats.get("fixture_count") is not None else len(club_fixtures),
         "archive_count": season_stats["archive_count"] if season_stats and season_stats.get("archive_count") is not None else _club_archive_count(archives, member_names),
@@ -6327,7 +6372,28 @@ def scoped_store_for_club(store: dict[str, Any], club: dict[str, Any]) -> dict[s
     return focused
 
 
-def build_dashboard(store: dict[str, Any], llm_status: dict[str, Any], focus_club_id: str = "") -> dict[str, Any]:
+def build_dashboard(
+    store: dict[str, Any],
+    llm_status: dict[str, Any],
+    focus_club_id: str = "",
+    requested_season_year: str = "",
+) -> dict[str, Any]:
+    store_signature = _store_cache_signature(store)
+    dashboard_cache_key = (
+        store_signature,
+        str(focus_club_id or "").strip(),
+        str(requested_season_year or "").strip(),
+        json.dumps(llm_status or {}, sort_keys=True, default=str),
+    )
+    cached_dashboard = _DASHBOARD_CACHE.get(dashboard_cache_key)
+    if cached_dashboard is not None:
+        logger.debug(
+            "Build dashboard served from memory cache → club=%s year=%s signature=%s",
+            focus_club_id or "",
+            requested_season_year or "",
+            store_signature,
+        )
+        return deepcopy(cached_dashboard)
     focus_club = resolve_focus_club(store, focus_club_id)
     focused_store = scoped_store_for_club(store, focus_club)
     global_members = list(store.get("members", []))
@@ -6338,7 +6404,7 @@ def build_dashboard(store: dict[str, Any], llm_status: dict[str, Any], focus_clu
         for duplicate in list(reversed(store.get("duplicate_uploads", [])))
         if _duplicate_belongs_to_club(duplicate, focus_club, focused_store.get("archive_uploads", []))
     ]
-    selected_year = _resolve_dashboard_season_year(store)
+    selected_year = _resolve_dashboard_season_year(store, requested_season_year)
     season_label = _season_label_for_year(selected_year)
     season_years = _dashboard_season_years(store)
     season_fixtures = _filter_fixtures_by_year(_club_owned_fixtures(store, focus_club), selected_year)
@@ -6429,7 +6495,6 @@ def build_dashboard(store: dict[str, Any], llm_status: dict[str, Any], focus_clu
         for member in store.get("members", [])
         if member.get("name") in store.get("viewer_profile", {}).get("followed_player_names", [])
     ]
-    rankings_by_year = {year: build_rankings_for_year(focused_store, year) for year in season_years}
     dashboard = {
         "club": focus_club or focused_store["club"],
         "clubs": ordered_clubs,
@@ -6463,7 +6528,6 @@ def build_dashboard(store: dict[str, Any], llm_status: dict[str, Any], focus_clu
         "selected_season_year": selected_year,
         "ranking_years": season_years,
         "default_ranking_year": selected_year,
-        "rankings_by_year": rankings_by_year,
         "player_pending_stats": pending_player_stats,
         "archive_uploads": list(reversed(season_archives)),
         "archive_file_uploads": list(reversed(focused_store["archive_uploads"])),
@@ -6473,7 +6537,7 @@ def build_dashboard(store: dict[str, Any], llm_status: dict[str, Any], focus_clu
         "viewer_profile": store.get("viewer_profile", dict(DEFAULT_VIEWER_PROFILE)),
         "landing_upcoming_matches": focus_fixtures[:10],
         "landing_club_stats": {
-            "member_count": season_club_year_stats.get("member_count") if season_club_year_stats and season_club_year_stats.get("member_count") is not None else len(_club_member_names(store, focus_club)),
+            "member_count": len(_club_member_names(store, focus_club)),
             "team_count": _club_team_count(store, focus_club, _club_member_names(store, focus_club)),
             "fixture_count": season_club_year_stats.get("fixture_count") if season_club_year_stats and season_club_year_stats.get("fixture_count") is not None else len(focus_fixtures),
             "archive_count": season_club_year_stats.get("archive_count") if season_club_year_stats and season_club_year_stats.get("archive_count") is not None else _club_archive_count(season_archives, _club_member_names(store, focus_club)),
@@ -6498,4 +6562,5 @@ def build_dashboard(store: dict[str, Any], llm_status: dict[str, Any], focus_clu
         for club in club_directory
     ]
     _write_text_atomic(DASHBOARD_CACHE_FILE, json.dumps(dashboard, indent=2))
+    _DASHBOARD_CACHE[dashboard_cache_key] = deepcopy(dashboard)
     return dashboard

@@ -6,8 +6,8 @@ const selectedClubSummary = document.getElementById("selectedClubSummary");
 const seasonSetupLink = document.getElementById("seasonSetupLink");
 const playerAvailabilityLink = document.getElementById("playerAvailabilityLink");
 const playerProfileLink = document.getElementById("playerProfileLink");
-const dashboardLink = document.getElementById("dashboardLink");
 const signOutButton = document.getElementById("signOutButton");
+const userIdentityBadge = document.getElementById("userIdentityBadge");
 const clubSearchInput = document.getElementById("clubSearchInput");
 const clubSearchButton = document.getElementById("clubSearchButton");
 const clubSearchForm = document.getElementById("clubSearchForm");
@@ -21,6 +21,12 @@ const clubsPlayerClubRows = document.getElementById("clubsPlayerClubRows");
 let authData = null;
 let dashboardData = null;
 const clubDashboardCache = new Map();
+
+function debug(...args) {
+  if (typeof console !== "undefined" && console.debug) {
+    console.debug("[Clubs]", ...args);
+  }
+}
 
 async function loadClubDirectoryFallback() {
   try {
@@ -209,6 +215,7 @@ async function loadClubDashboard(clubId) {
   if (clubDashboardCache.has(clubId)) {
     return clubDashboardCache.get(clubId);
   }
+  debug("Loading club dashboard snapshot.", { clubId });
   const dashboard = await getJson(`/api/dashboard?focus_club_id=${encodeURIComponent(clubId)}`, true);
   clubDashboardCache.set(clubId, dashboard);
   return dashboard;
@@ -296,13 +303,18 @@ async function renderPlayerBreakdowns() {
 
 async function loadDashboardSnapshot() {
   try {
-    const clubId = getPrimaryClubId() || authData?.user?.current_club_id || authData?.user?.primary_club_id || "";
+    const clubId = authData?.user?.current_club_id || authData?.user?.primary_club_id || getPrimaryClubId() || "";
+    debug("Loading dashboard snapshot.", { clubId });
+    setStatus("Loading club dashboard...", "info");
     dashboardData = await getJson(`/api/dashboard${clubId ? `?focus_club_id=${encodeURIComponent(clubId)}` : ""}`, true);
     updatePlayerSnapshot();
     await renderPlayerBreakdowns();
+    debug("Dashboard snapshot loaded.", { clubId, members: dashboardData?.members?.length || 0 });
+    setStatus(`Loaded ${currentClub()?.name || "club"} dashboard.`, "success");
   } catch {
     updatePlayerSnapshot();
     await renderPlayerBreakdowns();
+    setStatus("Club dashboard could not be loaded right now.", "error");
   }
 }
 
@@ -313,14 +325,47 @@ function setStatus(message, tone = "info") {
 }
 
 function currentClub() {
-  const clubId = getPrimaryClubId() || authData?.user?.current_club_id || authData?.user?.primary_club_id || "";
+  const clubId = authData?.user?.current_club_id || authData?.user?.primary_club_id || getPrimaryClubId() || "";
   return (authData?.clubs || []).find((club) => club.id === clubId) || authData?.clubs?.[0] || null;
+}
+
+function formatRoleLabel(role) {
+  const normalized = String(role || "").trim().replaceAll("_", " ");
+  if (!normalized) return "Player";
+  return normalized.replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function formatInitials(name) {
+  const parts = String(name || "")
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+  if (!parts.length) return "CC";
+  return parts.slice(0, 2).map((part) => part[0]?.toUpperCase() || "").join("").slice(0, 2);
+}
+
+function syncUserBadge(user) {
+  if (!userIdentityBadge) return;
+  if (!user) {
+    userIdentityBadge.hidden = true;
+    userIdentityBadge.innerHTML = "";
+    return;
+  }
+  userIdentityBadge.hidden = false;
+  const name = String(user.display_name || user.full_name || user.mobile || "Signed in").trim();
+  const role = formatRoleLabel(user.effective_role || user.role || "player");
+  userIdentityBadge.innerHTML = `
+    <span class="user-chip-mark" aria-hidden="true">${formatInitials(name)}</span>
+    <span class="user-chip-copy">
+      <strong>${name}</strong>
+      <span>${role}</span>
+    </span>
+  `;
 }
 
 function refreshLinks() {
   const club = currentClub();
   const query = club ? `?focus_club_id=${encodeURIComponent(club.id)}` : "";
-  dashboardLink.href = `/dashboard${query}`;
   seasonSetupLink.href = `/season-setup${query}`;
   playerAvailabilityLink.href = `/player-availability${query}`;
   playerProfileLink.href = `/player-profile${query}`;
@@ -367,18 +412,22 @@ function renderClubs() {
     const button = event.target.closest("[data-club-select]");
     if (!button) return;
     try {
+      debug("Club select requested.", { clubId: button.dataset.clubSelect || "" });
+      setStatus("Switching clubs...", "info");
       const data = await postJson("/api/auth/select-club", { club_id: button.dataset.clubSelect }, true);
       authData.user = data.user;
       setPrimaryClubId(data.user.current_club_id || data.user.primary_club_id || "");
       renderClubs();
       refreshLinks();
+      await loadDashboardSnapshot();
+      debug("Club select completed.", { clubId: data.club?.id || "", clubName: data.club?.name || "" });
       setStatus(`${data.club.name} selected.`, "success");
     } catch (error) {
+      debug("Club select failed.", { error: error?.message || error });
       setStatus(error.message, "error");
     }
   });
 
-  signOutButton?.addEventListener("click", signOut);
   clubSearchInput.addEventListener("input", renderClubs);
   clubSearchInput.addEventListener("search", renderClubs);
   clubSearchButton?.addEventListener("click", renderClubs);
@@ -391,6 +440,7 @@ function renderClubs() {
     .then((data) => {
       if (!data) return;
       authData = data;
+      syncUserBadge(data.user || null);
       const signedInName = data.user.display_name || data.user.full_name || data.user.email || data.user.mobile || "Signed in";
       if (greeting) {
         greeting.textContent = `Welcome, ${signedInName}`;

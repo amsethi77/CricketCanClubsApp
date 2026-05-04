@@ -10,7 +10,7 @@ from copy import deepcopy
 from urllib import request
 from urllib.parse import urlencode
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -155,6 +155,7 @@ app = FastAPI(
 )
 
 MIN_SEASON_SETUP_YEAR = 2026
+SESSION_TIMEOUT_MINUTES = 30
 
 app.add_middleware(
     CORSMiddleware,
@@ -180,7 +181,14 @@ async def _log_http_requests(request: Request, call_next):
         )
     try:
         response = await call_next(request)
-    except Exception:
+    except Exception as exc:
+        if exc.__class__.__name__ == "EndOfStream":
+            logger.debug(
+                "HTTP request disconnected. method=%s path=%s",
+                request.method,
+                path,
+            )
+            return Response(status_code=499)
         logger.exception("HTTP request error. method=%s path=%s", request.method, path)
         raise
     duration_ms = int((datetime.utcnow() - start).total_seconds() * 1000)
@@ -215,6 +223,26 @@ def _page_response(filename: str) -> FileResponse:
             "Pragma": "no-cache",
         },
     )
+
+
+def _identity_badge_html(display_name: str, role: str) -> str:
+    safe_name = html.escape(str(display_name or "Signed in").strip() or "Signed in")
+    safe_role = html.escape(str(role or "Player").strip() or "Player")
+    initials = "".join(
+        part[:1].upper()
+        for part in str(display_name or "").strip().split()
+        if part
+    )[:2] or "CC"
+    safe_initials = html.escape(initials)
+    return f"""
+      <div id="userIdentityBadge" class="user-chip" aria-live="polite">
+        <span class="user-chip-mark" aria-hidden="true">{safe_initials}</span>
+        <span class="user-chip-copy">
+          <strong>{safe_name}</strong>
+          <span>{safe_role}</span>
+        </span>
+      </div>
+    """
 
 
 def _redirect_to_signin() -> RedirectResponse:
@@ -574,7 +602,17 @@ def _clubs_page_html(request: Request, search: str = "", focus_club_id: str = ""
         for club in filtered
     ) or '<p class="empty-state">No clubs match that search.</p>'
     search_value = html.escape(search or "")
-    topbar = """
+    badge_html = ""
+    if token:
+        try:
+            user_row, _ = _auth_user_from_token(token)
+            badge_html = _identity_badge_html(
+                str(user_row["display_name"] or user_row["full_name"] or user_row["email"] or user_row["mobile"] or "Signed in"),
+                str(user_row["effective_role"] or user_row["role"] or "Player"),
+            )
+        except Exception:
+            badge_html = ""
+    topbar = f"""
       <header class="page-topbar">
         <nav class="top-nav">
           <a href="/dashboard">Dashboard</a>
@@ -584,7 +622,7 @@ def _clubs_page_html(request: Request, search: str = "", focus_club_id: str = ""
           <a href="/player-profile">Profile</a>
         </nav>
         <div class="topbar-actions">
-          <a id="dashboardLink" class="primary-link" href="/dashboard">Open club dashboard</a>
+          {badge_html}
           <a class="secondary-button" href="/signout">Sign out</a>
         </div>
       </header>
@@ -1142,8 +1180,12 @@ class PlayerSelfProfileRequest(BaseModel):
     primary_club_id: str = ""
 
 
-def current_dashboard(store: dict[str, Any], focus_club_id: str | None = None) -> dict[str, Any]:
-    return build_dashboard(store, get_llm_status(), focus_club_id or "")
+def current_dashboard(
+    store: dict[str, Any],
+    focus_club_id: str | None = None,
+    requested_season_year: str | None = None,
+) -> dict[str, Any]:
+    return build_dashboard(store, get_llm_status(), focus_club_id or "", requested_season_year or "")
 
 
 def _selected_club(store: dict[str, Any], focus_club_id: str | None = None) -> dict[str, Any]:
@@ -1347,6 +1389,9 @@ def ensure_auth_schema() -> None:
               user_id INTEGER NOT NULL,
               current_club_id TEXT,
               created_at TEXT NOT NULL,
+              last_seen_at TEXT,
+              ended_at TEXT,
+              activity_count INTEGER NOT NULL DEFAULT 0,
               FOREIGN KEY (user_id) REFERENCES app_users(id) ON DELETE CASCADE,
               FOREIGN KEY (current_club_id) REFERENCES clubs(id) ON DELETE SET NULL
             );
@@ -1408,6 +1453,7 @@ def ensure_auth_schema() -> None:
                 _seed_role_catalog(connection)
                 _sync_role_permissions(connection)
                 _migrate_multi_role_assignments(connection)
+                _migrate_auth_sessions(connection)
         except sqlite3.OperationalError as exc:
             if "locked" not in str(exc).lower():
                 raise
@@ -1457,6 +1503,100 @@ def _audit_event(
         )
 
 
+def _parse_utc_timestamp(value: str | None) -> datetime | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc).replace(tzinfo=None)
+    except ValueError:
+        return None
+
+
+def _session_timeout_seconds() -> int:
+    return int(SESSION_TIMEOUT_MINUTES * 60)
+
+
+def _session_snapshot(connection: sqlite3.Connection, token: str) -> dict[str, Any] | None:
+    row = connection.execute(
+        """
+        SELECT token, user_id, current_club_id, created_at, last_seen_at, ended_at, activity_count
+        FROM app_auth_sessions
+        WHERE token = ?
+        """,
+        (token,),
+    ).fetchone()
+    if not row:
+        return None
+    created_at = _parse_utc_timestamp(row["created_at"])
+    last_seen_at = _parse_utc_timestamp(row["last_seen_at"] or row["created_at"])
+    ended_at = _parse_utc_timestamp(row["ended_at"])
+    now = datetime.utcnow()
+    session_start = created_at or last_seen_at or now
+    active_last_seen = last_seen_at or session_start
+    elapsed_seconds = max(0, int((now - session_start).total_seconds()))
+    idle_seconds = max(0, int((now - active_last_seen).total_seconds()))
+    return {
+        "token": row["token"],
+        "user_id": int(row["user_id"]),
+        "current_club_id": row["current_club_id"] or "",
+        "created_at": row["created_at"] or "",
+        "last_seen_at": row["last_seen_at"] or row["created_at"] or "",
+        "ended_at": row["ended_at"] or "",
+        "activity_count": int(row["activity_count"] or 0),
+        "timeout_minutes": SESSION_TIMEOUT_MINUTES,
+        "elapsed_seconds": elapsed_seconds,
+        "idle_seconds": idle_seconds,
+        "active": not bool(ended_at),
+    }
+
+
+def _touch_auth_session(
+    connection: sqlite3.Connection,
+    token: str,
+    *,
+    force: bool = False,
+    activity_delta: int = 1,
+) -> None:
+    row = connection.execute(
+        """
+        SELECT created_at, last_seen_at, ended_at, activity_count
+        FROM app_auth_sessions
+        WHERE token = ?
+        """,
+        (token,),
+    ).fetchone()
+    if not row or row["ended_at"]:
+        return
+    now = now_iso()
+    last_seen = _parse_utc_timestamp(row["last_seen_at"] or row["created_at"])
+    elapsed = (datetime.utcnow() - last_seen).total_seconds() if last_seen else _session_timeout_seconds() + 1
+    should_touch = force or last_seen is None or elapsed >= 30
+    if should_touch:
+        connection.execute(
+            """
+            UPDATE app_auth_sessions
+            SET last_seen_at = ?, activity_count = COALESCE(activity_count, 0) + ?
+            WHERE token = ?
+            """,
+            (now, max(1, int(activity_delta or 1)), token),
+        )
+
+
+def _end_auth_session(connection: sqlite3.Connection, token: str) -> None:
+    connection.execute(
+        """
+        UPDATE app_auth_sessions
+        SET ended_at = COALESCE(ended_at, ?)
+        WHERE token = ?
+        """,
+        (now_iso(), token),
+    )
+
+
 def _migrate_multi_role_assignments(connection: sqlite3.Connection) -> None:
     table_info = connection.execute("PRAGMA table_info(app_user_club_roles)").fetchall()
     pk_columns = [str(row["name"]) for row in table_info if int(row["pk"] or 0)]
@@ -1492,6 +1632,26 @@ def _migrate_multi_role_assignments(connection: sqlite3.Connection) -> None:
             (int(row["user_id"]), str(row["club_id"] or ""), role_name, str(row["created_at"] or now_iso())),
         )
     connection.execute("DROP TABLE app_user_club_roles_legacy")
+
+
+def _migrate_auth_sessions(connection: sqlite3.Connection) -> None:
+    table_info = connection.execute("PRAGMA table_info(app_auth_sessions)").fetchall()
+    existing_columns = {str(row["name"]) for row in table_info}
+    migrations = [
+        ("last_seen_at", "ALTER TABLE app_auth_sessions ADD COLUMN last_seen_at TEXT"),
+        ("ended_at", "ALTER TABLE app_auth_sessions ADD COLUMN ended_at TEXT"),
+        ("activity_count", "ALTER TABLE app_auth_sessions ADD COLUMN activity_count INTEGER NOT NULL DEFAULT 0"),
+    ]
+    for column_name, statement in migrations:
+        if column_name not in existing_columns:
+            connection.execute(statement)
+    connection.execute(
+        """
+        UPDATE app_auth_sessions
+        SET last_seen_at = COALESCE(last_seen_at, created_at),
+            activity_count = COALESCE(activity_count, 0)
+        """
+    )
 
 
 def _password_hash(password: str) -> str:
@@ -1690,22 +1850,32 @@ def _require_permission(token: str | None, permission: str) -> tuple[sqlite3.Row
     return user_row, current_club_id
 
 
-def _auth_user_from_token(token: str | None) -> tuple[sqlite3.Row, str]:
+def _auth_user_from_token(token: str | None, touch: bool = True) -> tuple[sqlite3.Row, str]:
     ensure_auth_schema()
     if not token:
         raise HTTPException(status_code=401, detail="Sign in first.")
     with _auth_connection() as connection:
         row = connection.execute(
             """
-            SELECT u.*, s.current_club_id
+            SELECT u.*, s.current_club_id, s.created_at AS session_created_at, s.last_seen_at AS session_last_seen_at, s.ended_at AS session_ended_at, s.activity_count AS session_activity_count
             FROM app_auth_sessions s
             JOIN app_users u ON u.id = s.user_id
             WHERE s.token = ?
             """,
             (token,),
         ).fetchone()
-    if not row:
-        raise HTTPException(status_code=401, detail="Session expired. Sign in again.")
+        if not row:
+            raise HTTPException(status_code=401, detail="Session expired. Sign in again.")
+        if row["session_ended_at"]:
+            raise HTTPException(status_code=401, detail="Session expired. Sign in again.")
+        last_seen = _parse_utc_timestamp(row["session_last_seen_at"] or row["session_created_at"])
+        if last_seen is not None:
+            idle_seconds = int((datetime.utcnow() - last_seen).total_seconds())
+            if idle_seconds >= _session_timeout_seconds():
+                _end_auth_session(connection, token)
+                raise HTTPException(status_code=401, detail="Session expired after 30 minutes of inactivity. Sign in again.")
+        if touch:
+            _touch_auth_session(connection, token)
     return row, row["current_club_id"] or row["primary_club_id"] or ""
 
 
@@ -3409,7 +3579,14 @@ def clubs_select(request: Request, club_id: str = Form(...), search: str = Form(
 
 
 @app.get("/signout")
-def signout_page() -> HTMLResponse:
+def signout_page(request: Request) -> HTMLResponse:
+    token = _auth_token_from_request(request)
+    if token:
+        try:
+            with _auth_connection() as connection:
+                _end_auth_session(connection, token)
+        except Exception:
+            logger.exception("Failed to close auth session during sign out.")
     response = HTMLResponse(
         """
         <!DOCTYPE html>
@@ -3423,6 +3600,7 @@ def signout_page() -> HTMLResponse:
             <script>
               window.localStorage.removeItem("cricketClubAppAuthToken");
               window.localStorage.removeItem("cricketClubAppPrimaryClubId");
+              window.sessionStorage.removeItem("cricketClubAppSessionState");
               window.location.href = "/signin";
             </script>
             <p>Signing you out...</p>
@@ -3466,7 +3644,30 @@ def dashboard_page(request: Request) -> Response:
     session = _require_page_session(request)
     if isinstance(session, RedirectResponse):
         return session
-    return _page_response("index.html")
+    token = _auth_token_from_request(request)
+    badge_html = ""
+    if token:
+        try:
+            user_row, _ = _auth_user_from_token(token)
+            badge_html = _identity_badge_html(
+                str(user_row["display_name"] or user_row["full_name"] or user_row["email"] or user_row["mobile"] or "Signed in"),
+                str(user_row["effective_role"] or user_row["role"] or "Player"),
+            )
+        except Exception:
+            badge_html = ""
+    body = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
+    if badge_html:
+        body = body.replace(
+            '<div id="userIdentityBadge" class="user-chip" aria-live="polite" hidden></div>',
+            badge_html,
+        )
+    return HTMLResponse(
+        body,
+        headers={
+            "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+            "Pragma": "no-cache",
+        },
+    )
 
 
 @app.get("/api/health")
@@ -3475,14 +3676,28 @@ def health() -> dict[str, Any]:
 
 
 @app.get("/api/dashboard")
-def dashboard(request: Request, focus_club_id: str | None = None) -> dict[str, Any]:
+def dashboard(
+    request: Request,
+    focus_club_id: str | None = None,
+    selected_season_year: str | None = None,
+) -> dict[str, Any]:
     resolved_focus_club_id = (
         focus_club_id
         or str(request.cookies.get("cricketClubAppPrimaryClubId") or "").strip()
         or None
     )
-    logger.debug("Dashboard loaded. focus_club_id=%s resolved_focus_club_id=%s", focus_club_id or "", resolved_focus_club_id or "")
-    dashboard_data = current_dashboard(load_store(), resolved_focus_club_id)
+    requested_season_year = (
+        str(selected_season_year or request.query_params.get("selected_season_year") or "").strip()
+        or str(request.cookies.get("cricketClubAppSelectedSeasonYear") or "").strip()
+        or str(datetime.utcnow().year)
+    )
+    logger.debug(
+        "Dashboard loaded. focus_club_id=%s resolved_focus_club_id=%s selected_season_year=%s",
+        focus_club_id or "",
+        resolved_focus_club_id or "",
+        requested_season_year,
+    )
+    dashboard_data = current_dashboard(load_store(), resolved_focus_club_id, requested_season_year)
     token = _auth_token_from_request(request)
     if token:
         try:
@@ -3843,7 +4058,7 @@ def signin(request: SignInRequest, response: Response) -> dict[str, Any]:
 
     logger.debug("Sign in attempt. identifier=%s player=%s", identifier or "", player_name or "")
 
-    identifier_phone = "".join(filter(str.isdigit, identifier)) if identifier else ""
+    identifier_phone = canonical_phone(identifier) if identifier and "@" not in identifier else ""
     identifier_email = identifier.lower() if "@" in identifier else ""
 
     with _auth_connection() as connection:
@@ -3957,6 +4172,17 @@ def signin(request: SignInRequest, response: Response) -> dict[str, Any]:
             """,
             (token, int(user_row["id"]), current_club_id or None, now_iso()),
         )
+        _touch_auth_session(connection, token, force=True)
+        session_state = _session_snapshot(connection, token) or {
+            "created_at": now_iso(),
+            "last_seen_at": now_iso(),
+            "ended_at": "",
+            "activity_count": 0,
+            "timeout_minutes": SESSION_TIMEOUT_MINUTES,
+            "elapsed_seconds": 0,
+            "idle_seconds": 0,
+            "active": True,
+        }
 
     logger.info("Login done by %s. user_id=%s club_id=%s", user_row["display_name"] or user_row["mobile"] or "user", user_row["id"], current_club_id or "")
     _audit_event(
@@ -3982,6 +4208,7 @@ def signin(request: SignInRequest, response: Response) -> dict[str, Any]:
         "token": token,
         "user": _auth_user_payload(user_row, current_club_id),
         "clubs": _sorted_club_choices(store, current_club_id),
+        "session": session_state,
     }
 
 @app.post("/signin/quick")
@@ -4043,9 +4270,14 @@ def auth_me(x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
     user_row, current_club_id = _auth_user_from_token(x_auth_token)
     logger.debug("Auth profile requested. user_id=%s current_club_id=%s", user_row["id"], current_club_id or "")
     store = _safe_load_store_for_auth("auth.me")
+    session_state = None
+    if x_auth_token:
+        with _auth_connection() as connection:
+            session_state = _session_snapshot(connection, x_auth_token)
     return {
         "user": _auth_user_payload(user_row, current_club_id),
         "clubs": _sorted_club_choices(store, current_club_id),
+        "session": session_state,
     }
 
 
@@ -4105,7 +4337,7 @@ def update_viewer_profile(request: ViewerProfileRequest) -> dict[str, Any]:
     viewer_profile["primary_club_name"] = selected_club.get("name", viewer_profile.get("primary_club_name", ""))
     store["viewer_profile"] = viewer_profile
     save_store(store)
-    return current_dashboard(store, viewer_profile.get("primary_club_id"))
+    return current_dashboard(store, viewer_profile.get("primary_club_id"), selected_season_year)
 
 
 @app.post("/api/viewer-profile/follow-player")
@@ -4128,20 +4360,34 @@ def follow_player(request: FollowPlayerRequest) -> dict[str, Any]:
 
 
 @app.get("/api/season-setup/data")
-def season_setup_data(x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
+def season_setup_data(
+    x_auth_token: str | None = Header(default=None),
+    club_id: str | None = None,
+) -> dict[str, Any]:
     user_row, current_club_id = _auth_user_from_token(x_auth_token)
     store = load_store()
-    club = _selected_club(store, current_club_id)
+    club = _selected_club(store, str(club_id or "").strip() or current_club_id)
     scoped = scoped_store_for_club(store, club)
     fixtures = sorted(scoped.get("fixtures", []), key=lambda fixture: (str(fixture.get("date") or ""), str(fixture.get("opponent") or "")))
+    current_year = str(datetime.utcnow().year)
+    season_years = {
+        fixture_season_year(fixture)
+        for fixture in fixtures
+        if fixture_season_year(fixture) and int(fixture_season_year(fixture)) >= MIN_SEASON_SETUP_YEAR
+    }
+    season_years.add(current_year)
+    viewer_selected_year = str(store.get("viewer_profile", {}).get("selected_season_year") or "").strip()
+    if re.match(r"20\d{2}$", viewer_selected_year) and int(viewer_selected_year) >= MIN_SEASON_SETUP_YEAR:
+        season_years.add(viewer_selected_year)
+    selected_year = current_year if int(current_year) >= MIN_SEASON_SETUP_YEAR else str(MIN_SEASON_SETUP_YEAR)
+    if selected_year not in season_years and season_years:
+        selected_year = sorted(season_years)[-1]
     season_years = sorted(
-        {
-            fixture_season_year(fixture)
-            for fixture in fixtures
-            if fixture_season_year(fixture) and int(fixture_season_year(fixture)) >= MIN_SEASON_SETUP_YEAR
-        }
+        {str(year).strip() for year in season_years if str(year).strip()},
+        reverse=True,
     )
-    selected_year = season_years[-1] if season_years else str(MIN_SEASON_SETUP_YEAR)
+    if selected_year not in season_years:
+        season_years = sorted({*season_years, selected_year}, reverse=True)
     return {
         "user": _auth_user_payload(user_row, current_club_id),
         "club": club,
@@ -4157,6 +4403,15 @@ def create_season_fixture(request: SeasonFixtureRequest, x_auth_token: str | Non
     user_row, current_club_id = _require_permission(x_auth_token, "manage_fixtures")
     store = load_store()
     club = _selected_club(store, request.club_id or current_club_id)
+    logger.debug(
+        "Season fixture create requested. club_id=%s club_name=%s season_year=%s date=%s opponent=%s actor=%s",
+        club.get("id", ""),
+        club.get("name", ""),
+        request.season_year,
+        request.date,
+        request.opponent,
+        user_row["display_name"] or user_row["mobile"] or "user",
+    )
     season_year = int(request.season_year)
     if season_year < MIN_SEASON_SETUP_YEAR:
         raise HTTPException(
@@ -4207,6 +4462,14 @@ def create_season_fixture(request: SeasonFixtureRequest, x_auth_token: str | Non
     _touch_fixture_audit(new_fixture, user_row, created=True)
     store.setdefault("fixtures", []).append(new_fixture)
     save_store(store)
+    logger.info(
+        "Season fixture saved. club=%s season_year=%s date=%s opponent=%s fixture_id=%s",
+        club.get("name", ""),
+        season_year,
+        request.date,
+        request.opponent,
+        new_fixture["id"],
+    )
     _audit_event(
         "fixture.create",
         "fixture",
@@ -4449,11 +4712,102 @@ def player_profile_data(x_auth_token: str | None = Header(default=None)) -> dict
     store = load_store()
     club = _selected_club(store, current_club_id)
     member = _member_for_user(store, user_row)
+    member_aliases = {
+        hint
+        for hint in (
+            str(member.get("name") or "").strip().lower() if member else "",
+            str(member.get("full_name") or "").strip().lower() if member else "",
+            str(user_row["display_name"] or "").strip().lower(),
+            str(user_row["email"] or "").strip().lower(),
+            str(user_row["mobile"] or "").strip().lower(),
+            *(str(alias or "").strip().lower() for alias in (member or {}).get("aliases", [])),
+        )
+        if hint
+    }
+
+    def _matches_member(row: dict[str, Any]) -> bool:
+        return (
+            str(row.get("player_name") or "").strip().lower() in member_aliases
+            or str(row.get("full_name") or "").strip().lower() in member_aliases
+        )
+
+    summary_stats = next((item for item in store.get("member_summary_stats", []) or [] if _matches_member(item)), {}) or {}
+    year_stats = [
+        row
+        for row in (store.get("member_year_stats", []) or [])
+        if _matches_member(row)
+    ]
+    year_stats.sort(key=lambda row: (str(row.get("season_year") or ""), str(row.get("player_name") or "")), reverse=True)
+    club_stats = [
+        row
+        for row in (store.get("member_club_stats", []) or [])
+        if _matches_member(row)
+    ]
+    club_stats.sort(key=lambda row: (str(row.get("club_name") or ""), str(row.get("player_name") or "")))
+
+    recent_history: list[dict[str, Any]] = []
+    for fixture in sorted(store.get("fixtures", []) or [], key=lambda item: str(item.get("date") or ""), reverse=True):
+        performances = [
+            performance
+            for performance in fixture.get("performances", []) or []
+            if str(performance.get("player_name") or "").strip().lower() in member_aliases
+        ]
+        if not performances:
+            continue
+        recent_history.append(
+            {
+                "source": "fixture",
+                "date": str(fixture.get("date") or ""),
+                "season_year": str(fixture.get("season_year") or ""),
+                "club_name": str(fixture.get("club_name") or club.get("name") or ""),
+                "opponent": str(fixture.get("opponent") or fixture.get("away_team") or fixture.get("team_2") or "TBD"),
+                "status": str(fixture.get("status") or ""),
+                "result": str(fixture.get("result") or fixture.get("match_result") or ""),
+                "runs": sum(int(performance.get("runs") or 0) for performance in performances),
+                "balls": sum(int(performance.get("balls") or 0) for performance in performances),
+                "wickets": sum(int(performance.get("wickets") or 0) for performance in performances),
+                "catches": sum(int(performance.get("catches") or 0) for performance in performances),
+            }
+        )
+
+    for archive in sorted(canonical_archive_uploads(store.get("archive_uploads", []) or []), key=lambda item: str(item.get("archive_date") or item.get("date") or ""), reverse=True):
+        performances = [
+            performance
+            for performance in archive.get("suggested_performances", []) or []
+            if str(performance.get("player_name") or "").strip().lower() in member_aliases
+        ]
+        if not performances:
+            continue
+        recent_history.append(
+            {
+                "source": "archive",
+                "date": str(archive.get("archive_date") or archive.get("date") or ""),
+                "season_year": str(archive.get("archive_year") or archive.get("season_year") or ""),
+                "club_name": str(archive.get("club_name") or club.get("name") or ""),
+                "opponent": str(
+                    archive.get("match", {}).get("teams", {}).get("team_2")
+                    or archive.get("opponent")
+                    or "TBD"
+                ),
+                "status": str(archive.get("status") or ""),
+                "result": str(archive.get("validation", {}).get("expected_result") or archive.get("result") or ""),
+                "runs": sum(int(performance.get("runs") or 0) for performance in performances),
+                "balls": sum(int(performance.get("balls") or 0) for performance in performances),
+                "wickets": sum(int(performance.get("wickets") or 0) for performance in performances),
+                "catches": sum(int(performance.get("catches") or 0) for performance in performances),
+            }
+        )
+
+    recent_history.sort(key=lambda item: str(item.get("date") or ""), reverse=True)
     return {
         "user": _auth_user_payload(user_row, current_club_id),
         "club": club,
         "member": member,
         "clubs": _sorted_club_choices(store, club.get("id", "")),
+        "summary_stats": summary_stats,
+        "year_stats": year_stats,
+        "club_stats": club_stats,
+        "recent_history": recent_history[:20],
     }
 
 

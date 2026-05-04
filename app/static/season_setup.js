@@ -12,6 +12,12 @@ const MIN_SEASON_YEAR = 2026;
 
 let payload = null;
 
+function debug(...args) {
+  if (typeof console !== "undefined" && console.debug) {
+    console.debug("[SeasonSetup]", ...args);
+  }
+}
+
 function setStatus(message, tone = "info") {
   statusBanner.hidden = !message;
   statusBanner.textContent = message || "";
@@ -19,7 +25,7 @@ function setStatus(message, tone = "info") {
 }
 
 function renderFixtures() {
-  const selectedYear = String(seasonFilter.value || payload?.selected_year || "");
+  const selectedYear = String(seasonFilter.value || payload?.selected_year || seasonYearInput.value || "");
   const fixtures = (payload?.fixtures || []).filter((fixture) => {
     if (!selectedYear) return true;
     return String(fixture.season_year || String(fixture.date || "").slice(0, 4)) === selectedYear;
@@ -40,7 +46,7 @@ function renderFixtures() {
 function renderSeasonFilter() {
   const years = Array.from(
     new Set(
-      [...(payload?.season_years || []), String(seasonYearInput.value || "")].filter((year) => {
+      [...(payload?.season_years || []), String(seasonYearInput.value || ""), String(payload?.selected_year || "")].filter((year) => {
         const value = Number(year);
         return Number.isFinite(value) && value >= MIN_SEASON_YEAR;
       })
@@ -50,19 +56,21 @@ function renderSeasonFilter() {
     years.push(String(MIN_SEASON_YEAR));
   }
   seasonFilter.innerHTML = years.map((year) => `<option value="${year}">${year} Season</option>`).join("");
-  const selectedYear = String(payload?.selected_year || years[years.length - 1] || MIN_SEASON_YEAR);
-  seasonFilter.value = years.includes(selectedYear) ? selectedYear : (years[years.length - 1] || "");
+  const selectedYear = String(payload?.selected_year || seasonYearInput.value || years[0] || MIN_SEASON_YEAR);
+  seasonFilter.value = years.includes(selectedYear) ? selectedYear : (years[0] || String(MIN_SEASON_YEAR));
 }
 
 form.addEventListener("submit", async (event) => {
   event.preventDefault();
   try {
-    const clubId = getPrimaryClubId() || payload?.club?.id || "";
+    const clubId = payload?.club?.id || getPrimaryClubId() || "";
     const submittedYear = String(seasonYearInput.value || MIN_SEASON_YEAR);
     if (Number(submittedYear) < MIN_SEASON_YEAR) {
       setStatus(`Season setup is only available for ${MIN_SEASON_YEAR} and later.`, "error");
       return;
     }
+    debug("Fixture create requested.", { clubId, seasonYear: submittedYear, opponent: document.getElementById("fixtureOpponent").value.trim() });
+    setStatus(`Saving ${submittedYear} fixture for ${payload?.club?.name || "selected club"}...`, "info");
     const result = await postJson(
       "/api/season-setup/fixtures",
       {
@@ -87,8 +95,11 @@ form.addEventListener("submit", async (event) => {
     seasonYearInput.value = submittedYear;
     renderSeasonFilter();
     renderFixtures();
-    setStatus("Fixture added.", "success");
+    const savedCount = Array.isArray(result.fixtures) ? result.fixtures.length : 0;
+    debug("Fixture create completed.", { clubId: result.club?.id || "", seasonYear: submittedYear, savedCount });
+    setStatus(`Fixture saved for ${result.club.name} in ${submittedYear}. ${savedCount} fixture(s) stored for this club.`, "success");
   } catch (error) {
+    debug("Fixture create failed.", { error: error?.message || error });
     setStatus(error.message, "error");
   }
 });
@@ -106,13 +117,19 @@ requireAuth()
       });
       return;
     }
-    const clubId = getPrimaryClubId() || auth.user.current_club_id || auth.user.primary_club_id || "";
+    const clubId = auth.user.current_club_id || auth.user.primary_club_id || getPrimaryClubId() || "";
     setPrimaryClubId(clubId);
-    payload = await window.CricketClubAppPages.getJson("/api/season-setup/data", true);
+    debug("Loading season setup data.", { clubId });
+    setStatus("Loading season setup...", "info");
+    payload = await window.CricketClubAppPages.getJson(`/api/season-setup/data${clubId ? `?club_id=${encodeURIComponent(clubId)}` : ""}`, true);
+    setPrimaryClubId(payload.club.id || clubId);
     title.textContent = `${payload.club.name} season setup`;
     summary.textContent = `Club default season ${payload.club.season || "TBD"} · ${payload.fixtures.length} fixture(s) stored`;
-    seasonYearInput.value = Number(payload.selected_year || MIN_SEASON_YEAR);
+    const activeYear = String(payload.selected_year || seasonYearInput.value || MIN_SEASON_YEAR);
+    seasonYearInput.value = activeYear;
     renderSeasonFilter();
     renderFixtures();
+    debug("Season setup loaded.", { clubId: payload.club?.id || "", fixtures: payload.fixtures?.length || 0, selectedYear: payload.selected_year || "" });
+    setStatus(`Loaded ${payload.club.name} season setup.`, "success");
   })
   .catch((error) => setStatus(error.message, "error"));

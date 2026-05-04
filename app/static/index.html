@@ -29,7 +29,7 @@
       rel="stylesheet"
     />
     <link rel="stylesheet" href="/assets/tailwind.css?v=20260426a" />
-    <link rel="stylesheet" href="/assets/styles.css?v=20260429e" />
+    <link rel="stylesheet" href="/assets/styles.css?v=20260503e" />
   </head>
   <body>
     <div class="page-shell">
@@ -43,6 +43,7 @@
           <a href="/admin-center" data-admin-only hidden>Admin center</a>
         </nav>
         <div class="topbar-actions">
+          <div id="userIdentityBadge" class="user-chip" aria-live="polite" hidden></div>
           <a class="secondary-button" href="/signout">Sign out</a>
         </div>
       </header>
@@ -418,7 +419,12 @@
             <select id="editPlayerTeamName" name="team_name"></select>
             <input id="editPlayerTeamMemberships" name="team_memberships" type="text" class="wide" placeholder="All team memberships, comma separated" />
             <input id="editPlayerAge" name="age" type="number" placeholder="Age" />
-            <input id="editPlayerRole" name="role" type="text" placeholder="Role" />
+            <select id="editPlayerRole" name="role">
+              <option value="">Role</option>
+              <option value="player">Player</option>
+              <option value="captain">Captain</option>
+              <option value="club_admin">Club Admin</option>
+            </select>
             <input id="editPlayerBattingStyle" name="batting_style" type="text" placeholder="Batting style" />
             <input id="editPlayerBowlingStyle" name="bowling_style" type="text" placeholder="Bowling style" />
             <input id="editPlayerJerseyNumber" name="jersey_number" type="text" placeholder="Jersey number" />
@@ -602,6 +608,7 @@
         </section>
       </main>
     </div>
-    <script src="/assets/app.js?v=20260429d"></script>
+    <script src="/assets/multipage.js?v=20260503g"></script>
+    <script src="/assets/app.js?v=20260503i"></script>
   </body>
 </html>

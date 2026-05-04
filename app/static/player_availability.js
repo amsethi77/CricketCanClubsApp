@@ -10,6 +10,12 @@ const clubSwitchButton = document.getElementById("availabilityClubSwitch");
 
 let payload = null;
 
+function debug(...args) {
+  if (typeof console !== "undefined" && console.debug) {
+    console.debug("[Availability]", ...args);
+  }
+}
+
 function setStatus(message, tone = "info") {
   statusBanner.hidden = !message;
   statusBanner.textContent = message || "";
@@ -64,12 +70,20 @@ function renderFixtures() {
 }
 
 async function loadAvailability() {
+  debug("Loading availability page.");
+  setStatus("Loading availability...", "info");
   payload = await getJson("/api/player/availability-data", true);
   heading.textContent = `${payload.club.name} player availability`;
   summary.textContent = payload.member
     ? `${payload.member.full_name || payload.member.name} can update availability for ${payload.fixtures.length} fixture(s) in ${payload.selected_year || "the selected season"}.`
     : "Link this account to a player profile to update availability.";
   renderFixtures();
+  debug("Availability page loaded.", {
+    clubId: payload.club?.id || "",
+    fixtures: payload.fixtures?.length || 0,
+    member: payload.member?.name || "",
+  });
+  setStatus(`Loaded ${payload.club.name} availability.`, "success");
 }
 
 fixturesList.addEventListener("submit", async (event) => {
@@ -77,6 +91,11 @@ fixturesList.addEventListener("submit", async (event) => {
   if (!form) return;
   event.preventDefault();
   try {
+    debug("Saving availability.", {
+      fixtureId: form.dataset.fixtureForm,
+      playerName: payload?.member?.name || "",
+      clubId: payload?.club?.id || "",
+    });
     payload = await postJson(
       "/api/player/availability",
       {
@@ -88,8 +107,13 @@ fixturesList.addEventListener("submit", async (event) => {
       true
     );
     renderFixtures();
+    debug("Availability saved.", {
+      fixtureId: form.dataset.fixtureForm,
+      playerName: payload?.member?.name || "",
+    });
     setStatus("Availability saved.", "success");
   } catch (error) {
+    debug("Availability save failed.", { error: error?.message || error });
     setStatus(error.message, "error");
   }
 });
@@ -102,11 +126,14 @@ clubSwitchButton.addEventListener("click", async () => {
     return;
   }
   try {
+    debug("Club switch requested.", { clubId: clubSelect.value || "" });
     const selected = await postJson("/api/auth/select-club", { club_id: clubSelect.value }, true);
     setPrimaryClubId(selected.user.current_club_id || selected.user.primary_club_id || "");
     await loadAvailability();
+    debug("Club switch completed.", { clubId: selected.club?.id || "", clubName: selected.club?.name || "" });
     setStatus(`${selected.club.name} selected.`, "success");
   } catch (error) {
+    debug("Club switch failed.", { error: error?.message || error });
     setStatus(error.message, "error");
   }
 });
@@ -114,7 +141,7 @@ clubSwitchButton.addEventListener("click", async () => {
 requireAuth()
   .then(async (auth) => {
     if (!auth) return;
-    const clubId = getPrimaryClubId() || auth.user.current_club_id || auth.user.primary_club_id || "";
+    const clubId = auth.user.current_club_id || auth.user.primary_club_id || getPrimaryClubId() || "";
     setPrimaryClubId(clubId);
     await loadAvailability();
   })

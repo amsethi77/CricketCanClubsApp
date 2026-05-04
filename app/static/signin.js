@@ -12,6 +12,12 @@ const topBatsmen = document.getElementById("signinTopBatsmen");
 const topBowlers = document.getElementById("signinTopBowlers");
 const topClubs = document.getElementById("signinTopClubs");
 
+function debug(...args) {
+  if (typeof console !== "undefined" && console.debug) {
+    console.debug("[Signin]", ...args);
+  }
+}
+
 function escapeHtml(value) {
   return String(value ?? "")
     .replaceAll("&", "&amp;")
@@ -103,6 +109,8 @@ function renderClubs(rows) {
 
 async function loadLeagueLeaders() {
   try {
+    debug("Loading sign-in leaders.");
+    setStatus("Loading league leaders...", "info");
     const data = await getJson("/api/public/signin-stats");
     const batting = data.batting_leaders || [];
     const bowling = data.bowling_leaders || [];
@@ -113,6 +121,8 @@ async function loadLeagueLeaders() {
     renderBatsmen(batting);
     renderBowlers(bowling);
     renderClubs(clubs);
+    debug("Sign-in leaders loaded.", { batsmen: batting.length, bowlers: bowling.length, clubs: clubs.length });
+    setStatus("League leaders loaded.", "success");
   } catch (error) {
     if (batsmenCount) batsmenCount.textContent = "Unavailable";
     if (bowlersCount) bowlersCount.textContent = "Unavailable";
@@ -121,6 +131,7 @@ async function loadLeagueLeaders() {
     renderBowlers([]);
     renderClubs([]);
     setStatus("League leaders could not be loaded right now.", "error");
+    debug("Failed to load league leaders.", { error: error?.message || error });
     console.error("[Signin] Failed to load league leaders", error);
   }
 }
@@ -128,6 +139,12 @@ async function loadLeagueLeaders() {
 form.addEventListener("submit", async (event) => {
   event.preventDefault();
   try {
+    debug("Sign-in submitted.", {
+      hasIdentifier: Boolean(identifierInput.value.trim()),
+      hasPassword: Boolean(passwordInput.value),
+      hasPlayerName: Boolean(playerNameInput.value.trim()),
+    });
+    setStatus("Signing in...", "info");
     const data = await postJson("/api/auth/signin", {
       identifier: identifierInput.value.trim(),
       password: passwordInput.value,
@@ -135,8 +152,16 @@ form.addEventListener("submit", async (event) => {
     });
     setAuthToken(data.token);
     setPrimaryClubId(data.user.current_club_id || data.user.primary_club_id || "");
+    if (data.session) {
+      window.sessionStorage.setItem("cricketClubAppSessionState", JSON.stringify(data.session));
+    }
+    debug("Sign-in completed.", {
+      user: data.user?.display_name || data.user?.full_name || data.user?.mobile || "",
+      clubId: data.user?.current_club_id || data.user?.primary_club_id || "",
+    });
     window.location.href = "/clubs";
   } catch (error) {
+    debug("Sign-in failed.", { error: error?.message || error });
     setStatus(error.message, "error");
   }
 });
