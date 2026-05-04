@@ -21,6 +21,7 @@ const clubsPlayerClubRows = document.getElementById("clubsPlayerClubRows");
 let authData = null;
 let dashboardData = null;
 const clubDashboardCache = new Map();
+let authSignature = "";
 
 function debug(...args) {
   if (typeof console !== "undefined" && console.debug) {
@@ -38,21 +39,13 @@ async function loadClubDirectoryFallback() {
 }
 
 function currentMemberName() {
-  const authName = String(authData?.user?.display_name || "").trim();
-  const authEmail = String(authData?.user?.email || "").trim().toLowerCase();
-  const authMobile = String(authData?.user?.mobile || "").trim().toLowerCase();
+  const memberId = String(authData?.user?.member_id || "").trim();
+  if (!memberId) {
+    return "";
+  }
   const members = dashboardData?.all_members || dashboardData?.members || [];
-  const memberId = authData?.user?.member_id || "";
-  const viewerHints = new Set([authName.toLowerCase(), authEmail, authMobile].filter(Boolean));
-  const match = members.find((member) => {
-    if (member.id === memberId) return true;
-    if (viewerHints.has(String(member.name || "").trim().toLowerCase())) return true;
-    if (viewerHints.has(String(member.full_name || "").trim().toLowerCase())) return true;
-    if (viewerHints.has(String(member.phone || "").trim().toLowerCase())) return true;
-    if (viewerHints.has(String(member.email || "").trim().toLowerCase())) return true;
-    return (member.aliases || []).some((alias) => viewerHints.has(String(alias || "").trim().toLowerCase()));
-  });
-  return match?.name || authName || "";
+  const match = members.find((member) => String(member.id || "").trim() === memberId);
+  return match?.name || "";
 }
 
 function memberKey(member) {
@@ -158,7 +151,6 @@ function updatePlayerSnapshot() {
     return;
   }
   const memberName = currentMemberName();
-  const authName = String(authData?.user?.display_name || "").trim();
   if (!memberName) {
     clubsPlayerSnapshotTitle.textContent = "No player selected";
     clubsPlayerSnapshotDetails.textContent = "Sign in with your player profile to see your totals here.";
@@ -166,14 +158,9 @@ function updatePlayerSnapshot() {
   }
   const members = dashboardData?.all_members || dashboardData?.members || [];
   const member = members.find((item) => {
-    if (String(item.id || "") === String(authData?.user?.member_id || "")) return true;
-    if (String(item.name || "").trim().toLowerCase() === memberName.toLowerCase()) return true;
-    if (String(item.full_name || "").trim().toLowerCase() === memberName.toLowerCase()) return true;
-    if (String(item.phone || "").trim().toLowerCase() === String(authData?.user?.mobile || "").trim().toLowerCase()) return true;
-    if (String(item.email || "").trim().toLowerCase() === String(authData?.user?.email || "").trim().toLowerCase()) return true;
-    return (item.aliases || []).some((alias) => String(alias || "").trim().toLowerCase() === memberName.toLowerCase());
+    return String(item.id || "") === String(authData?.user?.member_id || "");
   });
-  const memberLabel = member?.full_name ? `${member.name} (${member.full_name})` : member?.name || authName || memberName;
+  const memberLabel = member?.full_name ? `${member.name} (${member.full_name})` : member?.name || "";
   clubsPlayerSnapshotTitle.textContent = memberLabel;
   if (!dashboardData) {
     clubsPlayerSnapshotDetails.textContent = "Loading totals from your clubs...";
@@ -303,14 +290,17 @@ async function renderPlayerBreakdowns() {
 
 async function loadDashboardSnapshot() {
   try {
+    if (!authData?.user) {
+      dashboardData = null;
+      return;
+    }
     const clubId = authData?.user?.current_club_id || authData?.user?.primary_club_id || getPrimaryClubId() || "";
     debug("Loading dashboard snapshot.", { clubId });
-    setStatus("Loading club dashboard...", "info");
     dashboardData = await getJson(`/api/dashboard${clubId ? `?focus_club_id=${encodeURIComponent(clubId)}` : ""}`, true);
     updatePlayerSnapshot();
     await renderPlayerBreakdowns();
     debug("Dashboard snapshot loaded.", { clubId, members: dashboardData?.members?.length || 0 });
-    setStatus(`Loaded ${currentClub()?.name || "club"} dashboard.`, "success");
+    setStatus("", "info");
   } catch {
     updatePlayerSnapshot();
     await renderPlayerBreakdowns();
@@ -319,8 +309,9 @@ async function loadDashboardSnapshot() {
 }
 
 function setStatus(message, tone = "info") {
-  statusBanner.hidden = !message;
-  statusBanner.textContent = message || "";
+  const show = Boolean(message) && (tone === "error" || tone === "warning");
+  statusBanner.hidden = !show;
+  statusBanner.textContent = show ? message : "";
   statusBanner.className = `status-banner ${tone}`;
 }
 
@@ -413,15 +404,17 @@ function renderClubs() {
     if (!button) return;
     try {
       debug("Club select requested.", { clubId: button.dataset.clubSelect || "" });
-      setStatus("Switching clubs...", "info");
       const data = await postJson("/api/auth/select-club", { club_id: button.dataset.clubSelect }, true);
       authData.user = data.user;
       setPrimaryClubId(data.user.current_club_id || data.user.primary_club_id || "");
       renderClubs();
       refreshLinks();
-      await loadDashboardSnapshot();
-      debug("Club select completed.", { clubId: data.club?.id || "", clubName: data.club?.name || "" });
-      setStatus(`${data.club.name} selected.`, "success");
+      const clubId = data.club?.id || data.user?.current_club_id || data.user?.primary_club_id || button.dataset.clubSelect || "";
+      const dashboardUrl = clubId ? `/dashboard?focus_club_id=${encodeURIComponent(clubId)}` : "/dashboard";
+      debug("Club select completed.", { clubId, clubName: data.club?.name || "" });
+      window.setTimeout(() => {
+        window.location.href = dashboardUrl;
+      }, 100);
     } catch (error) {
       debug("Club select failed.", { error: error?.message || error });
       setStatus(error.message, "error");
@@ -440,6 +433,16 @@ function renderClubs() {
     .then((data) => {
       if (!data) return;
       authData = data;
+      const nextAuthSignature = [
+        authData?.user?.member_id || "",
+        authData?.user?.viewer_member_name || "",
+        authData?.user?.current_club_id || authData?.user?.primary_club_id || "",
+      ].join("|");
+      if (authSignature && authSignature !== nextAuthSignature) {
+        clubDashboardCache.clear();
+        dashboardData = null;
+      }
+      authSignature = nextAuthSignature;
       syncUserBadge(data.user || null);
       const signedInName = data.user.display_name || data.user.full_name || data.user.email || data.user.mobile || "Signed in";
       if (greeting) {

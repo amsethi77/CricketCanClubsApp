@@ -6498,6 +6498,7 @@ def build_dashboard(
     dashboard = {
         "club": focus_club or focused_store["club"],
         "clubs": ordered_clubs,
+        "visible_clubs": [dict(focus_club or store["club"])],
         "focus_club": focus_club or store["club"],
         "teams": ordered_teams,
         "members": focused_store["members"],
@@ -6556,6 +6557,10 @@ def build_dashboard(
     dashboard["clubs"] = [
         {**club, "season": season_label}
         for club in ordered_clubs
+    ]
+    dashboard["visible_clubs"] = [
+        {**club, "season": season_label}
+        for club in dashboard["visible_clubs"]
     ]
     dashboard["club_directory"] = [
         {**club, "season": season_label}

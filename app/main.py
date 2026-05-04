@@ -10,7 +10,7 @@ from copy import deepcopy
 from urllib import request
 from urllib.parse import urlencode
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, date, timezone
 from pathlib import Path
 from typing import Any
 
@@ -243,6 +243,87 @@ def _identity_badge_html(display_name: str, role: str) -> str:
         </span>
       </div>
     """
+
+
+def _season_setup_page_html(request: Request) -> HTMLResponse | RedirectResponse:
+    session = _require_page_session(request)
+    if isinstance(session, RedirectResponse):
+        return session
+    token = _auth_token_from_request(request)
+    store = load_store()
+    user_row, current_club_id = _auth_user_from_token(token) if token else (None, "")
+    club = _selected_club(store, current_club_id)
+    scoped = scoped_store_for_club(store, club)
+    fixtures = sorted(
+        scoped.get("fixtures", []),
+        key=lambda fixture: (str(fixture.get("date") or ""), str(fixture.get("opponent") or "")),
+    )
+    current_year = str(datetime.utcnow().year)
+    season_years = {
+        fixture_season_year(fixture)
+        for fixture in fixtures
+        if fixture_season_year(fixture) and int(fixture_season_year(fixture)) >= MIN_SEASON_SETUP_YEAR
+    }
+    season_years.add(current_year)
+    viewer_selected_year = str(store.get("viewer_profile", {}).get("selected_season_year") or "").strip()
+    if re.match(r"20\d{2}$", viewer_selected_year) and int(viewer_selected_year) >= MIN_SEASON_SETUP_YEAR:
+        season_years.add(viewer_selected_year)
+    selected_year = current_year if int(current_year) >= MIN_SEASON_SETUP_YEAR else str(MIN_SEASON_SETUP_YEAR)
+    if selected_year not in season_years and season_years:
+        selected_year = sorted(season_years)[-1]
+    season_years = sorted(
+        {str(year).strip() for year in season_years if str(year).strip()},
+        reverse=True,
+    )
+    if selected_year not in season_years:
+        season_years = sorted({*season_years, selected_year}, reverse=True)
+
+    badge_html = ""
+    if user_row is not None:
+        user_payload = _auth_user_payload(user_row, current_club_id)
+        badge_html = _identity_badge_html(
+            str(user_payload.get("display_name") or user_payload.get("email") or user_payload.get("mobile") or "Signed in"),
+            str(user_payload.get("effective_role") or user_payload.get("role") or "Player"),
+        )
+    options_html = "".join(
+        f'<option value="{html.escape(year)}"{(" selected" if year == selected_year else "")}>{html.escape(year)} Season</option>'
+        for year in season_years
+    )
+    filtered_fixtures = [
+        fixture
+        for fixture in fixtures
+        if str(fixture_season_year(fixture) or "") == selected_year
+    ]
+    fixture_cards = "".join(
+        f"""
+        <article class="detail-card">
+          <strong>{html.escape(str(fixture.get("date_label") or fixture.get("date") or "Fixture"))} vs {html.escape(str(fixture.get("opponent") or "Opponent"))}</strong>
+          <p>{html.escape(str(fixture.get("venue") or "Venue TBD"))} · {html.escape(str(fixture.get("scheduled_time") or "Time TBD"))}</p>
+          <small>{html.escape(str(fixture.get("season") or f"{fixture_season_year(fixture) or selected_year} Season"))} · {html.escape(str(fixture.get("status") or "Scheduled"))}</small>
+        </article>
+        """
+        for fixture in filtered_fixtures
+    ) or '<p class="empty-state">No fixtures created yet for this club.</p>'
+    body = (STATIC_DIR / "season_setup.html").read_text(encoding="utf-8")
+    body = body.replace(
+        '<select id="seasonFilter"></select>',
+        f'<select id="seasonFilter">{options_html}</select>',
+    )
+    body = body.replace(
+        '<div id="seasonFixtures" class="detail-stack"></div>',
+        f'<div id="seasonFixtures" class="detail-stack">{fixture_cards}</div>',
+    )
+    body = body.replace(
+        '<div class="topbar-actions">\n          <a class="secondary-button" href="/signout">Sign out</a>\n        </div>',
+        f'<div class="topbar-actions">\n          {badge_html}\n          <a class="secondary-button" href="/signout">Sign out</a>\n        </div>',
+    )
+    return HTMLResponse(
+        body,
+        headers={
+            "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+            "Pragma": "no-cache",
+        },
+    )
 
 
 def _redirect_to_signin() -> RedirectResponse:
@@ -568,7 +649,7 @@ def _clubs_page_html(request: Request, search: str = "", focus_club_id: str = ""
     )
     if not default_clubs:
         default_clubs = clubs[:1]
-    source_clubs = clubs if query else default_clubs
+    source_clubs = clubs if query else default_clubs[:1]
     filtered = [
         club
         for club in source_clubs
@@ -606,9 +687,10 @@ def _clubs_page_html(request: Request, search: str = "", focus_club_id: str = ""
     if token:
         try:
             user_row, _ = _auth_user_from_token(token)
+            user_payload = _auth_user_payload(user_row, current_club_id)
             badge_html = _identity_badge_html(
-                str(user_row["display_name"] or user_row["full_name"] or user_row["email"] or user_row["mobile"] or "Signed in"),
-                str(user_row["effective_role"] or user_row["role"] or "Player"),
+                str(user_payload.get("display_name") or user_payload.get("email") or user_payload.get("mobile") or "Signed in"),
+                str(user_payload.get("effective_role") or user_payload.get("role") or "Player"),
             )
         except Exception:
             badge_html = ""
@@ -617,7 +699,7 @@ def _clubs_page_html(request: Request, search: str = "", focus_club_id: str = ""
         <nav class="top-nav">
           <a href="/dashboard">Dashboard</a>
           <a href="/clubs" aria-current="page">Clubs</a>
-          <a href="/season-setup">Season setup</a>
+          <a href="/season-setup">Season Fixtures</a>
           <a href="/player-availability">Availability</a>
           <a href="/player-profile">Profile</a>
         </nav>
@@ -712,14 +794,14 @@ def _clubs_page_html(request: Request, search: str = "", focus_club_id: str = ""
                 </div>
               </div>
               <div class="inline-actions">
-                <a id="seasonSetupLink" class="primary-link" href="/season-setup">Season setup</a>
+                <a id="seasonSetupLink" class="primary-link" href="/season-setup">Season Fixtures</a>
                 <a id="playerAvailabilityLink" class="primary-link" href="/player-availability">Player availability</a>
                 <a id="playerProfileLink" class="primary-link" href="/player-profile">Player profile</a>
               </div>
             </div>
           </section>
         </div>
-        <script src="/assets/multipage.js?v=20260429d"></script>
+        <script src="/assets/multipage.js?v=20260503i"></script>
         <script src="/assets/clubs.js?v=20260429c"></script>
       </body>
     </html>
@@ -1769,6 +1851,12 @@ def _auth_user_payload(user_row: sqlite3.Row, current_club_id: str = "") -> dict
     effective_role = _effective_role_name(user_row, current_club_id)
     role_names = _user_role_names(user_row, current_club_id)
     permissions = sorted(_user_permissions(user_row, current_club_id))
+    member_name = ""
+    member_full_name = ""
+    member = _member_for_user(_safe_load_store_for_auth("auth.user_payload"), user_row)
+    if member:
+        member_name = str(member.get("name") or "").strip()
+        member_full_name = str(member.get("full_name") or "").strip()
     return {
         "id": int(user_row["id"]),
         "display_name": user_row["display_name"] or "",
@@ -1779,9 +1867,58 @@ def _auth_user_payload(user_row: sqlite3.Row, current_club_id: str = "") -> dict
         "effective_role": effective_role,
         "permissions": permissions,
         "member_id": user_row["member_id"] or "",
+        "viewer_member_name": member_name,
+        "viewer_member_full_name": member_full_name,
         "primary_club_id": user_row["primary_club_id"] or "",
         "current_club_id": current_club_id or user_row["primary_club_id"] or "",
     }
+
+def _visible_club_choices_for_user(
+    store: dict[str, Any],
+    user_row: sqlite3.Row,
+    current_club_id: str = "",
+) -> list[dict[str, str]]:
+    linked_ids: list[str] = []
+
+    def add(value: Any) -> None:
+        clean = str(value or "").strip()
+        if clean and clean not in linked_ids:
+            linked_ids.append(clean)
+
+    add(current_club_id)
+    add(user_row["primary_club_id"])
+
+    member = _member_for_user(store, user_row)
+    if member:
+        add(member.get("primary_club_id"))
+        for club_membership in member.get("club_memberships", []) or []:
+            add(club_membership.get("club_id"))
+        for team_membership in member.get("team_memberships", []) or []:
+            add(team_membership.get("club_id"))
+
+    try:
+        with _auth_connection() as connection:
+            for row in connection.execute(
+                "SELECT club_id FROM app_user_club_roles WHERE user_id = ?",
+                (int(user_row["id"]),),
+            ).fetchall():
+                add(row["club_id"])
+    except Exception:
+        logger.debug("Could not load club-role links for user_id=%s", user_row["id"])
+
+    clubs = [
+        club
+        for club in store.get("clubs", [])
+        if str(club.get("id") or "").strip() in set(linked_ids)
+    ]
+    if not clubs:
+        fallback_club_id = str(current_club_id or user_row["primary_club_id"] or "").strip()
+        club = next(
+            (item for item in store.get("clubs", []) if str(item.get("id") or "").strip() == fallback_club_id),
+            store.get("club", {}),
+        )
+        clubs = [club] if club else []
+    return _sorted_club_choices({"clubs": clubs}, str(current_club_id or user_row["primary_club_id"] or ""))
 
 def _member_for_user(store: dict[str, Any], user_row: sqlite3.Row) -> dict[str, Any] | None:
     member_id = str(user_row["member_id"] or "").strip()
@@ -2909,6 +3046,7 @@ def startup_tasks() -> None:
 
 @app.get("/signin")
 def signin_page() -> HTMLResponse:
+    logger.debug("Signin page requested.")
     html_text = (STATIC_DIR / "signin.html").read_text(encoding="utf-8")
     try:
         stats = public_signin_stats()
@@ -2993,6 +3131,7 @@ def signin_page() -> HTMLResponse:
 
 @app.get("/api/public/signin-stats")
 def public_signin_stats() -> dict[str, Any]:
+    logger.debug("Public signin stats requested.")
     store = load_store()
     members = list(store.get("members", []))
     fixtures = list(store.get("fixtures", []))
@@ -3042,6 +3181,13 @@ def public_signin_stats() -> dict[str, Any]:
             -int(item.get("matches_played", 0) or 0),
             str(item.get("club_name") or ""),
         )
+    )
+
+    logger.info(
+        "Public signin stats loaded. batting=%s bowling=%s clubs=%s",
+        len(batting_leaders),
+        len(bowling_leaders),
+        len(club_leaders[:10]),
     )
 
     return {
@@ -3305,7 +3451,7 @@ def _admin_center_html(request: Request) -> HTMLResponse:
             <nav class="top-nav">
               <a href="/dashboard">Dashboard</a>
               <a href="/clubs">Clubs</a>
-              <a href="/season-setup">Season setup</a>
+              <a href="/season-setup">Season Fixtures</a>
               <a href="/player-availability">Availability</a>
               <a href="/player-profile">Profile</a>
               <a href="/admin-center" aria-current="page">Admin center</a>
@@ -3392,7 +3538,7 @@ def _admin_center_html(request: Request) -> HTMLResponse:
             </div>
           </section>
         </div>
-        <script src="/assets/multipage.js?v=20260429d"></script>
+        <script src="/assets/multipage.js?v=20260503i"></script>
         <script src="/assets/admin_center.js?v=20260429m"></script>
       </body>
     </html>
@@ -3616,10 +3762,7 @@ def signout_page(request: Request) -> HTMLResponse:
 
 @app.get("/season-setup")
 def season_setup_page(request: Request) -> Response:
-    session = _require_page_session(request)
-    if isinstance(session, RedirectResponse):
-        return session
-    return _page_response("season_setup.html")
+    return _season_setup_page_html(request)
 
 
 @app.get("/player-availability")
@@ -3648,10 +3791,16 @@ def dashboard_page(request: Request) -> Response:
     badge_html = ""
     if token:
         try:
-            user_row, _ = _auth_user_from_token(token)
+            user_row, current_club_id = _auth_user_from_token(token)
+            user_payload = _auth_user_payload(
+                user_row,
+                current_club_id
+                or str(request.cookies.get("cricketClubAppPrimaryClubId") or "").strip()
+                or str(request.query_params.get("focus_club_id") or "").strip(),
+            )
             badge_html = _identity_badge_html(
-                str(user_row["display_name"] or user_row["full_name"] or user_row["email"] or user_row["mobile"] or "Signed in"),
-                str(user_row["effective_role"] or user_row["role"] or "Player"),
+                str(user_payload.get("display_name") or user_payload.get("email") or user_payload.get("mobile") or "Signed in"),
+                str(user_payload.get("effective_role") or user_payload.get("role") or "Player"),
             )
         except Exception:
             badge_html = ""
@@ -3681,6 +3830,7 @@ def dashboard(
     focus_club_id: str | None = None,
     selected_season_year: str | None = None,
 ) -> dict[str, Any]:
+    token = _auth_token_from_request(request)
     resolved_focus_club_id = (
         focus_club_id
         or str(request.cookies.get("cricketClubAppPrimaryClubId") or "").strip()
@@ -3697,14 +3847,18 @@ def dashboard(
         resolved_focus_club_id or "",
         requested_season_year,
     )
-    dashboard_data = current_dashboard(load_store(), resolved_focus_club_id, requested_season_year)
-    token = _auth_token_from_request(request)
+    user_row = None
+    current_club_id = ""
     if token:
         try:
             user_row, current_club_id = _auth_user_from_token(token)
-            dashboard_data["user"] = _auth_user_payload(user_row, current_club_id or resolved_focus_club_id or "")
         except Exception:
-            pass
+            user_row = None
+            current_club_id = ""
+    resolved_focus_club_id = current_club_id or resolved_focus_club_id
+    dashboard_data = current_dashboard(load_store(), resolved_focus_club_id, requested_season_year)
+    if user_row:
+        dashboard_data["user"] = _auth_user_payload(user_row, current_club_id or resolved_focus_club_id or "")
     return dashboard_data
 
 
@@ -4207,7 +4361,8 @@ def signin(request: SignInRequest, response: Response) -> dict[str, Any]:
     return {
         "token": token,
         "user": _auth_user_payload(user_row, current_club_id),
-        "clubs": _sorted_club_choices(store, current_club_id),
+        "clubs": _visible_club_choices_for_user(store, user_row, current_club_id),
+        "visible_clubs": _visible_club_choices_for_user(store, user_row, current_club_id),
         "session": session_state,
     }
 
@@ -4276,9 +4431,26 @@ def auth_me(x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
             session_state = _session_snapshot(connection, x_auth_token)
     return {
         "user": _auth_user_payload(user_row, current_club_id),
-        "clubs": _sorted_club_choices(store, current_club_id),
+        "clubs": _visible_club_choices_for_user(store, user_row, current_club_id),
+        "visible_clubs": _visible_club_choices_for_user(store, user_row, current_club_id),
         "session": session_state,
     }
+
+
+@app.post("/api/auth/signout")
+def auth_signout(request: Request, x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
+    token = _auth_token_from_request(request, x_auth_token)
+    if token:
+        try:
+            with _auth_connection() as connection:
+                _end_auth_session(connection, token)
+        except Exception:
+            logger.exception("Failed to close auth session via api sign out.")
+    response = JSONResponse({"ok": True})
+    _clear_auth_cookies(response)
+    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    response.headers["Pragma"] = "no-cache"
+    return response
 
 
 @app.post("/api/auth/select-club")
@@ -4310,6 +4482,7 @@ def select_club(request: SelectClubRequest, x_auth_token: str | None = Header(de
     return {
         "user": _auth_user_payload(user_row, selected_club.get("id", "")),
         "club": selected_club,
+        "clubs": _visible_club_choices_for_user(store, user_row, selected_club.get("id", "")),
         "dashboard": current_dashboard(store, selected_club.get("id", "")),
     }
 
@@ -4516,6 +4689,17 @@ def update_season_fixture(
     )
     if fixture is None:
         raise HTTPException(status_code=404, detail="Fixture not found.")
+    fixture_date = str(fixture.get("date") or "").strip()
+    if fixture_date:
+        try:
+            fixture_day = date.fromisoformat(fixture_date)
+        except ValueError:
+            fixture_day = None
+        if fixture_day and fixture_day < datetime.utcnow().date():
+            raise HTTPException(
+                status_code=400,
+                detail="Past fixtures cannot be edited.",
+            )
     fixture.update(
         {
             "club_id": club.get("id", ""),

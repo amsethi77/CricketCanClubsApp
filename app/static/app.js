@@ -1,3 +1,4 @@
+(function () {
 function getCookieValue(name) {
   const match = document.cookie.split("; ").find((part) => part.startsWith(`${name}=`));
   if (!match) return "";
@@ -83,6 +84,7 @@ const savedChatHistory = (() => {
 const state = {
   dashboard: null,
   viewerAuth: null,
+  viewerAuthSignature: "",
   dashboardBootstrapped: false,
   isAdmin: false,
   canManageOtherAvailability: false,
@@ -544,7 +546,7 @@ async function postJson(url, payload) {
 }
 
 function setStatus(message, tone = "info") {
-  if (!message) {
+  if (!message || (tone !== "error" && tone !== "warning")) {
     elements.statusBanner.hidden = true;
     elements.statusBanner.textContent = "";
     elements.statusBanner.className = "status-banner";
@@ -650,6 +652,13 @@ function findMemberByName(playerName) {
     members.find((member) => normalizePlayerName(member.full_name) === target) ||
     null
   );
+}
+
+function findMemberById(memberId) {
+  const members = state.dashboard?.members || state.dashboard?.all_members || [];
+  const target = String(memberId || "").trim();
+  if (!target) return null;
+  return members.find((member) => String(member.id || "").trim() === target) || null;
 }
 
 function buildPlayerIndex(rows) {
@@ -774,20 +783,27 @@ function currentPlayer() {
   const clubMembers = state.dashboard.members || [];
   const members = clubMembers.length ? clubMembers : (state.dashboard.all_members || []);
   const viewerMemberName = getViewerMemberNameFromAuth();
+  if (!state.dashboardBootstrapped && viewerMemberName) {
+    const viewerMember = findMemberByName(viewerMemberName) || findMemberById(getViewerMemberIdFromAuth());
+    if (viewerMember) {
+      return viewerMember;
+    }
+  }
   return (
     findMemberByName(state.selectedPlayerName) ||
     findMemberByName(viewerMemberName) ||
-    clubMembers[0] ||
-    findMemberByName(state.selectedPlayerName) ||
-    findMemberByName(viewerMemberName) ||
-    members[0] ||
+    (state.dashboardBootstrapped ? clubMembers[0] || null : null) ||
     null
   );
 }
 
 function getViewerMemberNameFromAuth() {
+  const explicitName = String(state.viewerAuth?.user?.viewer_member_name || "").trim();
+  if (explicitName) {
+    return explicitName;
+  }
   const members = state.dashboard?.all_members || state.dashboard?.members || [];
-  const viewerMemberId = state.viewerAuth?.user?.member_id || "";
+  const viewerMemberId = getViewerMemberIdFromAuth();
   if (!viewerMemberId) {
     return "";
   }
@@ -795,9 +811,17 @@ function getViewerMemberNameFromAuth() {
   return viewerMember?.name || "";
 }
 
+function getViewerMemberIdFromAuth() {
+  return String(state.viewerAuth?.user?.member_id || state.dashboard?.user?.member_id || "").trim();
+}
+
 function viewerMemberName(dashboard) {
+  const explicitName = String(state.viewerAuth?.user?.viewer_member_name || dashboard?.user?.viewer_member_name || "").trim();
+  if (explicitName) {
+    return explicitName;
+  }
   const members = dashboard.all_members || dashboard.members || [];
-  const viewerMemberId = state.viewerAuth?.user?.member_id || dashboard.user?.member_id || "";
+  const viewerMemberId = getViewerMemberIdFromAuth() || String(dashboard.user?.member_id || "").trim();
   if (!viewerMemberId) {
     return "";
   }
@@ -807,8 +831,12 @@ function viewerMemberName(dashboard) {
 
 function currentSignedInMemberName(dashboard = state.dashboard) {
   if (!dashboard) return "";
+  const explicitName = String(state.viewerAuth?.user?.viewer_member_name || dashboard?.user?.viewer_member_name || "").trim();
+  if (explicitName) {
+    return explicitName;
+  }
   const members = dashboard.all_members || dashboard.members || [];
-  const viewerMemberId = state.viewerAuth?.user?.member_id || dashboard.user?.member_id || "";
+  const viewerMemberId = getViewerMemberIdFromAuth() || String(dashboard.user?.member_id || "").trim();
   if (viewerMemberId) {
     const matchById = members.find((member) => String(member.id || "") === String(viewerMemberId));
     if (matchById?.name) return matchById.name;
@@ -1125,15 +1153,25 @@ function playerMembershipSummary(player) {
       .map((membership) => (typeof membership === "string" ? membership : membership.team_name || membership.display_name || ""))
       .filter(Boolean)
   )];
-  const clubMemberships = [...new Map(
-    (player.club_memberships || [])
-      .filter((membership) => membership && membership.club_name)
-      .map((membership) => [membership.club_name, {
-        club_name: membership.club_name,
-        club_id: membership.club_id || "",
-        teams: [...new Set(membership.teams || [])],
-      }])
-  ).values()];
+  const clubMemberships = [];
+  const seenClubs = new Set();
+  for (const membership of player.club_memberships || []) {
+    if (!membership || !membership.club_name) {
+      continue;
+    }
+    const clubName = String(membership.club_name || "").trim();
+    const clubId = String(membership.club_id || "").trim();
+    const key = clubId ? `id:${clubId.toLowerCase()}` : `name:${clubName.toLowerCase()}`;
+    if (seenClubs.has(key)) {
+      continue;
+    }
+    seenClubs.add(key);
+    clubMemberships.push({
+      club_name: clubName,
+      club_id: clubId,
+      teams: [...new Set((membership.teams || []).filter(Boolean))],
+    });
+  }
   return { teamNames, clubMemberships };
 }
 
@@ -1303,7 +1341,11 @@ function renderSummary(summary, archiveCount = summary.archive_file_count ?? sum
 
 function populatePrimaryClubSelect(clubsOrDashboard) {
   const dashboard = Array.isArray(clubsOrDashboard) ? { clubs: clubsOrDashboard } : (clubsOrDashboard || {});
-  const clubs = Array.isArray(dashboard.clubs) ? dashboard.clubs : [];
+  const clubs = Array.isArray(dashboard.visible_clubs)
+    ? dashboard.visible_clubs
+    : Array.isArray(dashboard.clubs)
+      ? dashboard.clubs
+      : [];
   const currentClubId = String(
     state.viewerAuth?.user?.current_club_id ||
     state.viewerAuth?.user?.primary_club_id ||
@@ -1412,16 +1454,19 @@ function renderClubSearchResults() {
     return;
   }
   const query = elements.clubSearchInput.value.trim().toLowerCase();
-  const clubs = state.dashboard?.clubs || [];
+  const clubs = state.dashboard?.visible_clubs || state.dashboard?.clubs || [];
+  const currentClubId = currentClubIdForDashboard();
   const filtered = !query
-    ? clubs
+    ? clubs.filter((club) => String(club.id || "") === String(currentClubId || "")).slice(0, 1)
     : clubs.filter((club) => {
         const haystack = `${club.name || ""} ${club.short_name || ""} ${club.city || ""}`.toLowerCase();
         return haystack.includes(query);
       });
   elements.clubSearchResults.innerHTML = renderLimitedCollection(filtered, {
     key: "club-search-results",
-    emptyMessage: `<p class="empty-state">No clubs match that search.</p>`,
+    emptyMessage: query
+      ? `<p class="empty-state">No clubs match that search.</p>`
+      : `<p class="empty-state">Current club only.</p>`,
     renderItem: (club) => `
       <article class="detail-card clickable-card ${club.id === state.selectedFocusClubId ? "active-card" : ""}" data-club="${club.id}">
         <strong>${club.name}</strong>
@@ -1430,6 +1475,17 @@ function renderClubSearchResults() {
       </article>
     `,
   });
+}
+
+function currentClubIdForDashboard() {
+  return (
+    state.selectedFocusClubId ||
+    state.dashboard?.focus_club?.id ||
+    state.dashboard?.viewer_profile?.primary_club_id ||
+    state.viewerAuth?.user?.current_club_id ||
+    state.viewerAuth?.user?.primary_club_id ||
+    ""
+  );
 }
 
 function renderLandingPlayerResults() {
@@ -2764,16 +2820,31 @@ function renderDashboard(dashboard) {
     state.selectedMatchId = dashboard.upcoming_match.id;
   }
   const memberNameForViewer = getViewerMemberNameFromAuth() || viewerMemberName(dashboard);
-  if (!state.selectedPlayerName || !dashboard.members.some((member) => member.name === state.selectedPlayerName)) {
-    state.selectedPlayerName = memberNameForViewer || dashboard.members[0]?.name || null;
+  const viewerPlayerName = memberNameForViewer || dashboard.members[0]?.name || null;
+  const selectedPlayerStillMatchesViewer =
+    normalizePlayerName(state.selectedPlayerName || "") === normalizePlayerName(viewerPlayerName || "");
+  if (
+    !state.dashboardBootstrapped ||
+    !state.selectedPlayerName ||
+    !dashboard.members.some((member) => member.name === state.selectedPlayerName) ||
+    !selectedPlayerStillMatchesViewer
+  ) {
+    state.selectedPlayerName = viewerPlayerName;
   }
-  if (!state.selectedAvailabilityPlayerName || !dashboard.members.some((member) => member.name === state.selectedAvailabilityPlayerName)) {
+  const availabilityPlayerStillMatchesViewer =
+    normalizePlayerName(state.selectedAvailabilityPlayerName || "") === normalizePlayerName(viewerPlayerName || "");
+  if (
+    !state.dashboardBootstrapped ||
+    !state.selectedAvailabilityPlayerName ||
+    !dashboard.members.some((member) => member.name === state.selectedAvailabilityPlayerName) ||
+    !availabilityPlayerStillMatchesViewer
+  ) {
     state.selectedAvailabilityPlayerName = state.canManageOtherAvailability
-      ? (state.selectedPlayerName || dashboard.members[0]?.name || null)
-      : (memberNameForViewer || state.selectedPlayerName || dashboard.members[0]?.name || null);
+      ? (state.selectedPlayerName || viewerPlayerName)
+      : (viewerPlayerName || state.selectedPlayerName || dashboard.members[0]?.name || null);
   }
   if (!state.canManageOtherAvailability) {
-    state.selectedAvailabilityPlayerName = memberNameForViewer || state.selectedPlayerName || dashboard.members[0]?.name || null;
+    state.selectedAvailabilityPlayerName = viewerPlayerName || state.selectedPlayerName || dashboard.members[0]?.name || null;
   }
   if (!state.selectedTeamName || !dashboard.teams.some((team) => team.name === state.selectedTeamName)) {
     state.selectedTeamName = dashboard.teams[0]?.name || null;
@@ -2863,6 +2934,18 @@ async function loadDashboard() {
   });
   try {
     state.viewerAuth = await window.CricketClubAppPages.authMe();
+    const nextViewerSignature = [
+      state.viewerAuth?.user?.member_id || "",
+      state.viewerAuth?.user?.viewer_member_name || "",
+      state.viewerAuth?.user?.current_club_id || state.viewerAuth?.user?.primary_club_id || "",
+    ].join("|");
+    if (state.viewerAuthSignature && state.viewerAuthSignature !== nextViewerSignature) {
+      state.selectedPlayerName = null;
+      state.selectedAvailabilityPlayerName = null;
+      state.selectedTeamName = null;
+      state.dashboardBootstrapped = false;
+    }
+    state.viewerAuthSignature = nextViewerSignature;
     dashboardDebug("Signed in user loaded.", {
       hasUser: Boolean(state.viewerAuth?.user),
       role: state.viewerAuth?.user?.effective_role || state.viewerAuth?.user?.role || "",
@@ -2885,12 +2968,17 @@ async function loadDashboard() {
         role: state.viewerAuth?.user?.effective_role || state.viewerAuth?.user?.role || "",
       });
     }
+    const currentYear = String(new Date().getFullYear());
+    state.selectedSeasonYear = currentYear;
+    window.localStorage.setItem("cricketClubAppSelectedSeasonYear", currentYear);
+    document.cookie = `cricketClubAppSelectedSeasonYear=${encodeURIComponent(currentYear)}; path=/; samesite=lax`;
   }
   const queryParams = new URLSearchParams();
   if (state.selectedFocusClubId) {
     queryParams.set("focus_club_id", state.selectedFocusClubId);
   }
-  const seasonYear = String(state.selectedSeasonYear || new Date().getFullYear()).trim();
+  const currentYear = String(new Date().getFullYear());
+  const seasonYear = String(state.selectedSeasonYear || currentYear).trim();
   if (seasonYear) {
     queryParams.set("selected_season_year", seasonYear);
   }
@@ -2903,8 +2991,42 @@ async function loadDashboard() {
       fixtures: Array.isArray(dashboard.fixtures) ? dashboard.fixtures.length : 0,
       archives: Array.isArray(dashboard.archive_uploads) ? dashboard.archive_uploads.length : 0,
     });
-    renderDashboard(dashboard);
-    state.dashboardBootstrapped = true;
+    try {
+      if (!state.dashboardBootstrapped) {
+        const viewerMemberId = String(
+          state.viewerAuth?.user?.member_id ||
+          dashboard?.user?.member_id ||
+          ""
+        ).trim();
+        const viewerMemberName = String(
+          state.viewerAuth?.user?.viewer_member_name ||
+          dashboard?.user?.viewer_member_name ||
+          ""
+        ).trim();
+        if (viewerMemberName) {
+          state.selectedPlayerName = viewerMemberName;
+          state.selectedAvailabilityPlayerName = viewerMemberName;
+        }
+        const viewerMember =
+          (viewerMemberId && (dashboard.all_members || dashboard.members || []).find((member) => String(member.id || "") === viewerMemberId)) ||
+          (viewerMemberName && (dashboard.all_members || dashboard.members || []).find((member) => normalizePlayerName(member.name) === normalizePlayerName(viewerMemberName))) ||
+          null;
+        if (viewerMember?.name) {
+          state.selectedPlayerName = viewerMember.name;
+          state.selectedAvailabilityPlayerName = viewerMember.name;
+        }
+      }
+      renderDashboard(dashboard);
+      if (!state.dashboardBootstrapped && dashboard.selected_season_year) {
+        state.selectedSeasonYear = dashboard.selected_season_year;
+        window.localStorage.setItem("cricketClubAppSelectedSeasonYear", dashboard.selected_season_year);
+        document.cookie = `cricketClubAppSelectedSeasonYear=${encodeURIComponent(dashboard.selected_season_year)}; path=/; samesite=lax`;
+      }
+      state.dashboardBootstrapped = true;
+    } catch (error) {
+      dashboardError("Dashboard render failed.", error);
+      setStatus(error.message || "Dashboard could not load.", "error");
+    }
   }
 }
 
@@ -3737,3 +3859,5 @@ elements.stopVoiceCommentary.addEventListener("click", () => {
 
 restoreChatHistory();
 loadDashboard();
+
+})();

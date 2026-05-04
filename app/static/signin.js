@@ -28,8 +28,9 @@ function escapeHtml(value) {
 }
 
 function setStatus(message, tone = "info") {
-  statusBanner.hidden = !message;
-  statusBanner.textContent = message || "";
+  const show = Boolean(message) && (tone === "error" || tone === "warning");
+  statusBanner.hidden = !show;
+  statusBanner.textContent = show ? message : "";
   statusBanner.className = `status-banner ${tone}`;
 }
 
@@ -110,7 +111,6 @@ function renderClubs(rows) {
 async function loadLeagueLeaders() {
   try {
     debug("Loading sign-in leaders.");
-    setStatus("Loading league leaders...", "info");
     const data = await getJson("/api/public/signin-stats");
     const batting = data.batting_leaders || [];
     const bowling = data.bowling_leaders || [];
@@ -121,8 +121,7 @@ async function loadLeagueLeaders() {
     renderBatsmen(batting);
     renderBowlers(bowling);
     renderClubs(clubs);
-    debug("Sign-in leaders loaded.", { batsmen: batting.length, bowlers: bowling.length, clubs: clubs.length });
-    setStatus("League leaders loaded.", "success");
+    setStatus("", "info");
   } catch (error) {
     if (batsmenCount) batsmenCount.textContent = "Unavailable";
     if (bowlersCount) bowlersCount.textContent = "Unavailable";

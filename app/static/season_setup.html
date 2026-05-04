@@ -11,7 +11,7 @@
       rel="stylesheet"
     />
     <link rel="stylesheet" href="/assets/tailwind.css?v=20260426a" />
-    <link rel="stylesheet" href="/assets/styles.css?v=20260503d" />
+    <link rel="stylesheet" href="/assets/styles.css?v=20260503e" />
   </head>
   <body>
     <div class="page-shell">
@@ -19,7 +19,7 @@
         <nav class="top-nav">
           <a href="/dashboard">Dashboard</a>
           <a href="/clubs">Clubs</a>
-          <a href="/season-setup" aria-current="page">Season setup</a>
+          <a href="/season-setup" aria-current="page">Season Fixtures</a>
           <a href="/player-availability">Availability</a>
           <a href="/player-profile">Profile</a>
           <a href="/admin-center" data-admin-only hidden>Admin center</a>
@@ -35,6 +35,7 @@
           <p id="seasonSetupSummary" class="lede">Create fixtures for 2026 and later.</p>
           <div id="seasonStatus" class="status-banner" hidden></div>
           <form id="seasonSetupForm" class="form-grid">
+            <input id="editingFixtureId" type="hidden" value="" />
             <input id="seasonYear" type="number" min="2026" placeholder="Season year" required />
             <input id="fixtureDate" type="date" required />
             <input id="fixtureDateLabel" type="text" placeholder="Date label e.g. June 7th" required />
@@ -43,7 +44,8 @@
             <input id="fixtureType" type="text" placeholder="Match type" />
             <input id="fixtureTime" type="text" placeholder="Start time" />
             <input id="fixtureOvers" type="text" placeholder="Overs" />
-            <button class="primary-button wide" type="submit">Add fixture</button>
+            <button id="fixtureSubmitButton" class="primary-button wide" type="submit">Add fixture</button>
+            <button id="fixtureCancelEditButton" class="secondary-button wide" type="button" hidden>Cancel edit</button>
           </form>
           <div class="inline-actions">
             <label class="stack-field" for="seasonFilter">
@@ -55,7 +57,7 @@
         </div>
       </section>
     </div>
-    <script src="/assets/multipage.js?v=20260503g"></script>
-    <script src="/assets/season_setup.js?v=20260503c"></script>
+    <script src="/assets/multipage.js?v=20260503i"></script>
+    <script src="/assets/season_setup.js?v=20260503e"></script>
   </body>
 </html>

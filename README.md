@@ -20,6 +20,19 @@ Local-first website for CricketClubApp. This is the web version we can test quic
 - Club search, player search, quick stats, and followed-player watchlist
 - Landing-page highlights for recent scorecards, matches, and club stats
 
+## Canonical Product Rules
+
+These rules are the source of truth for the current implementation. If older log items conflict with them, these rules win.
+
+- The signed-in identity must come from the backend auth session and `app_users` row, not from the first matching player shown in the UI.
+- `member_id` is the canonical player link for the logged-in account. Display names, short names, and aliases are presentation-only labels.
+- The dashboard, clubs page, season fixtures page, and availability page must all use the logged-in user and active club from the backend payload first.
+- The clubs page may show only clubs linked to the signed-in identity. It must not show every club by default after login.
+- The dashboard player snapshot must default to the authenticated member linked to the account. It must not fall back to another roster member just because that member appears earlier in the list.
+- If a player belongs to multiple clubs, the player profile may show cross-club career history, but each club dashboard remains club-local.
+- Sign out must invalidate the server session and clear the browser auth state.
+- Success and loading chatter should stay quiet in the UI unless it is needed for a real error or actionable confirmation.
+
 ## Prompt And Requirement Log
 
 This section captures the user requirements in the order they were given and refined during the build.
@@ -208,7 +221,7 @@ pip install -r requirements.txt
 python3 app/main.py
 ```
 
-Open `http://127.0.0.1:8091`
+Open `http://127.0.0.1:8090`
 
 ## Project shape
 

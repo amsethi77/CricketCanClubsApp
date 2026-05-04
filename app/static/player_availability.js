@@ -17,8 +17,9 @@ function debug(...args) {
 }
 
 function setStatus(message, tone = "info") {
-  statusBanner.hidden = !message;
-  statusBanner.textContent = message || "";
+  const show = Boolean(message) && (tone === "error" || tone === "warning");
+  statusBanner.hidden = !show;
+  statusBanner.textContent = show ? message : "";
   statusBanner.className = `status-banner ${tone}`;
 }
 

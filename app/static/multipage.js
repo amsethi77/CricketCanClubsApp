@@ -1,3 +1,4 @@
+(function () {
 const TOKEN_KEY = "cricketClubAppAuthToken";
 const CLUB_KEY = "cricketClubAppPrimaryClubId";
 const SESSION_KEY = "cricketClubAppSessionState";
@@ -7,7 +8,7 @@ const SESSION_TOUCH_INTERVAL_MS = 60000;
 const SHARED_NAV_ITEMS = [
   { href: "/dashboard", label: "Dashboard" },
   { href: "/clubs", label: "Clubs" },
-  { href: "/season-setup", label: "Season setup" },
+  { href: "/season-setup", label: "Season Fixtures" },
   { href: "/player-availability", label: "Availability" },
   { href: "/player-profile", label: "Profile" },
   { href: "/admin-center", label: "Admin center", adminOnly: true },
@@ -61,13 +62,13 @@ async function apiJson(url, options = {}) {
   return data;
 }
 
-async function getJson(url, authenticated = false) {
+async function sharedGetJson(url, authenticated = false) {
   return apiJson(url, {
     headers: authenticated ? authHeaders() : undefined,
   });
 }
 
-async function postJson(url, payload, authenticated = false) {
+async function sharedPostJson(url, payload, authenticated = false) {
   return apiJson(url, {
     method: "POST",
     headers: authenticated ? authHeaders({ "Content-Type": "application/json" }) : { "Content-Type": "application/json" },
@@ -91,7 +92,7 @@ async function deleteJson(url, authenticated = false) {
 }
 
 async function authMe() {
-  const data = await getJson("/api/auth/me", true);
+  const data = await sharedGetJson("/api/auth/me", true);
   renderSharedTopbar(data.user || null);
   syncUserBadge(data.user || null);
   window.sessionStorage.setItem(SESSION_KEY, JSON.stringify(data.session || null));
@@ -109,14 +110,18 @@ async function requireAuth() {
 }
 
 function signOut() {
-  setAuthToken("");
-  setPrimaryClubId("");
-  window.sessionStorage.removeItem(SESSION_KEY);
-  const badge = document.getElementById(USER_BADGE_ID);
-  if (badge) {
-    badge.remove();
-  }
-  window.location.href = "/signin";
+  Promise.resolve(
+    sharedPostJson("/api/auth/signout", {}, true).catch(() => null)
+  ).finally(() => {
+    setAuthToken("");
+    setPrimaryClubId("");
+    window.sessionStorage.removeItem(SESSION_KEY);
+    const badge = document.getElementById(USER_BADGE_ID);
+    if (badge) {
+      badge.remove();
+    }
+    window.location.href = "/signin";
+  });
 }
 
 function formatRoleLabel(role) {
@@ -328,8 +333,8 @@ window.CricketClubAppPages = {
   setAuthToken,
   getPrimaryClubId,
   setPrimaryClubId,
-  getJson,
-  postJson,
+  getJson: sharedGetJson,
+  postJson: sharedPostJson,
   putJson,
   deleteJson,
   authMe,
@@ -339,3 +344,5 @@ window.CricketClubAppPages = {
   renderSharedTopbar,
   syncAdminOnlyElements,
 };
+
+})();
