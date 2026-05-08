@@ -243,6 +243,8 @@ Open `http://127.0.0.1:8090`
 - `app/static/clubs.html`: primary-club selection
 - `app/static/season_setup.html`: club-admin season planning
 - `app/static/player_availability.html`: logged-in player availability
+- `app/llm_registry.py`: prompt registry loaded from `READMELLM.md`
+- `app/llm_service.py`: FastAPI-facing LLM service layer, caching, ranking, and inference
 - `app/data/seed.json`: CricketClubApp seed data
 - `app/data/cricketclubapp.db`: local SQLite database used for persistence at runtime
 - `app/uploads/`: accepted scorecard images
@@ -253,12 +255,17 @@ Open `http://127.0.0.1:8090`
 - The site is mobile-friendly and works well as the product baseline for a future iPhone app.
 - `Imran +2` from the original schedule is stored as an availability note saying he is bringing two guests.
 - The Assistant header shows a compact `LLM` status badge with a blinking dot, green when Ollama is available and red when it is not.
-- If Ollama is running locally, the Assistant uses it; otherwise the grounded heuristic assistant still works.
+- The `LLM` badge sits beside the Assistant title, and the `Clear chat` button resets the browser conversation state plus cached LLM answers.
+- If Ollama is running locally, the Assistant uses it; when the forecast reply is too vague or hallucinates unsupported details, the app falls back to a grounded year-by-year trend summary instead of a made-up projection.
+- The prompt library in `READMELLM.md` is loaded into the runtime registry and indexed into the LLM document corpus for inference.
+- The LLM service layer exposes `/api/llm/status`, `/api/llm/prompts`, `/api/llm/documents`, `/api/llm/reindex`, and `/api/llm/infer` for prompt inspection, corpus refresh, and direct inference.
+- `/api/llm/cache/clear` resets the shared LLM query cache so the next chat starts fresh.
 - The chat pipeline now uses chunked context selection, optional Ollama embeddings for retrieval ranking, configurable sampling for forecast answers, and safety checks that avoid inventing unsupported numbers.
 - The chat pipeline also applies a small profanity/content filter so responses stay cricket-focused and respectful.
+- Saving the store refreshes the indexed LLM corpus, including prompt docs, club summaries, member summaries, fixtures, and archive scorecards.
 - Existing images dropped into `app/uploads/` are auto-imported into the archive list.
 - Duplicate files are moved into `app/duplicates/` for manual review, with a copy of the matched original staged beside them.
-- The local LLM also powers grounded predictive analysis for club and player outlooks across current and future seasons.
+- The local LLM also powers grounded predictive analysis for club and player outlooks across current and future seasons, with year-trend fallbacks when the model gets too vague.
 
 ## Azure LLM
 
@@ -272,6 +279,13 @@ For Azure, the web app stays on App Service and Ollama runs separately in Azure 
 - The Assistant badge reads `/api/health` and flips between blinking green and blinking red depending on Ollama availability.
 
 This keeps the web app lightweight while giving the chat and archive review flows a real model backend.
+
+The same registry and corpus indexing flow is used for scorecard ingestion:
+
+- uploaded archives and review payloads are re-indexed into the LLM document corpus on save
+- prompt registry entries from `READMELLM.md` are kept as first-class inference docs
+- query cache entries are stored in SQLite so repeat questions can reuse earlier responses safely
+- optional embeddings rank the most relevant club, player, fixture, and archive documents before inference
 
 ## Azure Login
 
@@ -317,6 +331,7 @@ Use the website AI box with natural-language questions like these. They should w
 - `Forecast Amit S's runs and batting average for the next season`
 - `What is the projected top batter for TestClub next year?`
 - `How is Amit Sethi's performance going to be in 2026 season?`
+- `Who should be the captain of Coca Cola team in 2026?`
 - `What is the next match?`
 - `Show old scorecards from 2025`
 - `Follow <player name>`

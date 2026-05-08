@@ -1376,6 +1376,30 @@ button:hover,
   width: 100%;
 }
 
+.assistant-heading-block {
+  display: block;
+  min-width: 0;
+}
+
+.assistant-kicker-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+.assistant-kicker-row .section-kicker {
+  margin-bottom: 0;
+}
+
+.assistant-clear-button {
+  padding: 10px 14px;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  min-height: 38px;
+  box-shadow: none;
+}
+
 .llm-status-pill {
   display: inline-flex;
   align-items: center;

@@ -17,6 +17,11 @@ from typing import Any
 
 import httpx
 
+try:
+    from llm_registry import prompt_documents, prompt_manifest, build_prompt
+except ModuleNotFoundError:
+    from app.llm_registry import prompt_documents, prompt_manifest, build_prompt
+
 
 BASE_DIR = Path(__file__).resolve().parent
 REPO_DIR = BASE_DIR.parent
@@ -3533,6 +3538,34 @@ def _schema_tables() -> str:
       FOREIGN KEY (club_id) REFERENCES clubs(id) ON DELETE CASCADE
     );
 
+    CREATE TABLE IF NOT EXISTS llm_documents (
+      id TEXT PRIMARY KEY,
+      doc_type TEXT NOT NULL,
+      source_id TEXT,
+      club_id TEXT,
+      season_year TEXT,
+      title TEXT,
+      content TEXT,
+      content_hash TEXT,
+      embedding_model TEXT,
+      embedding_json TEXT,
+      source_json TEXT,
+      updated_at TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS llm_query_cache (
+      id TEXT PRIMARY KEY,
+      question TEXT NOT NULL,
+      answer TEXT NOT NULL,
+      mode TEXT,
+      source_provider TEXT,
+      source_label TEXT,
+      prompt_name TEXT,
+      context_hash TEXT,
+      created_at TEXT,
+      updated_at TEXT
+    );
+
     CREATE INDEX IF NOT EXISTS idx_member_aliases_alias ON member_aliases(alias);
     CREATE INDEX IF NOT EXISTS idx_team_memberships_member ON team_memberships(member_id);
     CREATE INDEX IF NOT EXISTS idx_team_memberships_team ON team_memberships(team_id);
@@ -3547,6 +3580,11 @@ def _schema_tables() -> str:
     CREATE INDEX IF NOT EXISTS idx_member_club_stats_club ON member_club_stats(club_id);
     CREATE INDEX IF NOT EXISTS idx_club_summary_stats_name ON club_summary_stats(club_name);
     CREATE INDEX IF NOT EXISTS idx_club_year_stats_year ON club_year_stats(season_year);
+    CREATE INDEX IF NOT EXISTS idx_llm_documents_type ON llm_documents(doc_type);
+    CREATE INDEX IF NOT EXISTS idx_llm_documents_source ON llm_documents(source_id);
+    CREATE INDEX IF NOT EXISTS idx_llm_documents_club ON llm_documents(club_id);
+    CREATE INDEX IF NOT EXISTS idx_llm_query_cache_question ON llm_query_cache(question);
+    CREATE INDEX IF NOT EXISTS idx_llm_query_cache_context ON llm_query_cache(context_hash);
     """
 
 
@@ -3593,6 +3631,8 @@ def _clear_relational_state(connection: sqlite3.Connection) -> None:
         "member_club_stats",
         "member_year_stats",
         "member_summary_stats",
+        "llm_query_cache",
+        "llm_documents",
         "team_memberships",
         "member_aliases",
         "members",
@@ -4338,6 +4378,8 @@ def _read_relational_state(connection: sqlite3.Connection) -> dict[str, Any]:
     club_year_rows = connection.execute(
         "SELECT * FROM club_year_stats ORDER BY season_year DESC, club_name"
     ).fetchall()
+    llm_document_rows = connection.execute("SELECT * FROM llm_documents ORDER BY doc_type, title, id").fetchall()
+    llm_query_cache_rows = connection.execute("SELECT * FROM llm_query_cache ORDER BY created_at DESC, id DESC").fetchall()
 
     club_dicts = [dict(row) for row in clubs_rows]
     club_by_id = {str(club["id"]): club for club in club_dicts if str(club.get("id") or "").strip()}
@@ -4780,6 +4822,8 @@ def _read_relational_state(connection: sqlite3.Connection) -> dict[str, Any]:
     member_club_stats = [dict(row) for row in member_club_rows]
     club_summary_stats = [dict(row) for row in club_summary_rows]
     club_year_stats = [dict(row) for row in club_year_rows]
+    llm_documents = [dict(row) for row in llm_document_rows]
+    llm_query_cache = [dict(row) for row in llm_query_cache_rows]
 
     store = {
         "club": {key: primary_club.get(key, "") for key in ["id", "name", "short_name", "city", "country", "season", "home_ground", "whatsapp_number", "about"]},
@@ -4798,9 +4842,229 @@ def _read_relational_state(connection: sqlite3.Connection) -> dict[str, Any]:
         "member_club_stats": member_club_stats,
         "club_summary_stats": club_summary_stats,
         "club_year_stats": club_year_stats,
+        "llm_documents": llm_documents,
+        "llm_query_cache": llm_query_cache,
         "viewer_profile": viewer_profile,
     }
     return store
+
+
+def _llm_document_id(doc_type: str, source_id: str) -> str:
+    digest = hashlib.sha256(f"{doc_type}:{source_id}".encode("utf-8")).hexdigest()
+    return f"llm-{digest[:16]}"
+
+
+def _llm_document_record(
+    doc_type: str,
+    source_id: str,
+    title: str,
+    content: str,
+    *,
+    club_id: str = "",
+    season_year: str = "",
+    source_json: Any = None,
+    embedding_model: str = "",
+    embedding_json: str = "",
+) -> dict[str, Any]:
+    normalized_title = str(title or "").strip()
+    normalized_content = str(content or "").strip()
+    return {
+        "id": _llm_document_id(doc_type, source_id),
+        "doc_type": str(doc_type or "").strip(),
+        "source_id": str(source_id or "").strip(),
+        "club_id": str(club_id or "").strip(),
+        "season_year": str(season_year or "").strip(),
+        "title": normalized_title[:300],
+        "content": normalized_content[:20000],
+        "content_hash": hashlib.sha256(normalized_content.encode("utf-8")).hexdigest() if normalized_content else "",
+        "embedding_model": str(embedding_model or "").strip(),
+        "embedding_json": str(embedding_json or "").strip(),
+        "source_json": json.dumps(source_json or {}, ensure_ascii=False)[:12000] if not isinstance(source_json, str) else str(source_json)[:12000],
+        "updated_at": now_iso(),
+    }
+
+
+def build_llm_documents(store: dict[str, Any]) -> list[dict[str, Any]]:
+    normalized = normalize_store(store)
+    club = dict(normalized.get("club") or {})
+    members = list(normalized.get("members") or [])
+    fixtures = list(normalized.get("fixtures") or [])
+    archives = canonical_archive_uploads(normalized.get("archive_uploads", []))
+    summary = build_summary(normalized)
+    documents: list[dict[str, Any]] = []
+
+    for prompt in prompt_documents():
+        documents.append(
+            _llm_document_record(
+                prompt["doc_type"],
+                prompt["source_id"],
+                prompt["title"],
+                prompt["content"],
+                source_json=prompt.get("source_json", {}),
+            )
+        )
+
+    club_text = "\n".join(
+        [
+            f"Club: {club.get('name', 'Club')}",
+            f"Season: {club.get('season') or 'unknown'}",
+            f"Members: {summary.get('member_count', 0)}",
+            f"Fixtures: {summary.get('fixture_count', 0)}",
+            f"Archives: {summary.get('archive_count', 0)}",
+            f"Batting leader: {summary.get('batting_leader', '')} ({summary.get('batting_leader_runs', 0)})",
+            f"Wicket leader: {summary.get('wicket_leader', '')} ({summary.get('wicket_leader_count', 0)})",
+            f"Fielding leader: {summary.get('fielding_leader', '')} ({summary.get('fielding_leader_count', 0)})",
+        ]
+    )
+    documents.append(
+        _llm_document_record(
+            "club",
+            str(club.get("id") or "club").strip(),
+            f"{club.get('name', 'Club')} summary",
+            club_text,
+            club_id=str(club.get("id") or ""),
+            season_year=str(club.get("season") or "")[:4],
+            source_json={"club": club, "summary": summary},
+        )
+    )
+
+    member_summary_rows = {str(row.get("player_name") or ""): row for row in normalized.get("member_summary_stats", []) or []}
+    member_year_rows: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in normalized.get("member_year_stats", []) or []:
+        member_year_rows[str(row.get("player_name") or "")].append(row)
+    member_club_rows: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in normalized.get("member_club_stats", []) or []:
+        member_club_rows[str(row.get("player_name") or "")].append(row)
+
+    for member in members:
+        name = str(member.get("name") or "").strip()
+        summary_row = dict(member_summary_rows.get(name) or {})
+        lines = [
+            f"Player: {member.get('full_name') or name}",
+            f"Known as: {name}",
+            f"Club memberships: {', '.join(item.get('club_name', '') for item in member.get('club_memberships', []) or [] if item.get('club_name')) or 'none'}",
+            f"Age: {member.get('age', '')}",
+            f"Role: {member.get('role', '')}",
+            f"Summary: runs={summary_row.get('runs', 0)}, matches={summary_row.get('matches', 0)}, avg={summary_row.get('batting_average', 0)}, strike_rate={summary_row.get('strike_rate', 0)}, wickets={summary_row.get('wickets', 0)}, catches={summary_row.get('catches', 0)}, highest_score={summary_row.get('highest_score', '')}",
+        ]
+        for row in member_year_rows.get(name, [])[:4]:
+            lines.append(
+                f"Year {row.get('season_year')}: runs={row.get('runs', 0)}, matches={row.get('matches', 0)}, avg={row.get('batting_average', 0)}, wickets={row.get('wickets', 0)}, catches={row.get('catches', 0)}"
+            )
+        for row in member_club_rows.get(name, [])[:4]:
+            lines.append(
+                f"Club {row.get('club_name')}: runs={row.get('runs', 0)}, matches={row.get('matches', 0)}, avg={row.get('batting_average', 0)}, wickets={row.get('wickets', 0)}, catches={row.get('catches', 0)}"
+            )
+        documents.append(
+            _llm_document_record(
+                "member",
+                str(member.get("id") or name),
+                f"{member.get('full_name') or name} profile",
+                "\n".join(lines),
+                club_id=str(member.get("primary_club_id") or ""),
+                source_json={"member": member, "summary": summary_row},
+            )
+        )
+
+    for fixture in fixtures:
+        scorecard = fixture.get("scorecard", {}) or {}
+        performances = "; ".join(
+            f"{item.get('player_name')}: runs={item.get('runs', 0)}, wickets={item.get('wickets', 0)}, catches={item.get('catches', 0)}"
+            for item in fixture.get("performances", [])[:18]
+            if item.get("player_name")
+        ) or "none"
+        content = "\n".join(
+            [
+                f"Fixture: {fixture.get('date_label') or fixture.get('date')}",
+                f"Club: {fixture.get('club_name')}",
+                f"Opponent: {fixture.get('opponent')}",
+                f"Status: {fixture.get('status')}",
+                f"Scorecard: {scorecard.get('heartlake_runs') or '--'}/{scorecard.get('heartlake_wickets') or '--'} vs {scorecard.get('opponent_runs') or '--'}/{scorecard.get('opponent_wickets') or '--'}",
+                f"Result: {scorecard.get('result') or fixture.get('result') or 'TBD'}",
+                f"Availability: {', '.join(fixture.get('availability', [])) or 'none'}",
+                f"Performances: {performances}",
+            ]
+        )
+        documents.append(
+            _llm_document_record(
+                "fixture",
+                str(fixture.get("id") or ""),
+                f"Fixture vs {fixture.get('opponent') or 'Opponent'}",
+                content,
+                club_id=str(fixture.get("club_id") or ""),
+                season_year=str(fixture.get("date") or "")[:4],
+                source_json={"fixture": fixture},
+            )
+        )
+
+    for archive in archives:
+        draft = archive.get("draft_scorecard", {}) or {}
+        performances = "; ".join(
+            f"{item.get('player_name')}: runs={item.get('runs', 0)}, wickets={item.get('wickets', 0)}, catches={item.get('catches', 0)}"
+            for item in archive.get("suggested_performances", [])[:18]
+            if item.get("player_name")
+        ) or "none"
+        content = "\n".join(
+            [
+                f"Archive: {archive.get('file_name')}",
+                f"Club: {archive.get('club_name')}",
+                f"Season: {archive.get('season')}",
+                f"Archive date: {archive.get('archive_date') or archive.get('scorecard_date') or archive.get('photo_taken_at') or 'unknown'}",
+                f"Status: {archive.get('status')}",
+                f"Summary: {archive.get('extracted_summary') or ''}",
+                f"Draft scorecard: {draft.get('heartlake_runs') or '--'}/{draft.get('heartlake_wickets') or '--'} vs {draft.get('opponent_runs') or '--'}/{draft.get('opponent_wickets') or '--'}",
+                f"Suggested performances: {performances}",
+            ]
+        )
+        documents.append(
+            _llm_document_record(
+                "archive",
+                str(archive.get("id") or ""),
+                f"Archive {archive.get('file_name') or archive.get('id')}",
+                content,
+                club_id=str(archive.get("club_id") or ""),
+                season_year=str(archive.get("archive_year") or archive.get("season") or "")[:4],
+                source_json={"archive": archive},
+            )
+        )
+    return documents
+
+
+def refresh_llm_document_index(connection: sqlite3.Connection, store: dict[str, Any]) -> list[dict[str, Any]]:
+    documents = build_llm_documents(store)
+    llm_status = {}
+    try:
+        from app.cricket_brain import get_llm_status as _get_llm_status
+    except ModuleNotFoundError:
+        from cricket_brain import get_llm_status as _get_llm_status
+    try:
+        llm_status = _get_llm_status()
+    except Exception:
+        llm_status = {}
+    embedding_model = str(llm_status.get("embedding_model") or "").strip()
+    if embedding_model and llm_status.get("embeddings_available"):
+        try:
+            from app.cricket_brain import _llm_embedding_for_text as _embedding_for_text
+        except ModuleNotFoundError:
+            from cricket_brain import _llm_embedding_for_text as _embedding_for_text
+        for document in documents:
+            embedding = _embedding_for_text(document["content"], llm_status) or []
+            document["embedding_model"] = embedding_model
+            document["embedding_json"] = json.dumps(embedding, ensure_ascii=False)
+    with connection:
+        connection.execute("DELETE FROM llm_documents")
+        connection.executemany(
+            """
+            INSERT INTO llm_documents (
+              id, doc_type, source_id, club_id, season_year, title, content, content_hash,
+              embedding_model, embedding_json, source_json, updated_at
+            ) VALUES (:id, :doc_type, :source_id, :club_id, :season_year, :title, :content, :content_hash,
+              :embedding_model, :embedding_json, :source_json, :updated_at)
+            """,
+            documents,
+        )
+        connection.execute("DELETE FROM llm_query_cache")
+    return documents
 
 
 def ensure_database() -> None:
@@ -5074,7 +5338,9 @@ def save_store(store: dict[str, Any]) -> None:
     ensure_database()
     with _connection() as connection:
         _write_relational_state(connection, normalized)
+        llm_documents = refresh_llm_document_index(connection, normalized)
     _STORE_CACHE_SIGNATURE = _database_signature()
+    normalized["llm_documents"] = llm_documents
     normalized["_cache_signature"] = f"{_STORE_CACHE_SIGNATURE[0]}:{_STORE_CACHE_SIGNATURE[1]}"
     _write_text_atomic(CACHE_FILE, json.dumps(normalized, indent=2))
     _STORE_CACHE_PAYLOAD = deepcopy(normalized)

@@ -1450,39 +1450,225 @@ def _forecast_answer_is_grounded(answer: str, context: str, question: str) -> bo
     return True
 
 
+def _forecast_answer_needs_grounded_fallback(answer: str) -> bool:
+    lowered = answer.lower()
+    generic_markers = [
+        "cautious forecast",
+        "cautious club forecast",
+        "cannot justify exact numeric projections",
+        "cannot justify exact numbers",
+        "cannot provide exact numeric projections",
+        "not enough recent trend data",
+        "not enough data",
+        "cannot find any information",
+        "cannot find information",
+        "based on the stored records",
+        "i can summarize the direction of performance",
+        "the provided context only includes fixtures",
+        "uncertain how",
+        "without recent form data",
+        "i cannot predict",
+    ]
+    return any(marker in lowered for marker in generic_markers)
+
+
+def _forecast_trend_snippets(rows: list[dict[str, Any]], entity_label: str, value_fields: list[str]) -> str:
+    ordered_rows = sorted(
+        [row for row in rows if str(row.get("season_year") or "").strip()],
+        key=lambda item: str(item.get("season_year") or ""),
+        reverse=True,
+    )
+    if not ordered_rows:
+        return ""
+
+    recent_rows = ordered_rows[:3]
+    comparison_rows = [
+        row
+        for row in ordered_rows
+        if int(row.get("matches", row.get("fixture_count", 0)) or 0) > 0
+    ]
+    if not comparison_rows:
+        comparison_rows = ordered_rows
+    parts: list[str] = []
+    for row in recent_rows:
+        year = str(row.get("season_year") or "").strip() or "unknown year"
+        metrics: list[str] = []
+        for field in value_fields:
+            value = row.get(field)
+            if value in (None, ""):
+                continue
+            if field in {"batting_average", "strike_rate"}:
+                try:
+                    metrics.append(f"{field.replace('_', ' ')}={float(value):.2f}")
+                except (TypeError, ValueError):
+                    continue
+            else:
+                metrics.append(f"{field.replace('_', ' ')}={value}")
+        if metrics:
+            parts.append(f"{year}: " + ", ".join(metrics))
+        else:
+            parts.append(year)
+
+    latest = recent_rows[0]
+    latest_year = str(latest.get("season_year") or "").strip() or "the latest year"
+    latest_matches = int(latest.get("matches", latest.get("fixture_count", 0)) or 0)
+    if latest_matches == 0 and len(comparison_rows) > 0:
+        trend_bits: list[str] = [f"{latest_year} currently has no confirmed matches yet"]
+        reference = comparison_rows[0]
+        reference_year = str(reference.get("season_year") or "").strip() or "the latest observed year"
+        reference_matches = int(reference.get("matches", reference.get("fixture_count", 0)) or 0)
+        reference_runs = int(reference.get("runs", reference.get("total_runs", 0)) or 0)
+        if reference_matches:
+            trend_bits.append(f"the latest observed scored season is {reference_year} with {reference_runs} runs across {reference_matches} confirmed match(es)")
+        if len(comparison_rows) > 1:
+            prior = comparison_rows[1]
+            prior_year = str(prior.get("season_year") or "").strip() or "the prior observed year"
+            prior_runs = int(prior.get("runs", prior.get("total_runs", 0)) or 0)
+            prior_matches = int(prior.get("matches", prior.get("fixture_count", 0)) or 0)
+            if prior_runs != reference_runs:
+                direction = "up" if reference_runs > prior_runs else "down"
+                trend_bits.append(
+                    f"that puts the observed trend {direction} from {prior_runs} in {prior_year} across {prior_matches} match(es)"
+                )
+        return f"{entity_label} recent trend: " + "; ".join(trend_bits) + ". Year-by-year data: " + "; ".join(parts) + "."
+
+    latest = recent_rows[0]
+    previous = recent_rows[1] if len(recent_rows) > 1 else {}
+    trend_bits: list[str] = []
+    latest_runs = int(latest.get("runs", 0) or 0)
+    previous_runs = int(previous.get("runs", 0) or 0)
+    if len(recent_rows) > 1 and latest_runs != previous_runs:
+        direction = "up" if latest_runs > previous_runs else "down"
+        trend_bits.append(f"runs are trending {direction} from {previous_runs} in {previous.get('season_year', 'the prior year')} to {latest_runs} in {latest.get('season_year', 'the latest year')}")
+    latest_matches = int(latest.get("matches", 0) or 0)
+    if latest_matches:
+        trend_bits.append(f"{latest_matches} confirmed match(es) in {latest.get('season_year', 'the latest year')}")
+    latest_avg = latest.get("batting_average")
+    if latest_avg not in (None, ""):
+        try:
+            trend_bits.append(f"batting average {float(latest_avg):.2f}")
+        except (TypeError, ValueError):
+            pass
+    latest_sr = latest.get("strike_rate")
+    if latest_sr not in (None, ""):
+        try:
+            trend_bits.append(f"strike rate {float(latest_sr):.2f}")
+        except (TypeError, ValueError):
+            pass
+
+    trend_text = "; ".join(trend_bits)
+    if trend_text:
+        return f"{entity_label} recent trend: {trend_text}. Year-by-year data: " + "; ".join(parts) + "."
+    return f"{entity_label} recent year-by-year data: " + "; ".join(parts) + "."
+
+
 def _forecast_fallback_answer(question: str, matched_members: list[dict[str, Any]], requested_clubs: list[str], analysis_store: dict[str, Any]) -> str:
-    member_names = ", ".join(_display_name(member) for member in matched_members[:2] if member.get("name"))
+    member = matched_members[0] if matched_members else None
+    member_names = ", ".join(_display_name(member_item) for member_item in matched_members[:2] if member_item.get("name"))
     requested_club_names = ", ".join(
         str(club).strip()
         for club in requested_clubs
         if str(club).strip()
     )
-    club_names = ", ".join(
-        str(club.get("name") or club.get("short_name") or club.get("id") or "").strip()
+    requested_clubs_lower = {item.strip().lower() for item in requested_clubs if str(item).strip()}
+    clubs = [
+        club
         for club in (analysis_store.get("clubs") or [])
         if str(club.get("name") or club.get("short_name") or club.get("id") or "").strip()
         and (
-            not requested_clubs
-            or str(club.get("id") or "").strip().lower() in {item.strip().lower() for item in requested_clubs}
-            or str(club.get("name") or "").strip().lower() in {item.strip().lower() for item in requested_clubs}
-            or str(club.get("short_name") or "").strip().lower() in {item.strip().lower() for item in requested_clubs}
+            not requested_clubs_lower
+            or str(club.get("id") or "").strip().lower() in requested_clubs_lower
+            or str(club.get("name") or "").strip().lower() in requested_clubs_lower
+            or str(club.get("short_name") or "").strip().lower() in requested_clubs_lower
         )
-    )
-    if member_names:
+    ]
+    club = clubs[0] if clubs else None
+    if member:
+        display_name = _display_name(member)
+        rows = [
+            row
+            for row in (analysis_store.get("member_year_stats") or [])
+            if str(row.get("player_name") or "").strip() == str(member.get("name") or "").strip()
+        ]
+        trend = _forecast_trend_snippets(
+            rows,
+            f"{display_name}'s performance",
+            ["matches", "runs", "batting_average", "strike_rate", "wickets", "catches", "highest_score", "scores_25_plus", "scores_50_plus", "scores_100_plus"],
+        )
+        if trend:
+            latest_year = max((str(row.get("season_year") or "") for row in rows if str(row.get("season_year") or "").strip()), default="")
+            if latest_year:
+                return (
+                    f"{display_name}'s 2026 outlook should be read from the latest stored trend data rather than a guessed projection. "
+                    f"{trend} This suggests the safest expectation is that his 2026 performance should follow the same upward or steady trajectory if his opportunities stay similar."
+                )
+            return trend
         return (
-            f"Based on the stored records, {member_names} have enough recent trend data for only a cautious forecast. "
-            "I can summarize the direction of performance, but I cannot justify exact numeric projections from the current data."
+            f"{display_name}'s forecast is still too thin for a numeric projection, but the stored data does not show any sign of a collapse."
         )
-    if club_names or requested_club_names:
-        club_label = club_names or requested_club_names or "the requested club"
-        return (
-            f"Based on the stored records, {club_label} have enough recent trend data for only a cautious club forecast. "
-            "I can summarize the direction of performance, but I cannot justify exact numeric projections from the current data."
+    if club:
+        club_label = str(club.get("name") or club.get("short_name") or club.get("id") or "the requested club").strip()
+        club_id = str(club.get("id") or "").strip()
+        rows = [
+            row
+            for row in (analysis_store.get("club_year_stats") or [])
+            if str(row.get("club_id") or "").strip().lower() == club_id.lower()
+        ]
+        trend = _forecast_trend_snippets(
+            rows,
+            f"{club_label}'s performance",
+            ["fixture_count", "archive_count", "total_runs", "total_wickets", "total_catches", "highest_score", "scores_25_plus", "scores_50_plus", "scores_100_plus"],
         )
+        if trend:
+            return (
+                f"{club_label}'s 2026 outlook should stay club-focused and grounded in the stored year-by-year record. "
+                f"{trend} This is a cautious projection based on the latest available club trend data."
+            )
+        return f"{club_label}'s forecast is too thin for a numeric projection from the stored club records."
+    if member_names or requested_club_names:
+        label = member_names or requested_club_names or "the requested subject"
+        return f"{label} does not have enough stored year-by-year trend data for a stronger forecast."
     return (
         "Based on the stored records, I can only give a cautious qualitative forecast. "
         "The current data is not strong enough for exact numeric projections."
     )
+
+
+def _provisional_captain_candidate(
+    analysis_store: dict[str, Any],
+    requested_clubs: list[str],
+    ranking_source_records: list[dict[str, Any]],
+    availability_board: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    if not requested_clubs:
+        return None
+
+    club_members = [
+        member
+        for member in analysis_store.get("members", [])
+        if member.get("name") and any(term in _member_club_terms(member) for term in requested_clubs)
+    ]
+    if not club_members:
+        return None
+
+    club_member_names = {member["name"] for member in club_members}
+    candidates = [record for record in ranking_source_records if record.get("player_name") in club_member_names]
+    if not candidates:
+        return None
+
+    availability_by_name = {item["player_name"]: item for item in availability_board}
+
+    def _score(record: dict[str, Any]) -> tuple[int, int, int, int, int]:
+        availability = availability_by_name.get(str(record.get("player_name") or ""), {})
+        return (
+            int(availability.get("matches_available", 0) or 0),
+            int(record.get("runs", 0) or 0),
+            int(record.get("wickets", 0) or 0),
+            int(record.get("catches", 0) or 0),
+            int(record.get("matches", 0) or 0),
+        )
+
+    return max(candidates, key=_score)
 
 
 def _forecast_club_snippets(
@@ -1572,25 +1758,38 @@ def _forecast_answer(question: str, store: dict[str, Any], history: list[dict[st
     requested_clubs = _requested_club_terms(effective_question, store)
     club_only_request = bool(requested_clubs) and not matched_members
     summary = build_summary(analysis_store)
+    overview_lines = [
+        f"[forecast-overview] club={analysis_store['club'].get('name', 'Club')}",
+        f"current_season={analysis_store['club'].get('season') or 'unknown'}",
+        f"fixture_count={summary.get('fixture_count', 0)}",
+        f"member_count={summary.get('member_count', 0)}",
+        f"archive_count={summary.get('archive_count', 0)}",
+        f"completed_matches={summary.get('completed_matches', 0)}",
+        f"live_matches={summary.get('live_matches', 0)}",
+    ]
+    if club_only_request:
+        overview_lines.extend(
+            [
+                "batting_leader=hidden for club-only forecast",
+                "wicket_leader=hidden for club-only forecast",
+                "fielding_leader=hidden for club-only forecast",
+                "availability_leader=hidden for club-only forecast",
+            ]
+        )
+    else:
+        overview_lines.extend(
+            [
+                f"batting_leader={summary.get('batting_leader', '')} ({summary.get('batting_leader_runs', 0)})",
+                f"wicket_leader={summary.get('wicket_leader', '')} ({summary.get('wicket_leader_count', 0)})",
+                f"fielding_leader={summary.get('fielding_leader', '')} ({summary.get('fielding_leader_count', 0)})",
+                f"availability_leader={summary.get('availability_leader', '')}",
+            ]
+        )
     snippets = [
         {
             "kind": "forecast-club-overview",
             "key": "overview",
-            "text": "\n".join(
-                [
-                    f"[forecast-overview] club={analysis_store['club'].get('name', 'Club')}",
-                    f"current_season={analysis_store['club'].get('season') or 'unknown'}",
-                    f"fixture_count={summary.get('fixture_count', 0)}",
-                    f"member_count={summary.get('member_count', 0)}",
-                    f"archive_count={summary.get('archive_count', 0)}",
-                    f"completed_matches={summary.get('completed_matches', 0)}",
-                    f"live_matches={summary.get('live_matches', 0)}",
-                    f"batting_leader={summary.get('batting_leader', '')} ({summary.get('batting_leader_runs', 0)})",
-                    f"wicket_leader={summary.get('wicket_leader', '')} ({summary.get('wicket_leader_count', 0)})",
-                    f"fielding_leader={summary.get('fielding_leader', '')} ({summary.get('fielding_leader_count', 0)})",
-                    f"availability_leader={summary.get('availability_leader', '')}",
-                ]
-            ),
+            "text": "\n".join(overview_lines),
         }
     ]
     snippets.extend(_forecast_club_snippets(store, analysis_store, requested_clubs, include_player_names=not club_only_request))
@@ -1643,6 +1842,13 @@ def _forecast_answer(question: str, store: dict[str, Any], history: list[dict[st
         answer = response.json().get("message", {}).get("content", "").strip()
         if not answer:
             return _forecast_fallback_answer(effective_question, matched_members, requested_clubs, analysis_store)
+        if _forecast_answer_needs_grounded_fallback(answer):
+            logger.info(
+                "forecast answer replaced with grounded fallback question=%s answer=%s",
+                effective_question[:200],
+                answer[:300],
+            )
+            return _forecast_fallback_answer(effective_question, matched_members, requested_clubs, analysis_store)
         if not _forecast_answer_is_grounded(answer, context, effective_question):
             logger.warning(
                 "forecast answer rejected due to ungrounded numbers question=%s answer=%s",
@@ -1678,7 +1884,19 @@ def _forecast_answer(question: str, store: dict[str, Any], history: list[dict[st
 def _prefer_heuristic_answer(question: str) -> bool:
     q = question.lower().strip()
     has_year = bool(re.search(r"\b(20\d{2})\b", q))
-    year_score_followup = has_year and any(
+    total_score_terms = any(
+        term in q
+        for term in [
+            "total score",
+            "total runs",
+            "overall score",
+            "score total",
+            "score across",
+            "across all clubs",
+        ]
+    )
+    captain_recommendation = "captain" in q and any(term in q for term in ["should", "who", "best", "recommend", "provisional"])
+    year_score_followup = has_year and not total_score_terms and any(
         phrase in q
         for phrase in [
             "how was",
@@ -1691,7 +1909,7 @@ def _prefer_heuristic_answer(question: str) -> bool:
         ]
     )
     if year_score_followup:
-        return False
+        return True
     exact_patterns = [
         "how many matches",
         "matches played",
@@ -1765,13 +1983,14 @@ def _prefer_heuristic_answer(question: str) -> bool:
         "taken most",
         "rarely available",
         "consistent",
+        "captain",
         "batters",
         "batter",
         "next match",
         "who is available",
         "availability",
     ]
-    return any(pattern in q for pattern in exact_patterns)
+    return captain_recommendation or any(pattern in q for pattern in exact_patterns)
 
 
 def _heuristic_answer(question: str, store: dict[str, Any], history: list[dict[str, str]] | None = None) -> dict[str, Any]:
@@ -2423,10 +2642,40 @@ def _heuristic_answer(question: str, store: dict[str, Any], history: list[dict[s
         else:
             answer = f"No fixture availability is stored yet for {store['club'].get('name', 'this club')}."
     elif "captain" in q:
-        answer = (
-            f"{summary['matches_without_captain']} fixtures still need a club captain assigned. "
-            "Use the Match Setup form to lock in captain, toss, venue, and scorer details."
-        )
+        if any(term in q for term in ["should", "who", "best", "recommend", "provisional"]):
+            candidate = _provisional_captain_candidate(
+                analysis_store,
+                requested_clubs,
+                ranking_source_records,
+                global_availability_board,
+            )
+            if candidate:
+                candidate_name = _display_name_for_name(str(candidate.get("player_name") or ""), analysis_members)
+                if requested_clubs:
+                    answer = (
+                        f"A provisional captain recommendation for {requested_club_label} in 2026 is {candidate_name}. "
+                        "That suggestion is based on availability and overall contribution in the stored records."
+                    )
+                else:
+                    answer = (
+                        f"A provisional captain recommendation from the stored records is {candidate_name}. "
+                        "That suggestion is based on availability and overall contribution in the stored records."
+                    )
+            elif requested_clubs:
+                answer = (
+                    f"I could not find enough stored data to recommend a captain for {requested_club_label} yet. "
+                    "Use the Match Setup form to lock in captain, toss, venue, and scorer details."
+                )
+            else:
+                answer = (
+                    f"{summary['matches_without_captain']} fixtures still need a club captain assigned. "
+                    "Use the Match Setup form to lock in captain, toss, venue, and scorer details."
+                )
+        else:
+            answer = (
+                f"{summary['matches_without_captain']} fixtures still need a club captain assigned. "
+                "Use the Match Setup form to lock in captain, toss, venue, and scorer details."
+            )
     elif "score" in q or "scorecard" in q:
         completed = [match for match in fixtures if match["status"] == "Completed" or match["heartlake_score"]]
         if completed:

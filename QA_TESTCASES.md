@@ -29,9 +29,9 @@ The automated suite covers the main product surfaces end-to-end on isolated loca
 | Core product, identity, auth, club-first landing | Signed-in identity, visible clubs, session handling, registration | U01-U04, U08-U09, F03-F04, F11, N04 |
 | Clubs, dashboard, current season, player snapshot | Club scoping, current season selection, canonical member resolution | U05-U07, F01-F02, N01, N03, N05 |
 | Season Fixtures, scoring, and availability | Season list, fixture CRUD, live scorebook setup, text/voice scoring, past-fixture lock, availability save | U05, F05-F08, F10, N05 |
-| Player profile, rankings, chat, and history | Cross-club profile data, clubs dedupe, AI/RAG question answering, predictive analysis | U06, F12, N03 |
+| Player profile, rankings, chat, history, and LLM service layer | Cross-club profile data, clubs dedupe, AI/RAG question answering, prompt registry, direct inference, predictive analysis | U06, F12, F13, N03, N06, N07 |
 | Admin Center and scorecard review | Superadmin-only access and scorebook / archive controls | U09, F09, F07 |
-| Sign-in and landing-page widgets | Leader widgets, public leaderboard stats, and live LLM badge state | F03, N04, N06 |
+| Sign-in and landing-page widgets | Leader widgets, public leaderboard stats, live LLM badge state beside Assistant, and chat cache reset | F03, N04, N06, F15 |
 | Non-functional checks | Page render, health, response latency | N01-N05 |
 
 ## Unit Testcases
@@ -51,6 +51,8 @@ The automated suite covers the main product surfaces end-to-end on isolated loca
 | U11 | Chat search stats | Signed in as a player | Call `/api/chat` with `Search <player name> and show their stats` | Chat returns a player stats summary across all clubs. |
 | U12 | Chat scorecard mentions | Signed in as a player | Call `/api/chat` with `Which scorecards mention <player name> in 2025?` | Chat lists the stored scorecards that mention that player in 2025. |
 | U13 | Chat forecast | Signed in as a player | Call `/api/chat` with `Predict <club name> batting, bowling, and fielding outlook for 2026 and 2027` | Chat returns a grounded forecast using the local LLM and stored year-by-year trends. |
+| U14 | LLM service layer | Signed in as a player | Call `/api/llm/status`, `/api/llm/prompts`, `/api/llm/documents`, and `/api/llm/infer` | The API exposes the prompt registry, indexed corpus, and direct inference path backed by the prompt library. |
+| U15 | Captain recommendation | Signed in as a player | Call `/api/chat` with `Who should be the captain of Coca Cola team in 2026?` | Chat returns a provisional club-specific captain recommendation instead of an unassigned dead-end. |
 
 ## Functional Testcases
 
@@ -69,6 +71,9 @@ The automated suite covers the main product surfaces end-to-end on isolated loca
 | F11 | Sign out | Signed in as any user | Call sign out, then `/api/auth/me` | Session is invalidated and auth lookup returns unauthorized. |
 | F12 | Chat / RAG | Any browser session | Ask `What is <player name> full name?` through `/api/chat` | Chat returns a grounded answer and preserves the session id. |
 | F13 | Chat forecast | Any browser session | Ask `Forecast <player name> runs and batting average for the next season` through `/api/chat` | Chat returns a local-LLM forecast grounded in year and club trends. |
+| F14 | LLM inference API | Any browser session | Call `/api/llm/infer` with a prompt name and template args | The LLM service returns a structured answer, mode, prompt name, and source label. |
+| F15 | Clear chat | Any browser session | Click `Clear chat` in the Assistant header | The browser conversation state and cached LLM answers are cleared, and the Assistant resets to a fresh prompt. |
+| F16 | Captain recommendation | Any browser session | Ask `Who should be the captain of Coca Cola team in 2026?` through `/api/chat` | Chat returns a grounded provisional captain recommendation for the requested club. |
 
 ## Non-Functional Testcases
 

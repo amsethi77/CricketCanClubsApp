@@ -498,6 +498,7 @@ const elements = {
   archiveResultInput: document.getElementById("archiveResultInput"),
   archiveSourceNoteInput: document.getElementById("archiveSourceNoteInput"),
   llmStatusBadge: document.getElementById("llmStatusBadge"),
+  clearChatButton: document.getElementById("clearChatButton"),
   chatMessages: document.getElementById("chatMessages"),
   chatForm: document.getElementById("chatForm"),
   chatInput: document.getElementById("chatInput"),
@@ -1385,6 +1386,14 @@ function normalizeChatMessageText(value) {
 
 function restoreChatHistory() {
   elements.chatMessages.innerHTML = "";
+  if (!state.chatHistory.length) {
+    const div = document.createElement("div");
+    div.className = "message assistant";
+    div.textContent = "Ask about scorecards, player availability, commentary, archive uploads, or who should be captain.";
+    elements.chatMessages.appendChild(div);
+    elements.chatMessages.scrollTop = elements.chatMessages.scrollHeight;
+    return;
+  }
   for (const entry of state.chatHistory) {
     const div = document.createElement("div");
     div.className = `message ${entry.role}`;
@@ -1401,6 +1410,14 @@ function restoreChatHistory() {
     elements.chatMessages.appendChild(div);
   }
   elements.chatMessages.scrollTop = elements.chatMessages.scrollHeight;
+}
+
+function resetChatConversation() {
+  state.chatHistory = [];
+  state.chatSessionId = window.crypto?.randomUUID ? window.crypto.randomUUID() : `chat-${Date.now()}`;
+  window.sessionStorage.removeItem("cricketClubAppChatHistory");
+  window.sessionStorage.setItem("cricketClubAppChatSessionId", state.chatSessionId);
+  restoreChatHistory();
 }
 
 function statusBadge(status) {
@@ -3882,6 +3899,14 @@ elements.chatForm.addEventListener("submit", async (event) => {
   );
   if (data) addMessage("assistant", data.answer, data);
 });
+
+if (elements.clearChatButton) {
+  elements.clearChatButton.addEventListener("click", async () => {
+    await runAction(() => postJson("/api/llm/cache/clear", {}), "", "clear chat cache");
+    resetChatConversation();
+    setStatus("Chat history cleared.", "warning");
+  });
+}
 
 window.addEventListener("storage", (event) => {
   if (event.key !== "cricketClubAppPrimaryClubId") {

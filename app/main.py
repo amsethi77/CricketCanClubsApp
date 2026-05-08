@@ -55,6 +55,7 @@ if not logger.handlers:
 
 try:
     from cricket_brain import answer_question, get_llm_status
+    from llm_service import clear_query_cache, infer as llm_infer, list_llm_documents, list_prompt_manifest, reindex_llm_corpus
     from cricket_store import (
         BASE_DIR,
         CACHE_FILE,
@@ -100,6 +101,7 @@ try:
     )
 except ModuleNotFoundError:
     from app.cricket_brain import answer_question, get_llm_status
+    from app.llm_service import clear_query_cache, infer as llm_infer, list_llm_documents, list_prompt_manifest, reindex_llm_corpus
     from app.cricket_store import (
         BASE_DIR,
         CACHE_FILE,
@@ -958,6 +960,17 @@ class ChatRequest(BaseModel):
     session_id: str | None = None
     history: list[dict[str, Any]] = Field(default_factory=list)
     focus_club_id: str | None = None
+
+
+class LLMInferRequest(BaseModel):
+    question: str
+    session_id: str | None = None
+    history: list[dict[str, Any]] = Field(default_factory=list)
+    focus_club_id: str | None = None
+    mode: str = "auto"
+    prompt_name: str = ""
+    template_args: dict[str, Any] = Field(default_factory=dict)
+    limit: int = 8
 
 
 class ArchiveApplyRequest(BaseModel):
@@ -5820,6 +5833,82 @@ def chat(request: ChatRequest) -> dict[str, Any]:
     chat_store["all_club_summary_stats"] = list(store.get("club_summary_stats", []) or [])
     chat_store["all_club_year_stats"] = list(store.get("club_year_stats", []) or [])
     return answer_question(request.question, chat_store, history=request.history, session_id=request.session_id)
+
+
+@app.get("/api/llm/status")
+def llm_status() -> dict[str, Any]:
+    store = load_store()
+    status = get_llm_status()
+    status["prompt_count"] = len(list_prompt_manifest())
+    status["document_count"] = len(list_llm_documents(store))
+    return status
+
+
+@app.get("/api/llm/prompts")
+def llm_prompts() -> dict[str, Any]:
+    return {"prompts": list_prompt_manifest()}
+
+
+@app.get("/api/llm/documents")
+def llm_documents(
+    doc_type: str = "",
+    club_id: str = "",
+    query: str = "",
+    limit: int = 100,
+) -> dict[str, Any]:
+    store = load_store()
+    docs = list_llm_documents(store, doc_type=doc_type, club_id=club_id, query=query, limit=limit)
+    return {
+        "documents": docs,
+        "count": len(docs),
+    }
+
+
+@app.post("/api/llm/reindex")
+def llm_reindex(x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
+    user_row, _ = _require_permission(x_auth_token, "manage_scorecards")
+    store = load_store()
+    documents = reindex_llm_corpus(store)
+    return {
+        "message": "LLM corpus rebuilt from READMELLM.md, clubs, members, fixtures, and archive scorecards.",
+        "documents_indexed": len(documents),
+        "prompt_count": len(list_prompt_manifest()),
+        "updated_at": now_iso(),
+        "requested_by": user_row.get("display_name") or user_row.get("mobile") or "",
+    }
+
+
+@app.post("/api/llm/cache/clear")
+def llm_clear_cache(x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
+    user_row, _ = _auth_user_from_token(x_auth_token)
+    cleared = clear_query_cache()
+    return {
+        "message": "LLM chat history and cached answers were cleared.",
+        "cleared_entries": cleared,
+        "updated_at": now_iso(),
+        "requested_by": user_row["display_name"] or user_row["mobile"] or "",
+    }
+
+
+@app.post("/api/llm/infer")
+def llm_infer_endpoint(request: LLMInferRequest) -> dict[str, Any]:
+    store = load_store()
+    focus_club_id = str(request.focus_club_id or "").strip()
+    result = llm_infer(
+        request.question,
+        store=store,
+        focus_club_id=focus_club_id,
+        mode=request.mode,
+        prompt_name=request.prompt_name,
+        template_args=request.template_args,
+        history=request.history,
+        limit=request.limit,
+    )
+    return {
+        "question": request.question,
+        "focus_club_id": focus_club_id,
+        "result": result,
+    }
 
 
 @app.post("/api/archive/reset-scores")

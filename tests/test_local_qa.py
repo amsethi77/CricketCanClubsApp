@@ -513,7 +513,10 @@ class FunctionalQATests(LocalQATestCase):
             answer = brain._forecast_answer(question, store, history=[])
 
         self.assertIsNotNone(answer)
-        self.assertIn("cautious forecast", answer.lower())
+        self.assertIn("2024", answer)
+        self.assertIn("2025", answer)
+        self.assertIn("55", answer)
+        self.assertIn("113", answer)
         self.assertNotIn("800+", answer)
         self.assertNotIn("19 matches", answer)
 
@@ -579,10 +582,117 @@ class FunctionalQATests(LocalQATestCase):
             answer = brain._forecast_answer(question, store, history=[])
 
         self.assertIsNotNone(answer)
-        self.assertIn("cautious club forecast", answer.lower())
+        self.assertIn("Coca Cola XI", answer)
+        self.assertIn("2024", answer)
+        self.assertIn("2025", answer)
+        self.assertIn("2026", answer)
         self.assertNotIn("amit sethi", answer.lower())
         self.assertNotIn("amit gaba", answer.lower())
         self.assertNotIn("heartlake", answer.lower())
+
+    def test_f18_captain_questions_recommend_provisional_candidate_for_club(self) -> None:
+        brain = importlib.import_module("app.cricket_brain")
+        store = self.main.load_store()
+        answer = brain.answer_question("who should be the captain of Coca Cola team in 2026", store, history=[], session_id="captain-qa")
+        self.assertEqual(answer.get("mode"), "heuristic")
+        self.assertIn("provisional captain recommendation", answer.get("answer", "").lower())
+        self.assertIn("coca cola", answer.get("answer", "").lower())
+        self.assertNotIn("unassigned", answer.get("answer", "").lower())
+
+    def test_f19_total_score_for_2025_across_all_clubs_is_year_scoped(self) -> None:
+        brain = importlib.import_module("app.cricket_brain")
+        store = self.main.load_store()
+        answer = brain.answer_question("what was Amit Sethi total score for 2025 across all clubs", store, history=[], session_id="total-score-qa")
+        self.assertEqual(answer.get("mode"), "heuristic")
+        self.assertIn("113 runs", answer.get("answer", ""))
+        self.assertIn("4 confirmed match(es)", answer.get("answer", ""))
+        self.assertNotIn("168 runs", answer.get("answer", ""))
+
+    def test_f20_history_pronoun_resolves_previous_player_for_2024_followup(self) -> None:
+        brain = importlib.import_module("app.cricket_brain")
+        store = self.main.load_store()
+        answer = brain.answer_question(
+            "how was his score in 2024?",
+            store,
+            history=[{"role": "user", "text": "how is Amit Sethi's performance going to be in 2026 season"}],
+            session_id="score-followup-qa",
+        )
+        self.assertEqual(answer.get("mode"), "heuristic")
+        self.assertIn("Amit Sethi", answer.get("answer", ""))
+        self.assertIn("55 runs", answer.get("answer", ""))
+        self.assertIn("2 confirmed match(es)", answer.get("answer", ""))
+
+    def test_f21_save_store_refreshes_llm_document_index(self) -> None:
+        store = self.main.load_store()
+        self.main.save_store(store)
+        refreshed = self.main.load_store()
+        llm_documents = refreshed.get("llm_documents", [])
+        self.assertTrue(llm_documents, "saving the store should rebuild the indexed LLM document corpus")
+        self.assertTrue(any(doc.get("doc_type") == "prompt" for doc in llm_documents))
+
+    def test_f22_llm_registry_and_status_endpoints(self) -> None:
+        status = self.client.get("/api/llm/status")
+        prompts = self.client.get("/api/llm/prompts")
+        documents = self.client.get("/api/llm/documents", params={"limit": 5})
+        self.assertEqual(status.status_code, 200, status.text)
+        self.assertEqual(prompts.status_code, 200, prompts.text)
+        self.assertEqual(documents.status_code, 200, documents.text)
+        self.assertGreaterEqual(status.json().get("prompt_count", 0), 1)
+        self.assertIn("SYSTEM_PROMPT", [item.get("name") for item in prompts.json().get("prompts", [])])
+
+    def test_f23_llm_infer_endpoint_uses_registry_prompt(self) -> None:
+        llm_service = importlib.import_module("app.llm_service")
+
+        class _FakeResponse:
+            def raise_for_status(self) -> None:
+                return None
+
+            def json(self) -> dict[str, dict[str, str]]:
+                return {
+                    "message": {
+                        "content": "Forecast: the club outlook is stable and grounded in the stored records."
+                    }
+                }
+
+        with (
+            patch.object(
+                llm_service,
+                "get_llm_status",
+                return_value={
+                    "available": True,
+                    "provider": "ollama",
+                    "model": "llama3.2:latest",
+                    "base_url": "http://127.0.0.1:11434",
+                    "embedding_model": "nomic-embed-text",
+                    "embeddings_available": True,
+                },
+            ),
+            patch.object(llm_service.httpx, "post", return_value=_FakeResponse()),
+        ):
+            response = self.client.post(
+                "/api/llm/infer",
+                json={
+                    "question": "Predict the club performance outlook for 2026",
+                    "prompt_name": "CLUB_PERFORMANCE",
+                    "focus_club_id": "club-heartlake",
+                    "mode": "forecast",
+                    "template_args": {"club_data": "club: Heartlake Cricket Club"},
+                },
+            )
+
+        self.assertEqual(response.status_code, 200, response.text)
+        payload = response.json()
+        self.assertIn("result", payload)
+        self.assertEqual(payload["result"].get("source_provider"), "ollama")
+        self.assertEqual(payload["result"].get("prompt_name"), "CLUB_PERFORMANCE")
+        self.assertIn("club outlook", payload["result"].get("answer", "").lower())
+
+    def test_f24_llm_cache_clear_endpoint_resets_cached_answers(self) -> None:
+        response = self.client.post("/api/llm/cache/clear", headers=self.auth_headers(self.signin("1111111111")["token"]))
+        self.assertEqual(response.status_code, 200, response.text)
+        payload = response.json()
+        self.assertIn("cleared", payload.get("message", "").lower())
+        self.assertIn("updated_at", payload)
 
 
 class NonFunctionalQATests(LocalQATestCase):

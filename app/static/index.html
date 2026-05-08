@@ -29,7 +29,7 @@
       rel="stylesheet"
     />
     <link rel="stylesheet" href="/assets/tailwind.css?v=20260426a" />
-    <link rel="stylesheet" href="/assets/styles.css?v=20260508b" />
+    <link rel="stylesheet" href="/assets/styles.css?v=20260508c" />
   </head>
   <body>
     <div class="page-shell">
@@ -592,11 +592,15 @@
         <section id="assistant" class="panel ai-panel">
           <div class="panel-head">
             <div class="assistant-head-row">
-              <div>
-                <p class="section-kicker">Assistant</p>
-                <h2>Free LLM style open queries</h2>
+              <div class="assistant-heading-block">
+                <div>
+                  <div class="assistant-kicker-row">
+                    <p class="section-kicker">Assistant</p>
+                    <div id="llmStatusBadge" class="llm-status-pill llm-status-loading" aria-live="polite" title="LLM status">LLM</div>
+                  </div>
+                </div>
               </div>
-              <div id="llmStatusBadge" class="llm-status-pill llm-status-loading" aria-live="polite" title="LLM status">LLM</div>
+              <button id="clearChatButton" class="secondary-button assistant-clear-button" type="button">Clear chat</button>
             </div>
           </div>
           <div id="chatMessages" class="chat-messages">
@@ -612,6 +616,6 @@
       </main>
     </div>
     <script src="/assets/multipage.js?v=20260503i"></script>
-    <script src="/assets/app.js?v=20260508b"></script>
+    <script src="/assets/app.js?v=20260508c"></script>
   </body>
 </html>
