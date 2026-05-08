@@ -1,5 +1,6 @@
 import os
 import re
+import logging
 from typing import Any
 
 import httpx
@@ -38,6 +39,8 @@ PREFERRED_OLLAMA_MODELS = [
     "phi4:latest",
     "mistral:latest",
 ]
+
+logger = logging.getLogger("CricketClubBrain")
 
 MONTH_NAMES = {
     "january": "01",
@@ -332,10 +335,12 @@ def _requested_club_terms(question: str, store: dict[str, Any]) -> list[str]:
             seen.add(lowered)
             matches.append((found.start(), lowered))
 
-    for club in store.get("clubs", []) or []:
+    clubs = list(store.get("clubs", []) or []) + list(store.get("all_clubs", []) or [])
+    teams = list(store.get("teams", []) or []) + list(store.get("all_teams", []) or [])
+    for club in clubs:
         consider(club.get("name", ""))
         consider(club.get("short_name", ""))
-    for team in store.get("teams", []) or []:
+    for team in teams:
         consider(team.get("name", ""))
         consider(team.get("display_name", ""))
 
@@ -565,6 +570,23 @@ def _requested_club_label(requested_clubs: list[str], store: dict[str, Any]) -> 
             if str(value or "").strip().lower() == target:
                 return str(value).strip()
     return requested_clubs[0]
+
+
+def _global_analysis_store(store: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "club": dict(store.get("focus_club") or store.get("club") or {}),
+        "clubs": list(store.get("all_clubs") or store.get("clubs") or []),
+        "teams": list(store.get("all_teams") or store.get("teams") or []),
+        "members": list(store.get("all_members") or store.get("members") or []),
+        "fixtures": list(store.get("all_fixtures") or store.get("fixtures") or []),
+        "archive_uploads": list(store.get("all_archive_uploads") or store.get("archive_uploads") or []),
+        "member_summary_stats": list(store.get("all_member_summary_stats") or store.get("member_summary_stats") or []),
+        "member_year_stats": list(store.get("all_member_year_stats") or store.get("member_year_stats") or []),
+        "member_club_stats": list(store.get("all_member_club_stats") or store.get("member_club_stats") or []),
+        "club_summary_stats": list(store.get("all_club_summary_stats") or store.get("club_summary_stats") or []),
+        "club_year_stats": list(store.get("all_club_year_stats") or store.get("club_year_stats") or []),
+        "viewer_profile": dict(store.get("viewer_profile") or {}),
+    }
 
 
 def _combined_player_records(
@@ -992,19 +1014,21 @@ def _rag_answer(question: str, store: dict[str, Any], grounded_facts: str = "", 
     if not llm_status.get("available") or llm_status.get("provider") != "ollama" or not llm_status.get("model"):
         return None
 
-    effective_question = _contextualize_question(question, history, store["members"], store)
+    analysis_store = _global_analysis_store(store)
+    effective_question = _contextualize_question(question, history, analysis_store["members"], analysis_store)
     q = effective_question.lower().strip()
-    fixtures = store["fixtures"]
-    members = store["members"]
-    summary = build_summary(store)
+    fixtures = analysis_store["fixtures"]
+    members = analysis_store["members"]
+    archives = analysis_store["archive_uploads"]
+    summary = build_summary(analysis_store)
     player_stats = build_player_stats(fixtures, members)
-    pending_player_stats = build_player_pending_stats(store.get("archive_uploads", []), members)
+    pending_player_stats = build_player_pending_stats(archives, members)
     matched_members = _matched_members(effective_question, members)
 
-    snippets = [_club_context_snippet(store, summary)]
-    snippets.extend(_player_context_snippets(store, members, fixtures, player_stats, pending_player_stats))
+    snippets = [_club_context_snippet(analysis_store, summary)]
+    snippets.extend(_player_context_snippets(analysis_store, members, fixtures, player_stats, pending_player_stats))
     snippets.extend(_fixture_context_snippets(fixtures))
-    snippets.extend(_archive_context_snippets(store.get("archive_uploads", [])))
+    snippets.extend(_archive_context_snippets(archives))
     selected_snippets = _rank_context_snippets(question, snippets, matched_members)
     context = "\n\n".join(snippet["text"] for snippet in selected_snippets)
     grounded_block = grounded_facts.strip()
@@ -1016,7 +1040,9 @@ def _rag_answer(question: str, store: dict[str, Any], grounded_facts: str = "", 
         "- If the answer is not supported by context, say you could not find it in the stored data.\n"
         "- Historical archive scorecards count as confirmed historical match history.\n"
         "- The live 2026 fixture season is separate from the 2025 historical archive season.\n"
+        "- The supplied context includes all clubs, teams, fixtures, archives, member stats, and club summary tables unless the question explicitly narrows the scope.\n"
         "- Player identity comes from the persisted member name, full name, and saved aliases in the supplied context.\n"
+        "- Treat every stored player the same way; do not assume any one player is special.\n"
         "- Unless the question explicitly names a club or team, player totals and match counts should include all stored clubs and teams.\n"
         "- In answers, refer to players by full name whenever a full name is available.\n"
         "- When authoritative grounded facts are provided, treat them as the primary answer source and do not contradict them.\n"
@@ -1056,8 +1082,270 @@ def _rag_answer(question: str, store: dict[str, Any], grounded_facts: str = "", 
         return None
 
 
+def _prediction_question_intent(question: str) -> bool:
+    q = question.lower().strip()
+    return any(
+        phrase in q
+        for phrase in [
+            "predict",
+            "prediction",
+            "forecast",
+            "projection",
+            "project",
+            "future performance",
+            "future year",
+            "next year",
+            "outlook",
+            "trend analysis",
+            "likely to",
+            "expected to",
+            "estimate",
+            "probability",
+            "performance outlook",
+        ]
+    ) or (
+        "will" in q
+        and any(term in q for term in ["run", "runs", "wicket", "wickets", "catch", "catches", "score", "perform"])
+    )
+
+
+def _forecast_rows_for_members(store: dict[str, Any], analysis_store: dict[str, Any], matched_members: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    member_year_rows = list(analysis_store.get("member_year_stats") or [])
+    member_club_rows = list(analysis_store.get("member_club_stats") or [])
+    overall_rows = list(analysis_store.get("member_summary_stats") or [])
+    selected_names = {member["name"] for member in matched_members if member.get("name")}
+    if selected_names:
+        overall_rows = [row for row in overall_rows if row.get("player_name") in selected_names]
+        member_year_rows = [row for row in member_year_rows if row.get("player_name") in selected_names]
+        member_club_rows = [row for row in member_club_rows if row.get("player_name") in selected_names]
+    else:
+        top_names = {
+            row.get("player_name")
+            for row in sorted(
+                overall_rows,
+                key=lambda item: (
+                    -int(item.get("runs", 0) or 0),
+                    -int(item.get("matches", 0) or 0),
+                    item.get("player_name", ""),
+                ),
+            )[:5]
+            if row.get("player_name")
+        }
+        if top_names:
+            overall_rows = [row for row in overall_rows if row.get("player_name") in top_names]
+            member_year_rows = [row for row in member_year_rows if row.get("player_name") in top_names]
+            member_club_rows = [row for row in member_club_rows if row.get("player_name") in top_names]
+
+    snippets: list[dict[str, Any]] = []
+    for row in overall_rows[:8]:
+        member = next((item for item in analysis_store.get("members", []) if item.get("name") == row.get("player_name")), None)
+        if not member:
+            continue
+        year_rows = sorted(
+            [item for item in member_year_rows if item.get("player_name") == row.get("player_name")],
+            key=lambda item: str(item.get("season_year") or ""),
+        )
+        club_rows = sorted(
+            [item for item in member_club_rows if item.get("player_name") == row.get("player_name")],
+            key=lambda item: (str(item.get("club_name") or ""), str(item.get("club_id") or "")),
+        )
+        recent_year_rows = year_rows[-3:]
+        recent_year_text = "; ".join(
+            (
+                f"{item.get('season_year')}: matches={item.get('matches', 0)}, runs={item.get('runs', 0)}, "
+                f"wickets={item.get('wickets', 0)}, catches={item.get('catches', 0)}, "
+                f"avg={item.get('batting_average', 0)}, sr={item.get('strike_rate', 0)}, "
+                f"highest={item.get('highest_score', '') or 'n/a'}"
+            )
+            for item in recent_year_rows
+        )
+        club_text = "; ".join(
+            (
+                f"{item.get('club_name')}: matches={item.get('matches', 0)}, runs={item.get('runs', 0)}, "
+                f"wickets={item.get('wickets', 0)}, catches={item.get('catches', 0)}, "
+                f"avg={item.get('batting_average', 0)}, sr={item.get('strike_rate', 0)}, "
+                f"highest={item.get('highest_score', '') or 'n/a'}"
+            )
+            for item in club_rows[:3]
+        )
+        snippets.append(
+            {
+                "kind": "forecast-player",
+                "key": row.get("player_name", ""),
+                "text": "\n".join(
+                    [
+                        f"[forecast-player] {_display_name(member)}",
+                        f"overall: matches={row.get('matches', 0)}, runs={row.get('runs', 0)}, wickets={row.get('wickets', 0)}, catches={row.get('catches', 0)}, avg={row.get('batting_average', 0)}, sr={row.get('strike_rate', 0)}, highest={row.get('highest_score', '') or 'n/a'}",
+                        f"milestones: 25+={row.get('scores_25_plus', 0)}, 50+={row.get('scores_50_plus', 0)}, 100+={row.get('scores_100_plus', 0)}",
+                        f"clubs: {club_text or 'none'}",
+                        f"recent_years: {recent_year_text or 'none'}",
+                        f"availability: available={row.get('matches_available', 0)}, maybe={row.get('matches_maybe', 0)}, unavailable={row.get('matches_unavailable', 0)}, no_response={row.get('matches_no_response', 0)}",
+                    ]
+                ),
+            }
+        )
+    return snippets
+
+
+def _forecast_club_snippets(store: dict[str, Any], analysis_store: dict[str, Any], requested_clubs: list[str]) -> list[dict[str, Any]]:
+    club_year_rows = list(analysis_store.get("club_year_stats") or [])
+    club_summary_rows = list(analysis_store.get("club_summary_stats") or [])
+    clubs = list(analysis_store.get("clubs") or [])
+    target_clubs = []
+    if requested_clubs:
+        requested_set = set(requested_clubs)
+        for club in clubs:
+            names = {
+                str(club.get("id") or "").strip().lower(),
+                str(club.get("name") or "").strip().lower(),
+                str(club.get("short_name") or "").strip().lower(),
+            }
+            if names & requested_set:
+                target_clubs.append(club)
+    elif store.get("focus_club"):
+        target_id = str(store["focus_club"].get("id") or "").strip().lower()
+        target_clubs = [club for club in clubs if str(club.get("id") or "").strip().lower() == target_id]
+    if not target_clubs:
+        target_clubs = clubs[:5]
+
+    snippets: list[dict[str, Any]] = []
+    for club in target_clubs:
+        club_id = str(club.get("id") or "").strip()
+        club_name = str(club.get("name") or "").strip()
+        if not club_id or not club_name:
+            continue
+        summary_row = next((row for row in club_summary_rows if str(row.get("club_id") or "").strip().lower() == club_id.lower()), {})
+        year_rows = sorted(
+            [row for row in club_year_rows if str(row.get("club_id") or "").strip().lower() == club_id.lower()],
+            key=lambda item: str(item.get("season_year") or ""),
+        )
+        recent_year_rows = year_rows[-3:]
+        year_text = "; ".join(
+            (
+                f"{item.get('season_year')}: matches={item.get('matches_played', 0)}, wins={item.get('matches_won', 0)}, "
+                f"losses={item.get('matches_lost', 0)}, nr={item.get('matches_nr', 0)}, runs={item.get('total_runs', 0)}, "
+                f"wickets={item.get('total_wickets', 0)}, catches={item.get('total_catches', 0)}, "
+                f"top_batter={item.get('top_batter', '')} ({item.get('top_batter_runs', 0)}), "
+                f"milestones=25+:{item.get('scores_25_plus', 0)} 50+:{item.get('scores_50_plus', 0)} 100+:{item.get('scores_100_plus', 0)}"
+            )
+            for item in recent_year_rows
+        )
+        snippets.append(
+            {
+                "kind": "forecast-club",
+                "key": club_id,
+                "text": "\n".join(
+                    [
+                        f"[forecast-club] {club_name}",
+                        f"season: {club.get('season') or 'unknown'}",
+                        f"overall: matches_played={summary_row.get('matches_played', 0)}, wins={summary_row.get('matches_won', 0)}, losses={summary_row.get('matches_lost', 0)}, nr={summary_row.get('matches_nr', 0)}, runs={summary_row.get('total_runs', 0)}, wickets={summary_row.get('total_wickets', 0)}, catches={summary_row.get('total_catches', 0)}, highest_score={summary_row.get('highest_score', '') or 'n/a'}",
+                        f"top_batter: {summary_row.get('top_batter', '')} ({summary_row.get('top_batter_runs', 0)})",
+                        f"milestones: 25+={summary_row.get('scores_25_plus', 0)}, 50+={summary_row.get('scores_50_plus', 0)}, 100+={summary_row.get('scores_100_plus', 0)}",
+                        f"recent_years: {year_text or 'none'}",
+                    ]
+                ),
+            }
+        )
+    return snippets
+
+
+def _forecast_answer(question: str, store: dict[str, Any], history: list[dict[str, str]] | None = None) -> str | None:
+    llm_status = get_llm_status()
+    if not llm_status.get("available") or llm_status.get("provider") != "ollama" or not llm_status.get("model"):
+        return None
+
+    analysis_store = _global_analysis_store(store)
+    effective_question = _contextualize_question(question, history, analysis_store["members"], analysis_store)
+    matched_members = _matched_members(effective_question, analysis_store["members"])
+    requested_clubs = _requested_club_terms(effective_question, store)
+    summary = build_summary(analysis_store)
+    snippets = [
+        {
+            "kind": "forecast-club-overview",
+            "key": "overview",
+            "text": "\n".join(
+                [
+                    f"[forecast-overview] club={analysis_store['club'].get('name', 'Club')}",
+                    f"current_season={analysis_store['club'].get('season') or 'unknown'}",
+                    f"fixture_count={summary.get('fixture_count', 0)}",
+                    f"member_count={summary.get('member_count', 0)}",
+                    f"archive_count={summary.get('archive_count', 0)}",
+                    f"completed_matches={summary.get('completed_matches', 0)}",
+                    f"live_matches={summary.get('live_matches', 0)}",
+                    f"batting_leader={summary.get('batting_leader', '')} ({summary.get('batting_leader_runs', 0)})",
+                    f"wicket_leader={summary.get('wicket_leader', '')} ({summary.get('wicket_leader_count', 0)})",
+                    f"fielding_leader={summary.get('fielding_leader', '')} ({summary.get('fielding_leader_count', 0)})",
+                    f"availability_leader={summary.get('availability_leader', '')}",
+                ]
+            ),
+        }
+    ]
+    snippets.extend(_forecast_club_snippets(store, analysis_store, requested_clubs))
+    snippets.extend(_forecast_rows_for_members(store, analysis_store, matched_members))
+    selected_snippets = _rank_context_snippets(question, snippets, matched_members)
+    context = "\n\n".join(snippet["text"] for snippet in selected_snippets)
+
+    system_prompt = (
+        "You are a cricket performance forecaster using only the supplied stored context.\n"
+        "Rules:\n"
+        "- Do not guess beyond the supplied trends and summaries.\n"
+        "- Make it clear that forecasts are projections, not certainties.\n"
+        "- Use the recent year-by-year club and player records to infer likely current and future performance.\n"
+        "- If a player is named, focus on that player and mention club-specific differences only when they exist in the context.\n"
+        "- If a club is named, focus on that club; otherwise compare the key clubs and players in the supplied context.\n"
+        "- For future years, project conservatively from the latest available year data and current availability patterns.\n"
+        "- Mention the factors used: recent form, batting average, strike rate, wickets, catches, availability, and milestone counts.\n"
+        "- If the data is too thin, say so plainly.\n"
+        "- Keep the answer concise, practical, and directly actionable for the club."
+    )
+
+    try:
+        response = httpx.post(
+            f"{_ollama_base_url()}/api/chat",
+            json={
+                "model": llm_status["model"],
+                "stream": False,
+                "options": {"temperature": 0.25},
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {
+                        "role": "user",
+                        "content": (
+                            f"Forecast question: {effective_question}\n\n"
+                            f"Context:\n{context}\n\n"
+                            "Return a grounded forecast for the club and/or player performance in current and future years."
+                        ),
+                    },
+                ],
+            },
+            timeout=45.0,
+        )
+        response.raise_for_status()
+        answer = response.json().get("message", {}).get("content", "").strip()
+        if not answer:
+            return None
+        return answer
+    except Exception:
+        return None
+
+
 def _prefer_heuristic_answer(question: str) -> bool:
     q = question.lower().strip()
+    has_year = bool(re.search(r"\b(20\d{2})\b", q))
+    year_score_followup = has_year and any(
+        phrase in q
+        for phrase in [
+            "how was",
+            "how did",
+            "what was",
+            "score in",
+            "runs in",
+            "score for",
+            "performance in",
+        ]
+    )
+    if year_score_followup:
+        return False
     exact_patterns = [
         "how many matches",
         "matches played",
@@ -1101,11 +1389,22 @@ def _prefer_heuristic_answer(question: str) -> bool:
         "which llm",
         "how many runs",
         "total runs",
+        "total score",
+        "overall score",
+        "score across",
+        "across all clubs",
         "batting average",
         "average",
         "strike rate",
         "economy",
         "bowling economy",
+        "show stats",
+        "search",
+        "scorecard",
+        "scorecards",
+        "mention",
+        "mentions",
+        "follow",
         "which team was it against",
         "what team was it against",
         "best score",
@@ -1135,24 +1434,37 @@ def _heuristic_answer(question: str, store: dict[str, Any], history: list[dict[s
     summary = build_summary(store)
     fixtures = store["fixtures"]
     members = store["members"]
+    analysis_store = _global_analysis_store(store)
+    analysis_fixtures = analysis_store["fixtures"]
+    analysis_members = analysis_store["members"]
+    analysis_archives = canonical_archive_uploads(analysis_store["archive_uploads"])
     availability_board = build_availability_board(members, fixtures)
     player_stats = build_player_stats(fixtures, members)
     pending_player_stats = build_player_pending_stats(store.get("archive_uploads", []), members)
+    global_availability_board = build_availability_board(analysis_members, analysis_fixtures)
+    global_player_stats = build_player_stats(analysis_fixtures, analysis_members)
+    global_pending_player_stats = build_player_pending_stats(analysis_archives, analysis_members)
     combined_records = _combined_player_records(members, player_stats, pending_player_stats, availability_board)
+    global_combined_records = _combined_player_records(
+        analysis_members,
+        global_player_stats,
+        global_pending_player_stats,
+        global_availability_board,
+    )
     next_match = next((match for match in fixtures if match["status"] != "Completed"), fixtures[0] if fixtures else {})
-    matched_members = _matched_members(effective_question, members)
+    matched_members = _matched_members(effective_question, analysis_members)
     matched_member = matched_members[0] if matched_members else None
     requested_clubs = _requested_club_terms(effective_question, store)
     requested_club_label = _requested_club_label(requested_clubs, store)
     club_member_names = {
         member["name"]
-        for member in members
+        for member in analysis_members
         if requested_clubs and any(term in _member_club_terms(member) for term in requested_clubs)
     }
     ranking_source_records = (
-        [item for item in combined_records if item["player_name"] in club_member_names]
+        [item for item in global_combined_records if item["player_name"] in club_member_names]
         if requested_clubs
-        else combined_records
+        else global_combined_records
     )
     matched_stats = None
     matched_pending = None
@@ -1160,18 +1472,19 @@ def _heuristic_answer(question: str, store: dict[str, Any], history: list[dict[s
     matched_filtered_entries: list[dict[str, Any]] = []
     if matched_member:
         matched_stats = next(
-            (item for item in player_stats if item["player_name"] == matched_member["name"]),
+            (item for item in global_player_stats if item["player_name"] == matched_member["name"]),
             {"player_name": matched_member["name"], "runs": 0, "wickets": 0, "catches": 0, "matches": 0},
         )
         matched_pending = next(
-            (item for item in pending_player_stats if item["player_name"] == matched_member["name"]),
+            (item for item in global_pending_player_stats if item["player_name"] == matched_member["name"]),
             {"player_name": matched_member["name"], "runs": 0, "wickets": 0, "catches": 0, "matches": 0},
         )
-        matched_entries = _player_participation_entries(store, matched_member)
+        matched_entries = _player_participation_entries(analysis_store, matched_member)
         matched_filtered_entries = _filter_entries_for_requested_clubs(matched_entries, requested_clubs)
     stored_matches = (matched_stats or {}).get("matches", 0) + (matched_pending or {}).get("matches", 0)
     stored_runs = (matched_stats or {}).get("runs", 0) + (matched_pending or {}).get("runs", 0)
     filtered_totals = _aggregate_entries(matched_filtered_entries) if matched_filtered_entries else {"matches": 0, "runs": 0, "balls": 0, "wickets": 0, "catches": 0}
+    global_totals = _aggregate_entries(matched_entries) if matched_entries else {"matches": 0, "runs": 0, "balls": 0, "wickets": 0, "catches": 0}
     year_match = re.search(r"\b(20\d{2})\b", q)
     query_year = year_match.group(1) if year_match else ""
     query_month = next((month_number for month_name, month_number in MONTH_NAMES.items() if month_name in q), "")
@@ -1199,6 +1512,19 @@ def _heuristic_answer(question: str, store: dict[str, Any], history: list[dict[s
     batting_average_intent = "batting average" in q
     strike_rate_intent = "strike rate" in q
     bowling_economy_intent = "bowling economy" in q or ("economy" in q and "bowl" in q)
+    search_stats_intent = ("search" in q and "stats" in q) or "show stats" in q
+    scorecard_mentions_intent = "scorecard" in q and any(term in q for term in ["mention", "mentions", "which", "show"])
+    follow_intent = "follow" in q
+    total_score_intent = any(
+        term in q
+        for term in [
+            "total score",
+            "total runs",
+            "overall score",
+            "runs total",
+            "score total",
+        ]
+    ) or ("score" in q and "total" in q)
     meta_rag_intent = "is this rag" in q or ("rag" in q and "llm" in q) or "from llm" in q
     model_intent = "what model" in q or "which llm" in q
     best_score_opponent_intent = (
@@ -1362,7 +1688,7 @@ def _heuristic_answer(question: str, store: dict[str, Any], history: list[dict[s
             matches = int(filtered_totals.get("matches", 0) or 0)
             batting_average = float(filtered_totals.get("batting_average", 0.0) or 0.0)
         else:
-            combined_record = next((item for item in combined_records if item["player_name"] == matched_member["name"]), None)
+            combined_record = next((item for item in global_combined_records if item["player_name"] == matched_member["name"]), None)
             batting_average = float((combined_record or {}).get("batting_average", 0.0) or 0.0)
             matches = int((combined_record or {}).get("matches", 0) or 0)
         if matches:
@@ -1377,7 +1703,7 @@ def _heuristic_answer(question: str, store: dict[str, Any], history: list[dict[s
             balls = int(filtered_totals.get("balls", 0) or 0)
             strike_rate = round((filtered_totals.get("runs", 0) / balls) * 100, 2) if balls else 0.0
         else:
-            combined_record = next((item for item in combined_records if item["player_name"] == matched_member["name"]), None)
+            combined_record = next((item for item in global_combined_records if item["player_name"] == matched_member["name"]), None)
             strike_rate = float((combined_record or {}).get("strike_rate", 0.0) or 0.0)
             balls = int((combined_record or {}).get("balls", 0) or 0)
         if balls:
@@ -1389,6 +1715,87 @@ def _heuristic_answer(question: str, store: dict[str, Any], history: list[dict[s
     elif matched_member and bowling_economy_intent:
         display_name = _display_name(matched_member)
         answer = f"I could not calculate a bowling economy for {display_name} because bowling overs and runs conceded are not stored yet."
+    elif matched_member and search_stats_intent:
+        display_name = _display_name(matched_member)
+        if requested_clubs:
+            scope_text = f" for {requested_club_label}"
+            answer = (
+                f"{display_name}'s stats{scope_text}: {filtered_totals['matches']} match(es), {filtered_totals['runs']} runs, "
+                f"{filtered_totals['wickets']} wickets, {filtered_totals['catches']} catches."
+            )
+        else:
+            clubs = sorted(
+                {
+                    str(club.get("club_name") or "").strip()
+                    for club in matched_member.get("club_memberships", []) or []
+                    if str(club.get("club_name") or "").strip()
+                }
+            )
+            clubs_text = ", ".join(clubs) if clubs else "no club memberships stored"
+            answer = (
+                f"{display_name}'s stats across all clubs: {stored_matches} match(es), {stored_runs} runs, "
+                f"{(matched_stats or {}).get('wickets', 0) + (matched_pending or {}).get('wickets', 0)} wickets, "
+                f"{(matched_stats or {}).get('catches', 0) + (matched_pending or {}).get('catches', 0)} catches. "
+                f"Clubs: {clubs_text}."
+            )
+    elif matched_member and scorecard_mentions_intent:
+        display_name = _display_name(matched_member)
+        archive_mentions = [
+            item
+            for item in matched_entries
+            if str(item.get("key", "")).startswith("archive:")
+            and (not query_year or _date_matches(item.get("date", ""), query_year, query_month))
+        ]
+        if requested_clubs:
+            archive_mentions = [
+                item
+                for item in matched_filtered_entries
+                if str(item.get("key", "")).startswith("archive:")
+                and (not query_year or _date_matches(item.get("date", ""), query_year, query_month))
+            ]
+        if archive_mentions:
+            mentions = []
+            for item in archive_mentions[:5]:
+                date_label = item.get("date", "") or "unknown date"
+                opponent = item.get("opponent", "") or "unknown opponent"
+                club_label = item.get("club_label", "") or item.get("team_label", "") or "unknown club"
+                mentions.append(f"{date_label} vs {opponent} ({club_label})")
+            scope = f" for {requested_club_label}" if requested_clubs else " across all clubs"
+            if query_year:
+                scope += f" in {query_year}"
+            answer = f"I found {len(archive_mentions)} scorecard(s){scope} mentioning {display_name}: " + "; ".join(mentions) + "."
+        else:
+            answer = f"I could not find any stored scorecards mentioning {display_name}."
+    elif matched_member and follow_intent:
+        display_name = _display_name(matched_member)
+        answer = (
+            f"Use the Follow button on {display_name}'s profile to add them to your watchlist. "
+            "Chat can read the stored data, but following a player is saved from the player or clubs page."
+        )
+    elif matched_member and total_score_intent:
+        display_name = _display_name(matched_member)
+        scope_entries = matched_filtered_entries if requested_clubs else matched_entries
+        if query_year or query_month:
+            scope_entries = [item for item in scope_entries if _date_matches(item.get("date", ""), query_year, query_month)]
+        scoped_totals = _aggregate_entries(scope_entries) if scope_entries else {"matches": 0, "runs": 0, "balls": 0, "wickets": 0, "catches": 0}
+        if scoped_totals["matches"]:
+            scope_bits = []
+            if requested_clubs:
+                scope_bits.append(f"for {requested_club_label}")
+            else:
+                scope_bits.append("across all clubs")
+            if query_year:
+                scope_bits.append(f"in {query_year}")
+            if query_month:
+                month_label = next(name.title() for name, value in MONTH_NAMES.items() if value == query_month)
+                scope_bits.append(f"in {month_label}")
+            scope_text = " ".join(scope_bits)
+            answer = (
+                f"{display_name}'s total score {scope_text} is {scoped_totals['runs']} runs across "
+                f"{scoped_totals['matches']} confirmed match(es)."
+            )
+        else:
+            answer = f"I could not find a scored match for {display_name} in the stored records."
     elif matched_member and rank_intent and not any(term in q for term in ["run", "bat", "wicket", "bowl", "catch", "field"]):
         display_name = _display_name(matched_member)
         batting_rank = batting_rank_by_player.get(matched_member["name"])
@@ -1555,29 +1962,61 @@ def _heuristic_answer(question: str, store: dict[str, Any], history: list[dict[s
                 f"across {filtered_totals['matches']} confirmed match(es) for {requested_club_label}."
             )
         else:
-            answer = (
-                f"{display_name} has {stored_runs} runs across {stored_matches} confirmed match(es) in the stored records. "
-                f"Live fixture records account for {matched_stats['runs']} runs, {matched_stats['wickets']} wickets, and {matched_stats['catches']} catches; "
-                f"confirmed historical scorecards account for {matched_pending['runs']} additional runs from {matched_pending['matches']} match(es)."
-            )
+            if query_year or query_month:
+                scope_entries = [item for item in matched_entries if _date_matches(item.get("date", ""), query_year, query_month)]
+                scoped_totals = _aggregate_entries(scope_entries) if scope_entries else {"matches": 0, "runs": 0, "balls": 0, "wickets": 0, "catches": 0}
+                if scoped_totals["matches"]:
+                    scope_bits = ["across all clubs"]
+                    if query_year:
+                        scope_bits.append(f"in {query_year}")
+                    if query_month:
+                        month_label = next(name.title() for name, value in MONTH_NAMES.items() if value == query_month)
+                        scope_bits.append(f"in {month_label}")
+                    scope_text = " ".join(scope_bits)
+                    answer = (
+                        f"{display_name} has {scoped_totals['runs']} runs {scope_text}, with "
+                        f"{scoped_totals['wickets']} wickets and {scoped_totals['catches']} catches across {scoped_totals['matches']} confirmed match(es)."
+                    )
+                else:
+                    answer = f"I could not find a scored match for {display_name} in the stored records."
+            else:
+                answer = (
+                    f"{display_name} has {stored_runs} runs across {stored_matches} confirmed match(es) in the stored records. "
+                    f"Live fixture records account for {matched_stats['runs']} runs, {matched_stats['wickets']} wickets, and {matched_stats['catches']} catches; "
+                    f"confirmed historical scorecards account for {matched_pending['runs']} additional runs from {matched_pending['matches']} match(es)."
+                )
     elif matched_member and any(keyword in q for keyword in ["availability", "available", "maybe", "unavailable"]):
+        analysis_store = _global_analysis_store(store)
         display_name = _display_name(matched_member)
-        club_availability = _player_availability_by_club(store, matched_member["name"])
+        club_availability = _player_availability_by_club(analysis_store, matched_member["name"])
         if club_availability:
+            known_clubs = {
+                str(club.get("name") or club.get("short_name") or "").strip()
+                for club in analysis_store.get("clubs", [])
+                if str(club.get("name") or club.get("short_name") or "").strip()
+            }
+            seen_clubs = {str(item["club_name"]).strip() for item in club_availability if str(item["club_name"]).strip()}
             parts: list[str] = []
             for item in club_availability:
                 club_label = item["club_name"]
                 if int(item["available"]) > 0:
-                    parts.append(f"{int(item['available'])} games available for {club_label}")
+                    parts.append(f"{int(item['available'])} game{'s' if int(item['available']) != 1 else ''} available for {club_label}")
                 if int(item["maybe"]) > 0:
-                    parts.append(f"{int(item['maybe'])} game maybe for {club_label}")
+                    parts.append(f"{int(item['maybe'])} game{'s' if int(item['maybe']) != 1 else ''} maybe for {club_label}")
                 if int(item["unavailable"]) > 0:
-                    parts.append(f"{int(item['unavailable'])} games unavailable for {club_label}")
+                    parts.append(f"{int(item['unavailable'])} game{'s' if int(item['unavailable']) != 1 else ''} unavailable for {club_label}")
             if not parts:
                 parts.append("no recorded availability yet")
-            answer = f"{display_name}'s availability for {store['club'].get('season', 'the selected season')} is " + ", ".join(parts) + "."
+            missing_clubs = [club_name for club_name in sorted(known_clubs) if club_name not in seen_clubs]
+            if missing_clubs:
+                parts.append("no recorded availability yet for " + ", ".join(missing_clubs))
+            answer = (
+                f"{display_name}'s 2026 availability across all clubs is "
+                + "; ".join(parts)
+                + "."
+            )
         else:
-            answer = f"No fixture availability is stored yet for {display_name} in {store['club'].get('name', 'this club')}."
+            answer = f"No fixture availability is stored yet for {display_name} across the stored clubs."
     elif matched_member:
         display_name = _display_name(matched_member)
         if requested_clubs:
@@ -1681,8 +2120,8 @@ def _heuristic_answer(question: str, store: dict[str, Any], history: list[dict[s
             answer = "No bowling figures are stored yet."
     elif "commentary" in q or "voice" in q:
         answer = (
-            f"There are {summary['commentary_count']} saved commentary entries. "
-            "Voice commentary is stored as transcript text, so it can be persisted with each match locally."
+            f"There are {summary['commentary_count']} saved text and voice scoring entries. "
+            "Voice scoring is stored as transcript text, so it can be persisted with each match locally."
         )
     elif "archive" in q or "image" in q or "ocr" in q:
         answer = (
@@ -1725,14 +2164,95 @@ def answer_question(
     history: list[dict[str, str]] | None = None,
     session_id: str | None = None,
 ) -> dict[str, Any]:
+    llm_status = get_llm_status()
     effective_question = _contextualize_question(question, history, store["members"], store)
+    if _prediction_question_intent(effective_question):
+        forecast = _forecast_answer(question, store, history=history)
+        if forecast:
+            model_name = str(llm_status.get("model") or "Ollama").strip()
+            result = {
+                "answer": forecast,
+                "mode": "forecast",
+                "session_id": session_id or "",
+                "llm": llm_status,
+                "source_provider": "ollama",
+                "source_label": f"Ollama: {model_name}",
+            }
+            logger.info(
+                "chat.answer source=%s mode=%s question=%s answer=%s",
+                result["source_provider"],
+                result.get("mode", ""),
+                question[:200],
+                str(result.get("answer", ""))[:300],
+            )
+            return result
+        heuristic_forecast = _heuristic_answer(question, store, history=history)
+        result = {
+            **heuristic_forecast,
+            "session_id": session_id or "",
+            "llm": llm_status,
+            "source_provider": "heuristic",
+            "source_label": "Heuristic fallback",
+        }
+        logger.info(
+            "chat.answer source=%s mode=%s question=%s answer=%s",
+            result["source_provider"],
+            result.get("mode", ""),
+            question[:200],
+            str(result.get("answer", ""))[:300],
+        )
+        return result
     prefer_grounded = _prefer_heuristic_answer(effective_question)
     grounded = _heuristic_answer(question, store, history=history) if prefer_grounded else None
     if grounded:
-        return {**grounded, "session_id": session_id or ""}
+        result = {
+            **grounded,
+            "session_id": session_id or "",
+            "llm": llm_status,
+            "source_provider": "heuristic",
+            "source_label": "Heuristic fallback",
+        }
+        logger.info(
+            "chat.answer source=%s mode=%s question=%s answer=%s",
+            result["source_provider"],
+            result.get("mode", ""),
+            question[:200],
+            str(result.get("answer", ""))[:300],
+        )
+        return result
     grounded_facts = ""
     rag_answer = _rag_answer(question, store, grounded_facts=grounded_facts, history=history)
     if rag_answer:
-        return {"answer": rag_answer, "mode": "grounded-rag" if grounded_facts else "rag", "session_id": session_id or ""}
+        model_name = str(llm_status.get("model") or "Ollama").strip()
+        result = {
+            "answer": rag_answer,
+            "mode": "grounded-rag" if grounded_facts else "rag",
+            "session_id": session_id or "",
+            "llm": llm_status,
+            "source_provider": "ollama",
+            "source_label": f"Ollama: {model_name}",
+        }
+        logger.info(
+            "chat.answer source=%s mode=%s question=%s answer=%s",
+            result["source_provider"],
+            result.get("mode", ""),
+            question[:200],
+            str(result.get("answer", ""))[:300],
+        )
+        return result
     fallback = _heuristic_answer(question, store, history=history)
-    return {**fallback, "session_id": session_id or ""}
+    result = {
+        **fallback,
+        "session_id": session_id or "",
+        "llm": llm_status,
+        "source_provider": "heuristic",
+        "source_label": "Heuristic fallback",
+    }
+    logger.info(
+        "chat.answer source=%s mode=%s question=%s answer=%s",
+        result["source_provider"],
+        result.get("mode", ""),
+        question[:200],
+        str(result.get("answer", ""))[:300],
+    )
+    return result

@@ -497,6 +497,7 @@ const elements = {
   archiveOpponentOversInput: document.getElementById("archiveOpponentOversInput"),
   archiveResultInput: document.getElementById("archiveResultInput"),
   archiveSourceNoteInput: document.getElementById("archiveSourceNoteInput"),
+  llmStatusBadge: document.getElementById("llmStatusBadge"),
   chatMessages: document.getElementById("chatMessages"),
   chatForm: document.getElementById("chatForm"),
   chatInput: document.getElementById("chatInput"),
@@ -543,6 +544,45 @@ async function postJson(url, payload) {
     throw new Error(parsed?.detail || parsed?.message || message || "Request failed");
   }
   return response.json();
+}
+
+function updateLlmStatusBadge(llm) {
+  if (!elements.llmStatusBadge) return;
+  const provider = String(llm?.provider || "").trim().toLowerCase();
+  const model = String(llm?.model || "").trim();
+  const available = Boolean(llm?.available);
+
+  elements.llmStatusBadge.classList.remove("llm-status-loading", "llm-status-online", "llm-status-offline");
+  elements.llmStatusBadge.textContent = "LLM";
+
+  if (provider === "ollama" && available) {
+    elements.llmStatusBadge.classList.add("llm-status-online");
+    elements.llmStatusBadge.title = model ? "LLM online" : "LLM online";
+    return;
+  }
+
+  if (available) {
+    elements.llmStatusBadge.classList.add("llm-status-online");
+    elements.llmStatusBadge.title = "LLM online";
+    return;
+  }
+
+  elements.llmStatusBadge.classList.add("llm-status-offline");
+  elements.llmStatusBadge.title = "LLM unavailable";
+}
+
+async function refreshLlmStatusBadge() {
+  if (!elements.llmStatusBadge) return;
+  elements.llmStatusBadge.classList.remove("llm-status-online", "llm-status-offline");
+  elements.llmStatusBadge.classList.add("llm-status-loading");
+  elements.llmStatusBadge.textContent = "LLM";
+  elements.llmStatusBadge.title = "Checking LLM";
+  try {
+    const health = await getJson("/api/health");
+    updateLlmStatusBadge(health?.llm || {});
+  } catch {
+    updateLlmStatusBadge({ available: false });
+  }
 }
 
 function setStatus(message, tone = "info") {
@@ -1296,15 +1336,51 @@ function renderArchiveSearchSummary(filteredCount, totalCount) {
   elements.archiveSearchSummary.textContent = `Showing ${filteredCount} of ${totalCount} archived scorecards for the current filters.`;
 }
 
-function addMessage(role, text) {
+function addMessage(role, text, meta = {}) {
+  const normalizedText = normalizeChatMessageText(text);
   const div = document.createElement("div");
   div.className = `message ${role}`;
-  div.textContent = text;
+  if (role === "assistant" && meta.sourceLabel) {
+    const badge = document.createElement("div");
+    badge.className = `chat-source-badge ${meta.sourceProvider || "heuristic"}`;
+    badge.textContent = meta.sourceLabel;
+    div.appendChild(badge);
+  }
+  const content = document.createElement("div");
+  content.className = "message-content";
+  content.textContent = normalizedText;
+  div.appendChild(content);
   elements.chatMessages.appendChild(div);
   elements.chatMessages.scrollTop = elements.chatMessages.scrollHeight;
-  state.chatHistory.push({ role, text });
+  state.chatHistory.push({ role, text: normalizedText, sourceLabel: meta.sourceLabel || null, sourceProvider: meta.sourceProvider || null });
   state.chatHistory = state.chatHistory.slice(-12);
   window.sessionStorage.setItem("cricketClubAppChatHistory", JSON.stringify(state.chatHistory));
+}
+
+function normalizeChatMessageText(value) {
+  if (value === null || value === undefined) {
+    return "";
+  }
+  if (typeof value === "string") {
+    return value;
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => normalizeChatMessageText(item)).filter(Boolean).join("\n");
+  }
+  if (typeof value === "object") {
+    const preferredKeys = ["answer", "text", "message", "content", "response", "summary"];
+    for (const key of preferredKeys) {
+      if (typeof value[key] === "string" && value[key].trim()) {
+        return value[key];
+      }
+    }
+    try {
+      return JSON.stringify(value, null, 2);
+    } catch {
+      return String(value);
+    }
+  }
+  return String(value);
 }
 
 function restoreChatHistory() {
@@ -1312,7 +1388,16 @@ function restoreChatHistory() {
   for (const entry of state.chatHistory) {
     const div = document.createElement("div");
     div.className = `message ${entry.role}`;
-    div.textContent = entry.text;
+    if (entry.role === "assistant" && entry.sourceLabel) {
+      const badge = document.createElement("div");
+      badge.className = `chat-source-badge ${entry.sourceProvider || "heuristic"}`;
+      badge.textContent = entry.sourceLabel;
+      div.appendChild(badge);
+    }
+    const content = document.createElement("div");
+    content.className = "message-content";
+    content.textContent = normalizeChatMessageText(entry.text);
+    div.appendChild(content);
     elements.chatMessages.appendChild(div);
   }
   elements.chatMessages.scrollTop = elements.chatMessages.scrollHeight;
@@ -3017,6 +3102,7 @@ async function loadDashboard() {
         }
       }
       renderDashboard(dashboard);
+      void refreshLlmStatusBadge();
       if (!state.dashboardBootstrapped && dashboard.selected_season_year) {
         state.selectedSeasonYear = dashboard.selected_season_year;
         window.localStorage.setItem("cricketClubAppSelectedSeasonYear", dashboard.selected_season_year);
@@ -3427,8 +3513,8 @@ elements.commentaryForm.addEventListener("submit", async (event) => {
   };
   const dashboard = await runAction(
     () => postJson(`/api/matches/${state.selectedMatchId}/commentary`, payload),
-    "Commentary saved to the selected match.",
-    "save commentary"
+    "Text and voice scoring saved to the selected match.",
+    "save text and voice scoring"
   );
   if (dashboard) {
     renderDashboard(dashboard);
@@ -3782,7 +3868,10 @@ elements.chatForm.addEventListener("submit", async (event) => {
   if (!question) return;
   addMessage("user", question);
   elements.chatInput.value = "";
-  const history = state.chatHistory.slice(0, -1);
+  const history = state.chatHistory.slice(0, -1).map((entry) => ({
+    role: String(entry?.role || "").trim(),
+    text: normalizeChatMessageText(entry?.text),
+  })).filter((entry) => entry.role && entry.text);
   const data = await runAction(() =>
     postJson("/api/chat", {
       question,
@@ -3791,7 +3880,7 @@ elements.chatForm.addEventListener("submit", async (event) => {
       focus_club_id: state.selectedFocusClubId,
     })
   );
-  if (data) addMessage("assistant", data.answer);
+  if (data) addMessage("assistant", data.answer, data);
 });
 
 window.addEventListener("storage", (event) => {
@@ -3820,7 +3909,7 @@ function ensureSpeechRecognition() {
   recognition.onstart = () => {
     recognitionActive = true;
     elements.commentaryMode.value = "voice";
-    setStatus("Mic transcription started. Speak and the transcript will appear in the commentary box.", "success");
+    setStatus("Mic transcription started. Speak and the transcript will appear in the scoring notes box.", "success");
   };
   recognition.onresult = (event) => {
     let transcript = "";
@@ -3832,7 +3921,7 @@ function ensureSpeechRecognition() {
   };
   recognition.onerror = () => {
     recognitionActive = false;
-    setStatus("Mic transcription hit an error. You can retry or type the commentary manually.", "error");
+    setStatus("Mic transcription hit an error. You can retry or type the scoring notes manually.", "error");
   };
   recognition.onend = () => {
     if (recognitionActive) {
@@ -3859,5 +3948,11 @@ elements.stopVoiceCommentary.addEventListener("click", () => {
 
 restoreChatHistory();
 loadDashboard();
+if (elements.llmStatusBadge) {
+  void refreshLlmStatusBadge();
+  window.setInterval(() => {
+    void refreshLlmStatusBadge();
+  }, 60000);
+}
 
 })();

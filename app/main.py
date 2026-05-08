@@ -17,9 +17,9 @@ from typing import Any
 
 from fastapi import FastAPI, File, Form, Header, HTTPException, Request, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 import sqlite3
 import logging
@@ -359,6 +359,22 @@ def _require_page_session(request: Request) -> tuple[sqlite3.Row, str] | Redirec
 
 def normalize_name(name: str) -> str:
     return (name or "").strip().lower()
+
+
+def _auth_identifier_candidates(identifier: str) -> list[str]:
+    clean = str(identifier or "").strip()
+    if not clean:
+        return []
+    candidates = []
+    for candidate in (
+        clean,
+        canonical_phone(clean),
+        re.sub(r"\D", "", clean),
+    ):
+        candidate = str(candidate or "").strip()
+        if candidate and candidate not in candidates:
+            candidates.append(candidate)
+    return candidates
 
 def _set_auth_cookies(response: Response, token: str, club_id: str = "") -> None:
     response.set_cookie("cricketClubAppAuthToken", token, httponly=False, samesite="lax", path="/")
@@ -940,7 +956,7 @@ class ScorebookBallRequest(BaseModel):
 class ChatRequest(BaseModel):
     question: str
     session_id: str | None = None
-    history: list[dict[str, str]] = []
+    history: list[dict[str, Any]] = Field(default_factory=list)
     focus_club_id: str | None = None
 
 
@@ -1369,10 +1385,12 @@ def _archive_match_club_ids(store: dict[str, Any], club_id: str, match_id: str =
 def _auth_connection() -> sqlite3.Connection:
     logger.debug("🗄️ Opening DB connection: %s", DATABASE_FILE)
     DATABASE_FILE.parent.mkdir(parents=True, exist_ok=True)
-    connection = sqlite3.connect(DATABASE_FILE, timeout=30)
+    connection = sqlite3.connect(DATABASE_FILE, timeout=60)
     connection.row_factory = sqlite3.Row
     connection.execute("PRAGMA foreign_keys = ON")
-    connection.execute("PRAGMA busy_timeout = 30000")
+    connection.execute("PRAGMA journal_mode = WAL")
+    connection.execute("PRAGMA synchronous = NORMAL")
+    connection.execute("PRAGMA busy_timeout = 60000")
     return connection
 
 
@@ -4212,7 +4230,7 @@ def signin(request: SignInRequest, response: Response) -> dict[str, Any]:
 
     logger.debug("Sign in attempt. identifier=%s player=%s", identifier or "", player_name or "")
 
-    identifier_phone = canonical_phone(identifier) if identifier and "@" not in identifier else ""
+    identifier_phone_candidates = _auth_identifier_candidates(identifier) if identifier and "@" not in identifier else []
     identifier_email = identifier.lower() if "@" in identifier else ""
 
     with _auth_connection() as connection:
@@ -4221,14 +4239,25 @@ def signin(request: SignInRequest, response: Response) -> dict[str, Any]:
         if password:
             logger.debug("Trying password login.")
 
-            user_row = connection.execute(
-                """
-                SELECT * FROM app_users
-                WHERE (mobile = ? OR lower(email) = lower(?))
-                  AND password_hash = ?
-                """,
-                (identifier_phone or None, identifier_email or None, _password_hash(password)),
-            ).fetchone()
+            if identifier_phone_candidates:
+                mobile_clause = ", ".join("?" for _ in identifier_phone_candidates)
+                user_row = connection.execute(
+                    f"""
+                    SELECT * FROM app_users
+                    WHERE (mobile IN ({mobile_clause}) OR lower(email) = lower(?))
+                      AND password_hash = ?
+                    """,
+                    (*identifier_phone_candidates, identifier_email or None, _password_hash(password)),
+                ).fetchone()
+            else:
+                user_row = connection.execute(
+                    """
+                    SELECT * FROM app_users
+                    WHERE lower(email) = lower(?)
+                      AND password_hash = ?
+                    """,
+                    (identifier_email or None, _password_hash(password)),
+                ).fetchone()
 
             if user_row:
                 logger.debug("Login done by %s. method=password user_id=%s", user_row["display_name"] or user_row["mobile"] or "user", user_row["id"])
@@ -4236,15 +4265,27 @@ def signin(request: SignInRequest, response: Response) -> dict[str, Any]:
         if not user_row:
             logger.debug("Trying direct user lookup.")
 
-            user_row = connection.execute(
-                """
-                SELECT * FROM app_users
-                WHERE mobile = ? OR lower(email) = lower(?)
-                ORDER BY id
-                LIMIT 1
-                """,
-                (identifier_phone or None, identifier_email or None),
-            ).fetchone()
+            if identifier_phone_candidates:
+                mobile_clause = ", ".join("?" for _ in identifier_phone_candidates)
+                user_row = connection.execute(
+                    f"""
+                    SELECT * FROM app_users
+                    WHERE mobile IN ({mobile_clause}) OR lower(email) = lower(?)
+                    ORDER BY id
+                    LIMIT 1
+                    """,
+                    (*identifier_phone_candidates, identifier_email or None),
+                ).fetchone()
+            else:
+                user_row = connection.execute(
+                    """
+                    SELECT * FROM app_users
+                    WHERE lower(email) = lower(?)
+                    ORDER BY id
+                    LIMIT 1
+                    """,
+                    (identifier_email or None,),
+                ).fetchone()
 
             if user_row:
                 logger.debug("Login done by %s. method=direct user_id=%s", user_row["display_name"] or user_row["mobile"] or "user", user_row["id"])
@@ -4288,13 +4329,13 @@ def signin(request: SignInRequest, response: Response) -> dict[str, Any]:
 
                     cursor = connection.execute(
                         """
-                        INSERT INTO app_users (
+                    INSERT INTO app_users (
                           display_name, mobile, email, password_hash, role, member_id, primary_club_id, created_at
                         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                         """,
                         (
                             member.get("full_name") or member.get("name"),
-                            identifier_phone or None,
+                            identifier_phone_candidates[0] if identifier_phone_candidates else None,
                             identifier_email or None,
                             _password_hash(secrets.token_urlsafe(24)),
                             "player",
@@ -4347,7 +4388,7 @@ def signin(request: SignInRequest, response: Response) -> dict[str, Any]:
         club_id=current_club_id or "",
         club_name="",
         details={
-            "method": "password" if password else ("direct" if identifier_phone or identifier_email else "member"),
+            "method": "password" if password else ("direct" if identifier_phone_candidates or identifier_email else "member"),
             "identifier": identifier,
             "player_name": player_name,
         },
@@ -5508,17 +5549,13 @@ def update_match_details(match_id: str, request: MatchDetailsRequest, x_auth_tok
     _touch_fixture_audit(match, user_row)
     save_store(store)
     _audit_event(
-        "player.update",
-        "member",
-        member_id,
+        "fixture.update",
+        "fixture",
+        match_id,
         actor=user_row,
-        club_id=str(current_club_id or ""),
-        club_name=str(_selected_club(store, current_club_id).get("name") or ""),
-        details={
-            "before_name": before.get("name", ""),
-            "after_name": member.get("name", ""),
-            "fields": sorted(updates.keys()),
-        },
+        club_id=str(match.get("club_id") or ""),
+        club_name=str(match.get("club_name") or ""),
+        details={"fields": sorted(updates.keys())},
         source="api",
     )
     return current_dashboard(load_store())
@@ -5767,11 +5804,22 @@ def add_scorebook_ball(match_id: str, request: ScorebookBallRequest, x_auth_toke
 @app.post("/api/chat")
 def chat(request: ChatRequest) -> dict[str, Any]:
     store = load_store()
-    focused_store = scoped_store_for_club(
-        store,
-        next((club for club in store.get("clubs", []) if club.get("id") == request.focus_club_id), store.get("club", {})),
-    ) if request.focus_club_id else store
-    return answer_question(request.question, focused_store, history=request.history, session_id=request.session_id)
+    focus_club = next((club for club in store.get("clubs", []) if club.get("id") == request.focus_club_id), store.get("club", {}))
+    focused_store = scoped_store_for_club(store, focus_club) if request.focus_club_id else dict(store)
+    chat_store = dict(focused_store)
+    chat_store["focus_club_id"] = str(request.focus_club_id or "").strip()
+    chat_store["focus_club"] = dict(focus_club or {})
+    chat_store["all_clubs"] = list(store.get("clubs", []) or [])
+    chat_store["all_members"] = list(store.get("members", []) or [])
+    chat_store["all_fixtures"] = list(store.get("fixtures", []) or [])
+    chat_store["all_archive_uploads"] = list(store.get("archive_uploads", []) or [])
+    chat_store["all_teams"] = list(store.get("teams", []) or [])
+    chat_store["all_member_summary_stats"] = list(store.get("member_summary_stats", []) or [])
+    chat_store["all_member_year_stats"] = list(store.get("member_year_stats", []) or [])
+    chat_store["all_member_club_stats"] = list(store.get("member_club_stats", []) or [])
+    chat_store["all_club_summary_stats"] = list(store.get("club_summary_stats", []) or [])
+    chat_store["all_club_year_stats"] = list(store.get("club_year_stats", []) or [])
+    return answer_question(request.question, chat_store, history=request.history, session_id=request.session_id)
 
 
 @app.post("/api/archive/reset-scores")
@@ -6307,6 +6355,6 @@ if __name__ == "__main__":
     uvicorn.run(
         "main:app",
         host="0.0.0.0",
-        port=int(os.getenv("PORT", os.getenv("WEBSITES_PORT", "8091"))),
+        port=int(os.getenv("PORT", os.getenv("WEBSITES_PORT", "8090"))),
         log_level="info",
     )

@@ -29,7 +29,7 @@
       rel="stylesheet"
     />
     <link rel="stylesheet" href="/assets/tailwind.css?v=20260426a" />
-    <link rel="stylesheet" href="/assets/styles.css?v=20260503e" />
+    <link rel="stylesheet" href="/assets/styles.css?v=20260508b" />
   </head>
   <body>
     <div class="page-shell">
@@ -161,7 +161,7 @@
         <a href="#performance">Performance</a>
         <a href="#player-profile">Player Profile</a>
         <a href="#teams">Teams</a>
-        <a href="#commentary">Commentary</a>
+        <a href="#commentary">Text and Voice Scoring</a>
         <a href="#squad">Squad</a>
         <a href="#schedule">Schedule</a>
         <a href="#archive">Archive</a>
@@ -197,7 +197,7 @@
               <div id="selectedPerformances" class="detail-stack"></div>
             </div>
             <div>
-              <h3>Commentary log</h3>
+              <h3>Text and voice scoring log</h3>
               <div id="selectedCommentary" class="detail-stack"></div>
             </div>
           </div>
@@ -472,21 +472,21 @@
         <section id="commentary" class="panel commentary-panel" data-live-only>
           <div class="panel-head">
             <div>
-              <p class="section-kicker">Commentary</p>
-              <h2>Live voice and text commentary</h2>
+              <p class="section-kicker">Text and Voice Scoring</p>
+              <h2>Live text notes and voice transcript scoring</h2>
             </div>
           </div>
           <form id="commentaryForm" class="form-grid">
             <select id="commentaryMode">
-              <option value="text">Text commentary</option>
+              <option value="text">Text scoring notes</option>
               <option value="voice">Voice transcript</option>
             </select>
-            <textarea id="commentaryText" rows="5" placeholder="Type commentary or paste the speech-to-text transcript here"></textarea>
+            <textarea id="commentaryText" rows="5" placeholder="Type scoring notes or paste the speech-to-text transcript here"></textarea>
             <div class="voice-tools wide">
-              <button id="startVoiceCommentary" class="secondary-button" type="button">Start mic transcript</button>
-              <button id="stopVoiceCommentary" class="secondary-button" type="button">Stop mic</button>
+              <button id="startVoiceCommentary" class="secondary-button" type="button">Start voice scoring</button>
+              <button id="stopVoiceCommentary" class="secondary-button" type="button">Stop voice</button>
             </div>
-            <button class="primary-button wide" type="submit">Save commentary to match</button>
+            <button class="primary-button wide" type="submit">Save scoring notes to match</button>
           </form>
         </section>
 
@@ -591,9 +591,12 @@
 
         <section id="assistant" class="panel ai-panel">
           <div class="panel-head">
-            <div>
-              <p class="section-kicker">Assistant</p>
-              <h2>Free LLM style open queries</h2>
+            <div class="assistant-head-row">
+              <div>
+                <p class="section-kicker">Assistant</p>
+                <h2>Free LLM style open queries</h2>
+              </div>
+              <div id="llmStatusBadge" class="llm-status-pill llm-status-loading" aria-live="polite" title="LLM status">LLM</div>
             </div>
           </div>
           <div id="chatMessages" class="chat-messages">
@@ -609,6 +612,6 @@
       </main>
     </div>
     <script src="/assets/multipage.js?v=20260503i"></script>
-    <script src="/assets/app.js?v=20260503l"></script>
+    <script src="/assets/app.js?v=20260508b"></script>
   </body>
 </html>

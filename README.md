@@ -10,7 +10,7 @@ Local-first website for CricketClubApp. This is the web version we can test quic
 - Player availability tracking by match
 - Live scoring and scorecard updates
 - Player performance tracking for runs, wickets, catches, fours, and sixes
-- Text commentary and voice transcript capture per match
+- Text and voice scoring with transcript capture per match
 - WhatsApp launch link for match coordination
 - Free AI-style Q&A over the stored club data
 - Scorecard image upload plus archive-review flow for offline score recovery
@@ -49,7 +49,7 @@ This section captures the user requirements in the order they were given and ref
 8. Add free LLM integration for open questions over stored data.
 9. Extract scores from previous-year scorecard images.
 10. Provide a feature to score matches.
-11. Add live voice commentary, text commentary, speech-to-text, and persistence per match.
+11. Add live text and voice scoring, speech-to-text, and persistence per match.
 12. If scoring cannot be done online, allow scorecard image upload, extract the score, create the online scorecard, and update player scores.
 13. Use SQLite for persistence and JSON/cache for fast retrieval.
 14. Keep the website UI easy to use and trendy.
@@ -174,6 +174,10 @@ This section captures the user requirements in the order they were given and ref
 118. Keep the dashboard registration widget scoped to the signed-in user's club instead of showing every club.
 119. Keep registration prompts and club selection consistent with the signed-in club context while preserving the standalone registration page flow.
 120. Keep local development as the first validation target and defer Azure deploys until changes are confirmed locally.
+121. Treat the backend auth session and `member_id` as the source of truth for the signed-in player; UI aliases and roster order must never choose the player snapshot.
+122. Resolve the clubs-page Player Snapshot strictly from the authenticated `member_id`, and prefer no snapshot over the wrong player.
+123. Deduplicate club memberships in the profile view so the same club cannot appear multiple times when multiple membership paths overlap.
+124. Allow Season Fixtures editing only for future fixtures; past fixtures must be locked in both the UI and API.
 
 ## Current behavior summary
 
@@ -189,14 +193,19 @@ This section captures the user requirements in the order they were given and ref
 - Season setup stores fixtures with their own season year so `2026` and `2027` schedules can coexist.
 - Player availability is shown against the selected club's active season fixtures after login.
 - The clubs page now shows a player snapshot plus year-wise and club-wise summary tables using cached SQLite stats.
+- The clubs page Player Snapshot is resolved from the signed-in player's canonical `member_id`, and it should not fall back to another roster member.
+- Player profile club memberships are deduplicated before display so the same club does not appear multiple times.
 - Summary milestone counts use `25+`, `50+`, and `100+` bands.
 - Player availability is now set per scheduled game, not as one season-wide toggle.
 - The player profile is the cross-club career view, while the club dashboard stays club-local.
+- TestClub now lives in the normal local runtime on `8090` with a two-innings scorebook fixture and a separate uploaded-image scorecard fixture.
 - The sign-in page now uses a split layout with the login form on the left and leader widgets on the right.
 - The sign-in page renders batting, bowling, and club leaderboards server-side so it stays visible even before the client script hydrates.
 - The dashboard landing page now replaces `Upcoming Events` with a more useful recent-scorecards summary.
+- The match center now supports text and voice scoring notes, with browser mic transcription feeding the same saved match commentary stream.
 - Dashboard season switching now requests the selected year explicitly and is cached to reduce repeated recomputation.
 - The Admin Center now renders the selected club first, filters its archive review queue by the active club, and groups uploaded scorecards clubwise for review.
+- Season Fixtures now supports editing future fixtures, while past fixtures are locked at both the UI and API layers.
 - Historical scorecards stay in the archive-review flow until superadmin approval attaches them back to the correct club or clubs.
 - Shared archives can appear in both clubs' Admin Center queues when the scorecard clearly belongs to a two-club match.
 - Single-club archives no longer bleed into another club's review queue when the second team is missing.
@@ -246,31 +255,48 @@ Open `http://127.0.0.1:8090`
 - If Ollama is running locally, the AI badge shows the local model; otherwise the heuristic assistant still works.
 - Existing images dropped into `app/uploads/` are auto-imported into the archive list.
 - Duplicate files are moved into `app/duplicates/` for manual review, with a copy of the matched original staged beside them.
+- The local LLM also powers grounded predictive analysis for club and player outlooks across current and future seasons.
+
+## Azure LLM
+
+For Azure, the web app stays on App Service and Ollama runs separately in Azure Container Instances.
+
+- Deploy Ollama with [`scripts/deploy_ollama_aci.sh`](scripts/deploy_ollama_aci.sh)
+- ACI template: [`infra/ollama-aci.yaml`](infra/ollama-aci.yaml)
+- Operator notes: [`.azure/ollama-aci.md`](.azure/ollama-aci.md)
+- Then set `OLLAMA_BASE_URL=http://<aci-fqdn>:11434` in the web app environment
+
+This keeps the web app lightweight while giving the chat and archive review flows a real model backend.
 
 ## Chat Prompt Examples
 
-Use the website AI box with natural-language questions like these:
+Use the website AI box with natural-language questions like these. They should work for any stored player name, full name, or alias:
 
-- `What is Amit S full name?`
-- `How old is Amit G?`
-- `What is Amit S phone number?`
-- `How many matches Amit S has played so far?`
-- `How many matches Amit S has played in 2025 and in which months?`
-- `How many matches Amit S played in Sep?`
-- `How many matches both Amit S and Amit G played?`
-- `What batting order Amit S and Amit G bats in the team?`
-- `What is the best batting order for Amit S?`
+- `What is <player name> full name?`
+- `How old is <player name>?`
+- `What is <player name> phone number?`
+- `How many matches <player name> has played so far?`
+- `How many matches <player name> has played in 2025 and in which months?`
+- `How many matches <player name> played in Sep?`
+- `How many matches both <player one> and <player two> played?`
+- `What batting order <player one> and <player two> bats in the team?`
+- `What is the best batting order for <player name>?`
+- `Search <player name> and show their stats`
+- `Show all stats for <player name>`
+- `Which scorecards mention <player name>?`
+- `Which scorecards mention <player name> in 2025?`
 - `Who is the top ranked player with runs?`
 - `Who has got most wicket?`
 - `Who has taken most number of catches?`
 - `Who are the top 5 batters with runs?`
 - `Which players are rarely available?`
 - `Which players are most consistent with last year availability by playing most games?`
+- `Predict TestClub batting, bowling, and fielding outlook for 2026 and 2027`
+- `Forecast Amit S's runs and batting average for the next season`
+- `What is the projected top batter for TestClub next year?`
 - `What is the next match?`
-- `Which scorecards mention Amit S?`
 - `Show old scorecards from 2025`
-- `Search Amit Gaba and show his stats`
-- `Follow Amit Sethi`
+- `Follow <player name>`
 - `Set CricketClubApp as my primary club`
 
 ## Archive Review Prompt Examples

@@ -34,7 +34,6 @@ Deploy the CricketClubApp / CricketCanClubs club website to Azure App Service wi
 - Azure App Service on Linux
 - GitHub Actions deployment from the repo main branch
 - Persistent App Service storage for SQLite/uploads/duplicates under `/home/site/cricketclubapp`
-- Separate Azure Container Instance for Ollama with Azure Files persistence for downloaded models
 - Azure DNS for `criccanclubs.ca`
 - Optional Azure Blob Storage later for larger archive backups or media offload
 
@@ -102,7 +101,7 @@ Deploy the CricketClubApp / CricketCanClubs club website to Azure App Service wi
 ## Future Upgrade Path
 - Move uploads to Blob Storage
 - Move persistence to Azure SQL or PostgreSQL if needed
-- Keep Ollama on Azure Container Instances for a lightweight model backend, or move OCR/chat workloads to Azure AI services if the local model path becomes limiting
+- Move OCR/chat workloads to Azure AI services if local compute becomes limiting
 - Reevaluate App Service scaling after the app is decoupled from local files and local inference
 
 ## Implementation Steps

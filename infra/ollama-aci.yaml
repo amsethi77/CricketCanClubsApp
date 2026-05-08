@@ -1,0 +1,44 @@
+apiVersion: '2019-12-01'
+location: __LOCATION__
+name: __ACI_NAME__
+properties:
+  containers:
+    - name: ollama
+      properties:
+        image: __OLLAMA_IMAGE__
+        command:
+          - /bin/sh
+          - -lc
+          - ollama serve
+        environmentVariables:
+          - name: OLLAMA_HOST
+            value: 0.0.0.0:11434
+          - name: OLLAMA_MODELS
+            value: /root/.ollama/models
+        resources:
+          requests:
+            cpu: __CPU__
+            memoryInGB: __MEMORY_GB__
+        ports:
+          - port: 11434
+        volumeMounts:
+          - name: ollama-models
+            mountPath: /root/.ollama
+  osType: Linux
+  ipAddress:
+    type: Public
+    ports:
+      - protocol: tcp
+        port: 11434
+    dnsNameLabel: __DNS_LABEL__
+  restartPolicy: Always
+  volumes:
+    - name: ollama-models
+      azureFile:
+        shareName: __SHARE_NAME__
+        storageAccountName: __STORAGE_ACCOUNT__
+        storageAccountKey: __STORAGE_KEY__
+tags:
+  app: CricketClubApp
+  purpose: ollama
+  model: __OLLAMA_MODEL__

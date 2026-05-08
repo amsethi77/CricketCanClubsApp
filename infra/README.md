@@ -5,6 +5,8 @@ This template provisions:
 - Linux Web App
 - App settings for persistent SQLite/uploads/duplicates storage
 
+The repo also includes [`infra/ollama-aci.yaml`](ollama-aci.yaml) and [`scripts/deploy_ollama_aci.sh`](../scripts/deploy_ollama_aci.sh) for the separate Ollama backend on Azure Container Instances.
+
 ## Inputs
 - `location`: `Canada Central`
 - `namePrefix`: resource prefix for the App Service resources
