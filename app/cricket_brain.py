@@ -1,6 +1,8 @@
 import os
 import re
 import logging
+from functools import lru_cache
+from math import sqrt
 from typing import Any
 
 import httpx
@@ -39,6 +41,41 @@ PREFERRED_OLLAMA_MODELS = [
     "phi4:latest",
     "mistral:latest",
 ]
+PREFERRED_OLLAMA_EMBED_MODELS = [
+    "nomic-embed-text",
+    "mxbai-embed-large",
+    "snowflake-arctic-embed",
+    "all-minilm",
+]
+
+RAG_TEMPERATURE = float(os.environ.get("OLLAMA_RAG_TEMPERATURE", "0.2"))
+FORECAST_TEMPERATURE = float(os.environ.get("OLLAMA_FORECAST_TEMPERATURE", "0.55"))
+RAG_TOP_P = float(os.environ.get("OLLAMA_RAG_TOP_P", "0.85"))
+FORECAST_TOP_P = float(os.environ.get("OLLAMA_FORECAST_TOP_P", "0.95"))
+RAG_TOP_K = int(os.environ.get("OLLAMA_RAG_TOP_K", "40"))
+FORECAST_TOP_K = int(os.environ.get("OLLAMA_FORECAST_TOP_K", "50"))
+RAG_NUM_PREDICT = int(os.environ.get("OLLAMA_RAG_NUM_PREDICT", "220"))
+FORECAST_NUM_PREDICT = int(os.environ.get("OLLAMA_FORECAST_NUM_PREDICT", "260"))
+EMBEDDING_MODEL_ENV = os.environ.get("OLLAMA_EMBED_MODEL", "").strip()
+CONTEXT_CHUNK_LIMIT = int(os.environ.get("OLLAMA_CONTEXT_CHUNK_LIMIT", "900"))
+MAX_CONTEXT_SNIPPETS = int(os.environ.get("OLLAMA_MAX_CONTEXT_SNIPPETS", "12"))
+PROFANITY_WORDS = {
+    "asshole",
+    "bastard",
+    "bitch",
+    "fuck",
+    "fucker",
+    "motherfucker",
+    "shit",
+    "shitty",
+    "cunt",
+}
+CLUB_GENERIC_WORDS = {
+    "club",
+    "cricket",
+    "team",
+    "xi",
+}
 
 logger = logging.getLogger("CricketClubBrain")
 
@@ -124,6 +161,7 @@ def get_llm_status() -> dict[str, Any]:
         response = httpx.get(f"{base_url}/api/tags", timeout=2.5)
         response.raise_for_status()
         models = [item.get("name", "").strip() for item in response.json().get("models", []) if item.get("name")]
+        embedding_model = _embedding_model_from_tags(models)
         selected = configured_model if configured_model in models else None
         if not selected:
             for model in PREFERRED_OLLAMA_MODELS:
@@ -136,14 +174,32 @@ def get_llm_status() -> dict[str, Any]:
             "provider": "ollama" if selected else "heuristic",
             "available": bool(selected),
             "model": selected,
+            "embedding_model": embedding_model,
+            "embeddings_available": bool(embedding_model),
             "base_url": base_url,
+            "safety": {
+                "grounded": True,
+                "chunking": True,
+                "embeddings": bool(embedding_model),
+                "content_filter": True,
+                "profanity_filter": True,
+            },
         }
     except Exception:
         return {
             "provider": "heuristic",
             "available": True,
             "model": "built-in data assistant",
+            "embedding_model": "",
+            "embeddings_available": False,
             "base_url": None,
+            "safety": {
+                "grounded": True,
+                "chunking": True,
+                "embeddings": False,
+                "content_filter": True,
+                "profanity_filter": True,
+            },
         }
 
 
@@ -172,6 +228,152 @@ def _query_terms(question: str) -> set[str]:
         for token in re.findall(r"[a-z0-9]+", question.lower())
         if token and token not in STOP_WORDS and len(token) > 1
     }
+
+
+def _normalized_name_tokens(value: str) -> tuple[str, ...]:
+    tokens = [
+        token
+        for token in re.findall(r"[a-z0-9]+", str(value or "").lower())
+        if token and token not in STOP_WORDS and token not in CLUB_GENERIC_WORDS and len(token) > 1
+    ]
+    return tuple(tokens)
+
+
+def _name_matches_requested(candidate: str, requested_values: set[str]) -> bool:
+    candidate_tokens = _normalized_name_tokens(candidate)
+    if not candidate_tokens:
+        return False
+    candidate_text = " ".join(candidate_tokens)
+    for raw_value in requested_values:
+        value_tokens = _normalized_name_tokens(raw_value)
+        if not value_tokens:
+            continue
+        value_text = " ".join(value_tokens)
+        if candidate_text == value_text:
+            return True
+        if candidate_text in value_text or value_text in candidate_text:
+            return True
+    return False
+
+
+def _llm_options(mode: str) -> dict[str, Any]:
+    if mode == "forecast":
+        return {
+            "temperature": FORECAST_TEMPERATURE,
+            "top_p": FORECAST_TOP_P,
+            "top_k": FORECAST_TOP_K,
+            "repeat_penalty": 1.08,
+            "num_predict": FORECAST_NUM_PREDICT,
+        }
+    if mode == "rag":
+        return {
+            "temperature": RAG_TEMPERATURE,
+            "top_p": RAG_TOP_P,
+            "top_k": RAG_TOP_K,
+            "repeat_penalty": 1.05,
+            "num_predict": RAG_NUM_PREDICT,
+        }
+    return {"temperature": RAG_TEMPERATURE, "top_p": RAG_TOP_P, "top_k": RAG_TOP_K, "num_predict": RAG_NUM_PREDICT}
+
+
+def _contains_profanity(text: str) -> bool:
+    lowered = f" {str(text or '').lower()} "
+    return any(re.search(rf"(?<!\w){re.escape(word)}(?!\w)", lowered) for word in PROFANITY_WORDS)
+
+
+def _redact_profanity(text: str) -> str:
+    result = str(text or "")
+    for word in PROFANITY_WORDS:
+        result = re.sub(rf"(?<!\w){re.escape(word)}(?!\w)", "***", result, flags=re.IGNORECASE)
+    return result
+
+
+def _moderated_prompt_response(question: str) -> dict[str, Any] | None:
+    if not _contains_profanity(question):
+        return None
+    return {
+        "answer": "Please keep the question cricket-focused and respectful.",
+        "mode": "moderated",
+        "source_provider": "heuristic",
+        "source_label": "Content filter",
+    }
+
+
+def _chunk_text_for_context(text: str, limit: int = CONTEXT_CHUNK_LIMIT) -> list[str]:
+    lines = [line.strip() for line in str(text or "").splitlines() if line.strip()]
+    if not lines:
+        return [str(text or "").strip()] if str(text or "").strip() else []
+    chunks: list[str] = []
+    current: list[str] = []
+    current_length = 0
+    for line in lines:
+        if current and current_length + len(line) + 1 > limit:
+            chunks.append("\n".join(current))
+            current = [line]
+            current_length = len(line)
+            continue
+        current.append(line)
+        current_length += len(line) + (1 if len(current) > 1 else 0)
+    if current:
+        chunks.append("\n".join(current))
+    return chunks
+
+
+def _vector_norm(vector: list[float]) -> float:
+    return sqrt(sum(value * value for value in vector)) if vector else 0.0
+
+
+def _cosine_similarity(left: list[float], right: list[float]) -> float:
+    if not left or not right or len(left) != len(right):
+        return 0.0
+    denominator = _vector_norm(left) * _vector_norm(right)
+    if not denominator:
+        return 0.0
+    return sum(x * y for x, y in zip(left, right)) / denominator
+
+
+def _embedding_model_candidates() -> list[str]:
+    candidates: list[str] = []
+    if EMBEDDING_MODEL_ENV:
+        candidates.append(EMBEDDING_MODEL_ENV)
+    candidates.extend(model for model in PREFERRED_OLLAMA_EMBED_MODELS if model not in candidates)
+    return candidates
+
+
+def _embedding_model_from_tags(tags: list[str]) -> str:
+    tag_set = {tag.strip() for tag in tags if tag.strip()}
+    for candidate in _embedding_model_candidates():
+        if candidate in tag_set:
+            return candidate
+    return ""
+
+
+@lru_cache(maxsize=2048)
+def _ollama_embedding_for_text_cached(base_url: str, embedding_model: str, text: str) -> tuple[float, ...]:
+    if not base_url or not embedding_model or not text.strip():
+        return ()
+    response = httpx.post(
+        f"{base_url}/api/embeddings",
+        json={"model": embedding_model, "prompt": text},
+        timeout=20.0,
+    )
+    response.raise_for_status()
+    embedding = response.json().get("embedding", [])
+    if not isinstance(embedding, list):
+        return ()
+    return tuple(float(value) for value in embedding if isinstance(value, (int, float)))
+
+
+def _llm_embedding_for_text(text: str, llm_status: dict[str, Any]) -> list[float] | None:
+    base_url = str(llm_status.get("base_url") or "").strip()
+    embedding_model = str(llm_status.get("embedding_model") or "").strip()
+    if not base_url or not embedding_model or not text.strip():
+        return None
+    try:
+        cached = _ollama_embedding_for_text_cached(base_url, embedding_model, text)
+        return list(cached) if cached else None
+    except Exception:
+        return None
 
 
 def _history_user_messages(history: list[dict[str, str]] | None) -> list[str]:
@@ -327,13 +529,15 @@ def _requested_club_terms(question: str, store: dict[str, Any]) -> list[str]:
         if not value:
             return
         lowered = value.lower()
+        if lowered in CLUB_GENERIC_WORDS:
+            return
         if lowered in seen:
             return
-        pattern = re.compile(rf"(?<!\w){re.escape(lowered)}(?!\w)")
-        found = pattern.search(q)
-        if found:
+        if _name_matches_requested(value, {q}):
             seen.add(lowered)
-            matches.append((found.start(), lowered))
+            pattern = re.compile(rf"(?<!\w){re.escape(lowered)}(?!\w)")
+            found = pattern.search(q)
+            matches.append((found.start() if found else len(matches), lowered))
 
     clubs = list(store.get("clubs", []) or []) + list(store.get("all_clubs", []) or [])
     teams = list(store.get("teams", []) or []) + list(store.get("all_teams", []) or [])
@@ -938,24 +1142,46 @@ def _club_context_snippet(store: dict[str, Any], summary: dict[str, Any]) -> dic
     return {"kind": "club", "key": "club", "text": text}
 
 
-def _rank_context_snippets(question: str, snippets: list[dict[str, Any]], matched_members: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _rank_context_snippets(
+    question: str,
+    snippets: list[dict[str, Any]],
+    matched_members: list[dict[str, Any]],
+    llm_status: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
     query_terms = _query_terms(question)
     matched_names = {member["name"].lower() for member in matched_members}
     matched_full_names = {str(member.get("full_name", "")).lower() for member in matched_members if member.get("full_name")}
+    llm_status = llm_status or get_llm_status()
+    query_embedding = _llm_embedding_for_text(question, llm_status)
 
     ranked = []
     for snippet in snippets:
-        text = snippet["text"].lower()
-        score = sum(3 for term in query_terms if term in text)
-        if snippet["kind"] == "player" and any(name in text for name in matched_names | matched_full_names):
-            score += 50
-        if snippet["kind"] == "archive" and ("archive" in query_terms or "scorecard" in query_terms):
-            score += 8
-        if snippet["kind"] == "fixture" and any(term in query_terms for term in {"availability", "next", "match", "fixture", "captain"}):
-            score += 6
-        if snippet["kind"] == "club":
-            score += 2
-        ranked.append((score, snippet))
+        chunks = _chunk_text_for_context(snippet["text"])
+        for chunk_index, chunk_text in enumerate(chunks):
+            lowered = chunk_text.lower()
+            score = sum(3 for term in query_terms if term in lowered)
+            if snippet["kind"] == "player" and any(name in lowered for name in matched_names | matched_full_names):
+                score += 50
+            if snippet["kind"] == "archive" and ("archive" in query_terms or "scorecard" in query_terms):
+                score += 8
+            if snippet["kind"] == "fixture" and any(term in query_terms for term in {"availability", "next", "match", "fixture", "captain"}):
+                score += 6
+            if snippet["kind"] == "club":
+                score += 2
+            chunk_embedding = _llm_embedding_for_text(chunk_text, llm_status) if query_embedding else None
+            if query_embedding and chunk_embedding:
+                score += int(_cosine_similarity(query_embedding, chunk_embedding) * 30)
+            ranked.append(
+                (
+                    score,
+                    {
+                        **snippet,
+                        "text": chunk_text,
+                        "chunk_index": chunk_index,
+                        "chunk_count": len(chunks),
+                    },
+                )
+            )
 
     ranked.sort(key=lambda item: item[0], reverse=True)
     selected: list[dict[str, Any]] = []
@@ -968,7 +1194,7 @@ def _rank_context_snippets(question: str, snippets: list[dict[str, Any]], matche
             continue
         selected.append(snippet)
         total_chars += len(text)
-        if len(selected) >= 12:
+        if len(selected) >= MAX_CONTEXT_SNIPPETS:
             break
     return selected or [snippet for _, snippet in ranked[:8]]
 
@@ -1029,7 +1255,7 @@ def _rag_answer(question: str, store: dict[str, Any], grounded_facts: str = "", 
     snippets.extend(_player_context_snippets(analysis_store, members, fixtures, player_stats, pending_player_stats))
     snippets.extend(_fixture_context_snippets(fixtures))
     snippets.extend(_archive_context_snippets(archives))
-    selected_snippets = _rank_context_snippets(question, snippets, matched_members)
+    selected_snippets = _rank_context_snippets(question, snippets, matched_members, llm_status)
     context = "\n\n".join(snippet["text"] for snippet in selected_snippets)
     grounded_block = grounded_facts.strip()
 
@@ -1058,7 +1284,7 @@ def _rag_answer(question: str, store: dict[str, Any], grounded_facts: str = "", 
             json={
                 "model": llm_status["model"],
                 "stream": False,
-                "options": {"temperature": 0},
+                "options": _llm_options("rag"),
                 "messages": [
                     {"role": "system", "content": system_prompt},
                     {
@@ -1077,35 +1303,60 @@ def _rag_answer(question: str, store: dict[str, Any], grounded_facts: str = "", 
         answer = response.json().get("message", {}).get("content", "").strip()
         if not _rag_answer_is_safe(answer, members, matched_members, grounded_facts):
             return None
-        return answer or None
+        return _redact_profanity(answer) or None
     except Exception:
         return None
 
 
 def _prediction_question_intent(question: str) -> bool:
     q = question.lower().strip()
-    return any(
+    has_year = bool(re.search(r"\b(20\d{2})\b", q))
+    season_context = has_year or any(
         phrase in q
         for phrase in [
-            "predict",
-            "prediction",
-            "forecast",
-            "projection",
-            "project",
-            "future performance",
-            "future year",
-            "next year",
-            "outlook",
-            "trend analysis",
-            "likely to",
-            "expected to",
-            "estimate",
-            "probability",
+            "next season",
+            "future season",
+            "upcoming season",
+            "season outlook",
             "performance outlook",
         ]
+    )
+    future_phrases = [
+        "predict",
+        "prediction",
+        "forecast",
+        "projection",
+        "project",
+        "future performance",
+        "future year",
+        "next year",
+        "outlook",
+        "trend analysis",
+        "likely to",
+        "expected to",
+        "estimate",
+        "probability",
+        "performance outlook",
+        "going to be",
+        "going to perform",
+        "will perform",
+        "will be",
+        "will do",
+    ]
+    return any(
+        phrase in q for phrase in future_phrases
     ) or (
         "will" in q
         and any(term in q for term in ["run", "runs", "wicket", "wickets", "catch", "catches", "score", "perform"])
+    ) or (
+        season_context
+        and (
+            "performance" in q
+            or "perform" in q
+            or "going to" in q
+            or "how is" in q
+            or "how will" in q
+        )
     )
 
 
@@ -1187,7 +1438,59 @@ def _forecast_rows_for_members(store: dict[str, Any], analysis_store: dict[str, 
     return snippets
 
 
-def _forecast_club_snippets(store: dict[str, Any], analysis_store: dict[str, Any], requested_clubs: list[str]) -> list[dict[str, Any]]:
+def _forecast_answer_is_grounded(answer: str, context: str, question: str) -> bool:
+    if not answer.strip():
+        return False
+    allowed_numbers = set(re.findall(r"\b\d+(?:\.\d+)?\b", f"{context}\n{question}"))
+    if not allowed_numbers:
+        return True
+    for token in re.findall(r"\b\d+(?:\.\d+)?\b", answer):
+        if token not in allowed_numbers:
+            return False
+    return True
+
+
+def _forecast_fallback_answer(question: str, matched_members: list[dict[str, Any]], requested_clubs: list[str], analysis_store: dict[str, Any]) -> str:
+    member_names = ", ".join(_display_name(member) for member in matched_members[:2] if member.get("name"))
+    requested_club_names = ", ".join(
+        str(club).strip()
+        for club in requested_clubs
+        if str(club).strip()
+    )
+    club_names = ", ".join(
+        str(club.get("name") or club.get("short_name") or club.get("id") or "").strip()
+        for club in (analysis_store.get("clubs") or [])
+        if str(club.get("name") or club.get("short_name") or club.get("id") or "").strip()
+        and (
+            not requested_clubs
+            or str(club.get("id") or "").strip().lower() in {item.strip().lower() for item in requested_clubs}
+            or str(club.get("name") or "").strip().lower() in {item.strip().lower() for item in requested_clubs}
+            or str(club.get("short_name") or "").strip().lower() in {item.strip().lower() for item in requested_clubs}
+        )
+    )
+    if member_names:
+        return (
+            f"Based on the stored records, {member_names} have enough recent trend data for only a cautious forecast. "
+            "I can summarize the direction of performance, but I cannot justify exact numeric projections from the current data."
+        )
+    if club_names or requested_club_names:
+        club_label = club_names or requested_club_names or "the requested club"
+        return (
+            f"Based on the stored records, {club_label} have enough recent trend data for only a cautious club forecast. "
+            "I can summarize the direction of performance, but I cannot justify exact numeric projections from the current data."
+        )
+    return (
+        "Based on the stored records, I can only give a cautious qualitative forecast. "
+        "The current data is not strong enough for exact numeric projections."
+    )
+
+
+def _forecast_club_snippets(
+    store: dict[str, Any],
+    analysis_store: dict[str, Any],
+    requested_clubs: list[str],
+    include_player_names: bool = True,
+) -> list[dict[str, Any]]:
     club_year_rows = list(analysis_store.get("club_year_stats") or [])
     club_summary_rows = list(analysis_store.get("club_summary_stats") or [])
     clubs = list(analysis_store.get("clubs") or [])
@@ -1196,11 +1499,11 @@ def _forecast_club_snippets(store: dict[str, Any], analysis_store: dict[str, Any
         requested_set = set(requested_clubs)
         for club in clubs:
             names = {
-                str(club.get("id") or "").strip().lower(),
-                str(club.get("name") or "").strip().lower(),
-                str(club.get("short_name") or "").strip().lower(),
+                str(club.get("id") or "").strip(),
+                str(club.get("name") or "").strip(),
+                str(club.get("short_name") or "").strip(),
             }
-            if names & requested_set:
+            if any(_name_matches_requested(name, requested_set) for name in names):
                 target_clubs.append(club)
     elif store.get("focus_club"):
         target_id = str(store["focus_club"].get("id") or "").strip().lower()
@@ -1220,15 +1523,24 @@ def _forecast_club_snippets(store: dict[str, Any], analysis_store: dict[str, Any
             key=lambda item: str(item.get("season_year") or ""),
         )
         recent_year_rows = year_rows[-3:]
-        year_text = "; ".join(
-            (
+        year_parts = []
+        for item in recent_year_rows:
+            bits = [
                 f"{item.get('season_year')}: matches={item.get('matches_played', 0)}, wins={item.get('matches_won', 0)}, "
                 f"losses={item.get('matches_lost', 0)}, nr={item.get('matches_nr', 0)}, runs={item.get('total_runs', 0)}, "
-                f"wickets={item.get('total_wickets', 0)}, catches={item.get('total_catches', 0)}, "
-                f"top_batter={item.get('top_batter', '')} ({item.get('top_batter_runs', 0)}), "
+                f"wickets={item.get('total_wickets', 0)}, catches={item.get('total_catches', 0)}"
+            ]
+            if include_player_names:
+                bits.append(f"top_batter={item.get('top_batter', '')} ({item.get('top_batter_runs', 0)})")
+            bits.append(
                 f"milestones=25+:{item.get('scores_25_plus', 0)} 50+:{item.get('scores_50_plus', 0)} 100+:{item.get('scores_100_plus', 0)}"
             )
-            for item in recent_year_rows
+            year_parts.append(", ".join(bits))
+        year_text = "; ".join(year_parts)
+        top_batter_text = (
+            f"top_batter: {summary_row.get('top_batter', '')} ({summary_row.get('top_batter_runs', 0)})"
+            if include_player_names
+            else "top_batter: hidden for club-only forecast"
         )
         snippets.append(
             {
@@ -1239,7 +1551,7 @@ def _forecast_club_snippets(store: dict[str, Any], analysis_store: dict[str, Any
                         f"[forecast-club] {club_name}",
                         f"season: {club.get('season') or 'unknown'}",
                         f"overall: matches_played={summary_row.get('matches_played', 0)}, wins={summary_row.get('matches_won', 0)}, losses={summary_row.get('matches_lost', 0)}, nr={summary_row.get('matches_nr', 0)}, runs={summary_row.get('total_runs', 0)}, wickets={summary_row.get('total_wickets', 0)}, catches={summary_row.get('total_catches', 0)}, highest_score={summary_row.get('highest_score', '') or 'n/a'}",
-                        f"top_batter: {summary_row.get('top_batter', '')} ({summary_row.get('top_batter_runs', 0)})",
+                        top_batter_text,
                         f"milestones: 25+={summary_row.get('scores_25_plus', 0)}, 50+={summary_row.get('scores_50_plus', 0)}, 100+={summary_row.get('scores_100_plus', 0)}",
                         f"recent_years: {year_text or 'none'}",
                     ]
@@ -1258,6 +1570,7 @@ def _forecast_answer(question: str, store: dict[str, Any], history: list[dict[st
     effective_question = _contextualize_question(question, history, analysis_store["members"], analysis_store)
     matched_members = _matched_members(effective_question, analysis_store["members"])
     requested_clubs = _requested_club_terms(effective_question, store)
+    club_only_request = bool(requested_clubs) and not matched_members
     summary = build_summary(analysis_store)
     snippets = [
         {
@@ -1280,9 +1593,12 @@ def _forecast_answer(question: str, store: dict[str, Any], history: list[dict[st
             ),
         }
     ]
-    snippets.extend(_forecast_club_snippets(store, analysis_store, requested_clubs))
-    snippets.extend(_forecast_rows_for_members(store, analysis_store, matched_members))
-    selected_snippets = _rank_context_snippets(question, snippets, matched_members)
+    snippets.extend(_forecast_club_snippets(store, analysis_store, requested_clubs, include_player_names=not club_only_request))
+    if matched_members and not club_only_request:
+        snippets.extend(_forecast_rows_for_members(store, analysis_store, matched_members))
+    elif not requested_clubs:
+        snippets.extend(_forecast_rows_for_members(store, analysis_store, matched_members))
+    selected_snippets = _rank_context_snippets(question, snippets, matched_members, llm_status)
     context = "\n\n".join(snippet["text"] for snippet in selected_snippets)
 
     system_prompt = (
@@ -1290,9 +1606,12 @@ def _forecast_answer(question: str, store: dict[str, Any], history: list[dict[st
         "Rules:\n"
         "- Do not guess beyond the supplied trends and summaries.\n"
         "- Make it clear that forecasts are projections, not certainties.\n"
+        "- Do not invent exact future numbers, ranges, averages, or match counts unless those exact numbers are explicitly present in the supplied context.\n"
         "- Use the recent year-by-year club and player records to infer likely current and future performance.\n"
         "- If a player is named, focus on that player and mention club-specific differences only when they exist in the context.\n"
-        "- If a club is named, focus on that club; otherwise compare the key clubs and players in the supplied context.\n"
+        "- If a club is named, focus on that club and do not introduce unrelated player names unless they are explicitly relevant to that club context.\n"
+        "- If a club is named, answer at club level first and keep player details out unless the question explicitly asks about players.\n"
+        "- If a club is not named, compare the key clubs and players in the supplied context.\n"
         "- For future years, project conservatively from the latest available year data and current availability patterns.\n"
         "- Mention the factors used: recent form, batting average, strike rate, wickets, catches, availability, and milestone counts.\n"
         "- If the data is too thin, say so plainly.\n"
@@ -1305,7 +1624,7 @@ def _forecast_answer(question: str, store: dict[str, Any], history: list[dict[st
             json={
                 "model": llm_status["model"],
                 "stream": False,
-                "options": {"temperature": 0.25},
+                "options": _llm_options("forecast"),
                 "messages": [
                     {"role": "system", "content": system_prompt},
                     {
@@ -1323,10 +1642,37 @@ def _forecast_answer(question: str, store: dict[str, Any], history: list[dict[st
         response.raise_for_status()
         answer = response.json().get("message", {}).get("content", "").strip()
         if not answer:
-            return None
-        return answer
+            return _forecast_fallback_answer(effective_question, matched_members, requested_clubs, analysis_store)
+        if not _forecast_answer_is_grounded(answer, context, effective_question):
+            logger.warning(
+                "forecast answer rejected due to ungrounded numbers question=%s answer=%s",
+                effective_question[:200],
+                answer[:300],
+            )
+            return _forecast_fallback_answer(effective_question, matched_members, requested_clubs, analysis_store)
+        if club_only_request:
+            answer_lower = answer.lower()
+            if any(
+                member_name in answer_lower
+                for member_name in (
+                    token
+                    for member in analysis_store.get("members", [])
+                    for token in {
+                        str(member.get("name") or "").strip().lower(),
+                        str(member.get("full_name") or "").strip().lower(),
+                    }
+                    if token
+                )
+            ):
+                logger.warning(
+                    "forecast answer rejected due to club-only player leakage question=%s answer=%s",
+                    effective_question[:200],
+                    answer[:300],
+                )
+                return _forecast_fallback_answer(effective_question, matched_members, requested_clubs, analysis_store)
+        return _redact_profanity(answer)
     except Exception:
-        return None
+        return _forecast_fallback_answer(effective_question, matched_members, requested_clubs, analysis_store)
 
 
 def _prefer_heuristic_answer(question: str) -> bool:
@@ -2166,6 +2512,18 @@ def answer_question(
 ) -> dict[str, Any]:
     llm_status = get_llm_status()
     effective_question = _contextualize_question(question, history, store["members"], store)
+    moderated = _moderated_prompt_response(effective_question)
+    if moderated:
+        moderated["session_id"] = session_id or ""
+        moderated["llm"] = llm_status
+        logger.info(
+            "chat.answer source=%s mode=%s question=%s answer=%s",
+            moderated["source_provider"],
+            moderated.get("mode", ""),
+            question[:200],
+            str(moderated.get("answer", ""))[:300],
+        )
+        return moderated
     if _prediction_question_intent(effective_question):
         forecast = _forecast_answer(question, store, history=history)
         if forecast:

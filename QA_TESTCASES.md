@@ -31,7 +31,7 @@ The automated suite covers the main product surfaces end-to-end on isolated loca
 | Season Fixtures, scoring, and availability | Season list, fixture CRUD, live scorebook setup, text/voice scoring, past-fixture lock, availability save | U05, F05-F08, F10, N05 |
 | Player profile, rankings, chat, and history | Cross-club profile data, clubs dedupe, AI/RAG question answering, predictive analysis | U06, F12, N03 |
 | Admin Center and scorecard review | Superadmin-only access and scorebook / archive controls | U09, F09, F07 |
-| Sign-in and landing-page widgets | Leader widgets and public leaderboard stats | F03, N04 |
+| Sign-in and landing-page widgets | Leader widgets, public leaderboard stats, and live LLM badge state | F03, N04, N06 |
 | Non-functional checks | Page render, health, response latency | N01-N05 |
 
 ## Unit Testcases
@@ -79,6 +79,8 @@ The automated suite covers the main product surfaces end-to-end on isolated loca
 | N03 | Stability | Fresh browser session | Reload `/signin`, `/clubs`, and `/season-setup` | Pages render without script crashes or stale fallback player selection. |
 | N04 | Leader widget latency | Any browser session | Fetch `/api/public/signin-stats` | Public leader stats are returned quickly and contain batting, bowling, and club lists. |
 | N05 | Season setup responsiveness | Signed in as `captain1` | Fetch `/api/season-setup/data?club_id=club-testclub` | Season year list is populated and the response stays fast. |
+| N06 | Assistant LLM badge | Any browser session | Open `/dashboard` and inspect the Assistant header | The `LLM` badge renders with a blinking green dot when Ollama is available and blinking red when it is not. |
+| N07 | LLM safety filter | Any browser session | Ask the chat a profanity-heavy question | The response is moderated and stays cricket-focused and respectful. |
 
 ## Automation
 

@@ -9,6 +9,7 @@ import time
 import unittest
 from datetime import datetime, timedelta
 from pathlib import Path
+from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
@@ -458,6 +459,130 @@ class FunctionalQATests(LocalQATestCase):
         payload = response.json()
         self.assertTrue(payload.get("answer"))
         self.assertEqual(payload.get("session_id"), "qa-session")
+
+    def test_f13_future_performance_questions_route_to_forecast(self) -> None:
+        brain = importlib.import_module("app.cricket_brain")
+        question = "how is Amit Sethi's performance going to be in 2026 season"
+        self.assertTrue(brain._prediction_question_intent(question))
+        store = self.main.load_store()
+        with (
+            patch.object(
+                brain,
+                "get_llm_status",
+                return_value={"available": True, "provider": "ollama", "model": "llama3.2:latest"},
+            ),
+            patch.object(brain, "_forecast_answer", return_value="Forecast answer") as forecast_mock,
+            patch.object(
+                brain,
+                "_heuristic_answer",
+                side_effect=AssertionError("heuristic should not run for forecast prompts"),
+            ),
+        ):
+            payload = brain.answer_question(question, store, history=[], session_id="forecast-qa")
+        self.assertEqual(payload.get("mode"), "forecast")
+        self.assertEqual(payload.get("source_provider"), "ollama")
+        self.assertEqual(payload.get("answer"), "Forecast answer")
+        forecast_mock.assert_called_once()
+
+    def test_f14_hallucinated_forecast_numbers_fall_back_to_safe_text(self) -> None:
+        brain = importlib.import_module("app.cricket_brain")
+        question = "how is Amit Sethi's performance going to be in 2026 season"
+        store = self.main.load_store()
+
+        class _FakeResponse:
+            def raise_for_status(self) -> None:
+                return None
+
+            def json(self) -> dict[str, dict[str, str]]:
+                return {
+                    "message": {
+                        "content": (
+                            "Amit Sethi will score 800+ runs, play 19 matches, and take 1-2 wickets in 2026."
+                        )
+                    }
+                }
+
+        with (
+            patch.object(
+                brain,
+                "get_llm_status",
+                return_value={"available": True, "provider": "ollama", "model": "llama3.2:latest"},
+            ),
+            patch.object(brain.httpx, "post", return_value=_FakeResponse()),
+        ):
+            answer = brain._forecast_answer(question, store, history=[])
+
+        self.assertIsNotNone(answer)
+        self.assertIn("cautious forecast", answer.lower())
+        self.assertNotIn("800+", answer)
+        self.assertNotIn("19 matches", answer)
+
+    def test_f15_profanity_is_moderated_before_llm(self) -> None:
+        brain = importlib.import_module("app.cricket_brain")
+        store = self.main.load_store()
+        payload = brain.answer_question("you are shit", store, history=[], session_id="moderation-qa")
+        self.assertEqual(payload.get("mode"), "moderated")
+        self.assertEqual(payload.get("source_label"), "Content filter")
+        self.assertIn("respectful", payload.get("answer", "").lower())
+
+    def test_f16_club_forecast_does_not_pull_in_player_snippets(self) -> None:
+        brain = importlib.import_module("app.cricket_brain")
+        store = self.main.load_store()
+        question = "how about Coca Cola Club's performance in 2026"
+        analysis_store = brain._global_analysis_store(store)
+        with (
+            patch.object(
+                brain,
+                "get_llm_status",
+                return_value={"available": True, "provider": "ollama", "model": "llama3.2:latest"},
+            ),
+            patch.object(brain, "_forecast_rows_for_members", side_effect=AssertionError("player snippets should not be used for club-only forecasts")),
+            patch.object(brain, "_forecast_club_snippets", return_value=[{"kind": "forecast-club", "key": "club", "text": "[forecast-club] Coca Cola XI\nseason: 2026\noverall: matches_played=2"}]),
+            patch.object(brain.httpx, "post") as post_mock,
+        ):
+            post_mock.return_value.raise_for_status.return_value = None
+            post_mock.return_value.json.return_value = {"message": {"content": "Coca Cola XI should remain stable in 2026."}}
+            answer = brain._forecast_answer(question, store, history=[])
+
+        self.assertIsNotNone(answer)
+        self.assertNotIn("Amit Sethi", answer or "")
+        self.assertNotIn("Amit Gaba", answer or "")
+        self.assertIn("Coca Cola XI", answer or "")
+
+    def test_f17_club_forecast_rejects_player_leakage(self) -> None:
+        brain = importlib.import_module("app.cricket_brain")
+        store = self.main.load_store()
+        question = "how about Coca Cola Club's performance in 2026"
+
+        class _FakeResponse:
+            def raise_for_status(self) -> None:
+                return None
+
+            def json(self) -> dict[str, dict[str, str]]:
+                return {
+                    "message": {
+                        "content": (
+                            "Amit Sethi will lead Coca Cola XI, Amit Gaba will support Heartlake Cricket Club, "
+                            "and TP Community will struggle."
+                        )
+                    }
+                }
+
+        with (
+            patch.object(
+                brain,
+                "get_llm_status",
+                return_value={"available": True, "provider": "ollama", "model": "llama3.2:latest"},
+            ),
+            patch.object(brain.httpx, "post", return_value=_FakeResponse()),
+        ):
+            answer = brain._forecast_answer(question, store, history=[])
+
+        self.assertIsNotNone(answer)
+        self.assertIn("cautious club forecast", answer.lower())
+        self.assertNotIn("amit sethi", answer.lower())
+        self.assertNotIn("amit gaba", answer.lower())
+        self.assertNotIn("heartlake", answer.lower())
 
 
 class NonFunctionalQATests(LocalQATestCase):

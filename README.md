@@ -252,7 +252,10 @@ Open `http://127.0.0.1:8090`
 
 - The site is mobile-friendly and works well as the product baseline for a future iPhone app.
 - `Imran +2` from the original schedule is stored as an availability note saying he is bringing two guests.
-- If Ollama is running locally, the AI badge shows the local model; otherwise the heuristic assistant still works.
+- The Assistant header shows a compact `LLM` status badge with a blinking dot, green when Ollama is available and red when it is not.
+- If Ollama is running locally, the Assistant uses it; otherwise the grounded heuristic assistant still works.
+- The chat pipeline now uses chunked context selection, optional Ollama embeddings for retrieval ranking, configurable sampling for forecast answers, and safety checks that avoid inventing unsupported numbers.
+- The chat pipeline also applies a small profanity/content filter so responses stay cricket-focused and respectful.
 - Existing images dropped into `app/uploads/` are auto-imported into the archive list.
 - Duplicate files are moved into `app/duplicates/` for manual review, with a copy of the matched original staged beside them.
 - The local LLM also powers grounded predictive analysis for club and player outlooks across current and future seasons.
@@ -264,9 +267,28 @@ For Azure, the web app stays on App Service and Ollama runs separately in Azure 
 - Deploy Ollama with [`scripts/deploy_ollama_aci.sh`](scripts/deploy_ollama_aci.sh)
 - ACI template: [`infra/ollama-aci.yaml`](infra/ollama-aci.yaml)
 - Operator notes: [`.azure/ollama-aci.md`](.azure/ollama-aci.md)
+- The ACI flow pulls both the chat model and an embedding model (`nomic-embed-text` by default) so the web app can do grounded retrieval ranking when embeddings are available.
 - Then set `OLLAMA_BASE_URL=http://<aci-fqdn>:11434` in the web app environment
+- The Assistant badge reads `/api/health` and flips between blinking green and blinking red depending on Ollama availability.
 
 This keeps the web app lightweight while giving the chat and archive review flows a real model backend.
+
+## Azure Login
+
+If you need to deploy with the direct App Service zip path, the CricketClubApp Azure tenant is:
+
+- Tenant ID: `44402a74-5c2e-4982-a6fb-e70bb39c7d8a`
+
+Use it with:
+
+```bash
+az logout
+az cloud set --name AzureCloud
+az login --use-device-code --tenant 44402a74-5c2e-4982-a6fb-e70bb39c7d8a
+az account set --subscription 9fdb812c-a846-4890-a27d-b99edc274a5e
+```
+
+Then use [`scripts/deploy_azure.sh`](scripts/deploy_azure.sh) for the zip deploy.
 
 ## Chat Prompt Examples
 
@@ -294,6 +316,7 @@ Use the website AI box with natural-language questions like these. They should w
 - `Predict TestClub batting, bowling, and fielding outlook for 2026 and 2027`
 - `Forecast Amit S's runs and batting average for the next season`
 - `What is the projected top batter for TestClub next year?`
+- `How is Amit Sethi's performance going to be in 2026 season?`
 - `What is the next match?`
 - `Show old scorecards from 2025`
 - `Follow <player name>`

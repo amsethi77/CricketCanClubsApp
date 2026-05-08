@@ -13,6 +13,7 @@ STORAGE_ACCOUNT="${STORAGE_ACCOUNT:-ccollama$(date +%y%m%d%H%M%S)}"
 SHARE_NAME="${SHARE_NAME:-ollama-models}"
 OLLAMA_IMAGE="${OLLAMA_IMAGE:-ollama/ollama:latest}"
 OLLAMA_MODEL="${OLLAMA_MODEL:-llama3.2:latest}"
+OLLAMA_EMBED_MODEL="${OLLAMA_EMBED_MODEL:-nomic-embed-text}"
 CPU="${CPU:-2}"
 MEMORY_GB="${MEMORY_GB:-4}"
 OWNER_TAG="${OWNER_TAG:-amitsethi}"
@@ -112,6 +113,13 @@ curl -fsS \
   -H "Content-Type: application/json" \
   -d "{\"model\":\"${OLLAMA_MODEL}\",\"stream\":false}" >/dev/null
 
+if [[ -n "$OLLAMA_EMBED_MODEL" ]]; then
+  curl -fsS \
+    -X POST "http://${FQDN}:11434/api/pull" \
+    -H "Content-Type: application/json" \
+    -d "{\"model\":\"${OLLAMA_EMBED_MODEL}\",\"stream\":false}" >/dev/null
+fi
+
 if [[ -n "$WEBAPP_NAME" ]]; then
   WEBAPP_RESOURCE_GROUP="${WEBAPP_RESOURCE_GROUP:-$RESOURCE_GROUP}"
   az webapp config appsettings set \
@@ -119,7 +127,8 @@ if [[ -n "$WEBAPP_NAME" ]]; then
     --name "$WEBAPP_NAME" \
     --settings \
       OLLAMA_BASE_URL="http://${FQDN}:11434" \
-      OLLAMA_MODEL="$OLLAMA_MODEL" >/dev/null
+      OLLAMA_MODEL="$OLLAMA_MODEL" \
+      OLLAMA_EMBED_MODEL="$OLLAMA_EMBED_MODEL" >/dev/null
   echo "Updated web app settings for ${WEBAPP_NAME}."
 fi
 

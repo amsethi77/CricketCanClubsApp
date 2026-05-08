@@ -29,12 +29,14 @@ Deploy the CricketClubApp / CricketCanClubs club website to Azure App Service wi
 ## Azure Context
 - Subscription: `Subscription 1`
 - Region: `Canada Central`
+- Tenant ID: `44402a74-5c2e-4982-a6fb-e70bb39c7d8a`
 
 ## Recommended Azure Architecture
 - Azure App Service on Linux
 - GitHub Actions deployment from the repo main branch
 - Persistent App Service storage for SQLite/uploads/duplicates under `/home/site/cricketclubapp`
 - Separate Azure Container Instance for Ollama with Azure Files persistence for downloaded models
+- The Ollama container should pull both the chat model and an embedding model (`nomic-embed-text` by default) so the web app can use embeddings-backed grounding and chunk ranking.
 - Azure DNS for `criccanclubs.ca`
 - Optional Azure Blob Storage later for larger archive backups or media offload
 
@@ -112,6 +114,17 @@ Deploy the CricketClubApp / CricketCanClubs club website to Azure App Service wi
 4. Add GitHub Actions deployment workflow.
 5. Add domain and HTTPS configuration.
 6. Deploy and verify the website.
+
+## Direct CLI Login
+
+Use the tenant below for direct Azure CLI access when deploying with [`scripts/deploy_azure.sh`](../scripts/deploy_azure.sh):
+
+```bash
+az logout
+az cloud set --name AzureCloud
+az login --use-device-code --tenant 44402a74-5c2e-4982-a6fb-e70bb39c7d8a
+az account set --subscription 9fdb812c-a846-4890-a27d-b99edc274a5e
+```
 
 ## Approval Needed
 This plan is ready for review. After approval, proceed to validation and infrastructure generation.
