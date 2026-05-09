@@ -622,7 +622,21 @@ class FunctionalQATests(LocalQATestCase):
         self.assertIn("55 runs", answer.get("answer", ""))
         self.assertIn("2 confirmed match(es)", answer.get("answer", ""))
 
-    def test_f21_save_store_refreshes_llm_document_index(self) -> None:
+    def test_f21_club_question_ignores_prior_player_history(self) -> None:
+        brain = importlib.import_module("app.cricket_brain")
+        store = self.main.load_store()
+        answer = brain.answer_question(
+            "how is Heartlake's performance looking in 2026",
+            store,
+            history=[{"role": "user", "text": "how is Amit Sethi's performance going to be in 2026 season"}],
+            session_id="club-forecast-qa",
+        )
+        self.assertEqual(answer.get("mode"), "forecast")
+        self.assertIn("Heartlake Cricket Club", answer.get("answer", ""))
+        self.assertNotIn("Amit Sethi", answer.get("answer", ""))
+        self.assertNotIn("Amit Gaba", answer.get("answer", ""))
+
+    def test_f22_save_store_refreshes_llm_document_index(self) -> None:
         store = self.main.load_store()
         self.main.save_store(store)
         refreshed = self.main.load_store()
@@ -630,7 +644,7 @@ class FunctionalQATests(LocalQATestCase):
         self.assertTrue(llm_documents, "saving the store should rebuild the indexed LLM document corpus")
         self.assertTrue(any(doc.get("doc_type") == "prompt" for doc in llm_documents))
 
-    def test_f22_llm_registry_and_status_endpoints(self) -> None:
+    def test_f23_llm_registry_and_status_endpoints(self) -> None:
         status = self.client.get("/api/llm/status")
         prompts = self.client.get("/api/llm/prompts")
         documents = self.client.get("/api/llm/documents", params={"limit": 5})
@@ -640,7 +654,7 @@ class FunctionalQATests(LocalQATestCase):
         self.assertGreaterEqual(status.json().get("prompt_count", 0), 1)
         self.assertIn("SYSTEM_PROMPT", [item.get("name") for item in prompts.json().get("prompts", [])])
 
-    def test_f23_llm_infer_endpoint_uses_registry_prompt(self) -> None:
+    def test_f24_llm_infer_endpoint_uses_registry_prompt(self) -> None:
         llm_service = importlib.import_module("app.llm_service")
 
         class _FakeResponse:

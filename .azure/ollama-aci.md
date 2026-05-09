@@ -29,14 +29,21 @@ The script:
 2. Creates or reuses the storage account and Azure Files share.
 3. Renders [`infra/ollama-aci.yaml`](../infra/ollama-aci.yaml) with the live storage key.
 4. Deploys the container group with `ollama/ollama`.
+5. Caps the Azure Files share at `10 GiB` so the model volume stays small and predictable.
 
 ## Runtime settings
 
 Recommended environment values for the web app:
 
 ```bash
-OLLAMA_BASE_URL=http://<aci-fqdn>:11434
+OLLAMA_BASE_URL=http://cricketcanclubs-ollama-cc260508.canadacentral.azurecontainer.io:11434
 OLLAMA_MODEL=llama3.2:latest
+```
+
+Current live endpoint for this deployment:
+
+```bash
+http://cricketcanclubs-ollama-cc260508.canadacentral.azurecontainer.io:11434
 ```
 
 The app already reads `OLLAMA_BASE_URL` in [`app/cricket_brain.py`](../app/cricket_brain.py).
@@ -45,5 +52,5 @@ The app already reads `OLLAMA_BASE_URL` in [`app/cricket_brain.py`](../app/crick
 
 After deployment:
 
-1. Open `http://<aci-fqdn>:11434/api/tags` to confirm Ollama is live.
+1. Open `http://cricketcanclubs-ollama-cc260508.canadacentral.azurecontainer.io:11434/api/tags` to confirm Ollama is live.
 2. Open `/api/health` on the Azure web app and confirm the `llm.provider` changes from `heuristic` to `ollama`.

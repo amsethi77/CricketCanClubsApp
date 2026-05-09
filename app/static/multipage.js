@@ -55,11 +55,27 @@ function authHeaders(extra = {}) {
 async function apiJson(url, options = {}) {
   const response = await fetch(url, options);
   const text = await response.text();
-  const data = text ? JSON.parse(text) : {};
-  if (!response.ok) {
-    throw new Error(data.detail || data.message || "Request failed.");
+  const trimmed = text.trim();
+  const contentType = String(response.headers.get("content-type") || "").toLowerCase();
+  let data = null;
+  if (trimmed && (contentType.includes("json") || trimmed.startsWith("{") || trimmed.startsWith("["))) {
+    try {
+      data = JSON.parse(text);
+    } catch {
+      data = null;
+    }
   }
-  return data;
+  if (!response.ok) {
+    const detail = data && typeof data === "object" ? (data.detail || data.message) : "";
+    throw new Error(detail || trimmed || "Request failed.");
+  }
+  if (data !== null) {
+    return data;
+  }
+  if (!trimmed) {
+    return {};
+  }
+  throw new Error("Unexpected non-JSON response from the server.");
 }
 
 async function sharedGetJson(url, authenticated = false) {

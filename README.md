@@ -254,8 +254,8 @@ Open `http://127.0.0.1:8090`
 
 - The site is mobile-friendly and works well as the product baseline for a future iPhone app.
 - `Imran +2` from the original schedule is stored as an availability note saying he is bringing two guests.
-- The Assistant header shows a compact `LLM` status badge with a blinking dot, green when Ollama is available and red when it is not.
-- The `LLM` badge sits beside the Assistant title, and the `Clear chat` button resets the browser conversation state plus cached LLM answers.
+- The Assistant header shows a compact status chip beside the Assistant title with a colored dot and text: solid green `Online`, blinking green `Thinking`, blinking red `Connecting`, and solid red `Offline`.
+- The status chip sits beside the Assistant title, and the `Clear chat` button resets the browser conversation state plus cached LLM answers.
 - If Ollama is running locally, the Assistant uses it; when the forecast reply is too vague or hallucinates unsupported details, the app falls back to a grounded year-by-year trend summary instead of a made-up projection.
 - The prompt library in `READMELLM.md` is loaded into the runtime registry and indexed into the LLM document corpus for inference.
 - The LLM service layer exposes `/api/llm/status`, `/api/llm/prompts`, `/api/llm/documents`, `/api/llm/reindex`, and `/api/llm/infer` for prompt inspection, corpus refresh, and direct inference.
@@ -275,8 +275,10 @@ For Azure, the web app stays on App Service and Ollama runs separately in Azure 
 - ACI template: [`infra/ollama-aci.yaml`](infra/ollama-aci.yaml)
 - Operator notes: [`.azure/ollama-aci.md`](.azure/ollama-aci.md)
 - The ACI flow pulls both the chat model and an embedding model (`nomic-embed-text` by default) so the web app can do grounded retrieval ranking when embeddings are available.
-- Then set `OLLAMA_BASE_URL=http://<aci-fqdn>:11434` in the web app environment
-- The Assistant badge reads `/api/health` and flips between blinking green and blinking red depending on Ollama availability.
+- Current live Ollama endpoint: `http://cricketcanclubs-ollama-cc260508.canadacentral.azurecontainer.io:11434`
+- The Azure Files share behind Ollama is intentionally capped at `10 GiB` so model storage stays small and predictable.
+- For a fresh redeploy, set `OLLAMA_BASE_URL` to the ACI endpoint returned by the deploy script. The App Service in Azure already points at the current live endpoint above.
+- The Assistant status chip reads `/api/health` and flips between the four live states depending on Ollama availability and chat request phase.
 
 This keeps the web app lightweight while giving the chat and archive review flows a real model backend.
 

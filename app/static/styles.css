@@ -1408,38 +1408,62 @@ button:hover,
   border-radius: 999px;
   font-size: 0.72rem;
   font-weight: 700;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
+  letter-spacing: 0.01em;
   white-space: nowrap;
   line-height: 1.2;
 }
 
-.llm-status-pill::before {
-  content: "";
+.llm-status-dot {
+  display: inline-block;
   width: 8px;
   height: 8px;
   border-radius: 999px;
   background: currentColor;
   box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.56);
-  animation: llmPulse 1.1s ease-in-out infinite;
+  flex: 0 0 auto;
 }
 
-.llm-status-loading {
-  background: rgba(100, 116, 139, 0.12);
-  color: #64748b;
-}
-
-.llm-status-online {
-  background: rgba(34, 197, 94, 0.16);
-  color: #15803d;
-}
-
-.llm-status-offline {
+.llm-status-connecting {
   background: rgba(214, 40, 57, 0.14);
   color: var(--red-deep);
+  animation: llmBadgePulseRed 1s ease-in-out infinite;
 }
 
-@keyframes llmPulse {
+.llm-status-connecting .llm-status-dot {
+  animation: llmBlinkRed 1s ease-in-out infinite;
+}
+
+.llm-status-connected {
+  background: rgba(34, 197, 94, 0.16);
+  color: #15803d;
+  animation: none;
+}
+
+.llm-status-connected .llm-status-dot {
+  animation: none;
+}
+
+.llm-status-thinking {
+  background: rgba(34, 197, 94, 0.16);
+  color: #15803d;
+  animation: llmBadgePulseGreen 1s ease-in-out infinite;
+}
+
+.llm-status-thinking .llm-status-dot {
+  animation: llmBlinkGreen 1s ease-in-out infinite;
+}
+
+.llm-status-disconnected {
+  background: rgba(214, 40, 57, 0.14);
+  color: var(--red-deep);
+  animation: none;
+}
+
+.llm-status-disconnected .llm-status-dot {
+  animation: none;
+}
+
+@keyframes llmBlinkGreen {
   0%,
   100% {
     transform: scale(1);
@@ -1448,6 +1472,54 @@ button:hover,
   50% {
     transform: scale(1.26);
     opacity: 1;
+  }
+}
+
+@keyframes llmBlinkRed {
+  0%,
+  100% {
+    transform: scale(1);
+    opacity: 0.65;
+  }
+  50% {
+    transform: scale(1.24);
+    opacity: 1;
+  }
+}
+
+@keyframes llmBadgePulseGreen {
+  0%,
+  100% {
+    transform: translateY(0) scale(1);
+    opacity: 0.92;
+    box-shadow:
+      0 0 0 rgba(21, 128, 61, 0),
+      0 8px 18px rgba(21, 128, 61, 0.06);
+  }
+  50% {
+    transform: translateY(-1px) scale(1.01);
+    opacity: 1;
+    box-shadow:
+      0 0 0 4px rgba(34, 197, 94, 0.1),
+      0 10px 24px rgba(21, 128, 61, 0.16);
+  }
+}
+
+@keyframes llmBadgePulseRed {
+  0%,
+  100% {
+    transform: translateY(0) scale(1);
+    opacity: 0.92;
+    box-shadow:
+      0 0 0 rgba(177, 20, 39, 0),
+      0 8px 18px rgba(177, 20, 39, 0.05);
+  }
+  50% {
+    transform: translateY(-1px) scale(1.01);
+    opacity: 1;
+    box-shadow:
+      0 0 0 4px rgba(214, 40, 57, 0.11),
+      0 10px 24px rgba(177, 20, 39, 0.16);
   }
 }
 

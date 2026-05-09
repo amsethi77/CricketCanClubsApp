@@ -441,6 +441,9 @@ def _contextualize_question(
     members: list[dict[str, Any]],
     store: dict[str, Any],
 ) -> str:
+    requested_clubs = _requested_club_terms(question, store)
+    if requested_clubs and not _matched_members(question, members):
+        return question
     user_messages = _history_user_messages(history)
     if not user_messages or not _question_needs_history(question, members, store):
         return question

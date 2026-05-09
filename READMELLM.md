@@ -4,6 +4,21 @@ Use this file as the central prompt registry for all LLM interactions.
 """
 
 # =========================================================
+# 🟢 LLM STATUS INDICATOR
+# =========================================================
+
+LLM_STATUS_INDICATOR = """
+The Assistant header shows a live status chip with a colored dot and label:
+
+- Solid green: Online
+- Blinking green: Thinking
+- Blinking red: Connecting
+- Solid red: Offline
+
+Use this status chip to reflect the live Ollama endpoint state and the current chat request phase.
+"""
+
+# =========================================================
 # 🧠 CORE SYSTEM PROMPT
 # =========================================================
 

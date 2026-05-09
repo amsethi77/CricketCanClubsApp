@@ -518,15 +518,24 @@ async function getJson(url) {
   const response = await fetch(url, {
     headers: token ? { "X-Auth-Token": token } : undefined,
   });
-  if (!response.ok) {
-    const message = await response.text();
-    let parsed = null;
+  const text = await response.text();
+  const trimmed = text.trim();
+  const contentType = String(response.headers.get("content-type") || "").toLowerCase();
+  let parsed = null;
+  if (trimmed && (contentType.includes("json") || trimmed.startsWith("{") || trimmed.startsWith("["))) {
     try {
-      parsed = JSON.parse(message);
-    } catch {}
-    throw new Error(parsed?.detail || parsed?.message || message || "Request failed");
+      parsed = JSON.parse(text);
+    } catch {
+      parsed = null;
+    }
   }
-  return response.json();
+  if (!response.ok) {
+    const message = parsed?.detail || parsed?.message || trimmed || "Request failed";
+    throw new Error(message);
+  }
+  if (parsed !== null) return parsed;
+  if (!trimmed) return {};
+  throw new Error("Unexpected non-JSON response from the server.");
 }
 
 async function postJson(url, payload) {
@@ -536,53 +545,92 @@ async function postJson(url, payload) {
     headers: token ? { "Content-Type": "application/json", "X-Auth-Token": token } : { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   });
-  if (!response.ok) {
-    const message = await response.text();
-    let parsed = null;
+  const text = await response.text();
+  const trimmed = text.trim();
+  const contentType = String(response.headers.get("content-type") || "").toLowerCase();
+  let parsed = null;
+  if (trimmed && (contentType.includes("json") || trimmed.startsWith("{") || trimmed.startsWith("["))) {
     try {
-      parsed = JSON.parse(message);
-    } catch {}
-    throw new Error(parsed?.detail || parsed?.message || message || "Request failed");
+      parsed = JSON.parse(text);
+    } catch {
+      parsed = null;
+    }
   }
-  return response.json();
+  if (!response.ok) {
+    const message = parsed?.detail || parsed?.message || trimmed || "Request failed";
+    throw new Error(message);
+  }
+  if (parsed !== null) return parsed;
+  if (!trimmed) return {};
+  throw new Error("Unexpected non-JSON response from the server.");
 }
 
-function updateLlmStatusBadge(llm) {
+const LLM_BADGE_STATE = {
+  CONNECTING: "connecting",
+  CONNECTED: "connected",
+  THINKING: "thinking",
+  DISCONNECTED: "disconnected",
+};
+
+function llmBadgeStateLabel(state) {
+  switch (String(state || "").trim().toLowerCase()) {
+    case LLM_BADGE_STATE.CONNECTED:
+      return "Online";
+    case LLM_BADGE_STATE.THINKING:
+      return "Thinking";
+    case LLM_BADGE_STATE.CONNECTING:
+      return "Connecting";
+    case LLM_BADGE_STATE.DISCONNECTED:
+    default:
+      return "Offline";
+  }
+}
+
+function setLlmStatusBadge(state, llm = {}) {
   if (!elements.llmStatusBadge) return;
   const provider = String(llm?.provider || "").trim().toLowerCase();
-  const model = String(llm?.model || "").trim();
   const available = Boolean(llm?.available);
+  const normalizedState = String(state || "").trim().toLowerCase();
 
-  elements.llmStatusBadge.classList.remove("llm-status-loading", "llm-status-online", "llm-status-offline");
-  elements.llmStatusBadge.textContent = "LLM";
+  elements.llmStatusBadge.classList.remove(
+    "llm-status-connecting",
+    "llm-status-connected",
+    "llm-status-thinking",
+    "llm-status-disconnected"
+  );
+  elements.llmStatusBadge.classList.add(`llm-status-${normalizedState || LLM_BADGE_STATE.DISCONNECTED}`);
+  elements.llmStatusBadge.innerHTML = `
+    <span class="llm-status-dot" aria-hidden="true"></span>
+    <span class="llm-status-text">${llmBadgeStateLabel(normalizedState)}</span>
+  `;
 
-  if (provider === "ollama" && available) {
-    elements.llmStatusBadge.classList.add("llm-status-online");
-    elements.llmStatusBadge.title = model ? "LLM online" : "LLM online";
+  if (normalizedState === LLM_BADGE_STATE.CONNECTING) {
+    elements.llmStatusBadge.title = "LLM connecting";
     return;
   }
 
-  if (available) {
-    elements.llmStatusBadge.classList.add("llm-status-online");
-    elements.llmStatusBadge.title = "LLM online";
+  if (normalizedState === LLM_BADGE_STATE.THINKING) {
+    elements.llmStatusBadge.title = "LLM responding";
     return;
   }
 
-  elements.llmStatusBadge.classList.add("llm-status-offline");
-  elements.llmStatusBadge.title = "LLM unavailable";
+  if (normalizedState === LLM_BADGE_STATE.DISCONNECTED || provider !== "ollama" || !available) {
+    elements.llmStatusBadge.title = "LLM disconnected";
+    return;
+  }
+
+  elements.llmStatusBadge.title = "LLM connected";
 }
 
 async function refreshLlmStatusBadge() {
   if (!elements.llmStatusBadge) return;
-  elements.llmStatusBadge.classList.remove("llm-status-online", "llm-status-offline");
-  elements.llmStatusBadge.classList.add("llm-status-loading");
-  elements.llmStatusBadge.textContent = "LLM";
-  elements.llmStatusBadge.title = "Checking LLM";
+  setLlmStatusBadge(LLM_BADGE_STATE.CONNECTING);
   try {
     const health = await getJson("/api/health");
-    updateLlmStatusBadge(health?.llm || {});
+    const llm = health?.llm || {};
+    setLlmStatusBadge(llm.provider === "ollama" && llm.available ? LLM_BADGE_STATE.CONNECTED : LLM_BADGE_STATE.DISCONNECTED, llm);
   } catch {
-    updateLlmStatusBadge({ available: false });
+    setLlmStatusBadge(LLM_BADGE_STATE.DISCONNECTED, { available: false });
   }
 }
 
@@ -3889,15 +3937,20 @@ elements.chatForm.addEventListener("submit", async (event) => {
     role: String(entry?.role || "").trim(),
     text: normalizeChatMessageText(entry?.text),
   })).filter((entry) => entry.role && entry.text);
-  const data = await runAction(() =>
-    postJson("/api/chat", {
-      question,
-      session_id: state.chatSessionId,
-      history,
-      focus_club_id: state.selectedFocusClubId,
-    })
-  );
-  if (data) addMessage("assistant", data.answer, data);
+  setLlmStatusBadge(LLM_BADGE_STATE.THINKING);
+  try {
+    const data = await runAction(() =>
+      postJson("/api/chat", {
+        question,
+        session_id: state.chatSessionId,
+        history,
+        focus_club_id: state.selectedFocusClubId,
+      })
+    );
+    if (data) addMessage("assistant", data.answer, data);
+  } finally {
+    void refreshLlmStatusBadge();
+  }
 });
 
 if (elements.clearChatButton) {

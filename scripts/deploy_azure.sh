@@ -31,7 +31,7 @@ rsync -a \
   --exclude 'app/**/__pycache__/**' \
   --exclude '.python_packages/**' \
   --exclude '.DS_Store' \
-  app requirements.txt README.md startup.sh "$BUILD_DIR"/
+  app requirements.txt README.md READMELLM.md startup.sh "$BUILD_DIR"/
 
 python3 -m pip install \
   --no-cache-dir \
@@ -43,7 +43,7 @@ python3 -m pip install \
   -r "$BUILD_DIR/requirements.txt" \
   -t "$BUILD_DIR/.python_packages/lib/site-packages"
 
-(cd "$BUILD_DIR" && zip -r "$ZIP_FILE" app requirements.txt README.md startup.sh .python_packages)
+(cd "$BUILD_DIR" && zip -r "$ZIP_FILE" app requirements.txt README.md READMELLM.md startup.sh .python_packages)
 
 az webapp deployment source config-zip \
   --resource-group "$RESOURCE_GROUP" \
