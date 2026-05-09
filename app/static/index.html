@@ -90,6 +90,62 @@
         </aside>
       </header>
 
+      <section class="panel widget-launcher-panel">
+        <div class="panel-head compact-head">
+          <div>
+            <p class="section-kicker">Widgets</p>
+            <h2>Open each part as its own page</h2>
+          </div>
+          <a class="secondary-button" href="/dashboard">Dashboard overview</a>
+        </div>
+        <div class="widget-launcher-grid">
+          <a class="widget-launcher-card" href="/dashboard/widgets/match-center">
+            <strong>Match Center</strong>
+            <small>Snapshot, scorecard, availability, and match notes.</small>
+          </a>
+          <a class="widget-launcher-card" href="/dashboard/widgets/scoring">
+            <strong>Scoring</strong>
+            <small>Live score console and offline recovery.</small>
+          </a>
+          <a class="widget-launcher-card" href="/dashboard/widgets/availability">
+            <strong>Availability</strong>
+            <small>Fixture-wise player availability and notes.</small>
+          </a>
+          <a class="widget-launcher-card" href="/dashboard/widgets/performance">
+            <strong>Performance</strong>
+            <small>Player runs, wickets, catches, and batting form.</small>
+          </a>
+          <a class="widget-launcher-card" href="/dashboard/widgets/player-profile">
+            <strong>Player Profile</strong>
+            <small>Profile, season summary, and career history.</small>
+          </a>
+          <a class="widget-launcher-card" href="/dashboard/widgets/teams">
+            <strong>Teams</strong>
+            <small>Team rosters and team scoreboards.</small>
+          </a>
+          <a class="widget-launcher-card" href="/dashboard/widgets/commentary">
+            <strong>Text &amp; Voice Scoring</strong>
+            <small>Commentary capture and voice transcript scoring.</small>
+          </a>
+          <a class="widget-launcher-card" href="/dashboard/widgets/squad">
+            <strong>Squad</strong>
+            <small>Player creation, team membership, and roster management.</small>
+          </a>
+          <a class="widget-launcher-card" href="/dashboard/widgets/schedule">
+            <strong>Schedule</strong>
+            <small>Season fixtures and visiting teams.</small>
+          </a>
+          <a class="widget-launcher-card" href="/dashboard/widgets/archive">
+            <strong>Archive</strong>
+            <small>Upload scorecards, recover offline score, review history.</small>
+          </a>
+          <a class="widget-launcher-card" href="/dashboard/widgets/assistant">
+            <strong>Assistant</strong>
+            <small>Open LLM chat for stored club data.</small>
+          </a>
+        </div>
+      </section>
+
       <div id="statusBanner" class="status-banner" hidden></div>
 
       <section class="panel onboarding-panel">
@@ -173,7 +229,7 @@
           <div id="summaryGrid" class="summary-grid"></div>
         </section>
 
-        <section id="match-center" class="panel match-center">
+        <section id="match-center" class="panel match-center" data-widget-name="match-center">
           <div class="panel-head">
             <div>
               <p class="section-kicker">Match Center</p>
@@ -220,7 +276,7 @@
           </div>
         </section>
 
-        <section id="setup" class="panel setup-panel" data-live-only>
+        <section id="setup" class="panel setup-panel" data-live-only data-widget-name="setup">
           <div class="panel-head">
             <div>
               <p class="section-kicker">Setup</p>
@@ -249,11 +305,11 @@
           </form>
         </section>
 
-        <section id="scoring" class="panel scoring-panel" data-live-only>
+        <section id="scoring" class="panel scoring-panel" data-live-only data-widget-name="scoring">
           <div class="panel-head">
             <div>
               <p class="section-kicker">Scoring</p>
-              <h2>Live score and offline recovery</h2>
+              <h2>Live score console and offline recovery</h2>
             </div>
           </div>
           <form id="scoreForm" class="form-grid">
@@ -267,11 +323,12 @@
             <textarea id="liveSummaryInput" rows="3" placeholder="Live summary or scoring notes"></textarea>
             <button class="primary-button wide" type="submit">Update online scorecard</button>
           </form>
+          <div id="scorebookLiveBoard" class="scorebook-live-board"></div>
           <div class="scorebook-shell">
             <div class="scorebook-column">
               <div class="panel-head compact-head">
                 <div>
-                  <p class="section-kicker">Scorebook</p>
+                  <p class="section-kicker">Innings setup</p>
                   <h3>11 batters and 11 bowlers per innings</h3>
                 </div>
                 <div class="toolbar-actions">
@@ -307,9 +364,19 @@
             <div class="scorebook-column">
               <div class="panel-head compact-head">
                 <div>
-                  <p class="section-kicker">Ball By Ball</p>
+                  <p class="section-kicker">Delivery desk</p>
                   <h3>Persisted locally for live and offline recovery</h3>
                 </div>
+              </div>
+              <div class="scorebook-quick-actions" aria-label="Quick scoring actions">
+                <button type="button" class="secondary-button scorebook-quick" data-score-quick="0">Dot</button>
+                <button type="button" class="secondary-button scorebook-quick" data-score-quick="1">1</button>
+                <button type="button" class="secondary-button scorebook-quick" data-score-quick="2">2</button>
+                <button type="button" class="secondary-button scorebook-quick" data-score-quick="4">4</button>
+                <button type="button" class="secondary-button scorebook-quick" data-score-quick="6">6</button>
+                <button type="button" class="secondary-button scorebook-quick" data-score-quick="wide">Wide</button>
+                <button type="button" class="secondary-button scorebook-quick" data-score-quick="no_ball">No ball</button>
+                <button type="button" class="secondary-button scorebook-quick" data-score-quick="wicket">Wicket</button>
               </div>
               <form id="scorebookBallForm" class="form-grid">
                 <input id="scorebookOverNumberInput" type="number" min="1" placeholder="Over" />
@@ -334,7 +401,10 @@
                 <input id="scorebookWicketPlayerInput" type="text" placeholder="Out batter" />
                 <input id="scorebookFielderInput" type="text" placeholder="Fielder for catches" />
                 <textarea id="scorebookBallCommentaryInput" rows="3" class="wide" placeholder="Ball commentary"></textarea>
-                <button class="primary-button wide" type="submit">Log delivery</button>
+                <div class="inline-actions wide">
+                  <button class="primary-button" type="submit">Log delivery</button>
+                  <button id="scorebookSaveNextButton" class="secondary-button" type="button">Save &amp; next ball</button>
+                </div>
               </form>
               <div id="scorebookSummary" class="player-summary-grid"></div>
               <div id="scorebookRecentBalls" class="player-history"></div>
@@ -342,7 +412,7 @@
           </div>
         </section>
 
-        <section id="availability" class="panel availability-panel" data-live-only>
+        <section id="availability" class="panel availability-panel" data-live-only data-widget-name="availability">
           <div class="panel-head">
             <div>
               <p class="section-kicker">Availability</p>
@@ -374,7 +444,7 @@
           <div id="availabilityMatrix" class="matrix-wrap"></div>
         </section>
 
-        <section id="performance" class="panel performance-panel" data-live-only>
+        <section id="performance" class="panel performance-panel" data-live-only data-widget-name="performance">
           <div class="panel-head">
             <div>
               <p class="section-kicker">Performance</p>
@@ -395,7 +465,7 @@
           <div id="playerLeaderboard" class="leaderboard"></div>
         </section>
 
-        <section id="player-profile" class="panel player-profile-panel">
+        <section id="player-profile" class="panel player-profile-panel" data-widget-name="player-profile">
           <div class="panel-head">
             <div>
               <p class="section-kicker">Player Profile</p>
@@ -446,7 +516,7 @@
           </div>
         </section>
 
-        <section id="teams" class="panel teams-panel">
+        <section id="teams" class="panel teams-panel" data-widget-name="teams">
           <div class="panel-head">
             <div>
               <p class="section-kicker">Teams</p>
@@ -469,7 +539,7 @@
           </div>
         </section>
 
-        <section id="commentary" class="panel commentary-panel" data-live-only>
+        <section id="commentary" class="panel commentary-panel" data-live-only data-widget-name="commentary">
           <div class="panel-head">
             <div>
               <p class="section-kicker">Text and Voice Scoring</p>
@@ -490,7 +560,7 @@
           </form>
         </section>
 
-        <section id="squad" class="panel squad-panel">
+        <section id="squad" class="panel squad-panel" data-widget-name="squad">
           <div class="panel-head">
             <div>
               <p class="section-kicker">Squad</p>
@@ -523,7 +593,7 @@
           </form>
         </section>
 
-        <section id="schedule" class="panel season-panel">
+        <section id="schedule" class="panel season-panel" data-widget-name="schedule">
           <div class="panel-head">
             <div>
               <p class="section-kicker">Schedule</p>
@@ -534,7 +604,7 @@
           <div id="visitingTeams" class="visiting-grid"></div>
         </section>
 
-        <section id="archive" class="panel archive-panel">
+        <section id="archive" class="panel archive-panel" data-widget-name="archive">
           <div class="panel-head">
             <div>
               <p class="section-kicker">Archive</p>
@@ -589,7 +659,7 @@
           </form>
         </section>
 
-        <section id="assistant" class="panel ai-panel">
+        <section id="assistant" class="panel ai-panel" data-widget-name="assistant">
           <div class="panel-head">
             <div class="assistant-head-row">
               <div class="assistant-heading-block">

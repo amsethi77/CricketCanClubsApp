@@ -1,6 +1,6 @@
 # CricketClubApp
 
-Local-first website for CricketClubApp. This is the web version we can test quickly before turning the same product into a native app.
+Local-first CricketClubApp product with a web app plus matching iOS and Android app surfaces. The three surfaces are kept in lockstep so the same cricket workflows are available everywhere.
 
 ## What it includes
 
@@ -203,6 +203,9 @@ This section captures the user requirements in the order they were given and ref
 - The sign-in page renders batting, bowling, and club leaderboards server-side so it stays visible even before the client script hydrates.
 - The dashboard landing page now replaces `Upcoming Events` with a more useful recent-scorecards summary.
 - The match center now supports text and voice scoring notes, with browser mic transcription feeding the same saved match commentary stream.
+- The live scoring panel now uses a scoreboard-style header with live over chips, batting and bowling tables, and a more professional scoring console layout.
+- The scoring console also includes quick delivery shortcuts for common outcomes plus a `Save & next ball` flow for faster manual scoring.
+- The dashboard is now an overview hub with widget launcher cards, and each major widget can open as its own page under `/dashboard/widgets/...`.
 - Dashboard season switching now requests the selected year explicitly and is cached to reduce repeated recomputation.
 - The Admin Center now renders the selected club first, filters its archive review queue by the active club, and groups uploaded scorecards clubwise for review.
 - Season Fixtures now supports editing future fixtures, while past fixtures are locked at both the UI and API layers.
@@ -214,6 +217,9 @@ This section captures the user requirements in the order they were given and ref
 - Captains and club admins can now notify players through WhatsApp reminders and build a selectable playing XI from the club's available players.
 - Players can now carry multiple club roles, and the auth layer unions those roles when calculating permissions.
 - The local UI is designed as the web baseline before a later native iPhone app conversion.
+- The iOS surface now has a checked-in Xcode project scaffold, and the Android surface has a checked-in Gradle project scaffold, both loading the same live web app for parity.
+- The iOS shell can be archived from Xcode and uploaded to TestFlight, but it still needs Apple signing and an app icon asset set before App Store review.
+- A starter iOS app icon catalog is checked in under `ios/Assets.xcassets`, ready to be wired in a signing-capable Xcode environment.
 - The repo now has an Azure App Service deployment plan checked in under `.azure/plan.md`, App Service infrastructure under `infra/`, and a GitHub Actions workflow under `.github/workflows/deploy.yml`.
 - Runtime data such as SQLite, uploads, duplicates, and cache files are treated as server data, while JSON snapshots are kept as the recovery source in Git.
 - Dashboard availability now uses the signed-in auth token, and fixture/availability flows are tested against the live selected club rather than the default CricketClubApp.
@@ -245,6 +251,12 @@ Open `http://127.0.0.1:8090`
 - `app/static/player_availability.html`: logged-in player availability
 - `app/llm_registry.py`: prompt registry loaded from `READMELLM.md`
 - `app/llm_service.py`: FastAPI-facing LLM service layer, caching, ranking, and inference
+- `ios/`: iOS app surface scaffold, Xcode project, and parity notes
+- `android/`: Android app surface scaffold, Gradle project, and parity notes
+- `MOBILE_PARITY.md`: shared parity contract for website, iOS, and Android
+- `ios/TESTFLIGHT.md`: iOS archive and TestFlight checklist
+- `ios/INSTALL_ON_PHONE.md`: TestFlight-only iPhone install path
+- `ios/Assets.xcassets/`: starter iOS app icon catalog
 - `app/data/seed.json`: CricketClubApp seed data
 - `app/data/cricketclubapp.db`: local SQLite database used for persistence at runtime
 - `app/uploads/`: accepted scorecard images
@@ -253,6 +265,7 @@ Open `http://127.0.0.1:8090`
 ## Notes
 
 - The site is mobile-friendly and works well as the product baseline for a future iPhone app.
+- The web, iOS, and Android surfaces are treated as equal products; any new feature must be reflected in all three unless the README explicitly says otherwise.
 - `Imran +2` from the original schedule is stored as an availability note saying he is bringing two guests.
 - The Assistant header shows a compact status chip beside the Assistant title with a colored dot and text: solid green `Online`, blinking green `Thinking`, blinking red `Connecting`, and solid red `Offline`.
 - The status chip sits beside the Assistant title, and the `Clear chat` button resets the browser conversation state plus cached LLM answers.

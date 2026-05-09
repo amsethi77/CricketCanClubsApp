@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="cricket_bg">#F3F7FB</color>
+    <color name="cricket_primary">#102A43</color>
+    <color name="cricket_status_green">#1DB954</color>
+    <color name="cricket_status_red">#D62839</color>
+</resources>

@@ -27,7 +27,7 @@ The automated suite covers the main product surfaces end-to-end on isolated loca
 | README areas | Coverage focus | Automated test IDs |
 |---|---|---|
 | Core product, identity, auth, club-first landing | Signed-in identity, visible clubs, session handling, registration | U01-U04, U08-U09, F03-F04, F11, N04 |
-| Clubs, dashboard, current season, player snapshot | Club scoping, current season selection, canonical member resolution | U05-U07, F01-F02, N01, N03, N05 |
+| Clubs, dashboard, widget launcher, current season, player snapshot | Club scoping, current season selection, canonical member resolution, widget-specific dashboard pages | U05-U07, F01-F02, N01, N03, N05, F17 |
 | Season Fixtures, scoring, and availability | Season list, fixture CRUD, live scorebook setup, text/voice scoring, past-fixture lock, availability save | U05, F05-F08, F10, N05 |
 | Player profile, rankings, chat, history, and LLM service layer | Cross-club profile data, clubs dedupe, AI/RAG question answering, prompt registry, direct inference, predictive analysis | U06, F12, F13, N03, N06, N07 |
 | Admin Center and scorecard review | Superadmin-only access and scorebook / archive controls | U09, F09, F07 |
@@ -61,6 +61,7 @@ The automated suite covers the main product surfaces end-to-end on isolated loca
 | F01 | Clubs snapshot | Signed in as `Amit S` | Open `/clubs` | Player Snapshot resolves to `Amit Sethi`, not `Amit G`. |
 | F02 | Clubs snapshot | Signed in as `player1` | Open `/clubs` | Player Snapshot resolves to `player1`. |
 | F03 | Sign-in page | Any browser session | Open `/signin` | The page renders the login form and the three leader widgets without a script crash. |
+| F17 | Dashboard widgets | Signed in as `player1` | Open `/dashboard` and then `/dashboard/widgets/scoring` | The dashboard opens as an overview hub and the widget route shows only the selected widget section. |
 | F04 | Register page | Any browser session | Open `/register` | The page renders the registration form successfully. |
 | F05 | Fixture create | Signed in as `captain1` | Create a future fixture for `TestClub` via Season Fixtures | Fixture is created and returned in the season fixture list. |
 | F06 | Fixture update | Signed in as `clubadmin1` | Edit the created future fixture | Fixture is updated successfully. |
@@ -86,6 +87,9 @@ The automated suite covers the main product surfaces end-to-end on isolated loca
 | N05 | Season setup responsiveness | Signed in as `captain1` | Fetch `/api/season-setup/data?club_id=club-testclub` | Season year list is populated and the response stays fast. |
 | N06 | Assistant status chip | Any browser session | Open `/dashboard` and inspect the Assistant header | The status chip beside Assistant shows a colored dot and text for solid green `Online`, blinking green `Thinking`, blinking red `Connecting`, and solid red `Offline`. |
 | N07 | LLM safety filter | Any browser session | Ask the chat a profanity-heavy question | The response is moderated and stays cricket-focused and respectful. |
+| N08 | Live scoring console | Signed in with an active match selected | Open the scoring panel and inspect the live scoreboard area | The scoring panel shows a scoreboard-style header, live ball chips, and cleaner batting and bowling tables instead of a plain form-only layout. |
+| N09 | Quick scoring shortcuts | Signed in with an active match selected | Click a quick action like `4` or `Wicket`, then use `Save & next ball` | The scorer pre-fills the delivery, saves it, and advances the ball number for the next entry. |
+| N10 | Mobile parity docs | Any developer session | Open `README.md`, `ios/README.md`, and `android/README.md` | The three app surfaces are documented as a parity set, with shared feature expectations called out explicitly. |
 
 ## Automation
 

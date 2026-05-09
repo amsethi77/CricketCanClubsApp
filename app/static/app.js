@@ -106,6 +106,7 @@ const state = {
   chatSessionId:
     window.sessionStorage.getItem("cricketClubAppChatSessionId") ||
     (window.crypto?.randomUUID ? window.crypto.randomUUID() : `chat-${Date.now()}`),
+  scorebookAutoAdvance: false,
 };
 
 const dashboardDebugEnabled = ["localhost", "127.0.0.1", ""].includes(String(window.location.hostname || "").trim());
@@ -398,6 +399,7 @@ const elements = {
   scorebookOversLimitInput: document.getElementById("scorebookOversLimitInput"),
   scorebookTargetRunsInput: document.getElementById("scorebookTargetRunsInput"),
   scorebookStatusInput: document.getElementById("scorebookStatusInput"),
+  scorebookLiveBoard: document.getElementById("scorebookLiveBoard"),
   scorebookBatters: document.getElementById("scorebookBatters"),
   scorebookBowlers: document.getElementById("scorebookBowlers"),
   scorebookBallForm: document.getElementById("scorebookBallForm"),
@@ -414,6 +416,7 @@ const elements = {
   scorebookWicketPlayerInput: document.getElementById("scorebookWicketPlayerInput"),
   scorebookFielderInput: document.getElementById("scorebookFielderInput"),
   scorebookBallCommentaryInput: document.getElementById("scorebookBallCommentaryInput"),
+  scorebookSaveNextButton: document.getElementById("scorebookSaveNextButton"),
   scorebookSummary: document.getElementById("scorebookSummary"),
   scorebookRecentBalls: document.getElementById("scorebookRecentBalls"),
   availabilityForm: document.getElementById("availabilityForm"),
@@ -1074,6 +1077,84 @@ function currentScorebookInnings() {
   return innings.find((item) => Number(item.inning_number) === inningsNumber) || innings[0] || null;
 }
 
+function formatBallCount(balls) {
+  const total = Math.max(0, Number(balls) || 0);
+  return `${Math.floor(total / 6)}.${total % 6}`;
+}
+
+function formatRate(value) {
+  const numeric = Number(value || 0);
+  return Number.isFinite(numeric) ? numeric.toFixed(2) : "0.00";
+}
+
+function advanceScorebookBallInputs() {
+  const over = Math.max(1, Number(elements.scorebookOverNumberInput.value || 1));
+  const ball = Math.max(1, Number(elements.scorebookBallNumberInput.value || 1));
+  let nextOver = over;
+  let nextBall = ball + 1;
+  if (nextBall > 6) {
+    nextOver += 1;
+    nextBall = 1;
+  }
+  elements.scorebookOverNumberInput.value = String(nextOver);
+  elements.scorebookBallNumberInput.value = String(nextBall);
+  elements.scorebookRunsBatInput.value = "0";
+  elements.scorebookExtrasTypeInput.value = "none";
+  elements.scorebookExtrasRunsInput.value = "0";
+  elements.scorebookWicketInput.value = "false";
+  elements.scorebookWicketTypeInput.value = "";
+  elements.scorebookWicketPlayerInput.value = "";
+  elements.scorebookFielderInput.value = "";
+  elements.scorebookBallCommentaryInput.value = "";
+  elements.scorebookStrikerInput.focus();
+}
+
+function setQuickBallPreset(preset) {
+  const currentRuns = String(elements.scorebookRunsBatInput.value || "0").trim();
+  const currentExtras = String(elements.scorebookExtrasTypeInput.value || "none").trim();
+  switch (preset) {
+    case "0":
+      elements.scorebookRunsBatInput.value = "0";
+      elements.scorebookExtrasTypeInput.value = "none";
+      elements.scorebookExtrasRunsInput.value = "0";
+      elements.scorebookWicketInput.value = "false";
+      break;
+    case "1":
+    case "2":
+    case "4":
+    case "6":
+      elements.scorebookRunsBatInput.value = preset;
+      elements.scorebookExtrasTypeInput.value = "none";
+      elements.scorebookExtrasRunsInput.value = "0";
+      elements.scorebookWicketInput.value = "false";
+      break;
+    case "wide":
+      elements.scorebookRunsBatInput.value = "0";
+      elements.scorebookExtrasTypeInput.value = "wide";
+      elements.scorebookExtrasRunsInput.value = currentExtras === "wide" ? currentRuns || "1" : "1";
+      elements.scorebookWicketInput.value = "false";
+      break;
+    case "no_ball":
+      elements.scorebookRunsBatInput.value = "0";
+      elements.scorebookExtrasTypeInput.value = "no_ball";
+      elements.scorebookExtrasRunsInput.value = currentExtras === "no_ball" ? currentRuns || "1" : "1";
+      elements.scorebookWicketInput.value = "false";
+      break;
+    case "wicket":
+      elements.scorebookRunsBatInput.value = "0";
+      elements.scorebookExtrasTypeInput.value = "none";
+      elements.scorebookExtrasRunsInput.value = "0";
+      elements.scorebookWicketInput.value = "true";
+      if (!elements.scorebookWicketTypeInput.value.trim()) {
+        elements.scorebookWicketTypeInput.value = "bowled";
+      }
+      break;
+    default:
+      break;
+  }
+  elements.scorebookBallCommentaryInput.focus();
+}
+
 function ensureScorebookSlotInputs() {
   if (!elements.scorebookBatters.children.length) {
     elements.scorebookBatters.innerHTML = Array.from({ length: 11 }, (_, index) => {
@@ -1094,28 +1175,60 @@ function scorebookSummary(innings) {
   let runs = 0;
   let wickets = 0;
   let legalBalls = 0;
+  let extras = 0;
+  let dotBalls = 0;
+  let fours = 0;
+  let sixes = 0;
+  let wides = 0;
+  let noBalls = 0;
+  let byes = 0;
+  let legByes = 0;
   const batterMap = {};
   const bowlerMap = {};
   balls.forEach((ball) => {
     const runsBat = Number(ball.runs_bat || 0);
     const extrasRuns = Number(ball.extras_runs || 0);
+    const totalRuns = runsBat + extrasRuns;
+    const extrasType = String(ball.extras_type || "none").toLowerCase();
     const striker = (ball.striker || "").trim();
     const bowler = (ball.bowler || "").trim();
-    runs += runsBat + extrasRuns;
-    if (!["wide", "no_ball"].includes((ball.extras_type || "none").toLowerCase())) {
+    runs += totalRuns;
+    extras += extrasRuns;
+    if (runsBat === 4) {
+      fours += 1;
+    }
+    if (runsBat === 6) {
+      sixes += 1;
+    }
+    if (extrasType === "wide") {
+      wides += extrasRuns;
+    }
+    if (extrasType === "no_ball") {
+      noBalls += extrasRuns;
+    }
+    if (extrasType === "bye") {
+      byes += extrasRuns;
+    }
+    if (extrasType === "leg_bye") {
+      legByes += extrasRuns;
+    }
+    if (!["wide", "no_ball"].includes(extrasType)) {
       legalBalls += 1;
+      if (totalRuns === 0) {
+        dotBalls += 1;
+      }
     }
     if (striker) {
       batterMap[striker] ||= { player_name: striker, runs: 0, balls: 0 };
       batterMap[striker].runs += runsBat;
-      if (!["wide", "no_ball"].includes((ball.extras_type || "none").toLowerCase())) {
+      if (!["wide", "no_ball"].includes(extrasType)) {
         batterMap[striker].balls += 1;
       }
     }
     if (bowler) {
       bowlerMap[bowler] ||= { player_name: bowler, legal_balls: 0, wickets: 0, runs: 0 };
-      bowlerMap[bowler].runs += runsBat + extrasRuns;
-      if (!["wide", "no_ball"].includes((ball.extras_type || "none").toLowerCase())) {
+      bowlerMap[bowler].runs += totalRuns;
+      if (!["wide", "no_ball"].includes(extrasType)) {
         bowlerMap[bowler].legal_balls += 1;
       }
       if (ball.wicket && !["run_out", "retired_hurt"].includes((ball.wicket_type || "").toLowerCase()) && (ball.wicket_player || "").trim()) {
@@ -1129,12 +1242,48 @@ function scorebookSummary(innings) {
   return {
     runs,
     wickets,
-    overs: `${Math.floor(legalBalls / 6)}.${legalBalls % 6}`,
-    batters: Object.values(batterMap),
-    bowlers: Object.values(bowlerMap).map((item) => ({
-      ...item,
-      overs: `${Math.floor(item.legal_balls / 6)}.${item.legal_balls % 6}`,
+    extras,
+    dotBalls,
+    fours,
+    sixes,
+    wides,
+    noBalls,
+    byes,
+    legByes,
+    overs: formatBallCount(legalBalls),
+    overs_balls: legalBalls,
+    run_rate: legalBalls ? runs / (legalBalls / 6) : 0,
+    required_run_rate: innings?.target_runs && Number(innings.target_runs) > 0
+      ? (() => {
+          const oversLimit = Number(innings?.overs_limit || 0);
+          const totalBalls = oversLimit ? oversLimit * 6 : 0;
+          const remainingBalls = Math.max(0, totalBalls - legalBalls);
+          if (!remainingBalls) {
+            return null;
+          }
+          const target = Number(innings.target_runs || 0);
+          const requiredRuns = Math.max(0, target - runs + 1);
+          return requiredRuns / (remainingBalls / 6);
+        })()
+      : null,
+    target_runs: innings?.target_runs || null,
+    balls: balls.slice(-6).map((ball) => ({
+      ...ball,
+      label: `${Number(ball.over_number || 0)}.${Number(ball.ball_number || 0)}`,
     })),
+    batters: Object.values(batterMap)
+      .map((item) => ({
+        ...item,
+        strike_rate: item.balls ? (item.runs / item.balls) * 100 : 0,
+      }))
+      .sort((left, right) => right.runs - left.runs || right.balls - left.balls || left.player_name.localeCompare(right.player_name)),
+    bowlers: Object.values(bowlerMap)
+      .map((item) => ({
+        ...item,
+        overs: formatBallCount(item.legal_balls),
+        economy: item.legal_balls ? item.runs / (item.legal_balls / 6) : 0,
+      }))
+      .sort((left, right) => right.wickets - left.wickets || left.economy - right.economy || left.player_name.localeCompare(right.player_name)),
   };
 }
 
@@ -1933,22 +2082,106 @@ function renderScorebook(match) {
   });
 
   const summary = scorebookSummary(innings);
-  elements.scorebookSummary.innerHTML = `
-    <article class="summary-card"><span>Innings</span><strong>${innings.inning_number}</strong><p>${innings.batting_team || "Batting team"} vs ${innings.bowling_team || "Bowling team"}</p></article>
-    <article class="summary-card"><span>Score</span><strong>${summary.runs}/${summary.wickets}</strong><p>${summary.overs} overs</p></article>
-    <article class="summary-card"><span>Overs Limit</span><strong>${innings.overs_limit || 20}</strong><p>Status: ${innings.status || "Not started"}</p></article>
-    <article class="summary-card"><span>Target</span><strong>${innings.target_runs || "--"}</strong><p>${(innings.balls || []).length} deliveries logged</p></article>
-  `;
+  const targetLabel = summary.target_runs ? `Target ${summary.target_runs}` : "Chasing N/A";
+  const requiredRateLabel = summary.required_run_rate !== null ? `Req RR ${formatRate(summary.required_run_rate)}` : "Req RR --";
+  const overCards = summary.balls.length
+    ? summary.balls
+        .map((ball) => {
+          const extrasLabel =
+            ball.extras_type && ball.extras_type !== "none" ? ` + ${ball.extras_runs} ${String(ball.extras_type).replace("_", " ")}` : "";
+          const wicketLabel = ball.wicket
+            ? ` · Wicket${ball.wicket_player ? `: ${ball.wicket_player}` : ""}${ball.fielder ? ` · Fielder: ${ball.fielder}` : ""}`
+            : "";
+          return `
+            <span class="scorebook-ball-chip">
+              <strong>${ball.label}</strong>
+              <small>${ball.runs_bat}r${extrasLabel}${wicketLabel}</small>
+            </span>
+          `;
+        })
+        .join("")
+    : `<span class="scorebook-ball-chip empty">No recent balls</span>`;
+  if (elements.scorebookLiveBoard) {
+    elements.scorebookLiveBoard.innerHTML = `
+      <article class="scoreboard-hero">
+        <div class="scoreboard-hero-copy">
+          <p class="section-kicker">Live scoreboard</p>
+          <h3>${innings.batting_team || "Batting team"} vs ${innings.bowling_team || "Bowling team"}</h3>
+          <div class="scoreboard-scoreline">
+            <strong>${summary.runs}/${summary.wickets}</strong>
+            <span>${summary.overs} overs</span>
+          </div>
+          <div class="scoreboard-context">
+            <span class="status-pill status-${String(innings.status || "not_started").toLowerCase().replace(/\s+/g, "-")}">${innings.status || "Not started"}</span>
+            <span>RR ${formatRate(summary.run_rate)}</span>
+            <span>${targetLabel}</span>
+            <span>${requiredRateLabel}</span>
+          </div>
+        </div>
+        <div class="scoreboard-metrics">
+          <article class="mini-stat"><span>Overs Limit</span><strong>${innings.overs_limit || 20}</strong></article>
+          <article class="mini-stat"><span>Extras</span><strong>${summary.extras}</strong><small>W ${summary.wides} · NB ${summary.noBalls}</small></article>
+          <article class="mini-stat"><span>Boundaries</span><strong>${summary.fours + summary.sixes}</strong><small>${summary.fours} fours · ${summary.sixes} sixes</small></article>
+          <article class="mini-stat"><span>Dot Balls</span><strong>${summary.dotBalls}</strong><small>${summary.overs_balls} legal balls logged</small></article>
+        </div>
+      </article>
+      <article class="scoreboard-strip">
+        <div>
+          <span>Last balls</span>
+          <div class="scorebook-ball-strip">${overCards}</div>
+        </div>
+        <div class="scoreboard-numbers">
+          <span><strong>${summary.byes}</strong><small>Byes</small></span>
+          <span><strong>${summary.legByes}</strong><small>Leg byes</small></span>
+          <span><strong>${summary.overs_balls}</strong><small>Balls</small></span>
+          <span><strong>${Math.max(0, 10 - summary.wickets)}</strong><small>Wkts left</small></span>
+        </div>
+      </article>
+    `;
+  }
 
   const battingCards = summary.batters.length
-    ? summary.batters
-        .map((item) => `<article class="detail-card"><strong>${item.player_name}</strong><p>${item.runs} runs off ${item.balls}</p></article>`)
-        .join("")
+    ? `
+      <div class="scorebook-table">
+        <div class="scorebook-table-head">
+          <span>Batter</span><span>Runs</span><span>Balls</span><span>SR</span>
+        </div>
+        ${summary.batters
+          .map(
+            (item) => `
+              <div class="scorebook-table-row">
+                <strong>${item.player_name}</strong>
+                <span>${item.runs}</span>
+                <span>${item.balls}</span>
+                <span>${formatRate(item.strike_rate)}</span>
+              </div>
+            `,
+          )
+          .join("")}
+      </div>
+    `
     : `<p class="empty-state">No batter entries recorded from deliveries yet.</p>`;
   const bowlingCards = summary.bowlers.length
-    ? summary.bowlers
-        .map((item) => `<article class="detail-card"><strong>${item.player_name}</strong><p>${item.overs} overs · ${item.runs} runs · ${item.wickets} wickets</p></article>`)
-        .join("")
+    ? `
+      <div class="scorebook-table">
+        <div class="scorebook-table-head">
+          <span>Bowler</span><span>Overs</span><span>Runs</span><span>Wkts</span><span>Econ</span>
+        </div>
+        ${summary.bowlers
+          .map(
+            (item) => `
+              <div class="scorebook-table-row scorebook-table-row-five">
+                <strong>${item.player_name}</strong>
+                <span>${item.overs}</span>
+                <span>${item.runs}</span>
+                <span>${item.wickets}</span>
+                <span>${formatRate(item.economy)}</span>
+              </div>
+            `,
+          )
+          .join("")}
+      </div>
+    `
     : `<p class="empty-state">No bowler entries recorded from deliveries yet.</p>`;
   const recentBalls = (innings.balls || []).length
     ? innings.balls
@@ -1973,7 +2206,7 @@ function renderScorebook(match) {
         })
         .join("")
     : `<p class="empty-state">No deliveries logged for this innings yet.</p>`;
-  elements.scorebookRecentBalls.innerHTML = `
+  elements.scorebookSummary.innerHTML = `
     <div>
       <h3>Batting card</h3>
       <div class="detail-stack">${battingCards}</div>
@@ -3375,6 +3608,8 @@ elements.scorebookSetupForm.addEventListener("submit", async (event) => {
 
 elements.scorebookBallForm.addEventListener("submit", async (event) => {
   event.preventDefault();
+  const shouldAdvance = state.scorebookAutoAdvance;
+  state.scorebookAutoAdvance = false;
   dashboardDebug("Scorebook ball submitted.", {
     matchId: state.selectedMatchId || "",
     innings: elements.scorebookInningsSelect.value || "1",
@@ -3404,10 +3639,29 @@ elements.scorebookBallForm.addEventListener("submit", async (event) => {
   );
   if (dashboard) {
     renderDashboard(dashboard);
-    elements.scorebookBallForm.reset();
-    elements.scorebookExtrasTypeInput.value = "none";
-    elements.scorebookWicketInput.value = "false";
+    if (shouldAdvance) {
+      advanceScorebookBallInputs();
+    } else {
+      elements.scorebookBallForm.reset();
+      elements.scorebookExtrasTypeInput.value = "none";
+      elements.scorebookWicketInput.value = "false";
+      elements.scorebookRunsBatInput.value = "0";
+      elements.scorebookExtrasRunsInput.value = "0";
+    }
   }
+});
+
+if (elements.scorebookSaveNextButton) {
+  elements.scorebookSaveNextButton.addEventListener("click", () => {
+    state.scorebookAutoAdvance = true;
+    elements.scorebookBallForm.requestSubmit();
+  });
+}
+
+document.querySelectorAll("[data-score-quick]").forEach((button) => {
+  button.addEventListener("click", () => {
+    setQuickBallPreset(button.dataset.scoreQuick || "");
+  });
 });
 
 async function saveDashboardAvailability() {

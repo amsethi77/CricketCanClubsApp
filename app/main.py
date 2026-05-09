@@ -3812,9 +3812,8 @@ def player_profile_page(request: Request) -> Response:
     return _page_response("player_profile.html")
 
 
-@app.get("/dashboard")
-def dashboard_page(request: Request) -> Response:
-    logger.debug("Dashboard page opened.")
+def _dashboard_page_html(request: Request, widget_name: str | None = None) -> HTMLResponse:
+    logger.debug("Dashboard page opened. widget=%s", widget_name or "")
     session = _require_page_session(request)
     if isinstance(session, RedirectResponse):
         return session
@@ -3836,6 +3835,8 @@ def dashboard_page(request: Request) -> Response:
         except Exception:
             badge_html = ""
     body = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
+    if widget_name:
+        body = body.replace("<body>", f'<body data-dashboard-widget="{html.escape(widget_name)}">', 1)
     if badge_html:
         body = body.replace(
             '<div id="userIdentityBadge" class="user-chip" aria-live="polite" hidden></div>',
@@ -3848,6 +3849,32 @@ def dashboard_page(request: Request) -> Response:
             "Pragma": "no-cache",
         },
     )
+
+
+@app.get("/dashboard")
+def dashboard_page(request: Request) -> Response:
+    return _dashboard_page_html(request, "overview")
+
+
+@app.get("/dashboard/widgets/{widget_name}")
+def dashboard_widget_page(request: Request, widget_name: str) -> Response:
+    allowed_widgets = {
+        "match-center",
+        "scoring",
+        "availability",
+        "performance",
+        "player-profile",
+        "teams",
+        "commentary",
+        "squad",
+        "schedule",
+        "archive",
+        "assistant",
+    }
+    normalized = str(widget_name or "").strip().lower()
+    if normalized not in allowed_widgets:
+        raise HTTPException(status_code=404, detail="Unknown dashboard widget.")
+    return _dashboard_page_html(request, normalized)
 
 
 @app.get("/api/health")
