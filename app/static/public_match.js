@@ -18,7 +18,8 @@
   const availabilityCountEl = document.getElementById("publicMatchAvailabilityCount");
   const selectionCountEl = document.getElementById("publicMatchSelectionCount");
   const recentBallsEl = document.getElementById("publicMatchRecentBalls");
-  const inningsEl = document.getElementById("publicMatchInnings");
+  const battersEl = document.getElementById("publicMatchBatters");
+  const bowlersEl = document.getElementById("publicMatchBowlers");
   const commentaryEl = document.getElementById("publicMatchCommentary");
   const performancesEl = document.getElementById("publicMatchPerformances");
   const readOnlyNoteEl = document.getElementById("publicMatchReadOnlyNote");
@@ -51,55 +52,98 @@
     `;
   }
 
-  function renderBattingTable(rows) {
-    if (!rows.length) {
-      return `<p class="public-empty">No batting figures recorded yet.</p>`;
-    }
-    return `
-      <div class="public-score-table">
-        <div class="public-score-table-head">
-          <span>Batter</span><span>Runs</span><span>Balls</span><span>SR</span>
-        </div>
-        ${rows
-          .map(
-            (row) => `
-              <div class="public-score-table-row">
-                <strong>${escapeHtml(row.player_name || "Player")}</strong>
-                <span>${escapeHtml(row.runs ?? 0)}</span>
-                <span>${escapeHtml(row.balls ?? 0)}</span>
-                <span>${escapeHtml(Number(row.strike_rate || 0).toFixed(2).replace(/\.00$/, ""))}</span>
-              </div>
-            `,
-          )
-          .join("")}
-      </div>
-    `;
+  function uniqueByName(rows) {
+    const seen = new Set();
+    return rows.filter((row) => {
+      const key = String(row.player_name || "").trim().toLowerCase();
+      if (!key || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
   }
 
-  function renderBowlingTable(rows) {
+  function renderBattingCards(rows) {
     if (!rows.length) {
-      return `<p class="public-empty">No bowling figures recorded yet.</p>`;
+      return `<div class="public-empty public-empty-dark">No batting figures recorded yet.</div>`;
     }
-    return `
-      <div class="public-score-table">
-        <div class="public-score-table-head public-score-table-head-five">
-          <span>Bowler</span><span>Overs</span><span>Runs</span><span>Wkts</span><span>Econ</span>
-        </div>
-        ${rows
-          .map(
-            (row) => `
-              <div class="public-score-table-row public-score-table-row-five">
-                <strong>${escapeHtml(row.player_name || "Bowler")}</strong>
-                <span>${escapeHtml(row.overs || "0.0")}</span>
-                <span>${escapeHtml(row.runs_conceded ?? 0)}</span>
-                <span>${escapeHtml(row.wickets ?? 0)}</span>
-                <span>${escapeHtml(Number(row.economy || 0).toFixed(2).replace(/\.00$/, ""))}</span>
+    return rows
+      .map(
+        (row) => `
+          <article class="public-player-card">
+            <div class="public-player-card-head">
+              <div>
+                <strong>${escapeHtml(row.player_name || "Player")}</strong>
+                <small>${escapeHtml(row.dismissal || row.notes || "Batting card")}</small>
               </div>
-            `,
-          )
-          .join("")}
-      </div>
-    `;
+              <div class="public-player-card-score">
+                <span>${escapeHtml(row.runs ?? 0)}</span>
+                <small>runs</small>
+              </div>
+            </div>
+            <div class="public-player-card-grid">
+              <div>
+                <span>Balls</span>
+                <strong>${escapeHtml(row.balls ?? 0)}</strong>
+              </div>
+              <div>
+                <span>SR</span>
+                <strong>${escapeHtml(Number(row.strike_rate || 0).toFixed(1).replace(/\.0$/, ""))}</strong>
+              </div>
+              <div>
+                <span>4s</span>
+                <strong>${escapeHtml(row.fours ?? 0)}</strong>
+              </div>
+              <div>
+                <span>6s</span>
+                <strong>${escapeHtml(row.sixes ?? 0)}</strong>
+              </div>
+            </div>
+          </article>
+        `,
+      )
+      .join("");
+  }
+
+  function renderBowlingCards(rows) {
+    if (!rows.length) {
+      return `<div class="public-empty public-empty-dark">No bowling figures recorded yet.</div>`;
+    }
+    return rows
+      .map(
+        (row) => `
+          <article class="public-player-card">
+            <div class="public-player-card-head">
+              <div>
+                <strong>${escapeHtml(row.player_name || "Bowler")}</strong>
+                <small>${escapeHtml(row.notes || "Bowling card")}</small>
+              </div>
+              <div class="public-player-card-score">
+                <span>${escapeHtml(row.wickets ?? 0)}</span>
+                <small>wkts</small>
+              </div>
+            </div>
+            <div class="public-player-card-grid">
+              <div>
+                <span>Overs</span>
+                <strong>${escapeHtml(row.overs || "0.0")}</strong>
+              </div>
+              <div>
+                <span>Runs</span>
+                <strong>${escapeHtml(row.runs_conceded ?? 0)}</strong>
+              </div>
+              <div>
+                <span>Econ</span>
+                <strong>${escapeHtml(Number(row.economy || 0).toFixed(1).replace(/\.0$/, ""))}</strong>
+              </div>
+              <div>
+                <span>Dots</span>
+                <strong>${escapeHtml(row.dot_balls ?? 0)}</strong>
+              </div>
+            </div>
+          </article>
+        `,
+      )
+      .join("");
   }
 
   function renderBalls(rows) {
@@ -191,9 +235,13 @@
       const match = data.match || {};
       const innings = Array.isArray(match.scorebook?.innings) ? match.scorebook.innings : [];
       const liveScore = match.scorecard || {};
-      const firstInning = innings[0]?.summary || {};
-      const secondInning = innings[1]?.summary || {};
       const recentBalls = innings.flatMap((inning) => Array.isArray(inning.balls) ? inning.balls : []);
+      const battingRows = uniqueByName(
+        innings.flatMap((inning) => (Array.isArray(inning.summary?.batting) ? inning.summary.batting : [])),
+      ).slice(0, 8);
+      const bowlingRows = uniqueByName(
+        innings.flatMap((inning) => (Array.isArray(inning.summary?.bowling) ? inning.summary.bowling : [])),
+      ).slice(0, 8);
       const requiredRuns = match.required_runs ?? liveScore.required_runs ?? match.chase_required_runs ?? "--";
       const requiredRate = match.required_run_rate ?? liveScore.required_run_rate ?? "--";
       const ballsLeft = match.balls_left ?? liveScore.balls_left ?? "--";
@@ -256,44 +304,11 @@
       if (recentBallsEl) {
         recentBallsEl.innerHTML = renderRecentBalls(recentBalls);
       }
-      if (inningsEl) {
-        inningsEl.innerHTML = innings.length
-          ? innings
-              .map((inning) => {
-                const summary = inning.summary || {};
-                const battingRows = Array.isArray(summary.batting) ? summary.batting : [];
-                const bowlingRows = Array.isArray(summary.bowling) ? summary.bowling : [];
-                return `
-                  <article class="public-innings-card">
-                    <div class="public-innings-head">
-                      <div>
-                        <p class="section-kicker">Inning ${escapeHtml(inning.inning_number || 1)}</p>
-                        <h3>${escapeHtml(inning.batting_team || "Batting team")} vs ${escapeHtml(inning.bowling_team || "Bowling team")}</h3>
-                      </div>
-                      <div class="public-innings-score">
-                        <strong>${escapeHtml(summary.runs ?? 0)}/${escapeHtml(summary.wickets ?? 0)}</strong>
-                        <small>${escapeHtml(formatOvers(summary.overs || "0.0"))} overs · ${escapeHtml(inning.status || "Not started")}</small>
-                      </div>
-                    </div>
-                    <div class="public-score-section-grid">
-                      <div>
-                        <strong>Batting card</strong>
-                        ${renderBattingTable(battingRows)}
-                      </div>
-                      <div>
-                        <strong>Bowling card</strong>
-                        ${renderBowlingTable(bowlingRows)}
-                      </div>
-                      <div class="wide">
-                        <strong>Recent balls</strong>
-                        ${renderBalls(Array.isArray(inning.balls) ? inning.balls : [])}
-                      </div>
-                    </div>
-                  </article>
-                `;
-              })
-              .join("")
-          : `<div class="public-empty">No scorebook entries have been logged yet for this match.</div>`;
+      if (battersEl) {
+        battersEl.innerHTML = renderBattingCards(battingRows);
+      }
+      if (bowlersEl) {
+        bowlersEl.innerHTML = renderBowlingCards(bowlingRows);
       }
       if (commentaryEl) {
         const commentary = Array.isArray(match.commentary) ? match.commentary.slice().reverse() : [];
@@ -301,15 +316,18 @@
           ? commentary
               .map(
                 (item) => `
-                  <article class="detail-card">
-                    <strong>${escapeHtml(String(item.mode || "text").toUpperCase())}</strong>
-                    <p>${escapeHtml(item.text || "")}</p>
-                    <small>${escapeHtml(item.created_at || "")}</small>
+                  <article class="public-timeline-item">
+                    <div class="public-timeline-dot ${escapeHtml(String(item.mode || "text").toLowerCase())}"></div>
+                    <div class="public-timeline-copy">
+                      <strong>${escapeHtml(String(item.mode || "text").toUpperCase())}</strong>
+                      <p>${escapeHtml(item.text || "")}</p>
+                      <small>${escapeHtml(item.created_at || "")}</small>
+                    </div>
                   </article>
                 `,
               )
               .join("")
-          : `<div class="public-empty">No commentary has been added yet.</div>`;
+          : `<div class="public-empty public-empty-dark">No commentary has been added yet.</div>`;
       }
       if (performancesEl) {
         const performances = Array.isArray(match.performances) ? match.performances : [];
@@ -317,19 +335,44 @@
           ? performances
               .map(
                 (item) => `
-                  <article class="detail-card">
-                    <strong>${escapeHtml(item.player_name || "Player")}</strong>
-                    <p>${escapeHtml(item.runs ?? 0)} runs · ${escapeHtml(item.wickets ?? 0)} wickets · ${escapeHtml(item.catches ?? 0)} catches</p>
-                    <small>${escapeHtml(item.notes || item.source || "")}</small>
+                  <article class="public-player-card">
+                    <div class="public-player-card-head">
+                      <div>
+                        <strong>${escapeHtml(item.player_name || "Player")}</strong>
+                        <small>${escapeHtml(item.source || item.notes || "Performance")}</small>
+                      </div>
+                      <div class="public-player-card-score">
+                        <span>${escapeHtml(item.runs ?? 0)}</span>
+                        <small>runs</small>
+                      </div>
+                    </div>
+                    <div class="public-player-card-grid">
+                      <div>
+                        <span>Wkts</span>
+                        <strong>${escapeHtml(item.wickets ?? 0)}</strong>
+                      </div>
+                      <div>
+                        <span>Catches</span>
+                        <strong>${escapeHtml(item.catches ?? 0)}</strong>
+                      </div>
+                      <div>
+                        <span>Score</span>
+                        <strong>${escapeHtml((item.confidence ?? item.runs ?? 0))}</strong>
+                      </div>
+                      <div>
+                        <span>Status</span>
+                        <strong>${escapeHtml(item.status || "Published")}</strong>
+                      </div>
+                    </div>
                   </article>
                 `,
               )
               .join("")
-          : `<div class="public-empty">No player performances have been published yet.</div>`;
+          : `<div class="public-empty public-empty-dark">No player performances have been published yet.</div>`;
       }
       if (readOnlyNoteEl) {
         readOnlyNoteEl.hidden = false;
-        readOnlyNoteEl.textContent = "Read-only public scorecard. Sign in to manage scoring, availability, and lineups.";
+        readOnlyNoteEl.textContent = "Read-only public scorecard.";
       }
     } catch (error) {
       console.error("[Public Match]", error);

@@ -7,11 +7,11 @@
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
-      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Source+Serif+4:opsz,wght@8..60;400;500;600;700&display=swap"
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=Source+Serif+4:opsz,wght@8..60;400;500;600;700&display=swap"
       rel="stylesheet"
     />
     <link rel="stylesheet" href="/assets/tailwind.css?v=20260430b" />
-    <link rel="stylesheet" href="/assets/styles.css?v=20260510a" />
+    <link rel="stylesheet" href="/assets/styles.css?v=20260510c" />
   </head>
   <body class="public-scorecard-page">
     <div class="public-scorecard-bg">
@@ -21,23 +21,29 @@
     </div>
 
     <div class="page-shell public-scorecard-shell">
-      <section class="public-scorecard-hero glass">
+      <section class="public-scorecard-hero">
         <div class="public-scorecard-hero-top">
           <div class="public-scorecard-live-pill">
             <span class="public-scorecard-live-dot"></span>
             <span>PUBLIC LIVE SCORECARD</span>
           </div>
           <div class="inline-actions">
-            <a class="primary-link" href="/signin">Sign in</a>
-            <a class="primary-link" href="/register">Register</a>
+            <a class="primary-link auth-cta-link secondary" href="/signin">Sign in</a>
+            <a class="primary-link auth-cta-link" href="/register">Register</a>
           </div>
         </div>
 
         <div class="public-scorecard-hero-body">
           <div class="public-scorecard-team public-scorecard-team-left">
-            <div id="publicMatchTeamOneBadge" class="public-scorecard-team-badge">HL</div>
-            <h1 id="publicMatchTitle">Loading match...</h1>
-            <p id="publicMatchMeta" class="public-scorecard-meta">Read-only public scorecard.</p>
+            <div class="public-scorecard-team-head">
+              <div id="publicMatchTeamOneBadge" class="public-scorecard-team-badge">HL</div>
+              <div>
+                <p class="public-scorecard-team-label">Batting</p>
+                <h1 id="publicMatchTitle">Loading match...</h1>
+                <p id="publicMatchMeta" class="public-scorecard-meta">Read-only public scorecard.</p>
+              </div>
+            </div>
+
             <div class="public-scorecard-score">
               <strong id="publicMatchTeamOneScore">--</strong>
               <span id="publicMatchTeamOneOvers">-- overs</span>
@@ -46,21 +52,29 @@
 
           <div class="public-scorecard-center">
             <div class="public-scorecard-vs">VS</div>
-            <div class="public-scorecard-target glass">
-              <span class="label">Target</span>
+            <div class="public-scorecard-situation glass">
+              <span class="label">Match Situation</span>
               <strong id="publicMatchTarget">--</strong>
+              <small id="publicMatchRequiredRate">--</small>
             </div>
-            <div class="public-scorecard-status glass">
-              <span class="label">Status</span>
-              <strong id="publicMatchStatus">Scheduled</strong>
+            <div class="public-scorecard-situation glass">
+              <span class="label">Balls Left</span>
+              <strong id="publicMatchBallsLeft">--</strong>
+              <small id="publicMatchMomentum">Match momentum</small>
             </div>
             <div id="publicMatchReadOnlyNote" class="public-readonly-note" hidden></div>
           </div>
 
           <div class="public-scorecard-team public-scorecard-team-right">
-            <div id="publicMatchTeamTwoBadge" class="public-scorecard-team-badge public-scorecard-team-badge-alt">TC</div>
-            <h2 id="publicMatchOpponentTitle">Opponent</h2>
-            <p id="publicMatchVenue" class="public-scorecard-meta">Venue TBD</p>
+            <div class="public-scorecard-team-head public-scorecard-team-head-right">
+              <div>
+                <p class="public-scorecard-team-label">Bowling</p>
+                <h2 id="publicMatchOpponentTitle">Opponent</h2>
+                <p id="publicMatchVenue" class="public-scorecard-meta">Venue TBD</p>
+              </div>
+              <div id="publicMatchTeamTwoBadge" class="public-scorecard-team-badge public-scorecard-team-badge-alt">TC</div>
+            </div>
+
             <div class="public-scorecard-score public-scorecard-score-alt">
               <strong id="publicMatchTeamTwoScore">--</strong>
               <span id="publicMatchTeamTwoOvers">-- overs</span>
@@ -68,20 +82,15 @@
           </div>
         </div>
 
-        <div class="public-scorecard-hero-footer">
+        <div class="public-scorecard-summary-grid">
           <article class="mini-stat">
-            <span>Required</span>
+            <span>Status</span>
+            <strong id="publicMatchStatus">Scheduled</strong>
+            <small id="publicMatchAvailabilityCount">-- responses</small>
+          </article>
+          <article class="mini-stat">
+            <span>Target</span>
             <strong id="publicMatchRequiredRuns">--</strong>
-            <small id="publicMatchRequiredRate">--</small>
-          </article>
-          <article class="mini-stat">
-            <span>Balls Left</span>
-            <strong id="publicMatchBallsLeft">--</strong>
-            <small id="publicMatchMomentum">Match momentum</small>
-          </article>
-          <article class="mini-stat">
-            <span>Availability</span>
-            <strong id="publicMatchAvailabilityCount">--</strong>
             <small id="publicMatchSelectionCount">-- selected XI</small>
           </article>
           <article class="mini-stat">
@@ -89,49 +98,70 @@
             <strong>Public mode</strong>
             <small>Scoreboard only</small>
           </article>
+          <article class="mini-stat">
+            <span>Coverage</span>
+            <strong>Live</strong>
+            <small>Recent balls and commentary</small>
+          </article>
         </div>
       </section>
 
-      <section class="public-scorecard-section glass">
+      <section class="public-scorecard-section">
         <div class="panel-head compact-head">
           <div>
             <p class="section-kicker">Recent Balls</p>
-            <h2>Latest deliveries and key moments</h2>
+            <h2>Latest deliveries</h2>
           </div>
+          <span class="public-section-pill">Live feed</span>
         </div>
         <div id="publicMatchRecentBalls" class="public-ball-strip hide-scrollbar"></div>
       </section>
 
-      <section class="public-scorecard-section glass">
-        <div class="panel-head compact-head">
-          <div>
-            <p class="section-kicker">Scorebook</p>
-            <h2>Innings, batting, bowling, and recent balls</h2>
+      <section class="public-scorecard-section public-scorecard-grid">
+        <div class="detail-card public-scorecard-panel">
+          <div class="panel-head compact-head">
+            <div>
+              <p class="section-kicker">Batting</p>
+              <h2>Current Batters</h2>
+            </div>
+            <span class="public-section-pill">Innings 1</span>
           </div>
+          <div id="publicMatchBatters" class="public-player-cards"></div>
         </div>
-        <div id="publicMatchInnings" class="public-innings-list"></div>
+
+        <div class="detail-card public-scorecard-panel">
+          <div class="panel-head compact-head">
+            <div>
+              <p class="section-kicker">Bowling</p>
+              <h2>Bowlers</h2>
+            </div>
+            <span class="public-section-pill">Current</span>
+          </div>
+          <div id="publicMatchBowlers" class="public-player-cards"></div>
+        </div>
       </section>
 
-      <section class="public-scorecard-section glass">
+      <section class="public-scorecard-section">
         <div class="panel-head compact-head">
           <div>
             <p class="section-kicker">Commentary</p>
-            <h2>Match commentary</h2>
+            <h2>Live timeline</h2>
           </div>
+          <span class="public-section-pill public-live-pulse-pill">Live feed</span>
         </div>
-        <div id="publicMatchCommentary" class="detail-stack"></div>
+        <div id="publicMatchCommentary" class="public-timeline"></div>
       </section>
 
-      <section class="public-scorecard-section glass">
+      <section class="public-scorecard-section">
         <div class="panel-head compact-head">
           <div>
             <p class="section-kicker">Performances</p>
             <h2>Published player performances</h2>
           </div>
         </div>
-        <div id="publicMatchPerformances" class="detail-stack"></div>
+        <div id="publicMatchPerformances" class="public-player-cards"></div>
       </section>
     </div>
-    <script src="/assets/public_match.js?v=20260510a"></script>
+    <script src="/assets/public_match.js?v=20260510c"></script>
   </body>
 </html>
