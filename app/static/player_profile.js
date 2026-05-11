@@ -1,4 +1,4 @@
-const { requireAuth, postJson, getJson, optionMarkup, setPrimaryClubId, getPrimaryClubId } = window.CricketClubAppPages;
+const { requireAuth, postJson, getJson } = window.CricketClubAppPages;
 
 const title = document.getElementById("playerProfileTitle");
 const summary = document.getElementById("playerProfileSummary");
@@ -7,10 +7,6 @@ const form = document.getElementById("playerProfileForm");
 const memberships = document.getElementById("playerMemberships");
 const snapshot = document.getElementById("playerProfileSnapshot");
 const matchHistory = document.getElementById("playerMatchHistory");
-const primaryClubSelect = document.getElementById("profilePrimaryClub");
-const clubSearchInput = document.getElementById("profileClubSearch");
-const clubSelect = document.getElementById("profileClubSelect");
-const clubSwitchButton = document.getElementById("profileClubSwitch");
 const genderSelect = document.getElementById("profileGender");
 
 let payload = null;
@@ -132,25 +128,13 @@ function renderMatchHistory() {
     .join("");
 }
 
-function renderClubOptions() {
-  const clubs = payload?.clubs || [];
-  const query = clubSearchInput.value.trim().toLowerCase();
-  const selectedClubId = payload?.club?.id || "";
-  const visibleClubs = clubs.filter((club) => {
-    if (!query) return true;
-    return [club.name, club.short_name, club.season].some((value) => String(value || "").toLowerCase().includes(query));
-  });
-  clubSelect.innerHTML = optionMarkup(visibleClubs, "id", (club) => `${club.name} · ${club.season || "Season TBD"}`);
-  clubSelect.value = visibleClubs.some((club) => club.id === selectedClubId)
-    ? selectedClubId
-    : visibleClubs[0]?.id || "";
-}
-
 function fillForm() {
   const member = payload?.member;
   if (!member) return;
   title.textContent = `${member.full_name || member.name} profile`;
-  summary.textContent = `Selected club: ${payload.club.name} · ${member.role || "Player"} · ${member.phone || "No mobile stored"}`;
+  title.hidden = false;
+  summary.textContent = `Selected club: ${payload?.club?.name || "Selected club"} · ${member.role || "Player"} · ${member.phone || "No mobile stored"}`;
+  summary.hidden = false;
   document.getElementById("profileFullName").value = member.full_name || "";
   genderSelect.value = member.gender || "";
   document.getElementById("profileAge").value = member.age || "";
@@ -165,25 +149,32 @@ function fillForm() {
     .map((item) => item.team_name || item)
     .join(", ");
   document.getElementById("profileNotes").value = member.notes || "";
-  primaryClubSelect.innerHTML = optionMarkup(payload.clubs || [], "id", (club) => club.name);
-  primaryClubSelect.value = payload.club.id || payload.user.current_club_id || payload.user.primary_club_id || "";
-  renderClubOptions();
   renderSnapshot();
   renderMatchHistory();
   renderMemberships();
 }
 
-async function loadProfile() {
+async function loadProfile(auth = null) {
   debug("Loading player profile.");
   setStatus("Loading player profile...", "info");
-  payload = await getJson("/api/player/profile-data", true);
-  fillForm();
-  debug("Player profile loaded.", {
-    clubId: payload.club?.id || "",
-    member: payload.member?.name || "",
-    summaryRuns: payload.summary_stats?.runs || 0,
-  });
-  setStatus(`Loaded ${payload.member?.full_name || payload.member?.name || "player"} profile.`, "success");
+  title.textContent = "Loading player profile...";
+  title.hidden = false;
+  summary.textContent = "Loading selected club and player data...";
+  summary.hidden = false;
+  if (!auth) return;
+  try {
+    payload = await getJson("/api/player/summary", true);
+    fillForm();
+    debug("Player profile loaded.", {
+      clubId: payload.club?.id || "",
+      member: payload.member?.name || "",
+      summaryRuns: payload.summary_stats?.runs || 0,
+    });
+    setStatus(`Loaded ${payload.member?.full_name || payload.member?.name || "player"} profile.`, "success");
+  } catch (error) {
+    debug("Player profile load failed.", { error: error?.message || error });
+    setStatus(error.message || "Player profile could not be loaded.", "error");
+  }
 }
 
 form.addEventListener("submit", async (event) => {
@@ -191,7 +182,7 @@ form.addEventListener("submit", async (event) => {
   try {
     debug("Saving player profile.", {
       player: document.getElementById("profileFullName").value.trim(),
-      clubId: primaryClubSelect.value || "",
+      clubId: payload?.club?.id || "",
     });
     payload = await postJson(
       "/api/player/profile",
@@ -207,14 +198,13 @@ form.addEventListener("submit", async (event) => {
         aliases: document.getElementById("profileAliases").value.trim(),
         team_memberships: document.getElementById("profileTeams").value.trim(),
         notes: document.getElementById("profileNotes").value.trim(),
-        primary_club_id: primaryClubSelect.value,
       },
       true
     );
     fillForm();
     debug("Player profile saved.", {
       player: payload?.member?.name || document.getElementById("profileFullName").value.trim(),
-      clubId: payload?.club?.id || primaryClubSelect.value || "",
+      clubId: payload?.club?.id || "",
     });
     setStatus("Player profile saved.", "success");
   } catch (error) {
@@ -223,31 +213,9 @@ form.addEventListener("submit", async (event) => {
   }
 });
 
-clubSearchInput.addEventListener("input", renderClubOptions);
-
-clubSwitchButton.addEventListener("click", async () => {
-  if (!clubSelect.value) {
-    setStatus("Choose a club first.", "error");
-    return;
-  }
-  try {
-    debug("Club switch requested.", { clubId: clubSelect.value || "" });
-    const selected = await postJson("/api/auth/select-club", { club_id: clubSelect.value }, true);
-    setPrimaryClubId(selected.user.current_club_id || selected.user.primary_club_id || "");
-    await loadProfile();
-    debug("Club switch completed.", { clubId: selected.club?.id || "", clubName: selected.club?.name || "" });
-    setStatus(`${selected.club.name} selected.`, "success");
-  } catch (error) {
-    debug("Club switch failed.", { error: error?.message || error });
-    setStatus(error.message, "error");
-  }
-});
-
 requireAuth()
   .then(async (auth) => {
     if (!auth) return;
-    const clubId = auth.user.current_club_id || auth.user.primary_club_id || getPrimaryClubId() || "";
-    setPrimaryClubId(clubId);
-    await loadProfile();
+    await loadProfile(auth);
   })
   .catch((error) => setStatus(error.message, "error"));

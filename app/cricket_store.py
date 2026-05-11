@@ -5619,7 +5619,7 @@ def build_player_pending_stats(archive_uploads: list[dict[str, Any]], members: l
         if status.startswith("pending") or status == "applied to match":
             continue
         archive_key = upload.get("id") or upload.get("file_name", "")
-        for performance in upload.get("suggested_performances", []):
+        for performance in _archive_player_performances(upload, members):
             name = _canonical_member_name(members, performance.get("player_name", ""))
             if not name or name not in member_names:
                 continue
@@ -5816,7 +5816,21 @@ def _highest_score_for_member(
             archive_club_id = str(archive.get("club_id") or "").strip().lower()
             if club_match not in archive_club_ids and archive_club_id != club_match:
                 continue
-        for performance in archive.get("suggested_performances", []) or []:
+        performances = [item for item in archive.get("suggested_performances", []) or [] if isinstance(item, dict)]
+        if not performances:
+            try:
+                template = json.loads(str(archive.get("review_template_json") or "{}"))
+            except Exception:
+                template = {}
+            for inning in template.get("innings", []) or []:
+                for batting in inning.get("batting", []) or []:
+                    performances.append(
+                        {
+                            "player_name": (batting.get("player") or {}).get("name") or batting.get("player_name") or "",
+                            "runs": batting.get("runs") or 0,
+                        }
+                    )
+        for performance in performances:
             consider(performance.get("player_name") or "", performance.get("runs") or 0)
     return highest
 
@@ -5863,7 +5877,7 @@ def _batting_milestones(
             archive_club_id = str(archive.get("club_id") or "").strip().lower()
             if club_match not in archive_club_ids and archive_club_id != club_match:
                 continue
-        for performance in archive.get("suggested_performances", []) or []:
+        for performance in _archive_player_performances(archive, [member]):
             consider(performance.get("player_name") or "", performance.get("runs") or 0)
 
     return milestones
@@ -5900,6 +5914,37 @@ def _player_stat_bucket(
         "scores_100_plus": int(milestone_values.get("scores_100_plus", 0) or 0),
         "updated_at": now_iso(),
     }
+
+
+def _archive_player_performances(archive: dict[str, Any], members: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    performances = [dict(item) for item in archive.get("suggested_performances", []) if isinstance(item, dict)]
+    if performances:
+        return performances
+    try:
+        template = json.loads(str(archive.get("review_template_json") or "{}"))
+    except Exception:
+        return []
+    fallback: list[dict[str, Any]] = []
+    for inning in template.get("innings", []) or []:
+        for batting in inning.get("batting", []) or []:
+            name = str((batting.get("player") or {}).get("name") or batting.get("player_name") or "").strip()
+            if not name:
+                continue
+            fallback.append(
+                {
+                    "player_name": _canonical_member_name(members, name) or name,
+                    "runs": batting.get("runs") or 0,
+                    "balls": batting.get("balls") or 0,
+                    "wickets": batting.get("wickets") or 0,
+                    "catches": batting.get("catches") or 0,
+                    "fours": batting.get("fours") or 0,
+                    "sixes": batting.get("sixes") or 0,
+                    "notes": "Verified archive scorecard",
+                    "source": "review_template_json",
+                    "confidence": "reviewed",
+                }
+            )
+    return fallback
 
 
 def _build_materialized_member_stats(store: dict[str, Any]) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:

@@ -11,28 +11,15 @@
       rel="stylesheet"
     />
     <link rel="stylesheet" href="/assets/tailwind.css?v=20260426a" />
-    <link rel="stylesheet" href="/assets/styles.css?v=20260503e" />
+    <link rel="stylesheet" href="/assets/styles.css?v=20260509f" />
   </head>
   <body>
     <div class="page-shell">
-      <header class="page-topbar">
-        <nav class="top-nav">
-          <a href="/dashboard">Dashboard</a>
-          <a href="/clubs">Clubs</a>
-          <a href="/season-setup" aria-current="page">Season Fixtures</a>
-          <a href="/player-availability">Availability</a>
-          <a href="/player-profile">Profile</a>
-          <a href="/admin-center" data-admin-only hidden>Admin center</a>
-        </nav>
-        <div class="topbar-actions">
-          <a class="secondary-button" href="/signout">Sign out</a>
-        </div>
-      </header>
+      <header class="page-topbar"></header>
       <section class="panel onboarding-panel">
         <div class="stack-card">
-          <p class="section-kicker">Season Setup</p>
-          <h1 id="seasonSetupTitle">Club season setup</h1>
-          <p id="seasonSetupSummary" class="lede">Create fixtures for 2026 and later.</p>
+          <h1 id="seasonSetupTitle" hidden>Club season setup</h1>
+          <p id="seasonSetupSummary" class="lede" hidden>Create fixtures for 2026 and later.</p>
           <div id="seasonStatus" class="status-banner" hidden></div>
           <form id="seasonSetupForm" class="form-grid">
             <input id="editingFixtureId" type="hidden" value="" />
@@ -57,7 +44,7 @@
         </div>
       </section>
     </div>
-    <script src="/assets/multipage.js?v=20260503i"></script>
-    <script src="/assets/season_setup.js?v=20260503e"></script>
+    <script src="/assets/multipage.js?v=20260509e"></script>
+    <script src="/assets/season_setup.js?v=20260509b"></script>
   </body>
 </html>

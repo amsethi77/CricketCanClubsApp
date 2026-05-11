@@ -206,6 +206,9 @@ This section captures the user requirements in the order they were given and ref
 - The live scoring panel now uses a scoreboard-style header with live over chips, batting and bowling tables, and a more professional scoring console layout.
 - The scoring console also includes quick delivery shortcuts for common outcomes plus a `Save & next ball` flow for faster manual scoring.
 - The dashboard is now an overview hub with widget launcher cards, and each major widget can open as its own page under `/dashboard/widgets/...`.
+- The dashboard navigation now follows the mobile app shell: `Home`, `Match`, `Fixtures`, `Squad`, `Assistant`, and `More`.
+- The Match area now carries its own local sub-navigation for `Overview`, `Squad`, `Scoring`, `Commentary`, `Stats`, and `Summary`.
+- Scorecards, OCR, uploads, settings, admin, and profile live under the secondary `More` menu cards.
 - Dashboard season switching now requests the selected year explicitly and is cached to reduce repeated recomputation.
 - The Admin Center now renders the selected club first, filters its archive review queue by the active club, and groups uploaded scorecards clubwise for review.
 - Season Fixtures now supports editing future fixtures, while past fixtures are locked at both the UI and API layers.

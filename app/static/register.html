@@ -11,50 +11,79 @@
       rel="stylesheet"
     />
     <link rel="stylesheet" href="/assets/tailwind.css?v=20260426a" />
-    <link rel="stylesheet" href="/assets/styles.css?v=20260503c" />
+    <link rel="stylesheet" href="/assets/styles.css?v=20260510g" />
   </head>
   <body>
     <div class="page-shell">
-      <section class="panel onboarding-panel">
-        <div class="stack-card">
-          <p class="section-kicker">Registration</p>
-          <h1>Create a local account</h1>
-          <p class="lede">Register as a player or club admin with mobile or email, then choose your primary club.</p>
-          <div id="registerStatus" class="status-banner" hidden></div>
-          <form id="registerForm" class="form-grid">
-            <input id="registerDisplayName" type="text" placeholder="Display name" required />
-            <input id="registerMobile" type="tel" placeholder="Mobile number" />
-            <input id="registerEmail" type="email" placeholder="Email address" />
-            <input id="registerPassword" type="password" placeholder="Password" required />
-            <select id="registerRole">
-              <option value="">Loading roles...</option>
-            </select>
-            <input id="registerClubSearch" type="search" placeholder="Search existing clubs" />
-            <select id="registerClub"></select>
-            <div id="registerMemberRow" class="wide">
-              <select id="registerMember"></select>
+      <section class="register-layout">
+        <aside class="panel onboarding-panel register-live-panel">
+          <div class="stack-card signin-stats-shell">
+            <div class="signin-stats-head">
+              <div>
+                <p class="section-kicker">Live</p>
+                <h2 class="signin-stats-title">🔥 Live Matches Today</h2>
+              </div>
+              <p class="lede signin-stats-lede">Open a live scorecard to see the match in real time before you register.</p>
             </div>
-            <div class="stack-card wide">
+            <div class="signin-tab-strip" role="tablist" aria-label="Register live tabs">
+              <button class="signin-tab is-active" type="button" aria-selected="true">
+                Live Match
+              </button>
+            </div>
+            <div class="detail-card public-live-card-shell">
               <div class="panel-head compact-head">
                 <div>
-                  <p class="section-kicker">Add club</p>
-                  <h2>Can't find your club?</h2>
+                  <p class="section-kicker">Live</p>
+                  <h2>🔥 Live Matches Today</h2>
+                </div>
+                <span id="registerLiveMatchesCount" class="signin-widget-pill">Loading</span>
+              </div>
+              <div id="registerLiveMatches" class="public-live-grid" aria-live="polite"></div>
+            </div>
+          </div>
+        </aside>
+        <div class="panel onboarding-panel register-form-panel">
+          <div class="stack-card">
+            <p class="section-kicker">Registration</p>
+            <h1>Create a local account</h1>
+            <p class="lede">Register as a player or club admin with mobile or email, then choose your primary club.</p>
+            <div id="registerStatus" class="status-banner" hidden></div>
+            <form id="registerForm" class="form-grid">
+              <input id="registerDisplayName" type="text" placeholder="Display name" required />
+              <input id="registerMobile" type="tel" placeholder="Mobile number" />
+              <input id="registerEmail" type="email" placeholder="Email address" />
+              <input id="registerPassword" type="password" placeholder="Password" required />
+              <select id="registerRole">
+                <option value="">Loading roles...</option>
+              </select>
+              <input id="registerClubSearch" type="search" placeholder="Search existing clubs" />
+              <select id="registerClub"></select>
+              <div id="registerMemberRow" class="wide">
+                <select id="registerMember"></select>
+              </div>
+              <div class="stack-card wide">
+                <div class="panel-head compact-head">
+                  <div>
+                    <p class="section-kicker">Add club</p>
+                    <h2>Can't find your club?</h2>
+                  </div>
+                </div>
+                <p class="lede">If your club is not listed, add it here. Club names are matched ignoring case to prevent duplicates.</p>
+                <div class="form-grid">
+                  <input id="registerNewClubName" type="text" placeholder="Club name" />
+                  <input id="registerNewClubCity" type="text" placeholder="City" />
+                  <input id="registerNewClubCountry" type="text" placeholder="Country" />
                 </div>
               </div>
-              <p class="lede">If your club is not listed, add it here. Club names are matched ignoring case to prevent duplicates.</p>
-              <div class="form-grid">
-                <input id="registerNewClubName" type="text" placeholder="Club name" />
-                <input id="registerNewClubCity" type="text" placeholder="City" />
-                <input id="registerNewClubCountry" type="text" placeholder="Country" />
-              </div>
-            </div>
-            <button class="primary-button wide" type="submit">Register and continue</button>
-          </form>
-          <a class="primary-link" href="/signin">Already have an account? Sign in</a>
+              <button class="primary-button wide" type="submit">Register and continue</button>
+              <a class="primary-link" href="/signin">Already have an account? Sign in</a>
+            </form>
+          </div>
         </div>
       </section>
     </div>
-    <script src="/assets/multipage.js?v=20260503g"></script>
+    <script src="/assets/multipage.js?v=20260510g"></script>
+    <script src="/assets/public_live.js?v=20260510g"></script>
     <script>
       // Inline fallback: populate `#registerRole` if external JS fails or is stale
       (async function populateRolesFallback() {
@@ -74,6 +103,6 @@
         }
       })();
     </script>
-    <script src="/assets/register.js?v=20260428FINAL"></script>
+    <script src="/assets/register.js?v=20260510g"></script>
   </body>
 </html>

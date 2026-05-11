@@ -1,4 +1,4 @@
-const { requireAuth, postJson, getPrimaryClubId, setPrimaryClubId } = window.CricketClubAppPages;
+const { requireAuth, postJson, setPrimaryClubId } = window.CricketClubAppPages;
 
 const title = document.getElementById("seasonSetupTitle");
 const summary = document.getElementById("seasonSetupSummary");
@@ -102,10 +102,12 @@ function renderSeasonFilter() {
   const currentYear = String(new Date().getFullYear());
   const years = Array.from(
     new Set(
-      [...(payload?.season_years || []), currentYear, String(seasonYearInput.value || ""), String(payload?.selected_year || "")].filter((year) => {
-        const value = Number(year);
-        return Number.isFinite(value) && value >= MIN_SEASON_YEAR;
-      })
+      [
+        ...(payload?.season_years || []),
+        currentYear,
+        String(seasonYearInput.value || ""),
+        String(payload?.selected_year || ""),
+      ].filter((year) => /^20\d{2}$/.test(String(year || "").trim()))
     )
   ).sort((left, right) => Number(right) - Number(left));
   if (!years.length) {
@@ -119,7 +121,7 @@ function renderSeasonFilter() {
 form.addEventListener("submit", async (event) => {
   event.preventDefault();
   try {
-    const clubId = payload?.club?.id || getPrimaryClubId() || "";
+    const clubId = payload?.club?.id || "";
     const submittedYear = String(seasonYearInput.value || MIN_SEASON_YEAR);
     if (Number(submittedYear) < MIN_SEASON_YEAR) {
       setStatus(`Season setup is only available for ${MIN_SEASON_YEAR} and later.`, "error");
@@ -198,7 +200,7 @@ requireAuth()
       });
       return;
     }
-    const clubId = auth.user.current_club_id || auth.user.primary_club_id || getPrimaryClubId() || "";
+    const clubId = auth.user.current_club_id || auth.user.primary_club_id || "";
     setPrimaryClubId(clubId);
     debug("Loading season setup data.", { clubId });
     setStatus("Loading season setup...", "info");

@@ -69,6 +69,7 @@ try:
         build_batting_rankings,
         build_bowling_rankings,
         build_combined_player_stats,
+        _build_materialized_member_stats,
         canonical_phone,
         canonical_archive_uploads,
         create_duplicate_record_from_bytes,
@@ -115,6 +116,7 @@ except ModuleNotFoundError:
         build_batting_rankings,
         build_bowling_rankings,
         build_combined_player_stats,
+        _build_materialized_member_stats,
         canonical_phone,
         canonical_archive_uploads,
         create_duplicate_record_from_bytes,
@@ -168,8 +170,42 @@ app.add_middleware(
 )
 
 
+def _canonical_dashboard_widget_path(path: str) -> str:
+    clean_path = str(path or "").rstrip("/")
+    if not clean_path.startswith("/dashboard/widgets/"):
+        return clean_path or path
+    widget_name = clean_path[len("/dashboard/widgets/") :].strip().lower()
+    widget_aliases = {
+        "club-performance": "performance",
+        "performances": "performance",
+        "fixtures": "schedule",
+        "upcoming-fixtures": "schedule",
+        "availability": "availability",
+        "playing-xi": "match-center",
+        "rankings": "performance",
+        "players": "player-profile",
+        "profile": "player-profile",
+        "player-profile": "player-profile",
+        "assistant": "assistant",
+        "scorecards": "archive",
+        "scoring": "scoring",
+        "commentary": "commentary",
+        "squad": "squad",
+        "archive": "archive",
+        "match-center": "match-center",
+        "teams": "teams",
+        "schedule": "schedule",
+        "more": "more",
+    }
+    canonical = widget_aliases.get(widget_name, widget_name)
+    return f"/dashboard/widgets/{canonical}" if canonical else clean_path
+
+
 @app.middleware("http")
 async def _log_http_requests(request: Request, call_next):
+    canonical_path = _canonical_dashboard_widget_path(request.scope.get("path", ""))
+    if canonical_path != request.scope.get("path", ""):
+        request.scope["path"] = canonical_path
     start = datetime.utcnow()
     path = request.url.path
     query = request.url.query
@@ -247,6 +283,20 @@ def _identity_badge_html(display_name: str, role: str) -> str:
     """
 
 
+def _club_badge_html(club_name: str) -> str:
+    safe_name = html.escape(str(club_name or "No club selected").strip() or "No club selected")
+    initials = "".join(part[:1].upper() for part in safe_name.split() if part)[:2] or "CL"
+    return f"""
+      <div id="currentClubBadge" class="club-chip" aria-live="polite">
+        <span class="club-chip-mark" aria-hidden="true">{html.escape(initials)}</span>
+        <span class="club-chip-copy">
+          <small>Club</small>
+          <strong>{safe_name}</strong>
+        </span>
+      </div>
+    """
+
+
 def _season_setup_page_html(request: Request) -> HTMLResponse | RedirectResponse:
     session = _require_page_session(request)
     if isinstance(session, RedirectResponse):
@@ -264,13 +314,15 @@ def _season_setup_page_html(request: Request) -> HTMLResponse | RedirectResponse
     season_years = {
         fixture_season_year(fixture)
         for fixture in fixtures
-        if fixture_season_year(fixture) and int(fixture_season_year(fixture)) >= MIN_SEASON_SETUP_YEAR
+        if fixture_season_year(fixture)
     }
     season_years.add(current_year)
     viewer_selected_year = str(store.get("viewer_profile", {}).get("selected_season_year") or "").strip()
-    if re.match(r"20\d{2}$", viewer_selected_year) and int(viewer_selected_year) >= MIN_SEASON_SETUP_YEAR:
+    if re.match(r"20\d{2}$", viewer_selected_year):
         season_years.add(viewer_selected_year)
-    selected_year = current_year if int(current_year) >= MIN_SEASON_SETUP_YEAR else str(MIN_SEASON_SETUP_YEAR)
+    selected_year = viewer_selected_year if re.match(r"20\d{2}$", viewer_selected_year) else current_year
+    if not re.match(r"20\d{2}$", selected_year):
+        selected_year = str(MIN_SEASON_SETUP_YEAR)
     if selected_year not in season_years and season_years:
         selected_year = sorted(season_years)[-1]
     season_years = sorted(
@@ -317,7 +369,7 @@ def _season_setup_page_html(request: Request) -> HTMLResponse | RedirectResponse
     )
     body = body.replace(
         '<div class="topbar-actions">\n          <a class="secondary-button" href="/signout">Sign out</a>\n        </div>',
-        f'<div class="topbar-actions">\n          {badge_html}\n          <a class="secondary-button" href="/signout">Sign out</a>\n        </div>',
+        f'<div class="topbar-actions">\n          {_club_badge_html(str(club.get("name") or "Selected club"))}\n          {badge_html}\n          <a class="secondary-button" href="/signout">Sign out</a>\n        </div>',
     )
     return HTMLResponse(
         body,
@@ -380,12 +432,10 @@ def _auth_identifier_candidates(identifier: str) -> list[str]:
 
 def _set_auth_cookies(response: Response, token: str, club_id: str = "") -> None:
     response.set_cookie("cricketClubAppAuthToken", token, httponly=False, samesite="lax", path="/")
-    response.set_cookie("cricketClubAppPrimaryClubId", club_id or "", httponly=False, samesite="lax", path="/")
 
 
 def _clear_auth_cookies(response: Response) -> None:
     response.delete_cookie("cricketClubAppAuthToken", path="/")
-    response.delete_cookie("cricketClubAppPrimaryClubId", path="/")
 
 
 def _auth_token_from_request(request: Request, x_auth_token: str | None = None) -> str:
@@ -514,12 +564,26 @@ def _clubs_page_html(request: Request, search: str = "", focus_club_id: str = ""
                                 continue
                             runs = int(performance.get("runs") or 0)
                             highest = runs if highest is None else max(highest, runs)
-                    for archive in store.get("archive_uploads", []):
+                    for archive in canonical_archive_uploads(store.get("archive_uploads", [])):
                         if year and str(archive.get("archive_year") or "").strip() != str(year).strip():
                             continue
                         if club_id and str(archive.get("club_id") or "").strip() != str(club_id).strip():
                             continue
-                        for performance in archive.get("suggested_performances", []) or []:
+                        performances = [item for item in archive.get("suggested_performances", []) or [] if isinstance(item, dict)]
+                        if not performances:
+                            try:
+                                template = json.loads(str(archive.get("review_template_json") or "{}"))
+                            except Exception:
+                                template = {}
+                            for inning in template.get("innings", []) or []:
+                                for batting in inning.get("batting", []) or []:
+                                    performances.append(
+                                        {
+                                            "player_name": (batting.get("player") or {}).get("name") or batting.get("player_name") or "",
+                                            "runs": batting.get("runs") or 0,
+                                        }
+                                    )
+                        for performance in performances:
                             if not _performance_matches_member(performance.get("player_name") or ""):
                                 continue
                             runs = int(performance.get("runs") or 0)
@@ -702,31 +766,21 @@ def _clubs_page_html(request: Request, search: str = "", focus_club_id: str = ""
     ) or '<p class="empty-state">No clubs match that search.</p>'
     search_value = html.escape(search or "")
     badge_html = ""
+    club_badge_html = ""
     if token:
         try:
             user_row, _ = _auth_user_from_token(token)
             user_payload = _auth_user_payload(user_row, current_club_id)
+            club_badge_html = _club_badge_html(
+                str(user_payload.get("current_club_name") or user_payload.get("primary_club_name") or "Selected club")
+            )
             badge_html = _identity_badge_html(
                 str(user_payload.get("display_name") or user_payload.get("email") or user_payload.get("mobile") or "Signed in"),
                 str(user_payload.get("effective_role") or user_payload.get("role") or "Player"),
             )
         except Exception:
             badge_html = ""
-    topbar = f"""
-      <header class="page-topbar">
-        <nav class="top-nav">
-          <a href="/dashboard">Dashboard</a>
-          <a href="/clubs" aria-current="page">Clubs</a>
-          <a href="/season-setup">Season Fixtures</a>
-          <a href="/player-availability">Availability</a>
-          <a href="/player-profile">Profile</a>
-        </nav>
-        <div class="topbar-actions">
-          {badge_html}
-          <a class="secondary-button" href="/signout">Sign out</a>
-        </div>
-      </header>
-    """
+    topbar = '<header class="page-topbar"></header>'
     body = f"""
     <!DOCTYPE html>
     <html lang="en">
@@ -734,7 +788,7 @@ def _clubs_page_html(request: Request, search: str = "", focus_club_id: str = ""
         <meta charset="UTF-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1.0" />
         <title>Select Club · CricketClubApp</title>
-        <link rel="stylesheet" href="/assets/styles.css?v=20260429f" />
+        <link rel="stylesheet" href="/assets/styles.css?v=20260509e" />
       </head>
       <body>
         <div class="page-shell">
@@ -814,13 +868,13 @@ def _clubs_page_html(request: Request, search: str = "", focus_club_id: str = ""
               <div class="inline-actions">
                 <a id="seasonSetupLink" class="primary-link" href="/season-setup">Season Fixtures</a>
                 <a id="playerAvailabilityLink" class="primary-link" href="/player-availability">Player availability</a>
-                <a id="playerProfileLink" class="primary-link" href="/player-profile">Player profile</a>
+                <a id="playerProfileLink" class="primary-link" href="/profile">Player profile</a>
               </div>
             </div>
           </section>
         </div>
-        <script src="/assets/multipage.js?v=20260503i"></script>
-        <script src="/assets/clubs.js?v=20260429c"></script>
+        <script src="/assets/multipage.js?v=20260509c"></script>
+        <script src="/assets/clubs.js?v=20260509c"></script>
       </body>
     </html>
     """
@@ -1884,10 +1938,21 @@ def _auth_user_payload(user_row: sqlite3.Row, current_club_id: str = "") -> dict
     permissions = sorted(_user_permissions(user_row, current_club_id))
     member_name = ""
     member_full_name = ""
-    member = _member_for_user(_safe_load_store_for_auth("auth.user_payload"), user_row)
+    current_club_name = ""
+    store = _safe_load_store_for_auth("auth.user_payload")
+    member = _member_for_user(store, user_row)
     if member:
         member_name = str(member.get("name") or "").strip()
         member_full_name = str(member.get("full_name") or "").strip()
+    try:
+        club_lookup_id = str(current_club_id or user_row["primary_club_id"] or "").strip()
+        club = next(
+            (club for club in store.get("clubs", []) if str(club.get("id") or "").strip() == club_lookup_id),
+            store.get("club", {}) if club_lookup_id else {},
+        )
+        current_club_name = str(club.get("name") or "").strip()
+    except Exception:
+        current_club_name = ""
     return {
         "id": int(user_row["id"]),
         "display_name": user_row["display_name"] or "",
@@ -1902,6 +1967,7 @@ def _auth_user_payload(user_row: sqlite3.Row, current_club_id: str = "") -> dict
         "viewer_member_full_name": member_full_name,
         "primary_club_id": user_row["primary_club_id"] or "",
         "current_club_id": current_club_id or user_row["primary_club_id"] or "",
+        "current_club_name": current_club_name,
     }
 
 def _visible_club_choices_for_user(
@@ -3229,6 +3295,234 @@ def public_signin_stats() -> dict[str, Any]:
     }
 
 
+def _public_live_matches(store: dict[str, Any]) -> list[dict[str, Any]]:
+    today = datetime.utcnow().date().isoformat()
+    live_statuses = {"live", "in progress", "ongoing"}
+    matches: list[dict[str, Any]] = []
+    for fixture in store.get("fixtures", []) or []:
+        status = str(fixture.get("status") or "").strip()
+        status_key = status.lower()
+        fixture_date = str(fixture.get("date") or "").strip()
+        if fixture_date != today and status_key not in live_statuses:
+            continue
+        if status_key == "completed":
+            continue
+        scorecard = dict(fixture.get("scorecard") or {})
+        scorebook_innings = []
+        for innings in (fixture.get("scorebook", {}) or {}).get("innings", []) or []:
+            summary = summarize_innings_scorebook(innings)
+            scorebook_innings.append(
+                {
+                    "inning_number": int(innings.get("inning_number") or 1),
+                    "batting_team": str(innings.get("batting_team") or ""),
+                    "bowling_team": str(innings.get("bowling_team") or ""),
+                    "overs_limit": int(innings.get("overs_limit") or 20),
+                    "status": str(innings.get("status") or "Not started"),
+                    "target_runs": int(innings["target_runs"]) if innings.get("target_runs") is not None else None,
+                    "summary": summary,
+                    "batters": [
+                        {
+                            "player_name": str(item.get("player_name") or ""),
+                            "runs": int(item.get("runs") or 0),
+                            "balls": int(item.get("balls") or 0),
+                            "fours": int(item.get("fours") or 0),
+                            "sixes": int(item.get("sixes") or 0),
+                            "status": str(item.get("status") or ""),
+                            "strike_rate": float(item.get("strike_rate") or ((int(item.get("runs") or 0) / int(item.get("balls") or 0)) * 100 if int(item.get("balls") or 0) else 0.0)),
+                        }
+                        for item in summary.get("batting", [])
+                    ],
+                    "bowlers": [
+                        {
+                            "player_name": str(item.get("player_name") or ""),
+                            "overs": str(item.get("overs") or "0.0"),
+                            "runs_conceded": int(item.get("runs_conceded") or 0),
+                            "wickets": int(item.get("wickets") or 0),
+                            "economy": float(item.get("economy") or 0.0),
+                        }
+                        for item in summary.get("bowling", [])
+                    ],
+                    "balls": [
+                        {
+                            "id": str(ball.get("id") or ""),
+                            "over_number": int(ball.get("over_number") or 1),
+                            "ball_number": int(ball.get("ball_number") or 1),
+                            "striker": str(ball.get("striker") or ""),
+                            "non_striker": str(ball.get("non_striker") or ""),
+                            "bowler": str(ball.get("bowler") or ""),
+                            "runs_bat": int(ball.get("runs_bat") or 0),
+                            "extras_type": str(ball.get("extras_type") or "none"),
+                            "extras_runs": int(ball.get("extras_runs") or 0),
+                            "wicket": bool(ball.get("wicket")),
+                            "wicket_type": str(ball.get("wicket_type") or ""),
+                            "wicket_player": str(ball.get("wicket_player") or ""),
+                            "fielder": str(ball.get("fielder") or ""),
+                            "commentary": str(ball.get("commentary") or ""),
+                            "created_at": str(ball.get("created_at") or ""),
+                        }
+                        for ball in innings.get("balls", []) or []
+                    ],
+                }
+            )
+        matches.append(
+            {
+                "id": str(fixture.get("id") or ""),
+                "club_id": str(fixture.get("club_id") or ""),
+                "club_name": str(fixture.get("club_name") or ""),
+                "date": fixture_date,
+                "date_label": str(fixture.get("date_label") or fixture_date),
+                "opponent": str(fixture.get("opponent") or "Opponent"),
+                "venue": str((fixture.get("details") or {}).get("venue") or "Venue TBD"),
+                "match_type": str((fixture.get("details") or {}).get("match_type") or "Friendly"),
+                "scheduled_time": str((fixture.get("details") or {}).get("scheduled_time") or "Time TBD"),
+                "overs": str((fixture.get("details") or {}).get("overs") or ""),
+                "status": status or "Scheduled",
+                "status_key": status_key or "scheduled",
+                "result": str(scorecard.get("result") or fixture.get("result") or "TBD"),
+                "heartlake_score": str(scorecard.get("heartlake_runs") or fixture.get("heartlake_score") or ""),
+                "opponent_score": str(scorecard.get("opponent_runs") or fixture.get("opponent_score") or ""),
+                "live_summary": str(scorecard.get("live_summary") or ""),
+                "commentary_count": len(fixture.get("commentary", []) or []),
+                "performances_count": len(fixture.get("performances", []) or []),
+                "availability_count": len(fixture.get("availability", []) or []),
+                "selected_playing_xi": list(fixture.get("selected_playing_xi", []) or []),
+                "scorebook": {"innings": scorebook_innings},
+            }
+        )
+    matches.sort(
+        key=lambda item: (
+            0 if str(item.get("status_key") or "") in live_statuses else 1,
+            str(item.get("date") or ""),
+            str(item.get("scheduled_time") or ""),
+            str(item.get("opponent") or ""),
+        )
+    )
+    return matches
+
+
+def _public_match_payload(store: dict[str, Any], match_id: str) -> dict[str, Any]:
+    match = get_match_or_404(store, match_id)
+    scorecard = dict(match.get("scorecard") or {})
+    innings_payload = []
+    for innings in (match.get("scorebook", {}) or {}).get("innings", []) or []:
+        summary = summarize_innings_scorebook(innings)
+        innings_payload.append(
+            {
+                "inning_number": int(innings.get("inning_number") or 1),
+                "batting_team": str(innings.get("batting_team") or ""),
+                "bowling_team": str(innings.get("bowling_team") or ""),
+                "overs_limit": int(innings.get("overs_limit") or 20),
+                "status": str(innings.get("status") or "Not started"),
+                "target_runs": int(innings["target_runs"]) if innings.get("target_runs") is not None else None,
+                "summary": summary,
+                "batters": [
+                    {
+                        "player_name": str(item.get("player_name") or ""),
+                        "runs": int(item.get("runs") or 0),
+                        "balls": int(item.get("balls") or 0),
+                        "fours": int(item.get("fours") or 0),
+                        "sixes": int(item.get("sixes") or 0),
+                        "status": str(item.get("status") or ""),
+                        "strike_rate": float(item.get("strike_rate") or ((int(item.get("runs") or 0) / int(item.get("balls") or 0)) * 100 if int(item.get("balls") or 0) else 0.0)),
+                    }
+                    for item in summary.get("batting", [])
+                ],
+                "bowlers": [
+                    {
+                        "player_name": str(item.get("player_name") or ""),
+                        "overs": str(item.get("overs") or "0.0"),
+                        "runs_conceded": int(item.get("runs_conceded") or 0),
+                        "wickets": int(item.get("wickets") or 0),
+                        "economy": float(item.get("economy") or 0.0),
+                    }
+                    for item in summary.get("bowling", [])
+                ],
+                "balls": [
+                    {
+                        "id": str(ball.get("id") or ""),
+                        "over_number": int(ball.get("over_number") or 1),
+                        "ball_number": int(ball.get("ball_number") or 1),
+                        "striker": str(ball.get("striker") or ""),
+                        "non_striker": str(ball.get("non_striker") or ""),
+                        "bowler": str(ball.get("bowler") or ""),
+                        "runs_bat": int(ball.get("runs_bat") or 0),
+                        "extras_type": str(ball.get("extras_type") or "none"),
+                        "extras_runs": int(ball.get("extras_runs") or 0),
+                        "wicket": bool(ball.get("wicket")),
+                        "wicket_type": str(ball.get("wicket_type") or ""),
+                        "wicket_player": str(ball.get("wicket_player") or ""),
+                        "fielder": str(ball.get("fielder") or ""),
+                        "commentary": str(ball.get("commentary") or ""),
+                        "created_at": str(ball.get("created_at") or ""),
+                    }
+                    for ball in innings.get("balls", []) or []
+                ],
+            }
+        )
+    return {
+        "id": str(match.get("id") or ""),
+        "club_id": str(match.get("club_id") or ""),
+        "club_name": str(match.get("club_name") or ""),
+        "date": str(match.get("date") or ""),
+        "date_label": str(match.get("date_label") or match.get("date") or ""),
+        "opponent": str(match.get("opponent") or "Opponent"),
+        "venue": str((match.get("details") or {}).get("venue") or "Venue TBD"),
+        "match_type": str((match.get("details") or {}).get("match_type") or "Friendly"),
+        "scheduled_time": str((match.get("details") or {}).get("scheduled_time") or "Time TBD"),
+        "overs": str((match.get("details") or {}).get("overs") or ""),
+        "status": str(match.get("status") or "Scheduled"),
+        "result": str(scorecard.get("result") or match.get("result") or "TBD"),
+        "heartlake_score": str(scorecard.get("heartlake_runs") or match.get("heartlake_score") or ""),
+        "opponent_score": str(scorecard.get("opponent_runs") or match.get("opponent_score") or ""),
+        "live_summary": str(scorecard.get("live_summary") or ""),
+        "selected_playing_xi": list(match.get("selected_playing_xi", []) or []),
+        "availability": list(match.get("availability", []) or []),
+        "commentary": list(match.get("commentary", []) or []),
+        "performances": list(match.get("performances", []) or []),
+        "scorecard": {
+            "heartlake_runs": scorecard.get("heartlake_runs", "") or "",
+            "heartlake_wickets": scorecard.get("heartlake_wickets", "") or "",
+            "heartlake_overs": scorecard.get("heartlake_overs", "") or "",
+            "opponent_runs": scorecard.get("opponent_runs", "") or "",
+            "opponent_wickets": scorecard.get("opponent_wickets", "") or "",
+            "opponent_overs": scorecard.get("opponent_overs", "") or "",
+            "result": scorecard.get("result", match.get("result") or "TBD") or "TBD",
+            "live_summary": scorecard.get("live_summary", "") or "",
+        },
+        "scorebook": {"innings": innings_payload},
+    }
+
+
+@app.get("/api/public/live-matches")
+def public_live_matches() -> dict[str, Any]:
+    logger.debug("Public live matches requested.")
+    store = load_store()
+    matches = _public_live_matches(store)
+    return {
+        "matches": matches,
+        "generated_at": now_iso(),
+    }
+
+
+@app.get("/api/public/match/{match_id}")
+def public_match(match_id: str) -> dict[str, Any]:
+    logger.debug("Public scorecard requested. match_id=%s", match_id)
+    store = load_store()
+    try:
+        match = _public_match_payload(store, match_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    return {
+        "match": match,
+        "generated_at": now_iso(),
+    }
+
+
+@app.get("/public/match/{match_id}")
+def public_match_page(match_id: str) -> FileResponse:
+    return _page_response("public_match.html")
+
+
 def _admin_center_html(request: Request) -> HTMLResponse:
     user_row, current_club_id = _auth_user_from_token(_auth_token_from_request(request))
     if _effective_role_name(user_row, current_club_id) != "superadmin":
@@ -3474,24 +3768,11 @@ def _admin_center_html(request: Request) -> HTMLResponse:
         <meta charset="UTF-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1.0" />
         <title>Admin Center · CricketClubApp</title>
-        <link rel="stylesheet" href="/assets/styles.css?v=20260429f" />
+        <link rel="stylesheet" href="/assets/styles.css?v=20260509e" />
       </head>
       <body>
         <div class="page-shell">
-          <header class="page-topbar">
-            <nav class="top-nav">
-              <a href="/dashboard">Dashboard</a>
-              <a href="/clubs">Clubs</a>
-              <a href="/season-setup">Season Fixtures</a>
-              <a href="/player-availability">Availability</a>
-              <a href="/player-profile">Profile</a>
-              <a href="/admin-center" aria-current="page">Admin center</a>
-            </nav>
-            <div class="topbar-actions">
-              <a class="primary-link" href="/dashboard">Back to dashboard</a>
-              <a class="secondary-button" href="/signout">Sign out</a>
-            </div>
-          </header>
+          <header class="page-topbar"></header>
           <section class="panel onboarding-panel">
             <div class="stack-card">
               <p class="section-kicker">Admin Center</p>
@@ -3569,7 +3850,7 @@ def _admin_center_html(request: Request) -> HTMLResponse:
             </div>
           </section>
         </div>
-        <script src="/assets/multipage.js?v=20260503i"></script>
+        <script src="/assets/multipage.js?v=20260509c"></script>
         <script src="/assets/admin_center.js?v=20260429m"></script>
       </body>
     </html>
@@ -3650,9 +3931,8 @@ def _signin_redirect_page(token: str, club_id: str) -> HTMLResponse:
           <body>
             <script>
               window.localStorage.setItem("cricketClubAppAuthToken", {safe_token});
-              window.localStorage.setItem("cricketClubAppPrimaryClubId", {safe_club_id});
+              window.sessionStorage.setItem("cricketClubAppPrimaryClubId", {safe_club_id});
               document.cookie = "cricketClubAppAuthToken=" + encodeURIComponent({safe_token}) + "; path=/; samesite=lax";
-              document.cookie = "cricketClubAppPrimaryClubId=" + encodeURIComponent({safe_club_id}) + "; path=/; samesite=lax";
               window.location.href = "/clubs";
             </script>
             <p>Signing you in...</p>
@@ -3776,7 +4056,7 @@ def signout_page(request: Request) -> HTMLResponse:
           <body>
             <script>
               window.localStorage.removeItem("cricketClubAppAuthToken");
-              window.localStorage.removeItem("cricketClubAppPrimaryClubId");
+              window.sessionStorage.removeItem("cricketClubAppPrimaryClubId");
               window.sessionStorage.removeItem("cricketClubAppSessionState");
               window.location.href = "/signin";
             </script>
@@ -3804,6 +4084,7 @@ def player_availability_page(request: Request) -> Response:
     return _page_response("player_availability.html")
 
 
+@app.get("/profile")
 @app.get("/player-profile")
 def player_profile_page(request: Request) -> Response:
     session = _require_page_session(request)
@@ -3825,7 +4106,6 @@ def _dashboard_page_html(request: Request, widget_name: str | None = None) -> HT
             user_payload = _auth_user_payload(
                 user_row,
                 current_club_id
-                or str(request.cookies.get("cricketClubAppPrimaryClubId") or "").strip()
                 or str(request.query_params.get("focus_club_id") or "").strip(),
             )
             badge_html = _identity_badge_html(
@@ -3837,6 +4117,14 @@ def _dashboard_page_html(request: Request, widget_name: str | None = None) -> HT
     body = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
     if widget_name:
         body = body.replace("<body>", f'<body data-dashboard-widget="{html.escape(widget_name)}">', 1)
+    if widget_name != "overview":
+        body = re.sub(
+            r"\s*<section class=\"panel template-shell glass dashboard-hero-panel\">.*?</section>\s*",
+            "\n",
+            body,
+            count=1,
+            flags=re.S,
+        )
     if badge_html:
         body = body.replace(
             '<div id="userIdentityBadge" class="user-chip" aria-live="polite" hidden></div>',
@@ -3856,25 +4144,47 @@ def dashboard_page(request: Request) -> Response:
     return _dashboard_page_html(request, "overview")
 
 
+@app.get("/dashboard/widgets/performance")
+def dashboard_performance_page(request: Request) -> Response:
+    return _dashboard_page_html(request, "performance")
+
+
+@app.get("/dashboard/widgets/performances")
+def dashboard_performances_page(request: Request) -> Response:
+    return _dashboard_page_html(request, "performance")
+
+
 @app.get("/dashboard/widgets/{widget_name}")
 def dashboard_widget_page(request: Request, widget_name: str) -> Response:
-    allowed_widgets = {
-        "match-center",
-        "scoring",
-        "availability",
-        "performance",
-        "player-profile",
-        "teams",
-        "commentary",
-        "squad",
-        "schedule",
-        "archive",
-        "assistant",
+    widget_aliases = {
+        "club-performance": "performance",
+        "performances": "performance",
+        "fixtures": "schedule",
+        "upcoming-fixtures": "schedule",
+        "availability": "availability",
+        "playing-xi": "match-center",
+        "rankings": "performance",
+        "players": "player-profile",
+        "profile": "player-profile",
+        "player-profile": "player-profile",
+        "assistant": "assistant",
+        "scorecards": "archive",
+        "scoring": "scoring",
+        "commentary": "commentary",
+        "squad": "squad",
+        "archive": "archive",
+        "match-center": "match-center",
+        "teams": "teams",
+        "schedule": "schedule",
+        "more": "more",
     }
     normalized = str(widget_name or "").strip().lower()
-    if normalized not in allowed_widgets:
+    target_widget = widget_aliases.get(normalized)
+    if not target_widget:
         raise HTTPException(status_code=404, detail="Unknown dashboard widget.")
-    return _dashboard_page_html(request, normalized)
+    if target_widget == "player-profile":
+        return _page_response("player_profile.html")
+    return _dashboard_page_html(request, target_widget)
 
 
 @app.get("/api/health")
@@ -3889,14 +4199,16 @@ def dashboard(
     selected_season_year: str | None = None,
 ) -> dict[str, Any]:
     token = _auth_token_from_request(request)
+    store = load_store()
     resolved_focus_club_id = (
         focus_club_id
-        or str(request.cookies.get("cricketClubAppPrimaryClubId") or "").strip()
         or None
     )
+    stored_viewer_year = str(store.get("viewer_profile", {}).get("selected_season_year") or "").strip()
     requested_season_year = (
         str(selected_season_year or request.query_params.get("selected_season_year") or "").strip()
         or str(request.cookies.get("cricketClubAppSelectedSeasonYear") or "").strip()
+        or stored_viewer_year
         or str(datetime.utcnow().year)
     )
     logger.debug(
@@ -3914,7 +4226,7 @@ def dashboard(
             user_row = None
             current_club_id = ""
     resolved_focus_club_id = current_club_id or resolved_focus_club_id
-    dashboard_data = current_dashboard(load_store(), resolved_focus_club_id, requested_season_year)
+    dashboard_data = current_dashboard(store, resolved_focus_club_id, requested_season_year)
     if user_row:
         dashboard_data["user"] = _auth_user_payload(user_row, current_club_id or resolved_focus_club_id or "")
     return dashboard_data
@@ -4627,13 +4939,15 @@ def season_setup_data(
     season_years = {
         fixture_season_year(fixture)
         for fixture in fixtures
-        if fixture_season_year(fixture) and int(fixture_season_year(fixture)) >= MIN_SEASON_SETUP_YEAR
+        if fixture_season_year(fixture)
     }
     season_years.add(current_year)
     viewer_selected_year = str(store.get("viewer_profile", {}).get("selected_season_year") or "").strip()
-    if re.match(r"20\d{2}$", viewer_selected_year) and int(viewer_selected_year) >= MIN_SEASON_SETUP_YEAR:
+    if re.match(r"20\d{2}$", viewer_selected_year):
         season_years.add(viewer_selected_year)
-    selected_year = current_year if int(current_year) >= MIN_SEASON_SETUP_YEAR else str(MIN_SEASON_SETUP_YEAR)
+    selected_year = viewer_selected_year if re.match(r"20\d{2}$", viewer_selected_year) else current_year
+    if not re.match(r"20\d{2}$", selected_year):
+        selected_year = str(MIN_SEASON_SETUP_YEAR)
     if selected_year not in season_years and season_years:
         selected_year = sorted(season_years)[-1]
     season_years = sorted(
@@ -4996,55 +5310,69 @@ def player_profile_data(x_auth_token: str | None = Header(default=None)) -> dict
             or str(row.get("full_name") or "").strip().lower() in member_aliases
         )
 
-    summary_stats = next((item for item in store.get("member_summary_stats", []) or [] if _matches_member(item)), {}) or {}
-    year_stats = [
-        row
-        for row in (store.get("member_year_stats", []) or [])
-        if _matches_member(row)
-    ]
+    member_club_ids = {
+        str(item.get("club_id") or "").strip().lower()
+        for item in (member or {}).get("club_memberships", []) or []
+        if str(item.get("club_id") or "").strip()
+    }
+    member_club_names = {
+        str(item.get("club_name") or "").strip().lower()
+        for item in (member or {}).get("club_memberships", []) or []
+        if str(item.get("club_name") or "").strip()
+    }
+
+    overall_rows = list(store.get("member_summary_stats", []))
+    year_rows_all = list(store.get("member_year_stats", []))
+    club_rows_all = list(store.get("member_club_stats", []))
+
+    def _archive_matches_member_clubs(archive: dict[str, Any]) -> bool:
+        archive_ids = {
+            str(value or "").strip().lower()
+            for value in [archive.get("club_id"), *((archive.get("club_ids") or []) if isinstance(archive.get("club_ids"), list) else [])]
+            if str(value or "").strip()
+        }
+        archive_names = {
+            str(value or "").strip().lower()
+            for value in [archive.get("club_name"), *((archive.get("club_names") or []) if isinstance(archive.get("club_names"), list) else [])]
+            if str(value or "").strip()
+        }
+        return bool(archive_ids.intersection(member_club_ids) or archive_names.intersection(member_club_names))
+
+    summary_stats = next((item for item in overall_rows if _matches_member(item)), {}) or {}
+    year_stats = [row for row in year_rows_all if _matches_member(row)]
     year_stats.sort(key=lambda row: (str(row.get("season_year") or ""), str(row.get("player_name") or "")), reverse=True)
-    club_stats = [
-        row
-        for row in (store.get("member_club_stats", []) or [])
-        if _matches_member(row)
-    ]
+    club_stats = [row for row in club_rows_all if _matches_member(row)]
     club_stats.sort(key=lambda row: (str(row.get("club_name") or ""), str(row.get("player_name") or "")))
 
-    recent_history: list[dict[str, Any]] = []
-    for fixture in sorted(store.get("fixtures", []) or [], key=lambda item: str(item.get("date") or ""), reverse=True):
-        performances = [
-            performance
-            for performance in fixture.get("performances", []) or []
-            if str(performance.get("player_name") or "").strip().lower() in member_aliases
-        ]
-        if not performances:
-            continue
-        recent_history.append(
-            {
-                "source": "fixture",
-                "date": str(fixture.get("date") or ""),
-                "season_year": str(fixture.get("season_year") or ""),
-                "club_name": str(fixture.get("club_name") or club.get("name") or ""),
-                "opponent": str(fixture.get("opponent") or fixture.get("away_team") or fixture.get("team_2") or "TBD"),
-                "status": str(fixture.get("status") or ""),
-                "result": str(fixture.get("result") or fixture.get("match_result") or ""),
-                "runs": sum(int(performance.get("runs") or 0) for performance in performances),
-                "balls": sum(int(performance.get("balls") or 0) for performance in performances),
-                "wickets": sum(int(performance.get("wickets") or 0) for performance in performances),
-                "catches": sum(int(performance.get("catches") or 0) for performance in performances),
-            }
-        )
-
+    recent_history_by_key: dict[str, dict[str, Any]] = {}
+    seen_archive_keys: set[str] = set()
     for archive in sorted(canonical_archive_uploads(store.get("archive_uploads", []) or []), key=lambda item: str(item.get("archive_date") or item.get("date") or ""), reverse=True):
-        performances = [
-            performance
-            for performance in archive.get("suggested_performances", []) or []
-            if str(performance.get("player_name") or "").strip().lower() in member_aliases
-        ]
-        if not performances:
+        archive_key = "|".join(
+            str(value or "").strip().lower()
+            for value in (
+                archive.get("family_key"),
+                archive.get("id"),
+                archive.get("archive_id"),
+                archive.get("file_hash"),
+                archive.get("archive_date") or archive.get("date"),
+                archive.get("club_id"),
+                archive.get("club_name"),
+            )
+            if str(value or "").strip()
+        )
+        if archive_key and archive_key in seen_archive_keys:
             continue
-        recent_history.append(
-            {
+        if archive_key:
+            seen_archive_keys.add(archive_key)
+        archive_status = str(archive.get("status") or "").strip().lower()
+        if archive_status.startswith("pending"):
+            continue
+        archive_rows_by_key: dict[str, dict[str, Any]] = {}
+        def _add_archive_row(performance: dict[str, Any], fallback_note: str = "") -> None:
+            player_key = str(performance.get("player_name") or "").strip().lower()
+            if player_key not in member_aliases:
+                return
+            row = {
                 "source": "archive",
                 "date": str(archive.get("archive_date") or archive.get("date") or ""),
                 "season_year": str(archive.get("archive_year") or archive.get("season_year") or ""),
@@ -5056,14 +5384,78 @@ def player_profile_data(x_auth_token: str | None = Header(default=None)) -> dict
                 ),
                 "status": str(archive.get("status") or ""),
                 "result": str(archive.get("validation", {}).get("expected_result") or archive.get("result") or ""),
-                "runs": sum(int(performance.get("runs") or 0) for performance in performances),
-                "balls": sum(int(performance.get("balls") or 0) for performance in performances),
-                "wickets": sum(int(performance.get("wickets") or 0) for performance in performances),
-                "catches": sum(int(performance.get("catches") or 0) for performance in performances),
+                "runs": int(performance.get("runs") or 0),
+                "balls": int(performance.get("balls") or 0),
+                "wickets": int(performance.get("wickets") or 0),
+                "catches": int(performance.get("catches") or 0),
+                "player_name": str(performance.get("player_name") or "").strip().lower(),
+                "notes": str(performance.get("notes") or fallback_note or ""),
             }
-        )
+            row_key = "|".join(
+                [
+                    row["date"],
+                    row["club_name"],
+                    row["opponent"],
+                    row["player_name"],
+                    str(row["runs"]),
+                    str(row["balls"]),
+                    str(row["wickets"]),
+                    str(row["catches"]),
+                ]
+            )
+            if row_key not in archive_rows_by_key:
+                archive_rows_by_key[row_key] = row
+        performances = [
+            performance
+            for performance in archive.get("suggested_performances", []) or []
+            if str(performance.get("player_name") or "").strip().lower() in member_aliases
+        ]
+        if performances:
+            source_rows = performances
+        else:
+            try:
+                review_template = json.loads(str(archive.get("review_template_json") or "{}"))
+            except Exception:
+                review_template = {}
+            batting_rows: list[dict[str, Any]] = []
+            for inning in review_template.get("innings", []) or []:
+                for batting in inning.get("batting", []) or []:
+                    candidate_name = str((batting.get("player") or {}).get("name") or batting.get("player_name") or "").strip().lower()
+                    if candidate_name and candidate_name in member_aliases:
+                        batting_rows.append(
+                            {
+                                "player_name": candidate_name,
+                                "runs": int(batting.get("runs") or 0),
+                                "balls": int(batting.get("balls") or 0),
+                                "wickets": int(batting.get("wickets") or 0),
+                                "catches": int(batting.get("catches") or 0),
+                                "notes": "Verified archive scorecard",
+                            }
+                    )
+            source_rows = batting_rows
+        if not source_rows:
+            continue
+        for performance in source_rows:
+            _add_archive_row(performance, archive.get("status") or "Reviewed archive scorecard")
+        for row in archive_rows_by_key.values():
+            key = "|".join(
+                str(value or "").strip().lower()
+                for value in (
+                    row.get("date"),
+                    row.get("club_name"),
+                    row.get("opponent"),
+                    row.get("player_name"),
+                )
+                if str(value or "").strip()
+            )
+            if key and key not in recent_history_by_key:
+                recent_history_by_key[key] = row
 
-    recent_history.sort(key=lambda item: str(item.get("date") or ""), reverse=True)
+    recent_history = sorted(
+        recent_history_by_key.values(),
+        key=lambda item: str(item.get("date") or ""),
+        reverse=True,
+    )
     return {
         "user": _auth_user_payload(user_row, current_club_id),
         "club": club,
@@ -5074,6 +5466,11 @@ def player_profile_data(x_auth_token: str | None = Header(default=None)) -> dict
         "club_stats": club_stats,
         "recent_history": recent_history[:20],
     }
+
+
+@app.get("/api/player/summary")
+def player_summary_data(x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
+    return player_profile_data(x_auth_token)
 
 
 @app.post("/api/player/profile")

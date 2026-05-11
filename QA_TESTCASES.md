@@ -61,7 +61,7 @@ The automated suite covers the main product surfaces end-to-end on isolated loca
 | F01 | Clubs snapshot | Signed in as `Amit S` | Open `/clubs` | Player Snapshot resolves to `Amit Sethi`, not `Amit G`. |
 | F02 | Clubs snapshot | Signed in as `player1` | Open `/clubs` | Player Snapshot resolves to `player1`. |
 | F03 | Sign-in page | Any browser session | Open `/signin` | The page renders the login form and the three leader widgets without a script crash. |
-| F17 | Dashboard widgets | Signed in as `player1` | Open `/dashboard` and then `/dashboard/widgets/scoring` | The dashboard opens as an overview hub and the widget route shows only the selected widget section. |
+| F17 | Dashboard widgets | Signed in as `player1` | Open `/dashboard` and then `/dashboard/widgets/scoring` | The dashboard opens as an overview hub with core module navigation, and the widget route shows only the selected widget section. |
 | F04 | Register page | Any browser session | Open `/register` | The page renders the registration form successfully. |
 | F05 | Fixture create | Signed in as `captain1` | Create a future fixture for `TestClub` via Season Fixtures | Fixture is created and returned in the season fixture list. |
 | F06 | Fixture update | Signed in as `clubadmin1` | Edit the created future fixture | Fixture is updated successfully. |

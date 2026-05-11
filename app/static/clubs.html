@@ -11,29 +11,15 @@
       rel="stylesheet"
     />
     <link rel="stylesheet" href="/assets/tailwind.css?v=20260426a" />
-    <link rel="stylesheet" href="/assets/styles.css?v=20260503c" />
+    <link rel="stylesheet" href="/assets/styles.css?v=20260509f" />
   </head>
   <body>
     <div class="page-shell">
-      <header class="page-topbar">
-        <nav class="top-nav">
-          <a href="/dashboard">Dashboard</a>
-          <a href="/clubs" aria-current="page">Clubs</a>
-          <a href="/season-setup">Season Fixtures</a>
-          <a href="/player-availability">Availability</a>
-          <a href="/player-profile">Profile</a>
-          <a href="/admin-center" data-admin-only hidden>Admin center</a>
-        </nav>
-        <div class="topbar-actions">
-          <div id="userIdentityBadge" class="user-chip" aria-live="polite" hidden></div>
-          <button id="signOutButton" class="secondary-button" type="button">Sign out</button>
-        </div>
-      </header>
+      <header class="page-topbar"></header>
       <section class="panel onboarding-panel">
         <div class="stack-card">
-          <p class="section-kicker">Club Selection</p>
-          <h1 id="clubsGreeting" class="clubs-greeting">Signed in</h1>
-          <p id="selectedClubSummary" class="lede">Choose your current club. Your primary club is the default.</p>
+          <h1 id="clubsGreeting" class="clubs-greeting" hidden>Signed in</h1>
+          <p id="selectedClubSummary" class="lede" hidden>Choose your current club. Your primary club is the default.</p>
           <div id="clubsStatus" class="status-banner" hidden></div>
           <form id="clubSearchForm" class="toolbar-actions">
             <input id="clubSearchInput" type="search" placeholder="Search clubs by name, short name, or season" />
@@ -105,6 +91,30 @@
               </table>
             </div>
           </div>
+          <div class="detail-card">
+            <strong class="snapshot-breakdown-title">Recent match history</strong>
+            <p class="lede">Shared archive and played fixtures for the selected player, sorted by date.</p>
+            <div class="review-table-wrap">
+              <table class="review-table snapshot-table">
+                <thead>
+                  <tr>
+                    <th>Date</th>
+                    <th>Source</th>
+                    <th>Club</th>
+                    <th>Opponent</th>
+                    <th>Runs</th>
+                    <th>Balls</th>
+                    <th>Wkts</th>
+                    <th>Catches</th>
+                    <th>Result</th>
+                  </tr>
+                </thead>
+                <tbody id="clubsPlayerHistoryRows">
+                  <tr><td colspan="9">Loading recent match history...</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
           <div class="inline-actions">
             <a id="seasonSetupLink" class="primary-link" href="/season-setup">Season Fixtures</a>
             <a id="playerAvailabilityLink" class="primary-link" href="/player-availability">Player availability</a>
@@ -113,7 +123,7 @@
         </div>
       </section>
     </div>
-    <script src="/assets/multipage.js?v=20260503i"></script>
-    <script src="/assets/clubs.js?v=20260503g"></script>
+    <script src="/assets/multipage.js?v=20260509e"></script>
+    <script src="/assets/clubs.js?v=20260509c"></script>
   </body>
 </html>

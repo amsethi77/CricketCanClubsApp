@@ -11,41 +11,19 @@
       rel="stylesheet"
     />
     <link rel="stylesheet" href="/assets/tailwind.css?v=20260426a" />
-    <link rel="stylesheet" href="/assets/styles.css?v=20260503d" />
+    <link rel="stylesheet" href="/assets/styles.css?v=20260509f" />
   </head>
   <body>
     <div class="page-shell">
-      <header class="page-topbar">
-        <nav class="top-nav">
-          <a href="/dashboard">Dashboard</a>
-          <a href="/clubs">Clubs</a>
-          <a href="/season-setup">Season Fixtures</a>
-          <a href="/player-availability" aria-current="page">Availability</a>
-          <a href="/player-profile">Profile</a>
-          <a href="/admin-center" data-admin-only hidden>Admin center</a>
-        </nav>
-        <div class="topbar-actions">
-          <a class="secondary-button" href="/signout">Sign out</a>
-        </div>
-      </header>
+      <header class="page-topbar"></header>
       <section class="panel onboarding-panel">
         <div class="stack-card">
-          <p class="section-kicker">Availability</p>
-          <h1 id="availabilityPageTitle">Player availability</h1>
-          <p id="availabilityPageSummary" class="lede">Update your availability after signing in.</p>
           <div id="playerAvailabilityStatus" class="status-banner" hidden></div>
-          <div class="form-grid compact-grid">
-            <input id="availabilityClubSearch" type="search" placeholder="Search your clubs" />
-            <select id="availabilityClubSelect"></select>
-            <button id="availabilityClubSwitch" class="secondary-button wide" type="button">Switch selected club</button>
-          </div>
-          <p class="lede">Set your availability per scheduled game below. The date is shown on each fixture card.</p>
           <div id="playerFixtures" class="detail-stack"></div>
-          <a class="primary-link" href="/player-profile">Open player profile</a>
         </div>
       </section>
     </div>
-    <script src="/assets/multipage.js?v=20260503i"></script>
-    <script src="/assets/player_availability.js?v=20260423d"></script>
+    <script src="/assets/multipage.js?v=20260509e"></script>
+    <script src="/assets/player_availability.js?v=20260509b"></script>
   </body>
 </html>

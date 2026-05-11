@@ -5,8 +5,74 @@ function getCookieValue(name) {
   return decodeURIComponent(match.slice(name.length + 1));
 }
 
+function normalizeStoredSeasonYear(value) {
+  const clean = String(value || "").trim();
+  return /^20\d{2}$/.test(clean) ? clean : "";
+}
+
+function getStoredSeasonYear() {
+  return (
+    normalizeStoredSeasonYear(window.localStorage.getItem("cricketClubAppSelectedSeasonYear")) ||
+    normalizeStoredSeasonYear(getCookieValue("cricketClubAppSelectedSeasonYear"))
+  );
+}
+
+function persistSelectedSeasonYear(year) {
+  const clean = normalizeStoredSeasonYear(year);
+  if (!clean) return;
+  window.localStorage.setItem("cricketClubAppSelectedSeasonYear", clean);
+  document.cookie = `cricketClubAppSelectedSeasonYear=${encodeURIComponent(clean)}; path=/; samesite=lax`;
+}
+
+function putJson(url, payload, authenticated = false) {
+  const shared = window.CricketClubAppPages;
+  if (!shared || typeof shared.putJson !== "function") {
+    return Promise.reject(new Error("Shared request helpers are not available."));
+  }
+  return shared.putJson(url, payload, authenticated);
+}
+
+const SHARED_HEADER_URL = "/assets/shared_header.html?v=20260509a";
+let sharedHeaderTemplate = null;
+let sharedHeaderTemplateInFlight = null;
+
+async function loadSharedHeaderTemplate() {
+  if (sharedHeaderTemplate) {
+    return sharedHeaderTemplate;
+  }
+  if (!sharedHeaderTemplateInFlight) {
+    sharedHeaderTemplateInFlight = fetch(SHARED_HEADER_URL, { cache: "no-store" })
+      .then((response) => {
+        if (!response.ok) {
+          throw new Error(`Failed to load shared header (${response.status})`);
+        }
+        return response.text();
+      })
+      .then((template) => {
+        sharedHeaderTemplate = template;
+        return template;
+      })
+      .finally(() => {
+        sharedHeaderTemplateInFlight = null;
+      });
+  }
+  return sharedHeaderTemplateInFlight;
+}
+
+async function renderSharedTopbar() {
+  const topbar = document.querySelector(".page-topbar");
+  if (!topbar) {
+    return;
+  }
+  try {
+    topbar.innerHTML = await loadSharedHeaderTemplate();
+  } catch (err) {
+    console.error("Failed to render shared topbar", err);
+  }
+}
+
 /* Mobile quick-nav toggle: inject a button into the topbar and wire open/close behavior */
-(function setupMobileMenuToggle() {
+function setupMobileMenuToggle() {
   try {
     const isSmall = () => window.matchMedia && window.matchMedia("(max-width:640px)").matches;
     const topbar = document.querySelector(".page-topbar");
@@ -71,7 +137,7 @@ function getCookieValue(name) {
   } catch (err) {
     console.error("mobile menu toggle setup failed", err);
   }
-})();
+}
 
 const savedChatHistory = (() => {
   try {
@@ -89,12 +155,12 @@ const state = {
   isAdmin: false,
   canManageOtherAvailability: false,
   canManageLineupSelection: false,
-  selectedMatchId: null,
+  selectedMatchId: new URLSearchParams(window.location.search).get("match_id") || null,
   selectedPlayerName: null,
   selectedAvailabilityPlayerName: null,
   selectedTeamName: null,
-  selectedFocusClubId: getCookieValue("cricketClubAppPrimaryClubId") || window.localStorage.getItem("cricketClubAppPrimaryClubId") || null,
-  selectedSeasonYear: window.localStorage.getItem("cricketClubAppSelectedSeasonYear") || null,
+  selectedFocusClubId: null,
+  selectedSeasonYear: getStoredSeasonYear() || null,
   expandedLists: (() => {
     try {
       return JSON.parse(window.sessionStorage.getItem("cricketClubAppExpandedLists") || "{}");
@@ -124,6 +190,7 @@ function dashboardError(...args) {
 }
 
 const USER_BADGE_ID = "userIdentityBadge";
+const CLUB_BADGE_ID = "currentClubBadge";
 const SESSION_STATE_KEY = "cricketClubAppSessionState";
 const SESSION_TOUCH_INTERVAL_MS = 60000;
 const SESSION_ACTIVITY_DEBOUNCE_MS = 1200;
@@ -151,6 +218,86 @@ function formatInitials(name) {
     .map((part) => part[0]?.toUpperCase() || "")
     .join("")
     .slice(0, 2);
+}
+
+function ensureClubBadge() {
+  const topbarActions = document.querySelector(".topbar-actions");
+  if (!topbarActions) {
+    return null;
+  }
+  let badge = document.getElementById(CLUB_BADGE_ID);
+  if (!badge) {
+    badge = document.createElement("div");
+    badge.id = CLUB_BADGE_ID;
+    badge.className = "club-chip";
+    badge.setAttribute("aria-live", "polite");
+    topbarActions.insertAdjacentElement("afterbegin", badge);
+  }
+  return badge;
+}
+
+function syncClubBadge(clubName) {
+  const clean = String(clubName || "").trim();
+  const existing = document.getElementById(CLUB_BADGE_ID);
+  if (!clean) {
+    if (existing) {
+      existing.hidden = true;
+      existing.innerHTML = "";
+    }
+    return;
+  }
+  const badge = ensureClubBadge();
+  if (!badge) return;
+  badge.hidden = false;
+  const initials = clean
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part[0]?.toUpperCase() || "")
+    .join("")
+    .slice(0, 2) || "CL";
+  badge.innerHTML = `
+    <span class="club-chip-mark" aria-hidden="true">${initials}</span>
+    <span class="club-chip-copy">
+      <small>Club</small>
+      <strong>${clean}</strong>
+    </span>
+  `;
+}
+
+function syncAdminOnlyElements(user = state.viewerAuth?.user || state.dashboard?.user || null) {
+  const role = String(user?.effective_role || user?.role || "").trim();
+  const isAdmin = role === "superadmin";
+  document.querySelectorAll("[data-admin-only]").forEach((node) => {
+    node.hidden = !isAdmin;
+    if (isAdmin) {
+      node.removeAttribute("aria-hidden");
+    } else {
+      node.setAttribute("aria-hidden", "true");
+    }
+  });
+}
+
+function syncActiveNavState() {
+  const currentPath = String(window.location.pathname || "/dashboard").replace(/\/+$/, "") || "/dashboard";
+  const navLinks = document.querySelectorAll(".template-nav a, .top-nav a, .bottom-app-nav-item");
+  navLinks.forEach((link) => {
+    const href = String(link.getAttribute("href") || "").replace(/\/+$/, "") || "/";
+    const isCurrent = href === "/dashboard"
+      ? currentPath === href
+      : currentPath === href || currentPath.startsWith(`${href}/`);
+    if (isCurrent) {
+      link.setAttribute("aria-current", "page");
+      if (link.classList.contains("bottom-app-nav-item")) {
+        link.classList.add("is-active");
+      }
+    } else {
+      link.removeAttribute("aria-current");
+      if (link.classList.contains("bottom-app-nav-item")) {
+        link.classList.remove("is-active");
+      }
+    }
+  });
 }
 
 function ensureUserBadge() {
@@ -191,6 +338,17 @@ function syncUserBadge(user) {
       <span>${role}</span>
     </span>
   `;
+}
+
+function currentDashboardClubName(dashboard) {
+  return String(
+    dashboard?.focus_club?.name ||
+    dashboard?.club?.name ||
+    dashboard?.viewer_profile?.primary_club_name ||
+    dashboard?.user?.current_club_name ||
+    dashboard?.user?.primary_club_name ||
+    ""
+  ).trim();
 }
 
 function safeParseSessionState() {
@@ -326,7 +484,6 @@ let statusTimer = null;
 
 const elements = {
   statusBanner: document.getElementById("statusBanner"),
-  seasonLabel: document.getElementById("seasonLabel"),
   nextMatchLabelTitle: document.getElementById("nextMatchLabelTitle"),
   nextMatchLabel: document.getElementById("nextMatchLabel"),
   availabilityLabel: document.getElementById("availabilityLabel"),
@@ -336,6 +493,8 @@ const elements = {
   viewerPlayerSnapshotTitle: document.getElementById("viewerPlayerSnapshotTitle"),
   viewerPlayerSnapshotDetails: document.getElementById("viewerPlayerSnapshotDetails"),
   heroEyebrow: document.getElementById("heroEyebrow"),
+  heroGreetingTitle: document.getElementById("heroGreetingTitle"),
+  heroSubtitle: document.getElementById("heroSubtitle"),
   focusClubBadge: document.getElementById("focusClubBadge"),
   activeMatchSelect: document.getElementById("activeMatchSelect"),
   whatsappLink: document.getElementById("whatsappLink"),
@@ -351,11 +510,17 @@ const elements = {
   landingRecentScorecards: document.getElementById("landingRecentScorecards"),
   landingMatches: document.getElementById("landingMatches"),
   landingClubStats: document.getElementById("landingClubStats"),
+  homeRankingsPreview: document.getElementById("homeRankingsPreview"),
+  homeAvailabilityPreview: document.getElementById("homeAvailabilityPreview"),
+  dashboardMatchHero: document.getElementById("dashboardMatchHero"),
+  dashboardLivePreview: document.getElementById("dashboardLivePreview"),
+  dashboardRecentBalls: document.getElementById("dashboardRecentBalls"),
+  clubRosterLabel: document.getElementById("clubRosterLabel"),
   clubDirectory: document.getElementById("clubDirectory"),
   followedPlayers: document.getElementById("followedPlayers"),
   focusClubSummary: document.getElementById("focusClubSummary"),
   matchCenterHeading: document.getElementById("matchCenterHeading"),
-  selectedScorecardTitle: document.getElementById("selectedScorecardTitle"),
+  matchStatsSection: document.getElementById("matchStatsSection"),
   selectedAvailabilityTitle: document.getElementById("selectedAvailabilityTitle"),
   selectedPlayingXiTitle: document.getElementById("selectedPlayingXiTitle"),
   summaryGrid: document.getElementById("summaryGrid"),
@@ -369,6 +534,9 @@ const elements = {
   selectedPlayingXiSaveButton: document.getElementById("selectedPlayingXiSaveButton"),
   selectedPlayingXiCount: document.getElementById("selectedPlayingXiCount"),
   selectedWhatsAppAlerts: document.getElementById("selectedWhatsAppAlerts"),
+  performancePlayerIdentity: document.getElementById("performancePlayerIdentity"),
+  performancePlayerMatchHistory: document.getElementById("performancePlayerMatchHistory"),
+  performancePlayerMemberships: document.getElementById("performancePlayerMemberships"),
   detailsForm: document.getElementById("detailsForm"),
   captainInput: document.getElementById("captainInput"),
   venueInput: document.getElementById("venueInput"),
@@ -424,8 +592,24 @@ const elements = {
   availabilityPlayerSelect: document.getElementById("availabilityPlayerSelect"),
   availabilityStatusSelect: document.getElementById("availabilityStatusSelect"),
   availabilityNoteInput: document.getElementById("availabilityNoteInput"),
+  fixturesAvailabilityEditor: document.getElementById("fixturesAvailabilityEditor"),
   availabilityFixturesEditor: document.getElementById("availabilityFixturesEditor"),
   availabilityMatrix: document.getElementById("availabilityMatrix"),
+  fixturesAvailabilityMatrix: document.getElementById("fixturesAvailabilityMatrix"),
+  scheduleFixtureForm: document.getElementById("scheduleFixtureForm"),
+  scheduleEditingFixtureId: document.getElementById("scheduleEditingFixtureId"),
+  scheduleFixtureYear: document.getElementById("scheduleFixtureYear"),
+  scheduleFixtureDate: document.getElementById("scheduleFixtureDate"),
+  scheduleFixtureDateLabel: document.getElementById("scheduleFixtureDateLabel"),
+  scheduleFixtureOpponent: document.getElementById("scheduleFixtureOpponent"),
+  scheduleFixtureVenue: document.getElementById("scheduleFixtureVenue"),
+  scheduleFixtureType: document.getElementById("scheduleFixtureType"),
+  scheduleFixtureTime: document.getElementById("scheduleFixtureTime"),
+  scheduleFixtureOvers: document.getElementById("scheduleFixtureOvers"),
+  scheduleFixtureSubmitButton: document.getElementById("scheduleFixtureSubmitButton"),
+  scheduleFixtureCancelButton: document.getElementById("scheduleFixtureCancelButton"),
+  scheduleFixtureStatus: document.getElementById("scheduleFixtureStatus"),
+  scheduleFixturesEditor: document.getElementById("scheduleFixturesEditor"),
   performanceForm: document.getElementById("performanceForm"),
   performancePlayerSelect: document.getElementById("performancePlayerSelect"),
   performanceRunsInput: document.getElementById("performanceRunsInput"),
@@ -436,7 +620,21 @@ const elements = {
   performanceSixesInput: document.getElementById("performanceSixesInput"),
   performanceNotesInput: document.getElementById("performanceNotesInput"),
   playerLeaderboard: document.getElementById("playerLeaderboard"),
+  performancePlayerSearchInput: document.getElementById("performancePlayerSearchInput"),
+  performancePlayerSearchResults: document.getElementById("performancePlayerSearchResults"),
+  performanceInviteForm: document.getElementById("performanceInviteForm"),
+  performanceInviteName: document.getElementById("performanceInviteName"),
+  performanceInviteFullName: document.getElementById("performanceInviteFullName"),
+  performanceInviteMobile: document.getElementById("performanceInviteMobile"),
+  performanceInviteEmail: document.getElementById("performanceInviteEmail"),
+  performanceInviteAge: document.getElementById("performanceInviteAge"),
+  performanceInviteRole: document.getElementById("performanceInviteRole"),
+  performanceInviteTeam: document.getElementById("performanceInviteTeam"),
   rankingYearSelect: document.getElementById("rankingYearSelect"),
+  performanceTeamProfileSelect: document.getElementById("performanceTeamProfileSelect"),
+  performanceTeamSummary: document.getElementById("performanceTeamSummary"),
+  performanceTeamRoster: document.getElementById("performanceTeamRoster"),
+  performanceTeamPlayerScores: document.getElementById("performanceTeamPlayerScores"),
   playerProfileSelect: document.getElementById("playerProfileSelect"),
   playerSearchInput: document.getElementById("playerSearchInput"),
   playerIdentity: document.getElementById("playerIdentity"),
@@ -507,8 +705,8 @@ const elements = {
   chatInput: document.getElementById("chatInput"),
 };
 
-if (elements.seasonLabel && elements.seasonLabel.textContent === "Loading...") {
-  elements.seasonLabel.textContent = currentYearLabel;
+if (elements.clubRosterLabel && elements.clubRosterLabel.textContent === "Loading...") {
+  elements.clubRosterLabel.textContent = "0 members";
 }
 if (elements.scorecardLabel && elements.scorecardLabel.textContent === "Loading...") {
   elements.scorecardLabel.textContent = "0";
@@ -994,6 +1192,48 @@ function canManageLineupSelection() {
   );
 }
 
+function canManageFixtures() {
+  const permissions = effectiveViewerPermissions();
+  const roles = effectiveViewerRoles();
+  return (
+    permissions.includes("manage_fixtures") ||
+    roles.includes("captain") ||
+    roles.includes("club_admin") ||
+    roles.includes("superadmin")
+  );
+}
+
+function canEditPastFixtures() {
+  const permissions = effectiveViewerPermissions();
+  const roles = effectiveViewerRoles();
+  return permissions.includes("manage_club") || roles.includes("club_admin") || roles.includes("superadmin");
+}
+
+function isPastFixture(match) {
+  const dateText = String(match?.date || "").trim();
+  if (!dateText) {
+    return false;
+  }
+  const parsed = Date.parse(dateText);
+  if (!Number.isFinite(parsed)) {
+    return false;
+  }
+  const today = Date.parse(new Date().toISOString().slice(0, 10));
+  return parsed < today;
+}
+
+function canMutateFixture(match) {
+  return isPastFixture(match) ? canEditPastFixtures() : canManageFixtures();
+}
+
+function syncFixtureManagerVisibility() {
+  const visible = canManageFixtures();
+  document.querySelectorAll("[data-fixture-manager-only]").forEach((node) => {
+    node.hidden = !visible;
+  });
+  return visible;
+}
+
 function lineupStatusRank(status) {
   if (status === "available") return 0;
   if (status === "maybe") return 1;
@@ -1058,11 +1298,9 @@ function updateViewerPlayerSnapshot(dashboard) {
   if (!elements.viewerPlayerSnapshotLabel || !elements.viewerPlayerSnapshotTitle || !elements.viewerPlayerSnapshotDetails) {
     return;
   }
-  const focusClub = dashboard.focus_club || dashboard.club || {};
   const summary = dashboard.summary || {};
-  const yearLabel = state.selectedSeasonYear || String(new Date().getFullYear());
-  elements.viewerPlayerSnapshotLabel.textContent = `Clubs Summary for ${yearLabel}`;
-  elements.viewerPlayerSnapshotTitle.textContent = `${focusClub.name || "Club"} Clubs Summary`;
+  elements.viewerPlayerSnapshotLabel.textContent = `Club Summary`;
+  elements.viewerPlayerSnapshotTitle.textContent = `Overview`;
   elements.viewerPlayerSnapshotDetails.textContent = `Total Matches Played: ${summary.matches_played || 0} · Won: ${summary.matches_won || 0} · Lost: ${summary.matches_lost || 0} · NR: ${summary.matches_nr || 0}`;
 }
 
@@ -1288,6 +1526,9 @@ function scorebookSummary(innings) {
 }
 
 function populateMatchSelects(fixtures) {
+  if (!elements.activeMatchSelect) {
+    return;
+  }
   const options = fixtures
     .map((match) => `<option value="${match.id}">${match.date_label} vs ${match.opponent}</option>`)
     .join("");
@@ -1340,6 +1581,14 @@ function populateTeamSelect(teams) {
     .map((team) => `<option value="${team.name}">${team.display_name || team.name}</option>`)
     .join("");
   elements.teamProfileSelect.value = state.selectedTeamName;
+  if (elements.performanceTeamProfileSelect) {
+    elements.performanceTeamProfileSelect.innerHTML = options;
+    elements.performanceTeamProfileSelect.value = state.selectedTeamName;
+  }
+  if (elements.performanceInviteTeam) {
+    elements.performanceInviteTeam.innerHTML = options;
+    elements.performanceInviteTeam.value = elements.teamProfileSelect.value || teams[0]?.name || "";
+  }
 }
 
 function syncPlayerEditForm(player) {
@@ -1581,12 +1830,40 @@ function normalizeChatMessageText(value) {
   return String(value);
 }
 
+function escapeHtml(value) {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function matchIsOpenForLiveScoring(match) {
+  const status = String(match?.status || "").trim().toLowerCase();
+  if (status === "live" || status === "in progress") {
+    return true;
+  }
+  const rawDate = String(match?.date || "").trim();
+  if (!rawDate) {
+    return false;
+  }
+  const parsedDate = new Date(rawDate);
+  if (Number.isNaN(parsedDate.getTime())) {
+    return status === "live";
+  }
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  parsedDate.setHours(0, 0, 0, 0);
+  return parsedDate.getTime() <= today.getTime();
+}
+
 function restoreChatHistory() {
   elements.chatMessages.innerHTML = "";
   if (!state.chatHistory.length) {
     const div = document.createElement("div");
     div.className = "message assistant";
-    div.textContent = "Ask about scorecards, player availability, commentary, archive uploads, or who should be captain.";
+    div.textContent = "Chat only. Ask about the club, a player, or a cricket stat.";
     elements.chatMessages.appendChild(div);
     elements.chatMessages.scrollTop = elements.chatMessages.scrollHeight;
     return;
@@ -1618,13 +1895,19 @@ function resetChatConversation() {
 }
 
 function statusBadge(status) {
-  const cls = status === "available" ? "yes" : status === "maybe" ? "maybe" : "no";
-  return `<span class="status-pill ${cls}">${status}</span>`;
+  const clean = String(status || "no response").toLowerCase();
+  const cls = clean === "available" ? "yes" : clean === "maybe" ? "maybe" : clean === "unavailable" ? "no" : "neutral";
+  const label = clean === "no response" ? "No response" : clean;
+  return `<span class="status-pill ${cls}">${label}</span>`;
 }
 
 function renderSummary(summary, archiveCount = summary.archive_file_count ?? summary.archive_count ?? 0) {
+  const members = Array.isArray(state.dashboard?.members) ? state.dashboard.members.length : (summary.member_count || 0);
+  const upcomingMatch = state.dashboard?.upcoming_match || {};
+  const availabilityCount = Array.isArray(upcomingMatch.availability) ? upcomingMatch.availability.length : 0;
   elements.summaryGrid.innerHTML = `
-    <article class="summary-card"><span>Clubs Summary</span><strong>${state.dashboard?.focus_club?.name || state.dashboard?.club?.name || "Club"}</strong><p>Total Matches Played: ${summary.matches_played || 0} · Won: ${summary.matches_won || 0} · Lost: ${summary.matches_lost || 0} · NR: ${summary.matches_nr || 0}<br />Uploaded Scorecards: ${archiveCount}</p></article>
+    <article class="summary-card"><span>Club Summary</span><strong>Overview</strong><p>Total Matches Played: ${summary.matches_played || 0} · Won: ${summary.matches_won || 0} · Lost: ${summary.matches_lost || 0} · NR: ${summary.matches_nr || 0}<br />Uploaded Scorecards: ${archiveCount}</p></article>
+    <article class="summary-card"><span>Players Availability</span><strong>${availabilityCount}/${members}</strong><p>Ready for the next match</p></article>
     <article class="summary-card"><span>Fixtures</span><strong>${summary.fixture_count}</strong></article>
     <article class="summary-card"><span>Members</span><strong>${summary.member_count}</strong></article>
     <article class="summary-card"><span>Completed</span><strong>${summary.completed_matches}</strong></article>
@@ -1646,12 +1929,12 @@ function populatePrimaryClubSelect(clubsOrDashboard) {
       ? dashboard.clubs
       : [];
   const currentClubId = String(
+    state.selectedFocusClubId ||
+    dashboard.focus_club?.id ||
+    dashboard.viewer_profile?.primary_club_id ||
+    dashboard.club?.id ||
     state.viewerAuth?.user?.current_club_id ||
     state.viewerAuth?.user?.primary_club_id ||
-    dashboard.viewer_profile?.primary_club_id ||
-    dashboard.focus_club?.id ||
-    dashboard.club?.id ||
-    state.selectedFocusClubId ||
     ""
   ).trim();
   const selectedClub =
@@ -1660,7 +1943,7 @@ function populatePrimaryClubSelect(clubsOrDashboard) {
     dashboard.club ||
     clubs[0] ||
     null;
-  const visibleClubs = selectedClub ? [selectedClub] : [];
+  const visibleClubs = clubs.length ? clubs : (selectedClub ? [selectedClub] : []);
   elements.primaryClubSelect.innerHTML = visibleClubs
     .map((club) => `<option value="${club.id}">${club.name}</option>`)
     .join("");
@@ -1675,6 +1958,170 @@ function renderLandingClubStats(stats) {
     <article class="summary-card"><span>Fixtures</span><strong>${stats.fixture_count || 0}</strong></article>
     <article class="summary-card"><span>Archives</span><strong>${stats.archive_count || 0}</strong></article>
     <article class="summary-card"><span>Top Batter</span><strong>${stats.top_batter || "TBD"}</strong><p>${stats.top_batter_runs || 0} runs</p></article>
+  `;
+}
+
+function renderDashboardMatchHero(match, dashboard) {
+  if (!elements.dashboardMatchHero) {
+    return;
+  }
+  if (!match) {
+    elements.dashboardMatchHero.innerHTML = `<p class="empty-state">No match selected yet.</p>`;
+    return;
+  }
+  const clubName = focusClubName();
+  const scorecard = match.scorecard || {};
+  const availabilityCount = Array.isArray(match.availability) ? match.availability.length : 0;
+  const topLine = scorecard.result || (match.status === "Live" ? "Match in progress" : "Match scheduled");
+  elements.dashboardMatchHero.innerHTML = `
+    <article class="dashboard-match-card clickable-card" data-match-open="${match.id}">
+      <div class="dashboard-match-copy">
+        <div class="dashboard-match-kicker">
+          <span class="section-kicker">Next Match</span>
+          <span class="fixture-badge">${match.status || "Scheduled"}</span>
+        </div>
+        <h3>${match.date_label || "Date TBD"} vs ${match.opponent || "Opponent TBD"}</h3>
+        <p>${match.details?.venue || "Venue TBD"} · ${match.details?.scheduled_time || "Time TBD"}</p>
+        <div class="dashboard-match-metrics">
+          <span><strong>${dashboard?.summary?.fixture_count ?? dashboard?.fixtures?.length ?? 0}</strong><small>Fixtures</small></span>
+          <span><strong>${dashboard?.summary?.member_count ?? dashboard?.members?.length ?? 0}</strong><small>Members</small></span>
+          <span><strong>${availabilityCount}</strong><small>Available</small></span>
+        </div>
+        <div class="hero-actions">
+          <a class="secondary-button" href="/dashboard/widgets/schedule?match_id=${encodeURIComponent(match.id)}#selectedAvailabilityTitle">Update availability</a>
+          <a class="secondary-button" href="/dashboard/widgets/schedule?match_id=${encodeURIComponent(match.id)}#selectedPlayingXiTitle">Playing XI</a>
+        </div>
+      </div>
+      <div class="dashboard-match-score">
+        <p>${clubName}</p>
+        <strong>${scorecard.heartlake_runs || "--"}/${scorecard.heartlake_wickets || "--"}</strong>
+        <span>${scorecard.heartlake_overs || "--"} overs</span>
+        <small>${topLine}</small>
+      </div>
+    </article>
+  `;
+}
+
+function openMatchScorecard(matchId) {
+  const cleanMatchId = String(matchId || "").trim();
+  if (!cleanMatchId) {
+    return;
+  }
+  state.selectedMatchId = cleanMatchId;
+  window.location.assign(`/dashboard/widgets/match-center?match_id=${encodeURIComponent(cleanMatchId)}#selectedAvailabilityTitle`);
+}
+
+function openMatchAvailability(matchId) {
+  const cleanMatchId = String(matchId || "").trim();
+  if (!cleanMatchId) {
+    return;
+  }
+  state.selectedMatchId = cleanMatchId;
+  window.location.assign(`/dashboard/widgets/schedule?match_id=${encodeURIComponent(cleanMatchId)}#selectedAvailabilityTitle`);
+}
+
+function renderDashboardLivePreview(match) {
+  if (!elements.dashboardLivePreview) {
+    return;
+  }
+  if (!match) {
+    elements.dashboardLivePreview.innerHTML = `<p class="empty-state">Live scoring will appear here once a match is selected.</p>`;
+    return;
+  }
+  const scorecard = match.scorecard || {};
+  const liveOpen = matchIsOpenForLiveScoring(match);
+  const summary = [
+    `${scorecard.heartlake_runs || 0}/${scorecard.heartlake_wickets || 0}`,
+    `${scorecard.heartlake_overs || 0} overs`,
+    scorecard.result || "TBD",
+  ];
+  const recentBalls = (Array.isArray(match.commentary) ? match.commentary : [])
+    .slice(-6)
+    .reverse()
+    .map((ball, index) => {
+      const runs = ball?.runs_bat ?? ball?.runs ?? ball?.bat_runs ?? 0;
+      const wicket = Boolean(ball?.wicket || ball?.is_wicket || ball?.dismissal || ball?.dismissed);
+      const extras = String(ball?.extras_type || ball?.extras || "").trim().toUpperCase();
+      const label = wicket ? "W" : extras.includes("WIDE") ? "WD" : extras.includes("NO BALL") ? "NB" : String(runs);
+      const cls = label === "W" ? "ball-chip-red" : label === "WD" ? "ball-chip-yellow" : label === "NB" ? "ball-chip-purple" : Number(label) >= 4 ? "ball-chip-blue" : "ball-chip-neutral";
+      const commentary = String(ball?.commentary || ball?.text || ball?.summary || "").trim();
+      return `<div class="recent-ball-chip ${cls}" title="${escapeHtml(commentary || `Ball ${index + 1}`)}">${escapeHtml(label)}</div>`;
+    })
+    .join("");
+  const battingRows = (Array.isArray(match.performances) ? match.performances : [])
+    .slice(0, 2)
+    .map((item) => `
+      <article class="scoreboard-batter-card">
+        <div>
+          <p class="scoreboard-batter-name">${escapeHtml(item.player_name || "Player")}</p>
+          <p class="scoreboard-batter-detail">${escapeHtml(`${item.runs || 0} runs · ${item.balls || 0} balls`)}</p>
+        </div>
+        <div class="scoreboard-batter-rate">
+          <span>SR</span>
+          <strong>${escapeHtml(formatRate(item.strike_rate || 0))}</strong>
+        </div>
+      </article>
+    `)
+    .join("");
+  const currentBowler = (Array.isArray(match.commentary) ? match.commentary : [])
+    .slice()
+    .reverse()
+    .find((ball) => String(ball?.bowler || "").trim())?.bowler || "Bowler TBD";
+  const currentBowlerFigures = (Array.isArray(match.commentary) ? match.commentary : []).length
+    ? `${(match.scorecard?.overs_bowled || match.scorecard?.opponent_overs || "0.0") || "0.0"} - ${scorecard.opponent_runs || 0} - ${scorecard.opponent_wickets || 0}`
+    : "3.2 - 24 - 2";
+  if (elements.dashboardRecentBalls) {
+    elements.dashboardRecentBalls.innerHTML = recentBalls || `<span class="recent-ball-empty">No recent balls yet.</span>`;
+  }
+  if (!liveOpen) {
+    if (elements.dashboardLivePreview?.closest(".dashboard-live-panel")) {
+      elements.dashboardLivePreview.closest(".dashboard-live-panel").classList.add("is-locked");
+    }
+    elements.dashboardLivePreview.innerHTML = `
+      <div class="live-scoring-locked">
+        Live scoring opens on match day. The selected fixture is scheduled for ${escapeHtml(match.date_label || "a future date")}.
+      </div>
+    `;
+    if (elements.dashboardRecentBalls) {
+      elements.dashboardRecentBalls.innerHTML = `<span class="recent-ball-empty">Recent balls will appear once the match goes live.</span>`;
+    }
+    return;
+  }
+  elements.dashboardLivePreview.closest(".dashboard-live-panel")?.classList.remove("is-locked");
+  elements.dashboardLivePreview.innerHTML = `
+    <article class="scoreboard-hero dashboard-scoreboard-hero">
+      <div class="scoreboard-hero-copy">
+        <p class="section-kicker">Live Scoring</p>
+        <h3>${focusClubName()} vs ${match.opponent || "Opponent TBD"}</h3>
+        <div class="scoreboard-scoreline">
+          <strong>${summary[0]}</strong>
+          <span>${summary[1]}</span>
+        </div>
+        <div class="scoreboard-context">
+          <span class="status-pill status-${String(match.status || "scheduled").toLowerCase().replace(/\s+/g, "-")}">${match.status || "Scheduled"}</span>
+          <span>${summary[2]}</span>
+          <span>${match.details?.venue || "Venue TBD"}</span>
+        </div>
+        ${battingRows ? `<div class="scoreboard-batter-list">${battingRows}</div>` : ""}
+        <div class="scoreboard-bowler-card">
+          <div>
+            <p class="scoreboard-batter-name">Current Bowler</p>
+            <p class="scoreboard-batter-detail">${escapeHtml(currentBowler)}</p>
+          </div>
+          <div class="scoreboard-batter-rate">
+            <span>Figures</span>
+            <strong>${escapeHtml(currentBowlerFigures)}</strong>
+          </div>
+        </div>
+      </div>
+      <div class="scoreboard-metrics">
+        <article class="mini-stat"><span>Opp. Score</span><strong>${scorecard.opponent_runs || "--"}/${scorecard.opponent_wickets || "--"}</strong><small>${scorecard.opponent_overs || "--"} overs</small></article>
+        <article class="mini-stat"><span>Availability</span><strong>${Array.isArray(match.availability) ? match.availability.length : 0}</strong><small>Confirmed players</small></article>
+        <article class="mini-stat"><span>Current Rate</span><strong>${formatRate(scorecard.run_rate || 0)}</strong><small>Club scoring rate</small></article>
+        <article class="mini-stat"><span>Summary</span><strong>${scorecard.live_summary ? "Live" : "TBD"}</strong><small>${scorecard.live_summary || "No live summary yet."}</small></article>
+      </div>
+    </article>
+    <div class="recent-ball-trail">${recentBalls || `<span class="recent-ball-empty">No recent balls yet.</span>`}</div>
   `;
 }
 
@@ -1824,20 +2271,72 @@ function renderLandingPlayerResults() {
     : `<p class="empty-state">Search for a player to view quick stats and follow them.</p>`;
 }
 
+function renderPerformancePlayerResults() {
+  if (!elements.performancePlayerSearchResults) return;
+  const query = elements.performancePlayerSearchInput.value.trim().toLowerCase();
+  const statMap = combinedStatsByPlayer();
+  const members = state.dashboard?.members || [];
+  const filtered = !query
+    ? members.slice(0, 6)
+    : members.filter((member) => {
+        const haystack = `${member.name || ""} ${member.full_name || ""} ${(member.aliases || []).join(" ")}`.toLowerCase();
+        return haystack.includes(query);
+      });
+  elements.performancePlayerSearchResults.innerHTML = query
+    ? renderLimitedCollection(filtered, {
+        key: "performance-player-results",
+        emptyMessage: `<p class="empty-state">No players match that search.</p>`,
+        renderItem: (member) => {
+          const stats =
+            statMap[normalizePlayerName(member.name)] ||
+            statMap[normalizePlayerName(member.full_name)] ||
+            statMap[normalizePlayerName((member.aliases || [])[0])] ||
+            statMap[member.name] ||
+            { runs: 0, matches: 0, wickets: 0, catches: 0 };
+          return `
+            <article class="detail-card">
+              <strong>${displayPlayerName(member)}</strong>
+              <p>${stats.matches || 0} matches</p>
+              <small>${stats.runs || 0} runs · ${stats.wickets || 0} wickets · ${stats.catches || 0} catches</small>
+              <div class="inline-actions">
+                <button class="secondary-button" type="button" data-player-jump="${member.name}">Open profile</button>
+                <button class="secondary-button" type="button" data-follow-player="${member.name}" data-following="${isPlayerFollowed(member.name) ? "false" : "true"}">${isPlayerFollowed(member.name) ? "Unfollow" : "Follow"}</button>
+              </div>
+            </article>
+          `;
+        },
+      })
+    : `<p class="empty-state">Search for a player to view quick stats and follow them.</p>`;
+}
+
 function renderViewerProfile(dashboard) {
   const profile = dashboard.viewer_profile || {};
   const focusClub = dashboard.focus_club || dashboard.club || {};
   state.selectedFocusClubId = focusClub.id || profile.primary_club_id || state.selectedFocusClubId;
   if (state.selectedFocusClubId) {
-    window.localStorage.setItem("cricketClubAppPrimaryClubId", state.selectedFocusClubId);
-    document.cookie = `cricketClubAppPrimaryClubId=${encodeURIComponent(state.selectedFocusClubId)}; path=/; samesite=lax`;
+    window.sessionStorage.setItem("cricketClubAppPrimaryClubId", state.selectedFocusClubId);
   }
   elements.viewerDisplayNameInput.value = profile.display_name || "";
   elements.viewerMobileInput.value = profile.mobile || "";
   elements.viewerEmailInput.value = profile.email || "";
   document.title = `${focusClub.name || "Club"} Matchday Hub`;
-  elements.heroEyebrow.textContent = `${focusClub.short_name || focusClub.name || "Club"} Matchday Hub`;
-  elements.focusClubBadge.textContent = `Primary club: ${focusClub.name || dashboard.club.name || "Club"}`;
+  const viewerName = profile.display_name || state.viewerAuth?.user?.display_name || state.viewerAuth?.user?.full_name || "Captain";
+  const clubName = focusClub.name || dashboard.club.name || "Club";
+  if (elements.heroEyebrow) {
+    elements.heroEyebrow.textContent = "Good evening";
+  }
+  if (elements.heroGreetingTitle) {
+    elements.heroGreetingTitle.textContent = state.selectedSeasonYear
+      ? `Season ${state.selectedSeasonYear}`
+      : "Season overview";
+  }
+  if (elements.heroSubtitle) {
+    elements.heroSubtitle.textContent = `Season : ${state.selectedSeasonYear || new Date().getFullYear()}`;
+  }
+  if (elements.focusClubBadge) {
+    elements.focusClubBadge.textContent = `Season : ${state.selectedSeasonYear || new Date().getFullYear()}`;
+  }
+  syncClubBadge(clubName);
   syncUserBadge(state.viewerAuth?.user || null);
   populatePrimaryClubSelect(dashboard);
   renderLandingPlayerResults();
@@ -1849,8 +2348,13 @@ function renderViewerProfile(dashboard) {
 function renderSelectedMatch(match) {
   const clubName = focusClubName();
   elements.matchCenterHeading.textContent = `${clubName} match center`;
-  elements.selectedScorecardTitle.textContent = `${clubName} scorecard`;
-  elements.selectedAvailabilityTitle.textContent = `${clubName} confirmed availability`;
+  const scorecardHeading = elements.selectedScorecardTitle || elements.matchStatsSection;
+  if (scorecardHeading) {
+    scorecardHeading.textContent = `${clubName} scorecard`;
+  }
+  if (elements.selectedAvailabilityTitle) {
+    elements.selectedAvailabilityTitle.textContent = `${clubName} fixture availability & XI`;
+  }
   elements.selectedMatchSnapshot.innerHTML = `
     <article class="snapshot-card">
       <div>
@@ -1881,14 +2385,6 @@ function renderSelectedMatch(match) {
     </article>
   `;
 
-  const availabilityEntries = Object.entries(match.availability_statuses)
-    .map(([player, status]) => {
-      const note = match.availability_notes[player] ? ` · ${match.availability_notes[player]}` : "";
-      return `<article class="detail-card"><strong>${player}</strong><p>${status}${note}</p></article>`;
-    })
-    .join("");
-  elements.selectedAvailability.innerHTML = availabilityEntries || `<p class="empty-state">No availability set.</p>`;
-
   elements.selectedPerformances.innerHTML = renderLimitedCollection(match.performances || [], {
     key: `selected-performances-${match.id}`,
     emptyMessage: `<p class="empty-state">No player performances saved for this match yet.</p>`,
@@ -1916,35 +2412,22 @@ function renderSelectedMatch(match) {
 }
 
 function renderPlayingXiSection(match) {
-  if (!elements.selectedPlayingXiForm || !elements.selectedWhatsAppAlerts || !elements.selectedPlayingXiCount) {
+  if (!elements.selectedAvailability || !elements.selectedWhatsAppAlerts || !elements.selectedPlayingXiCount) {
     return;
   }
 
   const canManageLineup = canManageLineupSelection();
-  const currentYear = String(new Date().getFullYear());
-  const selectedSeasonYear = normalizeSeasonYear(state.selectedSeasonYear);
-  const isLiveSeason = selectedSeasonYear === currentYear;
-  const canEditLineup = canManageLineup && isLiveSeason;
+  const fixtureLocked = isPastFixture(match);
+  const canEditLineup = canManageLineup && !fixtureLocked;
   const candidates = lineupCandidateRows(match);
   const selectedNames = new Set(selectedPlayingXiNames(match));
   const selectedCount = selectedNames.size;
-  const section = elements.selectedPlayingXiForm.closest("[data-live-only]");
+  const section = elements.selectedAvailability.closest("[data-fixture-manager-only], [data-lineup-panel], [data-live-only]");
 
   if (section) {
-    section.hidden = !isLiveSeason;
-    section.classList.toggle("live-locked", !isLiveSeason);
-    section.dataset.liveMode = isLiveSeason ? "live" : "historical";
-  }
-
-  if (!isLiveSeason) {
-    elements.selectedPlayingXiForm.innerHTML = "";
-    elements.selectedWhatsAppAlerts.innerHTML = "";
-    elements.selectedPlayingXiCount.textContent = "";
-    return;
-  }
-
-  if (elements.selectedPlayingXiTitle) {
-    elements.selectedPlayingXiTitle.textContent = `${focusClubName()} playing XI`;
+    section.hidden = false;
+    section.classList.toggle("live-locked", fixtureLocked);
+    section.dataset.liveMode = fixtureLocked ? "historical" : "live";
   }
 
   const candidateCards = candidates.length
@@ -1959,6 +2442,13 @@ function renderPlayingXiSection(match) {
               : member.availability_status === "unavailable"
                 ? "Unavailable"
                 : "No response";
+          const chipClass = member.availability_status === "available"
+            ? "yes"
+            : member.availability_status === "maybe"
+              ? "maybe"
+              : member.availability_status === "unavailable"
+                ? "no"
+                : "neutral";
           return `
             <label class="detail-card lineup-card ${checked ? "selected-card" : ""} ${canSelect ? "" : "muted-card"}">
               <input
@@ -1971,7 +2461,7 @@ function renderPlayingXiSection(match) {
               />
               <div>
                 <strong>${member.name}</strong>
-                <p>${statusText}${member.phone ? ` · ${member.phone}` : ""}</p>
+                <p><span class="status-pill ${chipClass}">${statusText}</span>${member.phone ? ` · ${member.phone}` : ""}</p>
                 <small>${member.availability_note || (canSelect ? "Eligible for selection" : "Not eligible for selection yet")}</small>
               </div>
             </label>
@@ -1980,14 +2470,9 @@ function renderPlayingXiSection(match) {
         .join("")
     : `<p class="empty-state">No club players found for this fixture.</p>`;
 
-  elements.selectedPlayingXiForm.innerHTML = candidateCards;
+  elements.selectedAvailability.innerHTML = candidateCards;
   elements.selectedPlayingXiCount.textContent = `${selectedCount}/11 selected`;
 
-  if (elements.selectedPlayingXiForm) {
-    elements.selectedPlayingXiForm.querySelectorAll("input[type=checkbox][name=playing_xi]").forEach((input) => {
-      input.disabled = !(canEditLineup && input.dataset.lineupEligible === "true");
-    });
-  }
   if (elements.selectedPlayingXiAutoFillButton) {
     elements.selectedPlayingXiAutoFillButton.disabled = !canEditLineup;
   }
@@ -2270,9 +2755,105 @@ function renderSchedule(fixtures) {
         <p>vs ${match.opponent}</p>
         <p>${match.status} · ${match.availability.length} available</p>
         <p>${match.heartlake_score || "--"} / ${match.opponent_score || "--"}</p>
+        <div class="inline-actions">
+          <a class="secondary-button" href="/player-availability?fixture_id=${encodeURIComponent(match.id)}">Open availability</a>
+        </div>
       </article>
     `,
   });
+}
+
+function scheduleFixtureTodayIso() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function resetScheduleFixtureEditor() {
+  if (elements.scheduleEditingFixtureId) {
+    elements.scheduleEditingFixtureId.value = "";
+  }
+  if (elements.scheduleFixtureSubmitButton) {
+    elements.scheduleFixtureSubmitButton.textContent = "Add fixture";
+  }
+  if (elements.scheduleFixtureCancelButton) {
+    elements.scheduleFixtureCancelButton.hidden = true;
+  }
+  if (elements.scheduleFixtureStatus) {
+    elements.scheduleFixtureStatus.hidden = true;
+    elements.scheduleFixtureStatus.textContent = "";
+  }
+}
+
+function fillScheduleFixtureEditor(fixture) {
+  if (!fixture) return;
+  if (elements.scheduleEditingFixtureId) {
+    elements.scheduleEditingFixtureId.value = fixture.id || "";
+  }
+  if (elements.scheduleFixtureYear) {
+    elements.scheduleFixtureYear.value = String(fixture.season_year || fixture.date?.slice(0, 4) || new Date().getFullYear());
+  }
+  if (elements.scheduleFixtureDate) {
+    elements.scheduleFixtureDate.value = fixture.date || "";
+  }
+  if (elements.scheduleFixtureDateLabel) {
+    elements.scheduleFixtureDateLabel.value = fixture.date_label || "";
+  }
+  if (elements.scheduleFixtureOpponent) {
+    elements.scheduleFixtureOpponent.value = fixture.opponent || "";
+  }
+  if (elements.scheduleFixtureVenue) {
+    elements.scheduleFixtureVenue.value = fixture.details?.venue || "";
+  }
+  if (elements.scheduleFixtureType) {
+    elements.scheduleFixtureType.value = fixture.details?.match_type || "";
+  }
+  if (elements.scheduleFixtureTime) {
+    elements.scheduleFixtureTime.value = fixture.details?.scheduled_time || "";
+  }
+  if (elements.scheduleFixtureOvers) {
+    elements.scheduleFixtureOvers.value = fixture.details?.overs || "";
+  }
+  if (elements.scheduleFixtureSubmitButton) {
+    elements.scheduleFixtureSubmitButton.textContent = "Update fixture";
+  }
+  if (elements.scheduleFixtureCancelButton) {
+    elements.scheduleFixtureCancelButton.hidden = false;
+  }
+}
+
+function renderScheduleFixtureEditor(fixtures) {
+  const target = elements.scheduleFixturesEditor;
+  if (!target) return;
+  if (!canManageFixtures()) {
+    target.hidden = true;
+    target.innerHTML = "";
+    return;
+  }
+  target.hidden = false;
+  if (elements.scheduleFixtureYear && !elements.scheduleFixtureYear.value) {
+    elements.scheduleFixtureYear.value = String(new Date().getFullYear());
+  }
+  const sortedFixtures = Array.isArray(fixtures) ? [...fixtures] : [];
+  sortedFixtures.sort((a, b) => String(a.date || "").localeCompare(String(b.date || "")));
+  target.innerHTML = sortedFixtures.length
+    ? sortedFixtures
+        .map((fixture) => {
+          const locked = isPastFixture(fixture);
+          const editable = canMutateFixture(fixture);
+          return `
+            <article class="detail-card">
+              <strong>${fixture.date_label || fixture.date || "Fixture"}</strong>
+              <p>${fixture.opponent || "Opponent"} · ${fixture.details?.venue || "Venue TBD"} · ${fixture.details?.scheduled_time || "Time TBD"}</p>
+              <small>${fixture.season || `${fixture.season_year || ""} Season`} · ${fixture.status || "Scheduled"}${locked ? " · Past fixture" : ""}</small>
+              <div class="inline-actions">
+                <button class="secondary-button" type="button" data-schedule-fixture-edit="${fixture.id}" ${editable ? "" : "disabled"}>${editable ? "Edit" : "Locked"}</button>
+                <button class="secondary-button" type="button" data-schedule-fixture-delete="${fixture.id}" ${editable ? "" : "disabled"}>${editable ? "Delete" : "Locked"}</button>
+              </div>
+              ${locked && !canEditPastFixtures() ? `<small>Past fixtures are read-only unless you are a club-admin or superadmin.</small>` : ""}
+            </article>
+          `;
+        })
+        .join("")
+    : `<p class="empty-state">No fixtures created yet for this club.</p>`;
 }
 
 function renderVisitingTeams(teams) {
@@ -2290,44 +2871,75 @@ function renderVisitingTeams(teams) {
 }
 
 function renderAvailabilityMatrix(board, fixtures) {
-  if (!state.canManageOtherAvailability) {
-    elements.availabilityMatrix.hidden = true;
-    elements.availabilityMatrix.innerHTML = "";
+  const targets = [elements.availabilityMatrix, elements.fixturesAvailabilityMatrix].filter(Boolean);
+  if (!targets.length) {
     return;
   }
-  elements.availabilityMatrix.hidden = false;
-  const activeClubId = state.selectedFocusClubId || state.dashboard?.focus_club?.id || state.dashboard?.club?.id || "";
-  const scopedFixtures = activeClubId ? fixtures.filter((match) => (match.club_id || "") === activeClubId) : fixtures;
-  const scopedBoard = board?.map((row) => ({
-    ...row,
-    by_match: activeClubId
-      ? row.by_match.filter((item) => scopedFixtures.some((match) => match.id === item.match_id))
-      : row.by_match,
-  }));
-  const head = scopedFixtures
-    .map((match) => {
-      const title = match.date || match.date_label || "Date TBD";
-      return `<th title="${title}"><span class="stacked-head">${match.date_label || "Date TBD"}</span></th>`;
-    })
+  if (!state.canManageOtherAvailability) {
+    targets.forEach((target) => {
+      target.hidden = true;
+      target.innerHTML = "";
+    });
+    return;
+  }
+  const match = currentMatch();
+  const selectedFixtureId = match?.id || state.selectedMatchId || fixtures?.[0]?.id || "";
+  const selectedFixture = (Array.isArray(fixtures) ? fixtures : []).find((item) => item.id === selectedFixtureId) || match;
+  const selectedClubId = state.selectedFocusClubId || state.dashboard?.focus_club?.id || state.dashboard?.club?.id || "";
+  const editable = selectedFixture ? canMutateFixture(selectedFixture) : false;
+  const isLocked = selectedFixture ? isPastFixture(selectedFixture) : false;
+  const selectedBoard = Array.isArray(board)
+    ? board
+        .map((row) => {
+          const selectedStatus = (row.by_match || []).find((item) => item.match_id === selectedFixtureId) || null;
+          return {
+            player_name: row.player_name,
+            status: selectedStatus?.status || "no response",
+            note: selectedStatus?.note || "",
+          };
+        })
+        .filter((row) => row.player_name)
+    : [];
+  const rows = selectedBoard
+    .map((row) => `
+      <tr>
+        <th>${escapeHtml(row.player_name)}</th>
+        <td>${statusBadge(row.status)}</td>
+        <td>${escapeHtml(row.note || "")}</td>
+      </tr>
+    `)
     .join("");
-  const rows = scopedBoard
-    .map((row) => {
-      const cells = row.by_match.map((item) => `<td>${statusBadge(item.status)}</td>`).join("");
-      return `<tr><th>${row.player_name}</th>${cells}</tr>`;
-    })
-    .join("");
-  elements.availabilityMatrix.innerHTML = `
-    <table class="matrix-table">
-      <thead>
-        <tr><th>Player</th>${head}</tr>
-      </thead>
-      <tbody>${rows}</tbody>
-    </table>
+  const matrixHtml = `
+    <div class="detail-card selected-fixture-card">
+      <div class="panel-head compact-head">
+        <div>
+          <p class="section-kicker">Selected fixture availability</p>
+          <h3>${escapeHtml(selectedFixture?.date_label || "Fixture")}${selectedFixture?.opponent ? ` vs ${escapeHtml(selectedFixture.opponent)}` : ""}</h3>
+          <p class="lede">${selectedFixture?.details?.venue || "Venue TBD"} · ${selectedFixture?.details?.scheduled_time || "Time TBD"}</p>
+        </div>
+        <div class="toolbar-actions">
+          <span class="fixture-badge">${selectedFixture?.status || "Scheduled"}</span>
+          ${isLocked ? `<span class="fixture-badge">${editable ? "Past fixture editable" : "Past fixture locked"}</span>` : ""}
+        </div>
+      </div>
+      <table class="matrix-table">
+        <thead>
+          <tr><th>Player</th><th>Status</th><th>Note</th></tr>
+        </thead>
+        <tbody>${rows || `<tr><td colspan="3"><p class="empty-state">No availability has been set for this fixture yet.</p></td></tr>`}</tbody>
+      </table>
+      ${isLocked && !editable ? `<p class="mode-note">Past fixtures are read-only unless you are a club-admin or superadmin.</p>` : ""}
+    </div>
   `;
+  targets.forEach((target) => {
+    target.hidden = false;
+    target.innerHTML = matrixHtml;
+  });
 }
 
 function renderAvailabilityFixtureEditor(fixtures) {
-  if (!elements.availabilityFixturesEditor) {
+  const targets = [elements.availabilityFixturesEditor, elements.fixturesAvailabilityEditor].filter(Boolean);
+  if (!targets.length) {
     return;
   }
   const activeClubId = state.selectedFocusClubId || state.dashboard?.focus_club?.id || state.dashboard?.club?.id || "";
@@ -2351,14 +2963,16 @@ function renderAvailabilityFixtureEditor(fixtures) {
                   <option value="unavailable" ${currentStatus === "unavailable" ? "selected" : ""}>Unavailable</option>
                 </select>
                 <input type="text" name="note" value="${currentNote}" placeholder="Optional note" />
-                <button class="secondary-button" type="submit">Save game</button>
+                <button class="secondary-button" type="submit">Save availability</button>
               </form>
             </article>
           `;
         })
         .join("")
     : `<p class="empty-state">No fixtures are stored yet for this club.</p>`;
-  elements.availabilityFixturesEditor.innerHTML = cards;
+  targets.forEach((target) => {
+    target.innerHTML = cards;
+  });
 }
 
 function formatMetric(value, decimals = 2) {
@@ -2374,16 +2988,23 @@ function normalizeSeasonYear(value) {
 }
 
 function populateRankingYearSelect(dashboard) {
-  const years = dashboard.season_years || dashboard.ranking_years || [];
+  const years = (dashboard.season_years || dashboard.ranking_years || [])
+    .map((year) => String(year).trim())
+    .filter(Boolean);
   const currentYear = String(new Date().getFullYear());
+  const selectedYearFromState = normalizeStoredSeasonYear(state.selectedSeasonYear || "");
   const defaultYear =
     years.includes(currentYear)
       ? currentYear
-      : dashboard.selected_season_year || dashboard.default_season_year || dashboard.default_ranking_year || years[0] || currentYear;
-  if (!state.selectedSeasonYear || !years.includes(state.selectedSeasonYear)) {
+      : normalizeStoredSeasonYear(dashboard.selected_season_year || dashboard.default_season_year || dashboard.default_ranking_year || "") || years[0] || currentYear;
+  const selectedYear = selectedYearFromState || normalizeStoredSeasonYear(dashboard.selected_season_year || "");
+  if (!selectedYear || !years.includes(selectedYear)) {
     state.selectedSeasonYear = defaultYear;
+  } else {
+    state.selectedSeasonYear = selectedYear;
   }
-  elements.rankingYearSelect.innerHTML = years
+  const normalizedYears = years.includes(state.selectedSeasonYear) ? years : [...new Set([...years, state.selectedSeasonYear])];
+  elements.rankingYearSelect.innerHTML = normalizedYears
     .map((year) => `<option value="${year}">${year}</option>`)
     .join("");
   elements.rankingYearSelect.value = state.selectedSeasonYear || "";
@@ -2460,6 +3081,100 @@ function renderLeaderboard() {
   );
 
   elements.playerLeaderboard.innerHTML = `${battingSection}${bowlingSection}${fieldingSection}`;
+}
+
+function renderPreviewCards(rows, emptyMessage, formatter) {
+  if (!rows.length) {
+    return `<div class="rankings-preview-empty">${emptyMessage}</div>`;
+  }
+  return rows
+    .map((item, index) => formatter(item, index))
+    .join("");
+}
+
+function renderHomeRankingsPreview() {
+  if (!elements.homeRankingsPreview) {
+    return;
+  }
+  const battingRows = (state.dashboard?.batting_rankings || []).slice(0, 3);
+  const bowlingRows = (state.dashboard?.bowling_rankings || []).slice(0, 3);
+  const fieldingRows = (state.dashboard?.fielding_rankings || []).slice(0, 3);
+  elements.homeRankingsPreview.innerHTML = `
+    <article class="summary-card rankings-preview-card">
+      <span>Batting</span>
+      <div class="rankings-preview-list">
+        ${renderPreviewCards(battingRows, "No batting rankings yet.", (item) => `
+          <div class="rankings-preview-item">
+            <strong>#${item.rank} ${item.player_name}</strong>
+            <p>${item.runs} runs · Avg ${formatMetric(item.batting_average)} · SR ${formatMetric(item.strike_rate)}</p>
+          </div>
+      `)}
+      </div>
+    </article>
+    <article class="summary-card rankings-preview-card">
+      <span>Bowling</span>
+      <div class="rankings-preview-list">
+        ${renderPreviewCards(bowlingRows, "No bowling rankings yet.", (item) => `
+          <div class="rankings-preview-item">
+            <strong>#${item.rank} ${item.player_name}</strong>
+            <p>${item.wickets} wickets · ${formatMetric(item.wickets_per_match)} per match</p>
+          </div>
+      `)}
+      </div>
+    </article>
+    <article class="summary-card rankings-preview-card">
+      <span>Fielding</span>
+      <div class="rankings-preview-list">
+        ${renderPreviewCards(fieldingRows, "No fielding rankings yet.", (item) => `
+          <div class="rankings-preview-item">
+            <strong>#${item.rank} ${item.player_name}</strong>
+            <p>${item.catches} catches · ${formatMetric(item.catches_per_match)} per match</p>
+          </div>
+      `)}
+      </div>
+    </article>
+  `;
+}
+
+function viewerIsMemberOfSelectedClub(dashboard = state.dashboard || {}) {
+  const selectedClubId = String(state.selectedFocusClubId || dashboard?.focus_club?.id || dashboard?.club?.id || "").trim();
+  const viewerClubIds = new Set([
+    state.viewerAuth?.user?.current_club_id,
+    state.viewerAuth?.user?.primary_club_id,
+    dashboard?.viewer_profile?.primary_club_id,
+  ].map((value) => String(value || "").trim()).filter(Boolean));
+  return !selectedClubId || viewerClubIds.has(selectedClubId);
+}
+
+function renderHomeAvailabilityPreview() {
+  if (!elements.homeAvailabilityPreview) {
+    return;
+  }
+  const match = currentMatch() || state.dashboard?.upcoming_match || {};
+  const memberCount = Array.isArray(state.dashboard?.members) ? state.dashboard.members.length : 0;
+  const statuses = Object.values(match.availability_statuses || {}).map((value) => String(value || "").toLowerCase());
+  const available = statuses.filter((status) => status === "available").length;
+  const maybe = statuses.filter((status) => status === "maybe").length;
+  const unavailable = statuses.filter((status) => status === "unavailable").length;
+  const responded = available + maybe + unavailable;
+  const noResponse = Math.max(0, memberCount - responded);
+  elements.homeAvailabilityPreview.innerHTML = `
+    <article class="summary-card rankings-preview-card">
+      <span>Available for ${match.date_label || "next match"}</span>
+      <strong>${available}/${memberCount || responded}</strong>
+      <p>Players marked available before the match date</p>
+    </article>
+    <article class="summary-card rankings-preview-card">
+      <span>Maybe</span>
+      <strong>${maybe}</strong>
+      <p>Players who are uncertain or pending</p>
+    </article>
+    <article class="summary-card rankings-preview-card">
+      <span>Unavailable / No response</span>
+      <strong>${unavailable + noResponse}</strong>
+      <p>Players not ready for selection yet</p>
+    </article>
+  `;
 }
 
 function currentViewerProfilePayload(selectedSeasonYear = state.selectedSeasonYear || "") {
@@ -2657,6 +3372,7 @@ function getPlayerSeasonProfile(playerName) {
     sixes += totals.sixes;
     appearances.push({
       matchId: match.id,
+      player_name: player.name,
       clubName: match.club_name || match.details?.club_name || state.dashboard.focus_club?.name || state.dashboard.club?.name || "Club",
       date: match.date || "",
       dateLabel: match.date_label,
@@ -2813,24 +3529,10 @@ function renderPlayerProfile() {
   const lastGameDetails = profile.lastGame
     ? `${profile.lastGame.runs} runs · ${profile.lastGame.wickets} wickets · ${profile.lastGame.catches} catches · ${profile.lastGame.result}`
     : "This will populate once the player appears in a saved match.";
-  const upcomingGamesCards = profile.upcomingGames.length
-    ? profile.upcomingGames
-        .map(
-          (item) => `
-            <article class="summary-card">
-              <span>${item.clubName}</span>
-              <strong>${item.dateLabel}</strong>
-              <p>vs ${item.opponent} · ${item.status}</p>
-              <small>${item.availability === "no response" ? "Availability not yet set" : `Availability: ${item.availability}`}</small>
-            </article>
-          `
-        )
-        .join("")
-    : `<article class="summary-card"><span>Upcoming Games</span><strong>No upcoming fixtures</strong><p>Once the player is linked to scheduled games, they will appear here.</p></article>`;
+  const playedAppearances = (profile.appearances || []).filter((item) => item.played);
   elements.playerCareerSnapshot.innerHTML = `
     <article class="summary-card"><span>Last Game</span><strong>${lastGameLabel}</strong><p>${lastGameDetails}</p></article>
-    ${upcomingGamesCards}
-    <article class="summary-card"><span>Involvement</span><strong>${profile.appearances.filter((item) => item.played).length} played fixtures</strong><p>${profile.totals.runs} runs · ${profile.totals.wickets} wickets · ${profile.totals.catches} catches across ${profile.memberships.clubMemberships.length} clubs</p></article>
+    <article class="summary-card"><span>Involvement</span><strong>${playedAppearances.length} played fixtures</strong><p>${profile.totals.runs} runs · ${profile.totals.wickets} wickets · ${profile.totals.catches} catches across ${profile.memberships.clubMemberships.length} clubs</p></article>
   `;
 
   elements.playerPendingHistory.innerHTML = renderLimitedCollection(profile.pending.sources || [], {
@@ -2851,23 +3553,159 @@ function renderPlayerProfile() {
     `,
   });
 
-  elements.playerMatchHistory.innerHTML = renderLimitedCollection(profile.appearances || [], {
+  const seenArchiveKeys = new Set();
+  const archiveHistoryRows = [];
+  for (const archive of (state.dashboard.all_archive_uploads || state.dashboard.archive_uploads || []))
+    {
+      const archiveKey = [
+        archive?.family_key || "",
+        archive?.id || "",
+        archive?.archive_id || "",
+        archive?.file_hash || "",
+        archive?.archive_date || archive?.date || "",
+        archive?.club_id || "",
+        archive?.club_name || "",
+      ]
+        .map((value) => String(value || "").trim().toLowerCase())
+        .filter(Boolean)
+        .join("|");
+      if (archiveKey && seenArchiveKeys.has(archiveKey)) {
+        continue;
+      }
+      if (archiveKey) {
+        seenArchiveKeys.add(archiveKey);
+      }
+      const archiveDate = String(archive.archive_date || archive.scorecard_date || archive.photo_taken_at || archive.date || "");
+      const archiveDateLabel = archiveDate || "Unknown date";
+      const archiveStatus = String(archive.status || "").trim().toLowerCase();
+      if (archiveStatus.startsWith("pending")) {
+        continue;
+      }
+      const archiveRowsByKey = new Map();
+      const pushArchiveRow = (item, fallbackNotes = "") => {
+        if (!playerNameMatches(item.player_name, player.name)) {
+          return;
+        }
+        const row = {
+          dateLabel: archiveDateLabel,
+          date: archiveDate,
+          dateSort: Date.parse(archiveDate || "") || 0,
+          source: "archive",
+          clubName: archive.club_name || focusClubName() || "Club",
+          opponent:
+            archive.match?.teams?.team_2 ||
+            archive.opponent ||
+            archive.draft_scorecard?.opponent ||
+            "TBD",
+          runs: Number(item.runs || 0),
+          balls: Number(item.balls || 0),
+          wickets: Number(item.wickets || 0),
+          catches: Number(item.catches || 0),
+          player_name: String(item.player_name || "").trim().toLowerCase(),
+          result: archive.validation?.expected_result || archive.draft_scorecard?.result || archive.status || "Archive review",
+          availability: "reviewed",
+          notes: item.notes || fallbackNotes || archive.status || "Reviewed archive scorecard",
+        };
+        const rowKey = [
+          row.date,
+          row.clubName,
+          row.opponent,
+          row.player_name,
+        ]
+          .map((value) => String(value || "").trim().toLowerCase())
+          .join("|");
+        if (!archiveRowsByKey.has(rowKey)) {
+          archiveRowsByKey.set(rowKey, row);
+        }
+      };
+      const suggestedRows = (archive.suggested_performances || []).filter((item) =>
+        playerNameMatches(item?.player_name || "", player.name)
+      );
+      if (suggestedRows.length) {
+        for (const item of suggestedRows) {
+          pushArchiveRow(item, archive.status || "Reviewed archive scorecard");
+        }
+      } else {
+        const templateRows = (() => {
+          try {
+            const template = archive.review_template_json ? JSON.parse(archive.review_template_json) : null;
+            const innings = Array.isArray(template?.innings) ? template.innings : [];
+            return innings.flatMap((inning) => {
+              const batting = Array.isArray(inning?.batting) ? inning.batting : [];
+              return batting
+                .filter((item) => playerNameMatches(item?.player?.name || item?.player_name || "", player.name))
+                .map((item) => ({
+                  player_name: item?.player?.name || item?.player_name || "",
+                  runs: Number(item?.runs || 0),
+                  balls: Number(item?.balls || 0),
+                  wickets: Number(item?.wickets || 0),
+                  catches: Number(item?.catches || 0),
+                  notes: "Verified archive scorecard",
+                }));
+            });
+          } catch (err) {
+            return [];
+          }
+        })();
+        for (const item of templateRows) {
+          pushArchiveRow(item, archive.status || "Verified archive scorecard");
+        }
+      }
+      archiveHistoryRows.push(...archiveRowsByKey.values());
+    }
+  archiveHistoryRows.sort(
+    (a, b) => (b.dateSort || Date.parse(b.date || "") || 0) - (a.dateSort || Date.parse(a.date || "") || 0)
+  );
+  elements.playerMatchHistory.innerHTML = renderLimitedCollection(archiveHistoryRows, {
     key: `player-history-${player.name}`,
-    emptyMessage: `<p class="empty-state">No saved player performance entries yet for ${displayName}. Add scores from the Performance panel to build the profile history.</p>`,
+    emptyMessage: `<p class="empty-state">No reviewed archive scorecards found yet for ${displayName}.</p>`,
     renderItem: (item) => `
       <article class="history-card">
         <div>
-          <strong>${item.clubName} · ${item.dateLabel} vs ${item.opponent}</strong>
-          <p>${item.runs} runs off ${item.balls} · ${item.wickets} wickets · ${item.catches} catches</p>
-          <small>${item.result}</small>
+          <strong>${item.dateLabel || item.date || "--"} · ${item.clubName || "--"} vs ${item.opponent || "--"}</strong>
+          <p>${item.runs ?? 0} runs off ${item.balls ?? 0} · ${item.wickets ?? 0} wickets · ${item.catches ?? 0} catches</p>
+          <small>${item.result || item.notes || item.status || ""}</small>
         </div>
         <div class="history-side">
-          <span class="status-pill ${item.availability === "available" ? "yes" : item.availability === "maybe" ? "maybe" : "no"}">${item.availability}</span>
-          <small>${item.notes || item.status}</small>
+          <span class="status-pill neutral">reviewed</span>
+          <small>${item.notes || item.status || ""}</small>
         </div>
       </article>
     `,
   });
+
+  const combinedPerformanceRows = archiveHistoryRows.length
+    ? archiveHistoryRows
+        .map((item) => `
+            <tr>
+              <td>${item.dateLabel || item.date || "--"}</td>
+              <td>${item.source || "--"}</td>
+              <td>${item.clubName || "--"}</td>
+              <td>${item.opponent || "--"}</td>
+              <td>${item.runs ?? 0}</td>
+              <td>${item.balls ?? 0}</td>
+              <td>${item.wickets ?? 0}</td>
+              <td>${item.catches ?? 0}</td>
+              <td>
+                <div class="table-cell-stack">
+                  <span class="status-pill neutral">reviewed</span>
+                  <small>${item.result || item.notes || item.status || ""}</small>
+                </div>
+              </td>
+            </tr>
+          `)
+        .join("")
+    : `<tr><td colspan="9"><p class="empty-state">No reviewed archive scorecards found yet for ${displayName}.</p></td></tr>`;
+
+  if (elements.performancePlayerIdentity) {
+    elements.performancePlayerIdentity.innerHTML = elements.playerIdentity?.innerHTML || "";
+  }
+  if (elements.performancePlayerMatchHistory) {
+    elements.performancePlayerMatchHistory.innerHTML = combinedPerformanceRows;
+  }
+  if (elements.performancePlayerMemberships) {
+    elements.performancePlayerMemberships.innerHTML = elements.playerMemberships?.innerHTML || "";
+  }
 }
 
 function renderArchive(uploads) {
@@ -3050,7 +3888,10 @@ function loadArchiveIntoEditor(archiveId) {
   elements.archiveApplyForm.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
-function renderTeamPage() {
+function renderTeamPageInto(targets = {}) {
+  const teamSummaryEl = targets.teamSummary || elements.teamSummary;
+  const teamRosterEl = targets.teamRoster || elements.teamRoster;
+  const teamPlayerScoresEl = targets.teamPlayerScores || elements.teamPlayerScores;
   const team = currentTeam();
   if (!team) {
     return;
@@ -3075,14 +3916,16 @@ function renderTeamPage() {
   const pendingMap = Object.fromEntries((state.dashboard.player_pending_stats || []).map((item) => [item.player_name, item]));
   const fixtureInfo = state.dashboard.visiting_teams.find((item) => item.name === team.name);
 
-  elements.teamSummary.innerHTML = `
+  if (teamSummaryEl) {
+    teamSummaryEl.innerHTML = `
     <article class="summary-card"><span>Team</span><strong>${team.display_name || team.name}</strong></article>
     <article class="summary-card"><span>Roster Size</span><strong>${roster.length}</strong></article>
     <article class="summary-card"><span>Fixtures</span><strong>${team.name === clubName ? state.dashboard.summary.fixture_count : fixtureInfo?.fixture_count || 0}</strong></article>
     <article class="summary-card"><span>Top Scorer</span><strong>${scoreRows[0]?.player_name || "TBD"}</strong><p>${scoreRows[0]?.runs || 0} runs</p></article>
   `;
-
-  elements.teamRoster.innerHTML = renderLimitedCollection(roster, {
+  }
+  if (teamRosterEl) {
+    teamRosterEl.innerHTML = renderLimitedCollection(roster, {
     key: `team-roster-${team.name}`,
     emptyMessage: `<p class="empty-state">No players are stored for ${team.display_name || team.name} yet.</p>`,
     renderItem: (member) => {
@@ -3116,8 +3959,9 @@ function renderTeamPage() {
           `;
         },
   });
-
-  elements.teamPlayerScores.innerHTML = renderLimitedCollection(scoreRows, {
+  }
+  if (teamPlayerScoresEl) {
+    teamPlayerScoresEl.innerHTML = renderLimitedCollection(scoreRows, {
     key: `team-scores-${team.name}`,
     emptyMessage: `<p class="empty-state">No player score entries are stored yet for ${team.display_name || team.name}.</p>`,
     renderItem: (item) => {
@@ -3133,6 +3977,19 @@ function renderTeamPage() {
               </article>
             `;
           },
+  });
+  }
+}
+
+function renderTeamPage() {
+  renderTeamPageInto();
+}
+
+function renderPerformanceTeamPage() {
+  renderTeamPageInto({
+    teamSummary: elements.performanceTeamSummary,
+    teamRoster: elements.performanceTeamRoster,
+    teamPlayerScores: elements.performanceTeamPlayerScores,
   });
 }
 
@@ -3155,6 +4012,9 @@ function syncArchiveDraft() {
 }
 
 function updateWhatsappLink(match) {
+  if (!elements.whatsappLink || !state.dashboard?.club) {
+    return;
+  }
   const selectedLineup = selectedPlayingXiNames(match);
   const text = encodeURIComponent(
     `${state.dashboard.focus_club?.name || state.dashboard.club?.name || "Club"} update: ${match.date_label} vs ${match.opponent}. Status: ${match.status}. Available players: ${match.availability.join(", ") || "none yet"}.` +
@@ -3173,35 +4033,39 @@ function renderDashboard(dashboard) {
   });
   state.dashboard = dashboard;
   syncUserBadge(dashboard?.user || state.viewerAuth?.user || null);
+  syncAdminOnlyElements(dashboard?.user || state.viewerAuth?.user || null);
   const roles = effectiveViewerRoles();
   const role = effectiveViewerRole();
   state.isAdmin = roles.includes("superadmin") || role === "superadmin";
   state.canManageOtherAvailability = canManageOtherAvailability();
   state.canManageLineupSelection = canManageLineupSelection();
+  syncFixtureManagerVisibility();
   if (elements.uploadForm) elements.uploadForm.hidden = !state.isAdmin;
   if (elements.resetScoresButton) elements.resetScoresButton.hidden = !state.isAdmin;
   if (elements.archiveImportForm) elements.archiveImportForm.hidden = !state.isAdmin;
   if (elements.archiveApplyForm) elements.archiveApplyForm.hidden = !state.isAdmin;
-  state.selectedFocusClubId = dashboard.focus_club?.id || dashboard.viewer_profile?.primary_club_id || state.selectedFocusClubId;
+  state.selectedFocusClubId = state.selectedFocusClubId || dashboard.focus_club?.id || dashboard.viewer_profile?.primary_club_id || "";
   if (state.selectedFocusClubId) {
-    window.localStorage.setItem("cricketClubAppPrimaryClubId", state.selectedFocusClubId);
-    document.cookie = `cricketClubAppPrimaryClubId=${encodeURIComponent(state.selectedFocusClubId)}; path=/; samesite=lax`;
+    window.sessionStorage.setItem("cricketClubAppPrimaryClubId", state.selectedFocusClubId);
   }
   const currentYear = String(new Date().getFullYear());
-  state.selectedSeasonYear = dashboard.selected_season_year || dashboard.default_season_year || state.selectedSeasonYear || currentYear;
-  if (state.selectedSeasonYear) {
-    window.localStorage.setItem("cricketClubAppSelectedSeasonYear", state.selectedSeasonYear);
+  const activeWidget = String(document.body?.dataset?.dashboardWidget || "overview");
+  const dashboardHeroPanel = document.querySelector(".dashboard-hero-panel");
+  if (dashboardHeroPanel) {
+    dashboardHeroPanel.hidden = activeWidget !== "overview";
   }
-  if (state.selectedSeasonYear) {
-    window.localStorage.setItem("cricketClubAppSelectedSeasonYear", state.selectedSeasonYear);
-    document.cookie = `cricketClubAppSelectedSeasonYear=${encodeURIComponent(state.selectedSeasonYear)}; path=/; samesite=lax`;
-  }
+  const dashboardSelectedYear = normalizeStoredSeasonYear(
+    dashboard.selected_season_year || dashboard.default_season_year || dashboard.default_ranking_year || ""
+  );
+  const storedSelectedYear = normalizeStoredSeasonYear(state.selectedSeasonYear || getStoredSeasonYear());
+  state.selectedSeasonYear = activeWidget === "archive"
+    ? (storedSelectedYear || dashboardSelectedYear || currentYear)
+    : currentYear;
+  persistSelectedSeasonYear(state.selectedSeasonYear);
   const normalizedSelectedYear = normalizeSeasonYear(state.selectedSeasonYear || currentYear);
   const isLiveSeason = normalizedSelectedYear === currentYear;
   setLiveSeasonMode(isLiveSeason, state.selectedSeasonYear || currentYear);
-  if (!state.selectedMatchId || !dashboard.fixtures.some((match) => match.id === state.selectedMatchId)) {
-    state.selectedMatchId = dashboard.upcoming_match.id;
-  }
+  syncClubBadge(currentDashboardClubName(dashboard));
   const memberNameForViewer = getViewerMemberNameFromAuth() || viewerMemberName(dashboard);
   const viewerPlayerName = memberNameForViewer || dashboard.members[0]?.name || null;
   const selectedPlayerStillMatchesViewer =
@@ -3232,82 +4096,162 @@ function renderDashboard(dashboard) {
   if (!state.selectedTeamName || !dashboard.teams.some((team) => team.name === state.selectedTeamName)) {
     state.selectedTeamName = dashboard.teams[0]?.name || null;
   }
-  const match = currentMatch();
-  const landingNextMatch = dashboard.landing_upcoming_matches?.[0] || dashboard.upcoming_match || {};
-  const selectedYear = state.selectedSeasonYear || currentYear;
-  const totalFixtures = dashboard.summary?.fixture_count ?? (dashboard.fixtures || []).length;
-  const playedMatches = dashboard.summary?.matches_played ?? 0;
-  const pendingMatches = Math.max(0, totalFixtures - playedMatches);
-  const upcomingAvailability = Array.isArray(landingNextMatch.availability) ? landingNextMatch.availability.length : 0;
-  const totalPlayers = (dashboard.members || []).length;
-  const visibleArchiveUploads = dashboardArchiveUploads(dashboard);
-  elements.seasonLabel.textContent = `${selectedYear} Season`;
-  if (elements.availabilityLabel) {
-    elements.availabilityLabel.textContent = totalPlayers
-      ? `${upcomingAvailability}/${totalPlayers}`
-      : `${upcomingAvailability} available`;
+  const shouldRenderMatchCenter = ["overview", "schedule", "match-center", "scoring", "commentary"].includes(activeWidget);
+  const shouldRenderScheduleWorkflow = ["overview", "schedule", "match-center", "scoring", "commentary"].includes(activeWidget);
+
+  if (shouldRenderMatchCenter) {
+    if (!state.selectedMatchId || !dashboard.fixtures.some((match) => match.id === state.selectedMatchId)) {
+      state.selectedMatchId = dashboard.upcoming_match.id;
+    }
+    const match = currentMatch();
+    renderSelectedMatch(match);
+    renderDashboardMatchHero(match, dashboard);
+    renderDashboardLivePreview(match);
+    renderPlayingXiSection(match);
+    renderFormValues(match);
+    renderScorebook(match);
+    updateWhatsappLink(match);
   }
-  if (isLiveSeason) {
-    if (elements.nextMatchLabelTitle) {
-      elements.nextMatchLabelTitle.textContent = "Next Match";
+
+  if (activeWidget === "overview") {
+    const landingNextMatch = dashboard.landing_upcoming_matches?.[0] || dashboard.upcoming_match || {};
+    const selectedYear = state.selectedSeasonYear || currentYear;
+    const totalFixtures = dashboard.summary?.fixture_count ?? (dashboard.fixtures || []).length;
+    const playedMatches = dashboard.summary?.matches_played ?? 0;
+    const pendingMatches = Math.max(0, totalFixtures - playedMatches);
+    const upcomingAvailability = Array.isArray(landingNextMatch.availability) ? landingNextMatch.availability.length : 0;
+    const totalPlayers = (dashboard.members || []).length;
+    const visibleArchiveUploads = dashboardArchiveUploads(dashboard);
+    if (elements.clubRosterLabel) {
+      elements.clubRosterLabel.textContent = `${totalPlayers} members`;
     }
-    elements.nextMatchLabel.textContent = landingNextMatch.date_label
-      ? `${landingNextMatch.date_label} vs ${landingNextMatch.opponent}`
-      : "No upcoming match";
-    if (elements.seasonModeLabel) {
-      elements.seasonModeLabel.textContent = `Fixtures : ${totalFixtures}, Played: ${playedMatches}, Pending: ${pendingMatches}`;
+    if (elements.availabilityLabel) {
+      elements.availabilityLabel.textContent = totalPlayers
+        ? `${upcomingAvailability}/${totalPlayers} available`
+        : `${upcomingAvailability} available`;
     }
+    if (isLiveSeason) {
+      if (elements.nextMatchLabelTitle) {
+        elements.nextMatchLabelTitle.textContent = "Next Match";
+      }
+      if (elements.nextMatchLabel) {
+        elements.nextMatchLabel.textContent = landingNextMatch.date_label
+          ? `${landingNextMatch.date_label} vs ${landingNextMatch.opponent}`
+          : "No upcoming match";
+      }
+      if (elements.seasonModeLabel) {
+        elements.seasonModeLabel.textContent = `Fixtures : ${totalFixtures}, Played: ${playedMatches}, Pending: ${pendingMatches}`;
+      }
+    } else {
+      if (elements.nextMatchLabelTitle) {
+        elements.nextMatchLabelTitle.textContent = "Last Match";
+      }
+      const historicalSummary = getHistoricalSeasonSummary(dashboard);
+      if (elements.nextMatchLabel) {
+        elements.nextMatchLabel.textContent = historicalSummary.headline;
+      }
+      if (elements.seasonModeLabel) {
+        elements.seasonModeLabel.textContent = historicalSummary.details;
+      }
+    }
+    if (elements.scorecardLabel) {
+      elements.scorecardLabel.textContent = String(
+        dashboard.summary?.archive_file_count ?? dashboard.summary?.archive_count ?? visibleArchiveUploads.length ?? 0
+      );
+    }
+    elements.uploadSeason.value = elements.uploadSeason.value || ARCHIVE_SEASON_LABEL;
+    renderViewerProfile(dashboard);
+    updateViewerPlayerSnapshot(dashboard);
+    populateMatchSelects(dashboard.fixtures);
+    populatePlayerSelects(dashboard.members, dashboard.all_members || dashboard.members || []);
+    if (!state.canManageOtherAvailability && elements.availabilityPlayerSelect) {
+      elements.availabilityPlayerSelect.hidden = true;
+      elements.availabilityPlayerSelect.disabled = true;
+      elements.availabilityPlayerSelect.value = currentSignedInMemberName(dashboard) || dashboard.members[0]?.name || "";
+    }
+    populateTeamSelect(dashboard.teams || []);
+    populateArchiveSelect(visibleArchiveUploads);
+    populateArchiveYearSelect(visibleArchiveUploads);
+    populateRankingYearSelect(dashboard);
+    if (!elements.archiveSourceNoteInput.value) {
+      elements.archiveSourceNoteInput.value = "Offline scorecard sync";
+    }
+    renderSummary(dashboard.summary, visibleArchiveUploads.length);
+    renderSchedule(dashboard.fixtures);
+    renderScheduleFixtureEditor(dashboard.fixtures);
+    renderVisitingTeams(dashboard.visiting_teams);
+    renderAvailabilityMatrix(dashboard.availability_board, dashboard.fixtures);
+    renderHomeRankingsPreview();
+    if (elements.homeRankingsPreview) {
+      const showPlayerProfile = viewerIsMemberOfSelectedClub(dashboard) || state.isAdmin;
+      const playerProfileButton = elements.homeRankingsPreview.closest(".panel")?.querySelector('a[href="/profile"], a[href="/player-profile"]');
+      if (playerProfileButton) {
+        playerProfileButton.hidden = !showPlayerProfile;
+      }
+    }
+    if (elements.homeAvailabilityPreview) {
+      const availabilityButton = elements.homeAvailabilityPreview.closest(".panel")?.querySelector('a[href="/player-availability"]');
+      if (availabilityButton) {
+        availabilityButton.hidden = false;
+      }
+    }
+    if (elements.summaryGrid) {
+      const fixtureEditorButton = document.querySelector('a[href="/season-setup"]');
+      if (fixtureEditorButton) {
+        fixtureEditorButton.hidden = !canManageFixtures();
+      }
+    }
+    renderHomeAvailabilityPreview();
+    renderAvailabilityFixtureEditor(dashboard.fixtures);
+    renderArchive(visibleArchiveUploads);
+    renderLandingRecentScorecards(visibleArchiveUploads);
+    renderDuplicates(dashboard.duplicate_uploads || []);
+    renderArchiveScorecards(visibleArchiveUploads);
+    syncArchiveDraft();
+    renderMembers(dashboard.members);
+    renderLeaderboard();
+    renderPerformancePlayerResults();
+    renderPerformanceTeamPage();
+    renderPlayerProfile();
+    renderTeamPage();
+  } else if (shouldRenderScheduleWorkflow) {
+    populateMatchSelects(dashboard.fixtures);
+    renderSchedule(dashboard.fixtures);
+    renderScheduleFixtureEditor(dashboard.fixtures);
+    renderVisitingTeams(dashboard.visiting_teams);
+    renderAvailabilityMatrix(dashboard.availability_board, dashboard.fixtures);
+    renderMembers(dashboard.members);
+    renderLeaderboard();
+    renderPerformancePlayerResults();
+    renderPerformanceTeamPage();
+    renderPlayerProfile();
+    renderTeamPage();
+  } else if (activeWidget === "archive") {
+    const visibleArchiveUploads = dashboardArchiveUploads(dashboard);
+    populateArchiveSelect(visibleArchiveUploads);
+    populateArchiveYearSelect(visibleArchiveUploads);
+    if (!elements.archiveSourceNoteInput.value) {
+      elements.archiveSourceNoteInput.value = "Offline scorecard sync";
+    }
+    renderArchive(visibleArchiveUploads);
+    renderLandingRecentScorecards(visibleArchiveUploads);
+    renderDuplicates(dashboard.duplicate_uploads || []);
+    renderArchiveScorecards(visibleArchiveUploads);
+    syncArchiveDraft();
+  } else if (activeWidget === "performance" || activeWidget === "player-profile") {
+    populatePlayerSelects(dashboard.members, dashboard.all_members || dashboard.members || []);
+    renderPlayerProfile();
+    renderTeamPage();
+    renderLeaderboard();
+    renderPerformancePlayerResults();
+    renderPerformanceTeamPage();
   } else {
-    if (elements.nextMatchLabelTitle) {
-      elements.nextMatchLabelTitle.textContent = "Last Match";
-    }
-    const historicalSummary = getHistoricalSeasonSummary(dashboard);
-    elements.nextMatchLabel.textContent = historicalSummary.headline;
-    if (elements.seasonModeLabel) {
-      elements.seasonModeLabel.textContent = historicalSummary.details;
-    }
+    renderPlayerProfile();
+    renderTeamPage();
+    renderLeaderboard();
+    renderPerformancePlayerResults();
+    renderPerformanceTeamPage();
   }
-  if (elements.scorecardLabel) {
-    elements.scorecardLabel.textContent = String(
-      dashboard.summary?.archive_file_count ?? dashboard.summary?.archive_count ?? visibleArchiveUploads.length ?? 0
-    );
-  }
-  elements.uploadSeason.value = elements.uploadSeason.value || ARCHIVE_SEASON_LABEL;
-  renderViewerProfile(dashboard);
-  updateViewerPlayerSnapshot(dashboard);
-  populateMatchSelects(dashboard.fixtures);
-  populatePlayerSelects(dashboard.members, dashboard.all_members || dashboard.members || []);
-  if (!state.canManageOtherAvailability && elements.availabilityPlayerSelect) {
-    elements.availabilityPlayerSelect.hidden = true;
-    elements.availabilityPlayerSelect.disabled = true;
-    elements.availabilityPlayerSelect.value = currentSignedInMemberName(dashboard) || dashboard.members[0]?.name || "";
-  }
-  populateTeamSelect(dashboard.teams || []);
-  populateArchiveSelect(visibleArchiveUploads);
-  populateArchiveYearSelect(visibleArchiveUploads);
-  populateRankingYearSelect(dashboard);
-  if (!elements.archiveSourceNoteInput.value) {
-    elements.archiveSourceNoteInput.value = "Offline scorecard sync";
-  }
-  renderSummary(dashboard.summary, visibleArchiveUploads.length);
-  renderSelectedMatch(match);
-  renderPlayingXiSection(match);
-  renderFormValues(match);
-  renderScorebook(match);
-  renderMembers(dashboard.members);
-  renderSchedule(dashboard.fixtures);
-  renderVisitingTeams(dashboard.visiting_teams);
-  renderAvailabilityMatrix(dashboard.availability_board, dashboard.fixtures);
-  renderLeaderboard();
-  renderPlayerProfile();
-  renderTeamPage();
-  renderAvailabilityFixtureEditor(dashboard.fixtures);
-  renderArchive(visibleArchiveUploads);
-  renderLandingRecentScorecards(visibleArchiveUploads);
-  renderDuplicates(dashboard.duplicate_uploads || []);
-  renderArchiveScorecards(visibleArchiveUploads);
-  updateWhatsappLink(match);
-  syncArchiveDraft();
 }
 
 async function loadDashboard() {
@@ -3334,9 +4278,17 @@ async function loadDashboard() {
       role: state.viewerAuth?.user?.effective_role || state.viewerAuth?.user?.role || "",
     });
     syncUserBadge(state.viewerAuth?.user || null);
+    syncClubBadge(
+      state.viewerAuth?.user?.current_club_name ||
+      state.viewerAuth?.user?.primary_club_name ||
+      ""
+    );
+    syncAdminOnlyElements(state.viewerAuth?.user || null);
   } catch {
     state.viewerAuth = null;
     dashboardDebug("Signed in user could not be loaded yet.");
+    syncClubBadge("");
+    syncAdminOnlyElements(null);
   }
   if (!state.dashboardBootstrapped) {
     const sessionClubId = String(
@@ -3344,17 +4296,16 @@ async function loadDashboard() {
       state.viewerAuth?.user?.primary_club_id ||
       ""
     ).trim();
-    if (sessionClubId) {
+    if (!state.selectedFocusClubId && sessionClubId) {
       state.selectedFocusClubId = sessionClubId;
       dashboardDebug("Initial club resolved from signed-in session.", {
         selectedClubId: sessionClubId,
         role: state.viewerAuth?.user?.effective_role || state.viewerAuth?.user?.role || "",
       });
     }
-    const currentYear = String(new Date().getFullYear());
-    state.selectedSeasonYear = currentYear;
-    window.localStorage.setItem("cricketClubAppSelectedSeasonYear", currentYear);
-    document.cookie = `cricketClubAppSelectedSeasonYear=${encodeURIComponent(currentYear)}; path=/; samesite=lax`;
+    if (!normalizeStoredSeasonYear(state.selectedSeasonYear)) {
+      state.selectedSeasonYear = normalizeStoredSeasonYear(getStoredSeasonYear()) || "";
+    }
   }
   const queryParams = new URLSearchParams();
   if (state.selectedFocusClubId) {
@@ -3401,11 +4352,6 @@ async function loadDashboard() {
       }
       renderDashboard(dashboard);
       void refreshLlmStatusBadge();
-      if (!state.dashboardBootstrapped && dashboard.selected_season_year) {
-        state.selectedSeasonYear = dashboard.selected_season_year;
-        window.localStorage.setItem("cricketClubAppSelectedSeasonYear", dashboard.selected_season_year);
-        document.cookie = `cricketClubAppSelectedSeasonYear=${encodeURIComponent(dashboard.selected_season_year)}; path=/; samesite=lax`;
-      }
       state.dashboardBootstrapped = true;
     } catch (error) {
       dashboardError("Dashboard render failed.", error);
@@ -3414,11 +4360,13 @@ async function loadDashboard() {
   }
 }
 
-elements.activeMatchSelect.addEventListener("change", () => {
-  dashboardDebug("Active match changed.", { matchId: elements.activeMatchSelect.value || "" });
-  state.selectedMatchId = elements.activeMatchSelect.value;
-  renderDashboard(state.dashboard);
-});
+if (elements.activeMatchSelect) {
+  elements.activeMatchSelect.addEventListener("change", () => {
+    dashboardDebug("Active match changed.", { matchId: elements.activeMatchSelect.value || "" });
+    state.selectedMatchId = elements.activeMatchSelect.value;
+    renderDashboard(state.dashboard);
+  });
+}
 
 elements.playerProfileSelect.addEventListener("change", () => {
   dashboardDebug("Player profile changed.", { playerName: elements.playerProfileSelect.value || "" });
@@ -3432,15 +4380,20 @@ elements.teamProfileSelect.addEventListener("change", () => {
   renderDashboard(state.dashboard);
 });
 
+if (elements.performanceTeamProfileSelect) {
+  elements.performanceTeamProfileSelect.addEventListener("change", () => {
+    dashboardDebug("Performance team profile changed.", { teamName: elements.performanceTeamProfileSelect.value || "" });
+    state.selectedTeamName = elements.performanceTeamProfileSelect.value;
+    renderDashboard(state.dashboard);
+  });
+}
+
 elements.rankingYearSelect.addEventListener("change", async () => {
   const selectedYear = elements.rankingYearSelect.value || "";
   dashboardDebug("Ranking year changed.", { selectedSeasonYear: selectedYear });
   state.selectedSeasonYear = selectedYear;
   if (selectedYear) {
-    window.localStorage.setItem("cricketClubAppSelectedSeasonYear", selectedYear);
-  }
-  if (elements.seasonLabel) {
-    elements.seasonLabel.textContent = `${selectedYear} Season`;
+    persistSelectedSeasonYear(selectedYear);
   }
   if (elements.rankingYearSelect) {
     elements.rankingYearSelect.value = selectedYear;
@@ -3525,6 +4478,12 @@ if (elements.clubSearchInput) {
 elements.landingPlayerSearchInput.addEventListener("input", () => {
   renderLandingPlayerResults();
 });
+
+if (elements.performancePlayerSearchInput) {
+  elements.performancePlayerSearchInput.addEventListener("input", () => {
+    renderPerformancePlayerResults();
+  });
+}
 
 elements.detailsForm.addEventListener("submit", async (event) => {
   event.preventDefault();
@@ -3688,11 +4647,11 @@ async function saveDashboardAvailability() {
 }
 
 async function savePlayingXiSelection() {
-  if (!elements.selectedPlayingXiForm) return;
+  if (!elements.selectedAvailability) return;
   dashboardDebug("Saving playing XI.", {
     matchId: state.selectedMatchId || "",
   });
-  const selectedPlayers = Array.from(elements.selectedPlayingXiForm.querySelectorAll("input[type=checkbox][name=playing_xi]:checked"))
+  const selectedPlayers = Array.from(elements.selectedAvailability.querySelectorAll("input[type=checkbox][name=playing_xi]:checked"))
     .map((input) => input.value.trim())
     .filter(Boolean)
     .slice(0, 11);
@@ -3711,7 +4670,7 @@ async function savePlayingXiSelection() {
 }
 
 function autoFillPlayingXiSelection() {
-  if (!elements.selectedPlayingXiForm) return;
+  if (!elements.selectedAvailability) return;
   dashboardDebug("Auto-filling playing XI.", {
     matchId: state.selectedMatchId || "",
   });
@@ -3719,7 +4678,7 @@ function autoFillPlayingXiSelection() {
     .filter((member) => isEligibleForLineup(member.availability_status))
     .slice(0, 11)
     .map((member) => member.name);
-  elements.selectedPlayingXiForm.querySelectorAll("input[type=checkbox][name=playing_xi]").forEach((input) => {
+  elements.selectedAvailability.querySelectorAll("input[type=checkbox][name=playing_xi]").forEach((input) => {
     input.checked = eligible.includes(input.value);
   });
   elements.selectedPlayingXiCount.textContent = `${eligible.length}/11 selected`;
@@ -3730,36 +4689,133 @@ window.CricketClubAppDashboard = {
   savePlayingXiSelection,
 };
 
+if (elements.scheduleFixtureForm) {
+  elements.scheduleFixtureForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    if (!canManageFixtures()) {
+      return;
+    }
+    const clubId = state.selectedFocusClubId || state.dashboard?.focus_club?.id || state.dashboard?.club?.id || "";
+    const fixturePayload = {
+      club_id: clubId,
+      season_year: Number(elements.scheduleFixtureYear.value || new Date().getFullYear()),
+      date: elements.scheduleFixtureDate.value,
+      date_label: elements.scheduleFixtureDateLabel.value.trim(),
+      opponent: elements.scheduleFixtureOpponent.value.trim(),
+      venue: elements.scheduleFixtureVenue.value.trim(),
+      match_type: elements.scheduleFixtureType.value.trim(),
+      scheduled_time: elements.scheduleFixtureTime.value.trim(),
+      overs: elements.scheduleFixtureOvers.value.trim(),
+    };
+    const editingFixtureId = String(elements.scheduleEditingFixtureId.value || "").trim();
+    const isEditing = Boolean(editingFixtureId);
+    const existingFixture = isEditing ? (state.dashboard?.fixtures || []).find((item) => item.id === editingFixtureId) : null;
+    if (existingFixture && isPastFixture(existingFixture) && !canEditPastFixtures()) {
+      setStatus("Past fixtures can only be edited by club-admins or superadmins.", "warning");
+      return;
+    }
+    const dashboard = await runAction(
+      () =>
+        isEditing
+          ? putJson(`/api/admin/clubs/${encodeURIComponent(clubId)}/fixtures/${encodeURIComponent(editingFixtureId)}`, fixturePayload, true)
+          : postJson("/api/season-setup/fixtures", fixturePayload, true),
+      isEditing ? "Fixture updated." : "Fixture created.",
+      isEditing ? "update fixture" : "create fixture"
+    );
+    if (dashboard) {
+      renderDashboard(dashboard);
+      renderScheduleFixtureEditor(dashboard.fixtures || []);
+      elements.scheduleFixtureForm.reset();
+      resetScheduleFixtureEditor();
+      elements.scheduleFixtureYear.value = String(new Date().getFullYear());
+    }
+  });
+}
+
+if (elements.scheduleFixtureCancelButton) {
+  elements.scheduleFixtureCancelButton.addEventListener("click", () => {
+    if (elements.scheduleFixtureForm) {
+      elements.scheduleFixtureForm.reset();
+    }
+    resetScheduleFixtureEditor();
+    if (elements.scheduleFixtureYear) {
+      elements.scheduleFixtureYear.value = String(new Date().getFullYear());
+    }
+  });
+}
+
 elements.availabilityForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   await saveDashboardAvailability();
 });
 
-if (elements.availabilityFixturesEditor) {
-  elements.availabilityFixturesEditor.addEventListener("submit", async (event) => {
-    const form = event.target.closest("[data-fixture-availability-form]");
-    if (!form) return;
-    event.preventDefault();
-    const playerName = currentAvailabilityPlayerName();
-    if (!playerName) {
-      return;
+document.addEventListener("click", async (event) => {
+  const editButton = event.target.closest?.("[data-schedule-fixture-edit]");
+  if (editButton) {
+    const fixture = state.dashboard?.fixtures?.find((item) => item.id === editButton.dataset.scheduleFixtureEdit);
+    if (!fixture) return;
+    fillScheduleFixtureEditor(fixture);
+    return;
+  }
+  const deleteButton = event.target.closest?.("[data-schedule-fixture-delete]");
+  if (!deleteButton) {
+    return;
+  }
+  if (!canManageFixtures()) {
+    return;
+  }
+  const fixtureId = deleteButton.dataset.scheduleFixtureDelete || "";
+  const clubId = state.selectedFocusClubId || state.dashboard?.focus_club?.id || state.dashboard?.club?.id || "";
+  if (!fixtureId || !clubId) return;
+  const fixture = state.dashboard?.fixtures?.find((item) => item.id === fixtureId);
+  if (!fixture) return;
+  if (isPastFixture(fixture) && !canEditPastFixtures()) {
+    setStatus("Past fixtures can only be deleted by club-admins or superadmins.", "warning");
+    return;
+  }
+  if (!window.confirm(`Delete fixture ${fixture.date_label || fixture.date || "selected"} vs ${fixture.opponent || "Opponent"}?`)) {
+    return;
+  }
+  const dashboard = await runAction(
+    () => deleteJson(`/api/admin/clubs/${encodeURIComponent(clubId)}/fixtures/${encodeURIComponent(fixtureId)}`, true),
+    "Fixture deleted.",
+    "delete fixture"
+  );
+  if (dashboard) {
+    renderDashboard(dashboard);
+    renderScheduleFixtureEditor(dashboard.fixtures || []);
+    if (elements.scheduleFixtureForm) {
+      elements.scheduleFixtureForm.reset();
     }
-    const dashboard = await runAction(
-      () =>
-        postJson(`/api/matches/${form.dataset.fixtureAvailabilityForm}/availability`, {
-          player_name: playerName,
-          status: form.elements.status.value,
-          note: form.elements.note.value.trim(),
-          club_id: state.selectedFocusClubId || currentMatch().club_id || "",
-        }),
-      "Availability updated."
-    );
-    if (dashboard) {
-      renderDashboard(dashboard);
+    resetScheduleFixtureEditor();
+  }
+});
+
+document.addEventListener("submit", async (event) => {
+  const form = event.target.closest?.("[data-fixture-availability-form]");
+  if (!form) return;
+  event.preventDefault();
+  const playerName = currentAvailabilityPlayerName();
+  if (!playerName) {
+    return;
+  }
+  const dashboard = await runAction(
+    () =>
+      postJson(`/api/matches/${form.dataset.fixtureAvailabilityForm}/availability`, {
+        player_name: playerName,
+        status: form.elements.status.value,
+        note: form.elements.note.value.trim(),
+        club_id: state.selectedFocusClubId || currentMatch().club_id || "",
+      }),
+    "Availability updated."
+  );
+  if (dashboard) {
+    renderDashboard(dashboard);
+    if (elements.availabilityNoteInput) {
       elements.availabilityNoteInput.value = "";
     }
-  });
-}
+  }
+});
 
 if (elements.selectedPlayingXiSaveButton) {
   elements.selectedPlayingXiSaveButton.addEventListener("click", async () => {
@@ -3857,6 +4913,36 @@ elements.memberForm.addEventListener("submit", async (event) => {
   }
 });
 
+if (elements.performanceInviteForm) {
+  elements.performanceInviteForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    dashboardDebug("Performance invite form submitted.", {
+      clubId: state.selectedFocusClubId || state.dashboard?.club?.id || "",
+    });
+    const payload = {
+      name: elements.performanceInviteName.value.trim(),
+      full_name: elements.performanceInviteFullName.value.trim(),
+      mobile: elements.performanceInviteMobile.value.trim(),
+      email: elements.performanceInviteEmail.value.trim(),
+      age: Number(elements.performanceInviteAge.value || 0),
+      role: elements.performanceInviteRole.value,
+      team_name: elements.performanceInviteTeam.value || "Club",
+      team_memberships: elements.performanceInviteTeam.value ? [elements.performanceInviteTeam.value] : [],
+      club_id: state.selectedFocusClubId || state.dashboard?.club?.id || "",
+    };
+    if (!payload.name || !payload.mobile || !payload.age) {
+      setStatus("Enter a player name, mobile number, and age.", "error");
+      return;
+    }
+    const dashboard = await runAction(() => postJson("/api/members", payload), "Player invited.", "invite player from performance");
+    if (dashboard) {
+      renderDashboard(dashboard);
+      elements.performanceInviteForm.reset();
+      elements.performanceInviteTeam.value = state.selectedFocusClubId ? (state.dashboard?.teams || [])[0]?.name || "" : "";
+    }
+  });
+}
+
 elements.playerEditForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   dashboardDebug("Player edit form submitted.", {
@@ -3931,18 +5017,22 @@ elements.teamPlayerScores.addEventListener("click", (event) => {
 elements.scheduleBoard.addEventListener("click", (event) => {
   const card = event.target.closest("[data-match]");
   if (!card) return;
-  state.selectedMatchId = card.dataset.match;
-  renderDashboard(state.dashboard);
-  document.getElementById("match-center")?.scrollIntoView({ behavior: "smooth", block: "start" });
+  openMatchAvailability(card.dataset.match);
 });
 
 elements.landingMatches.addEventListener("click", (event) => {
   const card = event.target.closest("[data-match]");
   if (!card) return;
-  state.selectedMatchId = card.dataset.match;
-  renderDashboard(state.dashboard);
-  document.getElementById("match-center")?.scrollIntoView({ behavior: "smooth", block: "start" });
+  openMatchAvailability(card.dataset.match);
 });
+
+if (elements.dashboardMatchHero) {
+  elements.dashboardMatchHero.addEventListener("click", (event) => {
+    const card = event.target.closest("[data-match-open]");
+    if (!card) return;
+    openMatchAvailability(card.dataset.matchOpen);
+  });
+}
 
 elements.uploadForm.addEventListener("submit", async (event) => {
   event.preventDefault();
@@ -4215,16 +5305,6 @@ if (elements.clearChatButton) {
   });
 }
 
-window.addEventListener("storage", (event) => {
-  if (event.key !== "cricketClubAppPrimaryClubId") {
-    return;
-  }
-  state.selectedFocusClubId = event.newValue || null;
-  if (state.dashboard) {
-    loadDashboard();
-  }
-});
-
 function ensureSpeechRecognition() {
   const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
   if (!SpeechRecognition) {
@@ -4279,6 +5359,14 @@ elements.stopVoiceCommentary.addEventListener("click", () => {
 });
 
 restoreChatHistory();
+void renderSharedTopbar()
+  .then(() => {
+    syncActiveNavState();
+    setupMobileMenuToggle();
+  })
+  .catch(() => {
+    setupMobileMenuToggle();
+  });
 loadDashboard();
 if (elements.llmStatusBadge) {
   void refreshLlmStatusBadge();

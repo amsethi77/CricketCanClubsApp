@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Public Scorecard · CricketClubApp</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Source+Serif+4:opsz,wght@8..60;400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/assets/tailwind.css?v=20260430b" />
+    <link rel="stylesheet" href="/assets/styles.css?v=20260510a" />
+  </head>
+  <body class="public-scorecard-page">
+    <div class="public-scorecard-bg">
+      <div class="public-scorecard-orb public-scorecard-orb-red"></div>
+      <div class="public-scorecard-orb public-scorecard-orb-blue"></div>
+      <div class="public-scorecard-orb public-scorecard-orb-emerald"></div>
+    </div>
+
+    <div class="page-shell public-scorecard-shell">
+      <section class="public-scorecard-hero glass">
+        <div class="public-scorecard-hero-top">
+          <div class="public-scorecard-live-pill">
+            <span class="public-scorecard-live-dot"></span>
+            <span>PUBLIC LIVE SCORECARD</span>
+          </div>
+          <div class="inline-actions">
+            <a class="primary-link" href="/signin">Sign in</a>
+            <a class="primary-link" href="/register">Register</a>
+          </div>
+        </div>
+
+        <div class="public-scorecard-hero-body">
+          <div class="public-scorecard-team public-scorecard-team-left">
+            <div id="publicMatchTeamOneBadge" class="public-scorecard-team-badge">HL</div>
+            <h1 id="publicMatchTitle">Loading match...</h1>
+            <p id="publicMatchMeta" class="public-scorecard-meta">Read-only public scorecard.</p>
+            <div class="public-scorecard-score">
+              <strong id="publicMatchTeamOneScore">--</strong>
+              <span id="publicMatchTeamOneOvers">-- overs</span>
+            </div>
+          </div>
+
+          <div class="public-scorecard-center">
+            <div class="public-scorecard-vs">VS</div>
+            <div class="public-scorecard-target glass">
+              <span class="label">Target</span>
+              <strong id="publicMatchTarget">--</strong>
+            </div>
+            <div class="public-scorecard-status glass">
+              <span class="label">Status</span>
+              <strong id="publicMatchStatus">Scheduled</strong>
+            </div>
+            <div id="publicMatchReadOnlyNote" class="public-readonly-note" hidden></div>
+          </div>
+
+          <div class="public-scorecard-team public-scorecard-team-right">
+            <div id="publicMatchTeamTwoBadge" class="public-scorecard-team-badge public-scorecard-team-badge-alt">TC</div>
+            <h2 id="publicMatchOpponentTitle">Opponent</h2>
+            <p id="publicMatchVenue" class="public-scorecard-meta">Venue TBD</p>
+            <div class="public-scorecard-score public-scorecard-score-alt">
+              <strong id="publicMatchTeamTwoScore">--</strong>
+              <span id="publicMatchTeamTwoOvers">-- overs</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="public-scorecard-hero-footer">
+          <article class="mini-stat">
+            <span>Required</span>
+            <strong id="publicMatchRequiredRuns">--</strong>
+            <small id="publicMatchRequiredRate">--</small>
+          </article>
+          <article class="mini-stat">
+            <span>Balls Left</span>
+            <strong id="publicMatchBallsLeft">--</strong>
+            <small id="publicMatchMomentum">Match momentum</small>
+          </article>
+          <article class="mini-stat">
+            <span>Availability</span>
+            <strong id="publicMatchAvailabilityCount">--</strong>
+            <small id="publicMatchSelectionCount">-- selected XI</small>
+          </article>
+          <article class="mini-stat">
+            <span>Read-only</span>
+            <strong>Public mode</strong>
+            <small>Scoreboard only</small>
+          </article>
+        </div>
+      </section>
+
+      <section class="public-scorecard-section glass">
+        <div class="panel-head compact-head">
+          <div>
+            <p class="section-kicker">Recent Balls</p>
+            <h2>Latest deliveries and key moments</h2>
+          </div>
+        </div>
+        <div id="publicMatchRecentBalls" class="public-ball-strip hide-scrollbar"></div>
+      </section>
+
+      <section class="public-scorecard-section glass">
+        <div class="panel-head compact-head">
+          <div>
+            <p class="section-kicker">Scorebook</p>
+            <h2>Innings, batting, bowling, and recent balls</h2>
+          </div>
+        </div>
+        <div id="publicMatchInnings" class="public-innings-list"></div>
+      </section>
+
+      <section class="public-scorecard-section glass">
+        <div class="panel-head compact-head">
+          <div>
+            <p class="section-kicker">Commentary</p>
+            <h2>Match commentary</h2>
+          </div>
+        </div>
+        <div id="publicMatchCommentary" class="detail-stack"></div>
+      </section>
+
+      <section class="public-scorecard-section glass">
+        <div class="panel-head compact-head">
+          <div>
+            <p class="section-kicker">Performances</p>
+            <h2>Published player performances</h2>
+          </div>
+        </div>
+        <div id="publicMatchPerformances" class="detail-stack"></div>
+      </section>
+    </div>
+    <script src="/assets/public_match.js?v=20260510a"></script>
+  </body>
+</html>
