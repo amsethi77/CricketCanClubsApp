@@ -29,7 +29,7 @@
       rel="stylesheet"
     />
     <link rel="stylesheet" href="/assets/tailwind.css?v=20260426a" />
-    <link rel="stylesheet" href="/assets/styles.css?v=20260509f" />
+    <link rel="stylesheet" href="/assets/styles.css?v=20260511l" />
   </head>
   <body>
     <div class="page-shell">
@@ -39,7 +39,7 @@
         <div class="template-top-row">
           <div class="template-header-copy">
             <p id="heroEyebrow" class="template-kicker">Good Evening</p>
-            <h1 id="heroGreetingTitle" class="template-title">Season overview</h1>
+            <h1 id="heroGreetingTitle" class="template-title">Season</h1>
             <div class="template-club-row">
               <span id="focusClubBadge" class="template-club-pill">Season : ...</span>
             </div>
@@ -47,27 +47,27 @@
         </div>
         <div class="template-kpi-grid">
           <div class="mini-stat">
-            <span>Club roster</span>
+            <span>Roster</span>
             <strong id="clubRosterLabel">Loading...</strong>
           </div>
           <div class="mini-stat">
-            <span id="nextMatchLabelTitle">Next Match</span>
+            <span id="nextMatchLabelTitle">Next</span>
             <strong id="nextMatchLabel">Loading...</strong>
           </div>
           <div class="mini-stat">
-            <span>Players availability</span>
+            <span>Availability</span>
             <strong id="availabilityLabel">Loading...</strong>
           </div>
           <div class="mini-stat">
-            <span>Season Mode</span>
+            <span>Season mode</span>
             <strong id="seasonModeLabel">Loading...</strong>
           </div>
           <div class="mini-stat">
-            <span>Uploaded Scorecards</span>
+            <span>Scorecards</span>
             <strong id="scorecardLabel">Loading...</strong>
           </div>
           <div class="mini-stat">
-            <span id="viewerPlayerSnapshotLabel">Clubs Summary</span>
+            <span id="viewerPlayerSnapshotLabel">Summary</span>
             <strong id="viewerPlayerSnapshotTitle">No player selected</strong>
             <small id="viewerPlayerSnapshotDetails">Loading summary...</small>
           </div>
@@ -125,7 +125,6 @@
             <p class="section-kicker">Main menu</p>
             <h2>Quick entry points for the club</h2>
           </div>
-          <a class="secondary-button" href="/dashboard">Overview</a>
         </div>
 
         <div class="widget-launcher-grid core-grid">
@@ -146,7 +145,7 @@
             <small>Yearly rankings and player stats.</small>
           </a>
           <a class="widget-launcher-card" href="/dashboard/widgets/assistant">
-            <strong>AI Assistant</strong>
+            <strong>Assistant</strong>
             <small>Chat only.</small>
           </a>
           <a class="widget-launcher-card" href="/player-availability">
@@ -158,7 +157,7 @@
             <small>View and update player details.</small>
           </a>
           <a class="widget-launcher-card" href="/admin-center" data-admin-only hidden>
-            <strong>Admin Center</strong>
+            <strong>Admin</strong>
             <small>Superadmin tools and controls.</small>
           </a>
         </div>
@@ -359,17 +358,23 @@
                   <option>Live</option>
                   <option>Completed</option>
                 </select>
-                <div class="wide scorebook-slot-shell">
-                  <div>
-                    <h4>Batters</h4>
-                    <div id="scorebookBatters" class="scorebook-slot-grid"></div>
+                <details class="scorebook-advanced wide">
+                  <summary>Playing XI setup</summary>
+                  <div class="scorebook-advanced-grid">
+                    <p class="empty-state" style="margin: 0 0 10px;">Select from the confirmed XI only. This stays collapsed during scoring so you can focus on the delivery desk.</p>
+                    <div class="wide scorebook-slot-shell">
+                      <div>
+                        <h4>Batting lineup</h4>
+                        <div id="scorebookBatters" class="scorebook-slot-grid"></div>
+                      </div>
+                      <div>
+                        <h4>Bowling options</h4>
+                        <div id="scorebookBowlers" class="scorebook-slot-grid"></div>
+                      </div>
+                    </div>
+                    <button class="secondary-button wide" type="submit">Save innings setup</button>
                   </div>
-                  <div>
-                    <h4>Bowlers</h4>
-                    <div id="scorebookBowlers" class="scorebook-slot-grid"></div>
-                  </div>
-                </div>
-                <button class="secondary-button wide" type="submit">Save innings setup</button>
+                </details>
               </form>
             </div>
             <div class="scorebook-column">
@@ -379,45 +384,110 @@
                   <h3>Persisted locally for live and offline recovery</h3>
                 </div>
               </div>
-              <div class="scorebook-quick-actions" aria-label="Quick scoring actions">
-                <button type="button" class="secondary-button scorebook-quick" data-score-quick="0">Dot</button>
-                <button type="button" class="secondary-button scorebook-quick" data-score-quick="1">1</button>
-                <button type="button" class="secondary-button scorebook-quick" data-score-quick="2">2</button>
-                <button type="button" class="secondary-button scorebook-quick" data-score-quick="4">4</button>
-                <button type="button" class="secondary-button scorebook-quick" data-score-quick="6">6</button>
-                <button type="button" class="secondary-button scorebook-quick" data-score-quick="wide">Wide</button>
-                <button type="button" class="secondary-button scorebook-quick" data-score-quick="no_ball">No ball</button>
-                <button type="button" class="secondary-button scorebook-quick" data-score-quick="wicket">Wicket</button>
-              </div>
-              <form id="scorebookBallForm" class="form-grid">
-                <input id="scorebookOverNumberInput" type="number" min="1" placeholder="Over" />
-                <input id="scorebookBallNumberInput" type="number" min="1" max="8" placeholder="Ball" />
-                <input id="scorebookStrikerInput" type="text" placeholder="Striker" />
-                <input id="scorebookNonStrikerInput" type="text" placeholder="Non striker" />
-                <input id="scorebookBowlerInput" type="text" placeholder="Bowler" />
-                <input id="scorebookRunsBatInput" type="number" min="0" placeholder="Runs off bat" />
-                <select id="scorebookExtrasTypeInput">
-                  <option value="none">No extras</option>
-                  <option value="wide">Wide</option>
-                  <option value="no_ball">No ball</option>
-                  <option value="bye">Bye</option>
-                  <option value="leg_bye">Leg bye</option>
-                </select>
-                <input id="scorebookExtrasRunsInput" type="number" min="0" placeholder="Extras runs" />
-                <select id="scorebookWicketInput">
-                  <option value="false">No wicket</option>
-                  <option value="true">Wicket</option>
-                </select>
-                <input id="scorebookWicketTypeInput" type="text" placeholder="Wicket type" />
-                <input id="scorebookWicketPlayerInput" type="text" placeholder="Out batter" />
-                <input id="scorebookFielderInput" type="text" placeholder="Fielder for catches" />
-                <textarea id="scorebookBallCommentaryInput" rows="3" class="wide" placeholder="Ball commentary"></textarea>
+              <div id="scorebookDeliveryAssist" class="scorebook-delivery-assist"></div>
+              <form id="scorebookBallForm" class="form-grid scorebook-ball-form">
+                <div class="scorebook-lineup-bar wide">
+                  <label>
+                    <span>Striker</span>
+                    <select id="scorebookStrikerInput">
+                      <option value="">Select striker</option>
+                    </select>
+                  </label>
+                  <label>
+                    <span>Non-striker</span>
+                    <select id="scorebookNonStrikerInput">
+                      <option value="">Select non-striker</option>
+                    </select>
+                  </label>
+                  <label>
+                    <span>Bowler</span>
+                    <select id="scorebookBowlerInput">
+                      <option value="">Select bowler</option>
+                    </select>
+                  </label>
+                </div>
+                <div class="scorebook-quick-actions wide" aria-label="Quick scoring actions">
+                  <button type="button" class="secondary-button scorebook-quick" data-score-quick="0">0</button>
+                  <button type="button" class="secondary-button scorebook-quick" data-score-quick="1">1</button>
+                  <button type="button" class="secondary-button scorebook-quick" data-score-quick="2">2</button>
+                  <button type="button" class="secondary-button scorebook-quick" data-score-quick="3">3</button>
+                  <button type="button" class="secondary-button scorebook-quick" data-score-quick="4">4</button>
+                  <button type="button" class="secondary-button scorebook-quick" data-score-quick="6">6</button>
+                  <button type="button" class="secondary-button scorebook-quick" data-score-quick="wide">WD</button>
+                  <button type="button" class="secondary-button scorebook-quick" data-score-quick="no_ball">NB</button>
+                  <button type="button" class="secondary-button scorebook-quick" data-score-quick="bye">Bye</button>
+                  <button type="button" class="secondary-button scorebook-quick" data-score-quick="leg_bye">LB</button>
+                  <button type="button" class="secondary-button scorebook-quick" data-score-quick="wicket">W</button>
+                  <button type="button" id="scorebookSwapButton" class="secondary-button scorebook-quick">Swap</button>
+                  <button type="button" id="scorebookUndoButton" class="secondary-button scorebook-quick">Undo</button>
+                </div>
+                <details class="scorebook-advanced wide">
+                  <summary>More delivery details</summary>
+                  <div class="scorebook-advanced-grid">
+                    <p class="empty-state" style="margin: 0 0 10px;">The next over and ball are filled in automatically. Use this area only for custom scoring notes.</p>
+                    <div class="scorebook-manual-grid">
+                      <label>
+                        <span>Over</span>
+                        <input id="scorebookOverNumberInput" type="number" min="1" placeholder="Auto" />
+                      </label>
+                      <label>
+                        <span>Ball</span>
+                        <input id="scorebookBallNumberInput" type="number" min="1" max="8" placeholder="Auto" />
+                      </label>
+                      <label>
+                        <span>Runs off bat</span>
+                        <input id="scorebookRunsBatInput" type="number" min="0" placeholder="0" />
+                      </label>
+                      <label>
+                        <span>Extras type</span>
+                        <select id="scorebookExtrasTypeInput">
+                          <option value="none">No extras</option>
+                          <option value="wide">Wide</option>
+                          <option value="no_ball">No ball</option>
+                          <option value="bye">Bye</option>
+                          <option value="leg_bye">Leg bye</option>
+                        </select>
+                      </label>
+                      <label>
+                        <span>Extras runs</span>
+                        <input id="scorebookExtrasRunsInput" type="number" min="0" placeholder="0" />
+                      </label>
+                      <label>
+                        <span>Wicket?</span>
+                        <select id="scorebookWicketInput">
+                          <option value="false">No wicket</option>
+                          <option value="true">Wicket</option>
+                        </select>
+                      </label>
+                      <label>
+                        <span>Wicket type</span>
+                        <input id="scorebookWicketTypeInput" type="text" placeholder="bowled" />
+                      </label>
+                      <label>
+                        <span>Out batter</span>
+                        <select id="scorebookWicketPlayerInput">
+                          <option value="">Out batter</option>
+                        </select>
+                      </label>
+                      <label>
+                        <span>Fielder</span>
+                        <select id="scorebookFielderInput">
+                          <option value="">Fielder for catches</option>
+                        </select>
+                      </label>
+                      <label class="wide">
+                        <span>Ball commentary</span>
+                        <textarea id="scorebookBallCommentaryInput" rows="3" class="wide" placeholder="Ball commentary"></textarea>
+                      </label>
+                    </div>
+                  </div>
+                </details>
                 <div class="inline-actions wide">
                   <button class="primary-button" type="submit">Log delivery</button>
                   <button id="scorebookSaveNextButton" class="secondary-button" type="button">Save &amp; next ball</button>
                 </div>
               </form>
-              <div id="scorebookSummary" class="player-summary-grid"></div>
+              <div id="scorebookSummary" class="player-summary-grid scorebook-summary-grid"></div>
               <div id="scorebookRecentBalls" class="player-history"></div>
             </div>
           </div>
@@ -460,6 +530,10 @@
             <div>
               <p class="section-kicker">Performance</p>
               <h2>Club player performances and rankings</h2>
+            </div>
+            <div class="toolbar-actions performance-toolbar">
+              <label class="season-picker-label" for="rankingYearSelect">Season</label>
+              <select id="rankingYearSelect" class="season-select"></select>
             </div>
           </div>
           <p class="lede">Track batting, bowling, and fielding totals for each club player here. Use the Profile menu for the editable player record and all-year match history.</p>
@@ -734,13 +808,12 @@
           </div>
           <form id="uploadForm" class="form-grid" data-admin-only hidden>
             <input id="uploadSeason" type="text" placeholder="Season label" />
-            <input id="uploadFile" type="file" accept="image/*" required />
+            <input id="uploadFile" type="file" accept="image/*,.jpg,.jpeg,.png,.webp,.heic,.heif" capture="environment" required />
             <button class="primary-button" type="submit">Upload scorecard image</button>
           </form>
           <div class="archive-toolbar">
             <input id="archiveSearchInput" type="text" placeholder="Find old scorecards by player, team, file, or notes" />
             <input id="archiveDateInput" type="date" />
-            <select id="rankingYearSelect" class="season-select"></select>
             <select id="archiveYearSelect">
               <option value="">All years</option>
             </select>
@@ -809,7 +882,7 @@
         </section>
       </main>
     </div>
-    <script src="/assets/multipage.js?v=20260509e"></script>
-    <script src="/assets/app.js?v=20260509f"></script>
+    <script src="/assets/multipage.js?v=20260511k"></script>
+    <script src="/assets/app.js?v=20260511g"></script>
   </body>
 </html>

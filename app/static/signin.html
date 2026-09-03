@@ -7,54 +7,36 @@
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
-      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Source+Serif+4:opsz,wght@8..60;400;500;600;700&display=swap"
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Sora:wght@400;600;700;800&display=swap"
       rel="stylesheet"
     />
     <link rel="stylesheet" href="/assets/tailwind.css?v=20260430b" />
-    <link rel="stylesheet" href="/assets/styles.css?v=20260510g" />
+    <link rel="stylesheet" href="/assets/styles.css?v=20260511l" />
+    <link rel="stylesheet" href="/assets/live.css?v=20260511r" />
   </head>
-  <body>
+  <body class="public-auth-page">
+    <div data-public-header></div>
     <div class="page-shell">
-      <section class="signin-layout">
-        <aside class="panel onboarding-panel signin-live-panel">
-          <div class="stack-card signin-stats-shell">
-            <div class="signin-stats-head">
-              <div>
-                <p class="section-kicker">Live</p>
-                <h2 class="signin-stats-title">🔥 Live Matches Today</h2>
-              </div>
-              <p class="lede signin-stats-lede">Open a live scorecard to follow the match in real time.</p>
+      <div class="signin-page-grid">
+        <section class="signin-layout">
+          <div class="panel onboarding-panel signin-form-panel">
+            <div class="stack-card">
+              <p class="section-kicker">Sign In</p>
+              <h1 class="signin-title">Cricket Canada Clubs Login</h1>
+              <p class="lede">Sign in with mobile or email and password, or use your saved player mobile/email for quick access. Add player name only if needed.</p>
+              <div id="signinStatus" class="status-banner" hidden></div>
+              <form id="signinForm" class="form-grid" method="post" action="/signin/quick">
+                <input id="signinIdentifier" name="identifier" type="text" placeholder="Mobile or email" required />
+                <input id="signinPassword" name="password" type="password" placeholder="Password" />
+                <input id="signinPlayerName" name="player_name" type="text" placeholder="Player name for quick access" />
+                <button class="primary-button wide" type="submit">Sign in</button>
+              </form>
+              <a class="primary-link auth-cta-link secondary wide" href="/register">Create an account</a>
             </div>
-            <article class="signin-widget signin-widget-wide">
-              <div class="signin-widget-head">
-                <div>
-                  <p class="signin-widget-kicker">Live</p>
-                  <h3>Live Match</h3>
-                </div>
-                <span id="signinLiveMatchesCount" class="signin-widget-pill">Loading</span>
-              </div>
-              <div id="signinLiveMatches" class="public-live-grid" aria-live="polite"></div>
-            </article>
           </div>
-        </aside>
-        <div class="panel onboarding-panel signin-form-panel">
-          <div class="stack-card">
-            <p class="section-kicker">Sign In</p>
-            <h1 class="signin-title">Cricket Canada Clubs Login</h1>
-            <p class="lede">Sign in with mobile or email and password, or use your saved player mobile/email for quick access. Add player name only if needed.</p>
-            <div id="signinStatus" class="status-banner" hidden></div>
-            <form id="signinForm" class="form-grid" method="post" action="/signin/quick">
-              <input id="signinIdentifier" name="identifier" type="text" placeholder="Mobile or email" required />
-              <input id="signinPassword" name="password" type="password" placeholder="Password" />
-              <input id="signinPlayerName" name="player_name" type="text" placeholder="Player name for quick access" />
-              <button class="primary-button wide" type="submit">Sign in</button>
-            </form>
-            <a class="primary-link auth-cta-link secondary wide" href="/register">Create an account</a>
-          </div>
-        </div>
-      </section>
-      <section class="panel onboarding-panel signin-leaders-panel">
-        <div class="stack-card signin-stats-shell">
+        </section>
+        <section class="panel onboarding-panel signin-leaders-panel">
+          <div class="stack-card signin-stats-shell">
           <div class="signin-stats-head">
             <div>
               <p class="section-kicker">League Leaders</p>
@@ -96,9 +78,10 @@
           </div>
         </div>
       </section>
+      </div>
     </div>
-    <script src="/assets/multipage.js?v=20260510g"></script>
-    <script src="/assets/public_live.js?v=20260510g"></script>
-    <script src="/assets/signin.js?v=20260510g"></script>
+    <script src="/assets/public_header.js?v=20260511b"></script>
+    <script src="/assets/multipage.js?v=20260511k"></script>
+    <script src="/assets/signin.js?v=20260511j"></script>
   </body>
 </html>

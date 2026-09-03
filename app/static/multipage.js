@@ -6,7 +6,7 @@ const USER_BADGE_ID = "userIdentityBadge";
 const CLUB_BADGE_ID = "currentClubBadge";
 const BOTTOM_NAV_ID = "bottomAppNav";
 const ASSISTANT_FAB_ID = "assistantFloatingButton";
-const SHARED_HEADER_URL = "/assets/shared_header.html?v=20260509a";
+const SHARED_HEADER_URL = "/assets/shared_header.html?v=20260511k";
 const SESSION_ACTIVITY_DEBOUNCE_MS = 1200;
 const SESSION_TOUCH_INTERVAL_MS = 60000;
 const SHARED_NAV_ITEMS = [
@@ -18,8 +18,8 @@ const SHARED_NAV_ITEMS = [
   { href: "/dashboard/widgets/archive", label: "Archives" },
   { href: "/dashboard/widgets/performance", label: "Performances" },
   { href: "/profile", label: "Profile" },
-  { href: "/dashboard/widgets/assistant", label: "AI Assistant" },
-  { href: "/admin-center", label: "Admin Center", adminOnly: true },
+  { href: "/dashboard/widgets/assistant", label: "Assistant" },
+  { href: "/admin-center", label: "Admin", adminOnly: true },
 ];
 
 let sessionTouchTimer = null;
@@ -146,12 +146,12 @@ async function loadSharedHeaderTemplate() {
 async function authMe() {
   syncDashboardWidgetAttribute();
   const data = await sharedGetJson("/api/auth/me", true);
+  window.sessionStorage.setItem(SESSION_KEY, JSON.stringify(data.session || null));
   renderSharedTopbar(data.user || null);
-  renderSharedBottomNav();
+  renderSharedBottomNav(data.user || null);
   syncActiveNavState();
   syncUserBadge(data.user || null);
   syncClubBadge(data.user?.current_club_name || data.user?.primary_club_name || "");
-  window.sessionStorage.setItem(SESSION_KEY, JSON.stringify(data.session || null));
   return data;
 }
 
@@ -232,6 +232,7 @@ function syncClubBadge(clubName) {
   const badge = ensureClubBadge();
   if (!badge) return;
   badge.hidden = false;
+  badge.title = clean;
   const initials = clean
     .split(/\s+/)
     .filter(Boolean)
@@ -243,7 +244,8 @@ function syncClubBadge(clubName) {
     <span class="club-chip-mark" aria-hidden="true">${initials}</span>
     <span class="club-chip-copy">
       <small>Club</small>
-      <strong>${clean}</strong>
+      <strong>${initials}</strong>
+      <span>${clean}</span>
     </span>
   `;
 }
@@ -320,21 +322,26 @@ function syncUserBadge(user) {
   badge.classList.remove("is-muted");
   const name = String(user.display_name || user.full_name || user.mobile || "Signed in").trim();
   const role = formatRoleLabel(user.effective_role || user.role || "player");
+  const initials = formatInitials(name);
+  badge.title = name;
   badge.innerHTML = `
-    <span class="user-chip-mark" aria-hidden="true">${formatInitials(name)}</span>
+    <span class="user-chip-mark" aria-hidden="true">${initials}</span>
     <span class="user-chip-copy">
-      <strong>${name}</strong>
+      <small>User</small>
+      <strong>${initials}</strong>
       <span>${role}</span>
     </span>
   `;
 }
 
-function renderSharedBottomNav() {
+function renderSharedBottomNav(user = null) {
   const shell = document.querySelector(".page-shell");
   if (!shell) {
     return null;
   }
   const currentPath = String(window.location.pathname || "/dashboard").replace(/\/+$/, "") || "/dashboard";
+  const currentRole = String(user?.effective_role || user?.role || "").trim();
+  const isAdmin = currentRole === "superadmin";
   let nav = document.getElementById(BOTTOM_NAV_ID);
   if (!nav) {
     nav = document.createElement("nav");
@@ -347,10 +354,13 @@ function renderSharedBottomNav() {
     { href: "/clubs", label: "Clubs", icon: "🏏" },
     { href: "/dashboard/widgets/scoring", label: "Scoring", icon: "🏏" },
     { href: "/dashboard/widgets/schedule", label: "Fixtures", icon: "📅" },
+    { href: "/player-availability", label: "Availability", icon: "✅" },
     { href: "/dashboard/widgets/archive", label: "Archives", icon: "🗂️" },
     { href: "/dashboard/widgets/performance", label: "Performances", icon: "📊" },
     { href: "/profile", label: "Profile", icon: "👤" },
-  ];
+    { href: "/dashboard/widgets/assistant", label: "Assistant", icon: "🤖" },
+    { href: "/admin-center", label: "Admin", icon: "⚙️", adminOnly: true },
+  ].filter((item) => !item.adminOnly || isAdmin);
   nav.innerHTML = items
     .map((item) => {
       const isCurrent = currentPath === item.href || currentPath.startsWith(`${item.href}/`);
@@ -394,7 +404,9 @@ async function renderSharedTopbar(user = null) {
     syncUserBadge(user);
   }
   syncClubBadge(user?.current_club_name || user?.primary_club_name || "");
-  renderSharedBottomNav();
+  if (user) {
+    renderSharedBottomNav(user);
+  }
   return topbar;
 }
 
@@ -557,6 +569,7 @@ window.CricketClubAppPages = {
   signOut,
   optionMarkup,
   renderSharedTopbar,
+  renderSharedBottomNav,
   renderSharedPageIntro,
   syncClubBadge,
   syncAdminOnlyElements,

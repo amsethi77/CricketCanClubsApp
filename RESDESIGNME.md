@@ -76,14 +76,18 @@ The application IS:
 The local app has been redesigned around a shared header and a cleaner menu split. This is the current working map:
 
 * Shared header fragment: `app/static/shared_header.html`
-* Main menu order: `Home | Clubs | Live | Fixtures | Availability | Archives | Performances | AI Assistant | Admin Center`
+* Main menu order: `Home | Clubs | Scoring | Fixtures | Availability | Archives | Performances | Profile | AI Assistant | Admin Center`
+* Top and bottom menus now use the same icon-first tile language on web and mobile
+* Club/user identity chips are compact and use initials to preserve space on small screens
+* Sign out is icon-backed and styled like the rest of the compact header controls
 * Home only: season overview, snapshot cards, club summary, upcoming match summary
 * Live: scorecard and commentary only
 * Fixtures: create, update, delete fixtures; selected fixture availability board; playing XI selection from the same fixture roster
 * Availability: player self-service availability by fixture using three buttons
 * Archives: season selection, upload scorecards, archive status, pending review filters
-* Performances: player profile view/edit, selected player details, all-year match history, club-wise and season-wise stats
-* Clubs: shared player summary and match history view synced with Performance and Player Profile
+* Performances: club player performances, rankings, and invite/search entry points
+* Profile: player profile view/edit, selected player details, all-year match history, club-wise and season-wise stats
+* Clubs: shared player summary and match history view synced with Performance and Profile
 * AI Assistant: chat-only view, without schedule or ranking panels
 * Admin Center: only visible to superadmin
 
@@ -93,6 +97,12 @@ Shared APIs currently being used for consistency and future mobile reuse:
 * `GET /api/player/profile-data`
 * `GET /api/dashboard`
 
+Latest live deployment:
+
+* Existing Azure site remains `https://cricketcanclubs-web.azurewebsites.net`
+* Current live deployment is kept in sync with the local app
+* No Azure changes should be made until the current redesign is reviewed and approved
+
 Important rules:
 
 * No Azure deploy until the local app is reviewed and approved
@@ -100,6 +110,238 @@ Important rules:
 * Selected club must stay session-scoped and consistent across pages
 * Player history shows only played/reviewed fixtures, not pending matches
 * The archive history logic must keep the six approved records in sync across Clubs, Performance, and Player Profile
+* Public pages must use the Sora + Inter typography system:
+  * Sora for hero titles, live scores, scorecards, and major headings
+  * Inter for menus, labels, buttons, descriptions, commentary, cards, forms, and tables
+
+---
+
+# NEW PUBLIC LIVE LANDING PAGE ARCHITECTURE
+
+Status: implemented locally and wired into the current app shell. The public experience is now split into `/live` for live matches and `/fixtures` for public/read-only fixtures, `/` redirects to `/live`, and the signin/register pages no longer carry live-match widgets. The public pages must stay aligned to the original red/white brand theme and must not drift into orange/blue accents.
+Public pages now consume a single shared header fragment so the menu stays identical across `/live`, `/fixtures`, `/rankings`, `/signin`, `/register`, and the public scorecard.
+Shared public header files:
+
+* `app/static/public_header.html`
+* `app/static/public_header.js`
+
+## IMPORTANT PRODUCT CHANGE
+
+The LIVE MATCHES section MUST be removed from:
+
+* Signin Page
+* Registration Page
+
+Instead:
+
+Create a completely NEW PUBLIC PAGE called:
+
+```text
+/live
+```
+
+Implemented files:
+
+```text
+app/static/live.html
+app/static/live.css
+app/static/live.js
+app/static/fixtures.html
+app/static/fixtures.js
+app/static/rankings.html
+app/static/rankings.js
+```
+
+This page becomes the:
+
+* main public landing page
+* live match showcase
+* public engagement portal
+
+The default route:
+
+```text
+/
+```
+
+MUST redirect or render:
+
+```text
+/live
+```
+
+## PRODUCT STRATEGY CHANGE
+
+The website is NO LONGER:
+
+* authentication-first
+
+The website is NOW:
+
+* cricket-first
+* live-score-first
+* public-engagement first
+
+The public homepage should feel like:
+
+* Cricbuzz
+* CricHeroes
+* SofaScore
+* Apple Sports
+
+NOT:
+
+* an enterprise login portal
+
+## NEW PUBLIC FLOW
+
+Anonymous User
+↓
+LIVE Landing Page
+↓
+View Live Matches
+↓
+View Public Scorecards
+↓
+Register / Sign In CTA
+
+## NEW PRIMARY PUBLIC NAVIGATION
+
+The public navigation MUST include:
+
+* LIVE
+* Fixtures
+* Rankings
+* Clubs
+* Sign In
+* Register
+
+## AUTHENTICATED NAVIGATION
+
+Authenticated users see:
+
+* Home
+* Scoring
+* Clubs
+* Fixtures
+* Availability
+* Archives
+* Performances
+* Profile
+* Assistant
+* Admin
+
+## LIVE PAGE RESPONSIBILITIES
+
+The LIVE page becomes the:
+
+* public homepage
+* live match center
+
+It MUST show:
+
+1. LIVE MATCHES
+   * currently live matches
+   * realtime scores
+   * overs
+   * momentum
+   * recent balls
+   * venue
+   * match status
+
+2. PUBLIC SCORECARD ACCESS
+   * open matches
+   * view scorecards
+   * view commentary
+   * view innings
+   * read-only only
+
+## LIVE PAGE DESIGN
+
+The LIVE page MUST feel like:
+
+* the login page theme
+* lightweight
+* card based
+* mobile first
+
+The layout flow:
+
+* Hero
+* Live Matches
+* Public scorecard CTA
+
+The score and match situation must dominate visually.
+
+## FIXTURES PAGE
+
+The fixtures experience is now separated from live matches.
+
+Route:
+
+```text
+/fixtures
+```
+
+This page must:
+
+* show all clubs when the user is unauthenticated
+* show the current club fixtures in read-only mode when the user is authenticated
+* use the same light, login-like theme as the auth pages
+* stay distinct from the editable season setup / club admin flows
+
+Implemented route and files:
+
+```text
+/fixtures
+app/static/fixtures.html
+app/static/fixtures.js
+```
+
+Public ranking route:
+
+```text
+/rankings
+app/static/rankings.html
+app/static/rankings.js
+```
+
+The fixtures page should:
+
+* group fixtures by club
+* show venue, date, time, and match type
+* link read-only cards to the public scorecard view
+
+## AUTH PAGE CHANGE
+
+Signin/Register pages now become:
+
+* lightweight auth screens
+* simpler
+* cleaner
+* focused on auth
+
+Signin/Register pages MUST NOT carry live match widgets anymore.
+
+Implemented behavior:
+
+* `/` now redirects to `/live`
+* `/live` serves the new public landing page
+* `/live/:match-id` serves the public read-only scorecard
+* `/live/:match-id/commentary` and `/live/:match-id/stats` redirect back to the scorecard shell
+* sign-in and registration pages are now auth-first and no longer embed live match widgets
+
+## ROUTES
+
+Required routes:
+
+```text
+/
+/live
+/live/:match-id
+/live/:match-id/commentary
+/live/:match-id/stats
+```
 
 ---
 

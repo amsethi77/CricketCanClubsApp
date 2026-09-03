@@ -5,6 +5,7 @@ import os
 import re
 import secrets
 import sqlite3
+import shutil
 import threading
 from copy import deepcopy
 from urllib import request
@@ -13,6 +14,7 @@ import uuid
 from datetime import datetime, date, timezone
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 
 from fastapi import FastAPI, File, Form, Header, HTTPException, Request, Response, UploadFile
@@ -25,6 +27,30 @@ import sqlite3
 import logging
 
 logger = logging.getLogger("CricketClubApp")
+
+
+def _current_local_date() -> date:
+    try:
+        return datetime.now(ZoneInfo("America/Toronto")).date()
+    except Exception:
+        return datetime.now().date()
+
+
+def _scorebook_is_open(match: dict[str, Any]) -> bool:
+    status = str(match.get("status") or "").strip().lower()
+    raw_date = str(match.get("date") or "").strip()
+    if not raw_date:
+        return False
+    try:
+        match_day = datetime.fromisoformat(raw_date[:10]).date()
+    except Exception:
+        return False
+    today = _current_local_date()
+    if match_day < today:
+        return False
+    if status == "completed":
+        return False
+    return match_day == today or status in {"live", "in progress"}
 
 _AUTH_SCHEMA_BOOTSTRAP_LOCK = threading.Lock()
 _AUTH_SCHEMA_BOOTSTRAP_DONE = False
@@ -320,11 +346,9 @@ def _season_setup_page_html(request: Request) -> HTMLResponse | RedirectResponse
     viewer_selected_year = str(store.get("viewer_profile", {}).get("selected_season_year") or "").strip()
     if re.match(r"20\d{2}$", viewer_selected_year):
         season_years.add(viewer_selected_year)
-    selected_year = viewer_selected_year if re.match(r"20\d{2}$", viewer_selected_year) else current_year
+    selected_year = current_year
     if not re.match(r"20\d{2}$", selected_year):
         selected_year = str(MIN_SEASON_SETUP_YEAR)
-    if selected_year not in season_years and season_years:
-        selected_year = sorted(season_years)[-1]
     season_years = sorted(
         {str(year).strip() for year in season_years if str(year).strip()},
         reverse=True,
@@ -443,6 +467,11 @@ def _auth_token_from_request(request: Request, x_auth_token: str | None = None) 
     if token:
         return token
     return str(request.cookies.get("cricketClubAppAuthToken") or "").strip()
+
+
+def _validated_database_backup_path() -> Path:
+    timestamp = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
+    return DATABASE_FILE.with_name(f"{DATABASE_FILE.stem}.backup-{timestamp}{DATABASE_FILE.suffix}")
 
 
 def _clubs_page_html(request: Request, search: str = "", focus_club_id: str = "") -> HTMLResponse:
@@ -3132,8 +3161,8 @@ def parse_imported_extraction(store: dict[str, Any], text: str) -> dict[str, Any
 
 
 @app.get("/")
-def root() -> FileResponse:
-    return signin_page()
+def root() -> RedirectResponse:
+    return RedirectResponse(url="/live", status_code=303)
 
 
 @app.on_event("startup")
@@ -3224,6 +3253,139 @@ def signin_page() -> HTMLResponse:
             "Pragma": "no-cache",
         },
     )
+
+
+def _parse_public_fixture_date(value: Any) -> date | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        return date.fromisoformat(text[:10])
+    except Exception:
+        return None
+
+
+def _public_fixture_group_label(fixture: dict[str, Any]) -> str:
+    details = fixture.get("details") or {}
+    candidates = [
+        fixture.get("group"),
+        fixture.get("league"),
+        fixture.get("division"),
+        details.get("group"),
+        details.get("league"),
+        details.get("division"),
+        details.get("match_type"),
+        fixture.get("season"),
+    ]
+    for candidate in candidates:
+        text = str(candidate or "").strip()
+        if text:
+            return text
+    return "Upcoming"
+
+
+def _public_fixture_recent_balls(fixture: dict[str, Any], limit: int = 6) -> list[str]:
+    balls: list[str] = []
+    innings_list = (fixture.get("scorebook", {}) or {}).get("innings", []) or []
+    for innings in innings_list:
+        for ball in innings.get("balls", []) or []:
+            runs = str(ball.get("runs_bat") or 0)
+            extras_type = str(ball.get("extras_type") or "none")
+            wicket = bool(ball.get("wicket"))
+            token = runs
+            if wicket:
+                token = "W"
+            elif extras_type and extras_type != "none":
+                token = "WD" if extras_type == "wide" else "NB" if extras_type == "no_ball" else extras_type[:2].upper()
+            balls.append(token)
+    return balls[-limit:]
+
+
+def _public_fixture_card(fixture: dict[str, Any]) -> dict[str, Any]:
+    scorecard = dict(fixture.get("scorecard") or {})
+    status = str(fixture.get("status") or "Scheduled").strip() or "Scheduled"
+    date_text = str(fixture.get("date") or "").strip()
+    parsed_date = _parse_public_fixture_date(date_text)
+    today = date.today()
+    day_diff = (parsed_date - today).days if parsed_date else None
+    if day_diff == 0:
+        day_label = "Today"
+    elif day_diff == 1:
+        day_label = "Tomorrow"
+    elif day_diff is not None and 2 <= day_diff <= 6 and parsed_date and parsed_date.weekday() >= 5:
+        day_label = "Weekend"
+    else:
+        day_label = "Upcoming"
+    return {
+        "id": str(fixture.get("id") or ""),
+        "club_id": str(fixture.get("club_id") or ""),
+        "club_name": str(fixture.get("club_name") or ""),
+        "date": date_text,
+        "date_label": str(fixture.get("date_label") or date_text or "Date TBD"),
+        "day_label": day_label,
+        "opponent": str(fixture.get("opponent") or "Opponent"),
+        "venue": str((fixture.get("details") or {}).get("venue") or "Venue TBD"),
+        "match_type": str((fixture.get("details") or {}).get("match_type") or "Friendly"),
+        "scheduled_time": str((fixture.get("details") or {}).get("scheduled_time") or "Time TBD"),
+        "overs": str((fixture.get("details") or {}).get("overs") or ""),
+        "group_label": _public_fixture_group_label(fixture),
+        "status": status,
+        "status_key": status.lower(),
+        "result": str(scorecard.get("result") or fixture.get("result") or "TBD"),
+        "heartlake_score": str(scorecard.get("heartlake_runs") or fixture.get("heartlake_score") or ""),
+        "opponent_score": str(scorecard.get("opponent_runs") or fixture.get("opponent_score") or ""),
+        "live_summary": str(scorecard.get("live_summary") or ""),
+        "commentary_count": len(fixture.get("commentary", []) or []),
+        "performances_count": len(fixture.get("performances", []) or []),
+        "availability_count": len(fixture.get("availability", []) or []),
+        "selected_playing_xi": list(fixture.get("selected_playing_xi", []) or []),
+        "recent_balls": _public_fixture_recent_balls(fixture),
+    }
+
+
+def _public_live_page_payload(store: dict[str, Any]) -> dict[str, Any]:
+    live_matches = [_public_fixture_card(match) for match in _public_live_matches(store)]
+    live_match_ids = {item["id"] for item in live_matches}
+    today = date.today()
+    upcoming_candidates: list[dict[str, Any]] = []
+    recent_results: list[dict[str, Any]] = []
+    for fixture in list(store.get("fixtures", []) or []):
+        card = _public_fixture_card(fixture)
+        if card["id"] in live_match_ids:
+            continue
+        parsed_date = _parse_public_fixture_date(card.get("date"))
+        status_key = card.get("status_key") or ""
+        if status_key == "completed":
+            recent_results.append(card)
+            continue
+        if parsed_date and parsed_date < today:
+            continue
+        upcoming_candidates.append(card)
+    upcoming_candidates.sort(
+        key=lambda item: (
+            str(item.get("date") or ""),
+            str(item.get("scheduled_time") or ""),
+            str(item.get("club_name") or ""),
+        )
+    )
+    recent_results.sort(key=lambda item: str(item.get("date") or ""), reverse=True)
+    grouped_upcoming: list[dict[str, Any]] = []
+    group_map: dict[str, list[dict[str, Any]]] = {}
+    for item in upcoming_candidates:
+        bucket = str(item.get("day_label") or "Upcoming")
+        group = str(item.get("group_label") or "Upcoming")
+        key = f"{bucket}::{group}"
+        group_map.setdefault(key, []).append(item)
+    for key in sorted(group_map.keys(), key=lambda value: value.split("::", 1)):
+        bucket, group = key.split("::", 1)
+        grouped_upcoming.append({"bucket": bucket, "group": group, "matches": group_map[key]})
+    return {
+        "hero": live_matches[0] if live_matches else (upcoming_candidates[0] if upcoming_candidates else {}),
+        "live_matches": live_matches,
+        "upcoming_groups": grouped_upcoming[:8],
+        "recent_results": recent_results[:8],
+        "generated_at": now_iso(),
+    }
 
 
 @app.get("/api/public/signin-stats")
@@ -3504,6 +3666,79 @@ def public_live_matches() -> dict[str, Any]:
     }
 
 
+@app.get("/api/public/live-page")
+def public_live_page() -> dict[str, Any]:
+    logger.debug("Public live landing page requested.")
+    store = load_store()
+    return _public_live_page_payload(store)
+
+
+@app.get("/api/public/fixtures-page")
+def public_fixtures_page() -> dict[str, Any]:
+    logger.debug("Public fixtures landing page requested.")
+    store = load_store()
+    return _public_fixtures_page_payload(store)
+
+
+def _public_fixture_card_payload(fixture: dict[str, Any]) -> dict[str, Any]:
+    details = dict(fixture.get("details") or {})
+    scorecard = dict(fixture.get("scorecard") or {})
+    date_value = str(fixture.get("date") or "")
+    club_name = str(fixture.get("club_name") or "").strip() or "Club"
+    return {
+        "id": str(fixture.get("id") or ""),
+        "club_id": str(fixture.get("club_id") or ""),
+        "club_name": club_name,
+        "club_short_name": str(fixture.get("club_short_name") or "").strip(),
+        "date": date_value,
+        "date_label": str(fixture.get("date_label") or date_value or "Date TBD"),
+        "day_label": str(fixture.get("day_label") or ""),
+        "opponent": str(fixture.get("opponent") or "Opponent"),
+        "venue": str(details.get("venue") or "Venue TBD"),
+        "match_type": str(details.get("match_type") or "Friendly"),
+        "scheduled_time": str(details.get("scheduled_time") or "Time TBD"),
+        "overs": str(details.get("overs") or ""),
+        "status": str(fixture.get("status") or "Scheduled"),
+        "status_key": str(fixture.get("status_key") or str(fixture.get("status") or "").lower().replace(" ", "-")),
+        "result": str(scorecard.get("result") or fixture.get("result") or "TBD"),
+        "heartlake_score": str(scorecard.get("heartlake_runs") or fixture.get("heartlake_score") or ""),
+        "opponent_score": str(scorecard.get("opponent_runs") or fixture.get("opponent_score") or ""),
+        "live_summary": str(scorecard.get("live_summary") or ""),
+    }
+
+
+def _public_fixtures_page_payload(store: dict[str, Any]) -> dict[str, Any]:
+    fixtures = [_public_fixture_card_payload(fixture) for fixture in list(store.get("fixtures", []) or [])]
+    fixtures.sort(
+        key=lambda item: (
+            str(item.get("date") or ""),
+            str(item.get("club_name") or ""),
+            str(item.get("scheduled_time") or ""),
+            str(item.get("opponent") or ""),
+        )
+    )
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for fixture in fixtures:
+        grouped.setdefault(str(fixture.get("club_name") or "Club"), []).append(fixture)
+    club_groups = [
+        {"club_name": club_name, "count": len(items), "fixtures": items}
+        for club_name, items in grouped.items()
+    ]
+    club_groups.sort(key=lambda item: str(item.get("club_name") or ""))
+    return {
+        "hero": {
+            "headline": "Fixtures across clubs",
+            "summary": "Browse fixtures by club. Signed-in users see their club fixtures in read-only mode.",
+            "total_fixtures": len(fixtures),
+            "club_count": len(club_groups),
+            "upcoming_count": sum(1 for fixture in fixtures if str(fixture.get("status") or "").lower() != "completed"),
+        },
+        "fixtures": fixtures,
+        "club_groups": club_groups,
+        "generated_at": now_iso(),
+    }
+
+
 @app.get("/api/public/match/{match_id}")
 def public_match(match_id: str) -> dict[str, Any]:
     logger.debug("Public scorecard requested. match_id=%s", match_id)
@@ -3521,6 +3756,36 @@ def public_match(match_id: str) -> dict[str, Any]:
 @app.get("/public/match/{match_id}")
 def public_match_page(match_id: str) -> FileResponse:
     return _page_response("public_match.html")
+
+
+@app.get("/live")
+def live_page() -> FileResponse:
+    return _page_response("live.html")
+
+
+@app.get("/fixtures")
+def fixtures_page() -> FileResponse:
+    return _page_response("fixtures.html")
+
+
+@app.get("/rankings")
+def rankings_page() -> FileResponse:
+    return _page_response("rankings.html")
+
+
+@app.get("/live/{match_id}")
+def live_match_page(match_id: str) -> FileResponse:
+    return _page_response("public_match.html")
+
+
+@app.get("/live/{match_id}/commentary")
+def live_match_commentary_page(match_id: str) -> RedirectResponse:
+    return RedirectResponse(url=f"/live/{match_id}", status_code=303)
+
+
+@app.get("/live/{match_id}/stats")
+def live_match_stats_page(match_id: str) -> RedirectResponse:
+    return RedirectResponse(url=f"/live/{match_id}", status_code=303)
 
 
 def _admin_center_html(request: Request) -> HTMLResponse:
@@ -3767,7 +4032,7 @@ def _admin_center_html(request: Request) -> HTMLResponse:
       <head>
         <meta charset="UTF-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-        <title>Admin Center · CricketClubApp</title>
+        <title>Admin center · CricketClubApp</title>
         <link rel="stylesheet" href="/assets/styles.css?v=20260509e" />
       </head>
       <body>
@@ -3775,7 +4040,7 @@ def _admin_center_html(request: Request) -> HTMLResponse:
           <header class="page-topbar"></header>
           <section class="panel onboarding-panel">
             <div class="stack-card">
-              <p class="section-kicker">Admin Center</p>
+              <p class="section-kicker">Admin center</p>
               <h1>{html.escape(club.get('name', 'Selected club'))} control room</h1>
               <div id="adminRoleBadge" class="hero-badge admin-role-badge">Loading role...</div>
               <p class="lede">Select a club, review that club’s data, edit fixtures, and manage archives from one place.</p>
@@ -4204,11 +4469,9 @@ def dashboard(
         focus_club_id
         or None
     )
-    stored_viewer_year = str(store.get("viewer_profile", {}).get("selected_season_year") or "").strip()
     requested_season_year = (
         str(selected_season_year or request.query_params.get("selected_season_year") or "").strip()
         or str(request.cookies.get("cricketClubAppSelectedSeasonYear") or "").strip()
-        or stored_viewer_year
         or str(datetime.utcnow().year)
     )
     logger.debug(
@@ -4945,11 +5208,9 @@ def season_setup_data(
     viewer_selected_year = str(store.get("viewer_profile", {}).get("selected_season_year") or "").strip()
     if re.match(r"20\d{2}$", viewer_selected_year):
         season_years.add(viewer_selected_year)
-    selected_year = viewer_selected_year if re.match(r"20\d{2}$", viewer_selected_year) else current_year
+    selected_year = current_year
     if not re.match(r"20\d{2}$", selected_year):
         selected_year = str(MIN_SEASON_SETUP_YEAR)
-    if selected_year not in season_years and season_years:
-        selected_year = sorted(season_years)[-1]
     season_years = sorted(
         {str(year).strip() for year in season_years if str(year).strip()},
         reverse=True,
@@ -4966,11 +5227,27 @@ def season_setup_data(
     }
 
 
+def _fixture_identity_value(value: Any) -> str:
+    return " ".join(str(value or "").strip().lower().split())
+
+
+def _fixture_matches_identity(existing: dict[str, Any], club_id: str, request: SeasonFixtureRequest) -> bool:
+    return (
+        _fixture_identity_value(existing.get("club_id") or "") == _fixture_identity_value(club_id)
+        and _fixture_identity_value(existing.get("date") or "") == _fixture_identity_value(request.date)
+        and _fixture_identity_value(existing.get("opponent") or "") == _fixture_identity_value(request.opponent)
+        and _fixture_identity_value(existing.get("details", {}).get("scheduled_time") or "")
+        == _fixture_identity_value(request.scheduled_time)
+    )
+
+
 @app.post("/api/season-setup/fixtures")
 def create_season_fixture(request: SeasonFixtureRequest, x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
     user_row, current_club_id = _require_permission(x_auth_token, "manage_fixtures")
     store = load_store()
     club = _selected_club(store, request.club_id or current_club_id)
+    club_name = str(club.get("name") or club.get("short_name") or "Club").strip() or "Club"
+    club_short_name = str(club.get("short_name") or club_name).strip() or club_name
     logger.debug(
         "Season fixture create requested. club_id=%s club_name=%s season_year=%s date=%s opponent=%s actor=%s",
         club.get("id", ""),
@@ -4986,13 +5263,31 @@ def create_season_fixture(request: SeasonFixtureRequest, x_auth_token: str | Non
             status_code=400,
             detail=f"Season setup is only available for {MIN_SEASON_SETUP_YEAR} and later.",
         )
+    duplicate_fixture = next(
+        (
+            fixture
+            for fixture in store.get("fixtures", [])
+            if _fixture_matches_identity(fixture, str(club.get("id") or ""), request)
+        ),
+        None,
+    )
+    if duplicate_fixture:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Fixture already exists for {club.get('name', 'selected club')} "
+                f"on {request.date_label or request.date} vs {request.opponent} "
+                f"at {request.scheduled_time or 'the selected time'}."
+            ),
+        )
     season_label = f"{season_year} Season"
     created_at = now_iso()
 
     new_fixture = {
         "id": str(uuid.uuid4())[:8],
         "club_id": club.get("id", ""),
-        "club_name": club.get("name", ""),
+        "club_name": club_name,
+        "club_short_name": club_short_name,
         "season_year": str(season_year),
         "season": season_label,
         "date": request.date,
@@ -5025,7 +5320,14 @@ def create_season_fixture(request: SeasonFixtureRequest, x_auth_token: str | Non
         },
         "scorecard": default_scorecard("TBD"),
         "performances": [],
-        "scorebook": default_match_scorebook({"opponent": request.opponent.strip(), "details": {"overs": request.overs.strip() or "20"}}),
+        "scorebook": default_match_scorebook(
+            {
+                "club_name": club_name,
+                "club_short_name": club_short_name,
+                "opponent": request.opponent.strip(),
+                "details": {"overs": request.overs.strip() or "20"},
+            }
+        ),
     }
     _touch_fixture_audit(new_fixture, user_row, created=True)
     store.setdefault("fixtures", []).append(new_fixture)
@@ -5067,6 +5369,8 @@ def update_season_fixture(
     user_row, _ = _require_permission(x_auth_token, "manage_fixtures")
     store = load_store()
     club = _selected_club(store, club_id)
+    club_name = str(club.get("name") or club.get("short_name") or "Club").strip() or "Club"
+    club_short_name = str(club.get("short_name") or club_name).strip() or club_name
     season_year = int(request.season_year)
     if season_year < MIN_SEASON_SETUP_YEAR:
         raise HTTPException(
@@ -5090,15 +5394,34 @@ def update_season_fixture(
             fixture_day = date.fromisoformat(fixture_date)
         except ValueError:
             fixture_day = None
-        if fixture_day and fixture_day < datetime.utcnow().date():
+        if fixture_day and fixture_day < _current_local_date():
             raise HTTPException(
                 status_code=400,
                 detail="Past fixtures cannot be edited.",
             )
+    duplicate_fixture = next(
+        (
+            item
+            for item in store.get("fixtures", [])
+            if str(item.get("id") or "").strip() != fixture_id
+            and _fixture_matches_identity(item, str(club.get("id") or ""), request)
+        ),
+        None,
+    )
+    if duplicate_fixture:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Fixture already exists for {club.get('name', 'selected club')} "
+                f"on {request.date_label or request.date} vs {request.opponent} "
+                f"at {request.scheduled_time or 'the selected time'}."
+            ),
+        )
     fixture.update(
         {
             "club_id": club.get("id", ""),
-            "club_name": club.get("name", ""),
+            "club_name": club_name,
+            "club_short_name": club_short_name,
             "season_year": str(season_year),
             "season": f"{season_year} Season",
             "date": request.date,
@@ -5556,6 +5879,72 @@ def cache_status() -> dict[str, Any]:
         "dashboard_cache": str(DASHBOARD_CACHE_FILE),
         "store_cache_exists": CACHE_FILE.exists(),
         "dashboard_cache_exists": DASHBOARD_CACHE_FILE.exists(),
+    }
+
+
+@app.get("/api/admin/db/export")
+def export_database(x_auth_token: str | None = Header(default=None)) -> FileResponse:
+    _require_superadmin(x_auth_token)
+    if not DATABASE_FILE.exists():
+        raise HTTPException(status_code=404, detail="Database file not found.")
+    return FileResponse(
+        path=DATABASE_FILE,
+        filename=DATABASE_FILE.name,
+        media_type="application/x-sqlite3",
+    )
+
+
+@app.post("/api/admin/db/import")
+async def import_database(
+    database: UploadFile = File(...),
+    x_auth_token: str | None = Header(default=None),
+) -> dict[str, Any]:
+    _require_superadmin(x_auth_token)
+    filename = str(database.filename or "").strip().lower()
+    if not filename.endswith((".db", ".sqlite", ".sqlite3")):
+        raise HTTPException(status_code=400, detail="Upload a SQLite database file.")
+
+    payload = await database.read()
+    if not payload:
+        raise HTTPException(status_code=400, detail="Uploaded database file is empty.")
+
+    incoming_path = DATABASE_FILE.with_suffix(f"{DATABASE_FILE.suffix}.incoming")
+    backup_path = _validated_database_backup_path()
+    incoming_path.write_bytes(payload)
+
+    try:
+        with sqlite3.connect(str(incoming_path)) as connection:
+            connection.row_factory = sqlite3.Row
+            integrity_row = connection.execute("PRAGMA integrity_check").fetchone()
+            if not integrity_row or str(integrity_row[0] or "").strip().lower() != "ok":
+                raise HTTPException(status_code=400, detail="Uploaded database failed integrity check.")
+            required_tables = {"clubs", "members", "fixtures", "archives", "app_user_profile"}
+            existing_tables = {
+                str(row[0]).strip()
+                for row in connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'").fetchall()
+            }
+            if not required_tables.issubset(existing_tables):
+                missing = ", ".join(sorted(required_tables - existing_tables))
+                raise HTTPException(status_code=400, detail=f"Uploaded database is missing required tables: {missing}")
+    except HTTPException:
+        incoming_path.unlink(missing_ok=True)
+        raise
+    except Exception as exc:
+        incoming_path.unlink(missing_ok=True)
+        raise HTTPException(status_code=400, detail=f"Unable to validate uploaded database: {exc}") from exc
+
+    if DATABASE_FILE.exists():
+        shutil.copy2(DATABASE_FILE, backup_path)
+    incoming_path.replace(DATABASE_FILE)
+
+    refreshed_store = load_store()
+    return {
+        "ok": True,
+        "database_file": str(DATABASE_FILE),
+        "backup_file": str(backup_path) if backup_path.exists() else "",
+        "members": len(refreshed_store.get("members", []) or []),
+        "fixtures": len(refreshed_store.get("fixtures", []) or []),
+        "archives": len(refreshed_store.get("archive_uploads", []) or []),
     }
 
 
@@ -6155,6 +6544,8 @@ def update_scorebook_setup(match_id: str, request: ScorebookSetupRequest, x_auth
         match = get_match_or_404(store, match_id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
+    if not _scorebook_is_open(match):
+        raise HTTPException(status_code=400, detail="Live scoring is locked for this fixture. Past matches are read only and should be handled through Archives or scorecard uploads.")
 
     scorebook = _match_scorebook(match)
     innings_index = max(1, min(2, int(request.innings_number or 1))) - 1
@@ -6187,6 +6578,8 @@ def add_scorebook_ball(match_id: str, request: ScorebookBallRequest, x_auth_toke
         match = get_match_or_404(store, match_id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
+    if not _scorebook_is_open(match):
+        raise HTTPException(status_code=400, detail="Live scoring is locked for this fixture. Past matches are read only and should be handled through Archives or scorecard uploads.")
 
     scorebook = _match_scorebook(match)
     innings_index = max(1, min(2, int(request.innings_number or 1))) - 1
@@ -6232,6 +6625,42 @@ def add_scorebook_ball(match_id: str, request: ScorebookBallRequest, x_auth_toke
         innings["status"] = "Live"
     if summary["wickets"] >= 10 or summary["legal_balls"] >= int(innings.get("overs_limit", 20) or 20) * 6:
         innings["status"] = "Completed"
+    sync_fixture_scorecard_from_scorebook(match)
+    _touch_fixture_audit(match, user_row)
+    save_store(store)
+    return current_dashboard(load_store())
+
+
+@app.delete("/api/matches/{match_id}/scorebook/ball")
+def delete_scorebook_ball(match_id: str, x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
+    user_row, _ = _require_permission(x_auth_token, "manage_scorecards")
+    store = load_store()
+    try:
+        match = get_match_or_404(store, match_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    if not _scorebook_is_open(match):
+        raise HTTPException(status_code=400, detail="Live scoring is locked for this fixture. Past matches are read only and should be handled through Archives or scorecard uploads.")
+
+    scorebook = _match_scorebook(match)
+    balls_by_innings: list[tuple[dict[str, Any], dict[str, Any]]] = []
+    for innings in scorebook.get("innings", []):
+      for ball in innings.get("balls", []):
+        balls_by_innings.append((innings, ball))
+    if not balls_by_innings:
+        raise HTTPException(status_code=400, detail="No scorebook delivery to undo.")
+
+    def _ball_sort_key(item: tuple[dict[str, Any], dict[str, Any]]) -> tuple[int, int, str, str]:
+        innings, ball = item
+        return (
+            int(innings.get("inning_number", 1) or 1),
+            int(ball.get("over_number", 1) or 1) * 10 + int(ball.get("ball_number", 1) or 1),
+            str(ball.get("created_at") or ""),
+            str(ball.get("id") or ""),
+        )
+
+    target_innings, target_ball = sorted(balls_by_innings, key=_ball_sort_key)[-1]
+    target_innings["balls"] = [ball for ball in target_innings.get("balls", []) if ball.get("id") != target_ball.get("id")]
     sync_fixture_scorecard_from_scorebook(match)
     _touch_fixture_audit(match, user_row)
     save_store(store)
@@ -6845,6 +7274,17 @@ def delete_archive(upload_id: str, x_auth_token: str | None = Header(default=Non
     club = _selected_club(store, current_club_id)
     if not archive_belongs_to_club(upload, club, store.get("clubs", []), store.get("members", []), store.get("fixtures", [])):
         raise HTTPException(status_code=403, detail="This archive belongs to a different club.")
+    file_path = str(upload.get("file_path") or "").strip()
+    if file_path:
+        try:
+            resolved_path = Path(file_path).resolve()
+            upload_dir = UPLOAD_DIR.resolve()
+            if resolved_path.exists() and (resolved_path == upload_dir or upload_dir in resolved_path.parents):
+                resolved_path.unlink()
+                logger.debug("Deleted archive upload file from disk.", extra={"file_path": str(resolved_path)})
+        except Exception as exc:
+            logger.warning("Could not delete archive upload file from disk: %s", exc)
+
     store["archive_uploads"] = [
         item for item in store.get("archive_uploads", []) if str(item.get("id") or "").strip() != upload_id
     ]

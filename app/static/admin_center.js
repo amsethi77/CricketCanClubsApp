@@ -920,7 +920,7 @@ async function loadClubView(targetClubId = "", uploadsOverride = null) {
     members: filterMembersForClub(payload, club),
     teams: (Array.isArray(payload?.teams) ? payload.teams : []).filter((team) => clubMatchesSelection(team, club)),
     fixtures: filterFixturesForClub(payload, club),
-    archive_uploads: filterArchivesForClub(payload, club),
+    archive_uploads: Array.isArray(uploadsOverride) ? uploadsOverride : filterArchivesForClub(payload, club),
   };
   renderClubStats(payload);
   renderClubDetail(payload);

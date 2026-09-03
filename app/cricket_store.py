@@ -9,11 +9,12 @@ import sqlite3
 import subprocess
 import uuid
 from collections import Counter, defaultdict
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from copy import deepcopy
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import httpx
 
@@ -113,6 +114,26 @@ if not logger.handlers:
 _STORE_CACHE_SIGNATURE: tuple[int, int] | None = None
 _STORE_CACHE_PAYLOAD: dict[str, Any] | None = None
 _DASHBOARD_CACHE: dict[tuple[str, str, str], dict[str, Any]] = {}
+
+_TEAM_NAME_ALIASES = {
+    "carl xi": "Coca Cola XI",
+    "carl x!": "Coca Cola XI",
+}
+
+
+def _current_local_date() -> date:
+    try:
+        return datetime.now(ZoneInfo("America/Toronto")).date()
+    except Exception:
+        return datetime.utcnow().date()
+
+
+def canonical_team_name(name: str) -> str:
+    clean = str(name or "").strip()
+    if not clean:
+        return ""
+    alias_key = re.sub(r"[^a-z0-9]+", " ", clean.lower()).strip()
+    return _TEAM_NAME_ALIASES.get(alias_key, clean)
 
 
 def _database_signature() -> tuple[int, int]:
@@ -216,12 +237,12 @@ def _dashboard_season_years(store: dict[str, Any]) -> list[str]:
 def _resolve_dashboard_season_year(store: dict[str, Any], requested: str = "") -> str:
     available_years = _dashboard_season_years(store)
     current_year = str(datetime.utcnow().year)
-    requested_year = str(requested or store.get("viewer_profile", {}).get("selected_season_year") or "").strip()
+    requested_year = str(requested or "").strip()
     if requested_year and requested_year in available_years:
         return requested_year
     if current_year in available_years:
         return current_year
-    return available_years[0] if available_years else current_year
+    return max(available_years) if available_years else current_year
 
 
 def _display_club_season(store: dict[str, Any], club: dict[str, Any]) -> str:
@@ -566,6 +587,14 @@ def normalize_innings_scorebook(entry: dict[str, Any], default_inning: dict[str,
     normalized["batters"] = _normalize_scorebook_slots(normalized.get("batters"))
     normalized["bowlers"] = _normalize_scorebook_slots(normalized.get("bowlers"))
     normalized["balls"] = [normalize_scorebook_ball(item) for item in normalized.get("balls", []) if isinstance(item, dict)]
+    default_batting_team = str(default_inning.get("batting_team") or "").strip()
+    default_bowling_team = str(default_inning.get("bowling_team") or "").strip()
+    generic_team_names = {"", "club", "heartlake", "heartlake cricket club"}
+    if str(normalized.get("batting_team") or "").strip().lower() in generic_team_names and default_batting_team:
+        normalized["batting_team"] = default_batting_team
+    if str(normalized.get("bowling_team") or "").strip().lower() in generic_team_names and default_bowling_team:
+        normalized["bowling_team"] = default_bowling_team
+    normalized["state"] = build_scorebook_live_state(normalized)
     return normalized
 
 
@@ -605,6 +634,10 @@ def summarize_innings_scorebook(innings: dict[str, Any]) -> dict[str, Any]:
     wickets = 0
     extras = 0
     legal_balls = 0
+    wides = 0
+    noBalls = 0
+    byes = 0
+    legByes = 0
 
     for ball in innings.get("balls", []):
         striker = str(ball.get("striker", "") or "").strip()
@@ -624,7 +657,7 @@ def summarize_innings_scorebook(innings: dict[str, Any]) -> dict[str, Any]:
             )
             batter["runs"] += runs_bat
             batter["status"] = "batting"
-            if _delivery_is_legal(ball):
+            if _delivery_is_legal(ball) or extras_type == "no_ball":
                 batter["balls"] += 1
             if runs_bat == 4:
                 batter["fours"] += 1
@@ -698,19 +731,154 @@ def summarize_innings_scorebook(innings: dict[str, Any]) -> dict[str, Any]:
             99,
         ),
     )
+    target_runs = innings.get("target_runs")
+    required_run_rate = None
+    if target_runs and int(target_runs) > 0:
+        overs_limit = int(innings.get("overs_limit", 20) or 20)
+        total_balls = overs_limit * 6
+        remaining_balls = max(0, total_balls - legal_balls)
+        if remaining_balls:
+            required_runs = max(0, int(target_runs) - total_runs + 1)
+            required_run_rate = required_runs / (remaining_balls / 6)
     return {
         "runs": total_runs,
         "wickets": wickets,
         "extras": extras,
+        "wides": wides,
+        "noBalls": noBalls,
+        "byes": byes,
+        "legByes": legByes,
         "legal_balls": legal_balls,
         "overs": _over_string_from_legal_balls(legal_balls),
+        "run_rate": total_runs / (legal_balls / 6) if legal_balls else 0,
+        "required_run_rate": required_run_rate,
+        "target_runs": int(target_runs) if str(target_runs or "").strip() else None,
         "batting": batting_rows,
         "bowling": bowling_rows,
     }
 
 
-def _is_heartlake_side(team_name: str) -> bool:
-    return "heartlake" in str(team_name or "").strip().lower()
+def _scorebook_ball_label(ball: dict[str, Any]) -> str:
+    extras_type = str(ball.get("extras_type", "none") or "none").strip().lower()
+    runs_bat = int(ball.get("runs_bat", 0) or 0)
+    extras_runs = int(ball.get("extras_runs", 0) or 0)
+    if ball.get("wicket"):
+        return "W"
+    if extras_type == "wide":
+        return "Wd" if extras_runs <= 1 else f"{extras_runs}Wd"
+    if extras_type == "no_ball":
+        return f"{runs_bat}NB" if runs_bat else "NB"
+    if extras_type == "bye":
+        return f"B{extras_runs or runs_bat}" if (extras_runs or runs_bat) else "B"
+    if extras_type == "leg_bye":
+        return f"LB{extras_runs or runs_bat}" if (extras_runs or runs_bat) else "LB"
+    return str(runs_bat if runs_bat or extras_type == "none" else extras_runs)
+
+
+def build_scorebook_live_state(innings: dict[str, Any]) -> dict[str, Any]:
+    ordered_balls = sorted(
+        [item for item in innings.get("balls", []) if isinstance(item, dict)],
+        key=lambda item: (
+            int(item.get("over_number", 1) or 1),
+            int(item.get("ball_number", 1) or 1),
+            str(item.get("created_at", "")),
+            str(item.get("id", "")),
+        ),
+    )
+    summary = summarize_innings_scorebook(innings)
+    batting_slots = [str(item.get("player_name") or "").strip() for item in innings.get("batters", []) if str(item.get("player_name") or "").strip()]
+    bowling_slots = [str(item.get("player_name") or "").strip() for item in innings.get("bowlers", []) if str(item.get("player_name") or "").strip()]
+    first_striker = batting_slots[0] if batting_slots else ""
+    first_non_striker = batting_slots[1] if len(batting_slots) > 1 else (batting_slots[0] if batting_slots else "")
+    first_bowler = bowling_slots[0] if bowling_slots else ""
+    current_striker = first_striker
+    current_non_striker = first_non_striker
+    current_bowler = first_bowler
+    current_over = (summary["legal_balls"] // 6) + 1 if summary["legal_balls"] >= 0 else 1
+    next_ball = (summary["legal_balls"] % 6) + 1
+    over_complete = bool(summary["legal_balls"] and summary["legal_balls"] % 6 == 0 and ordered_balls)
+    note = "Start with two batters and the opening bowler." if not ordered_balls else "Pick the next delivery."
+
+    if ordered_balls:
+        last_ball = ordered_balls[-1]
+        last_pair = [str(last_ball.get("striker", "") or "").strip(), str(last_ball.get("non_striker", "") or "").strip()]
+        if last_pair[0]:
+            current_striker = last_pair[0]
+        if last_pair[1]:
+            current_non_striker = last_pair[1]
+        current_bowler = str(last_ball.get("bowler", "") or "").strip() or current_bowler
+        last_runs_bat = int(last_ball.get("runs_bat", 0) or 0)
+        last_extras_type = str(last_ball.get("extras_type", "none") or "none").strip().lower()
+        wicket_note = ""
+        if last_ball.get("wicket"):
+            if str(last_ball.get("wicket_type", "") or "").lower() != "run_out":
+                current_striker = ""
+                wicket_note = "A wicket fell. Choose the new striker before logging the next ball."
+        if wicket_note:
+            note = wicket_note
+        elif not current_striker or not current_non_striker:
+            note = "Choose the current batter pair for the next ball."
+        elif over_complete:
+            current_bowler = ""
+            note = "Over complete. Pick the next bowler and confirm the new end."
+        elif last_extras_type in {"wide", "no_ball"}:
+            note = "This delivery was an extra. The over does not advance on the legal-ball count."
+        elif last_runs_bat % 2 == 1:
+            current_striker, current_non_striker = current_non_striker, current_striker
+            note = "Strike rotated from the last delivery."
+
+    this_over_balls = [] if over_complete else [
+        _scorebook_ball_label(ball)
+        for ball in ordered_balls
+        if int(ball.get("over_number", 1) or 1) == current_over
+    ]
+    extras_breakdown = {
+        "wides": summary["wides"],
+        "no_balls": summary["noBalls"],
+        "byes": summary["byes"],
+        "leg_byes": summary["legByes"],
+        "total": summary["extras"],
+    }
+    return {
+        "runs": summary["runs"],
+        "wickets": summary["wickets"],
+        "legal_balls": summary["legal_balls"],
+        "overs": summary["overs"],
+        "current_run_rate": summary["run_rate"],
+        "required_run_rate": summary["required_run_rate"],
+        "target_runs": summary["target_runs"],
+        "extras": extras_breakdown,
+        "current_striker": current_striker,
+        "current_non_striker": current_non_striker,
+        "current_bowler": current_bowler,
+        "next_over": current_over,
+        "next_ball": next_ball,
+        "this_over_balls": this_over_balls,
+        "note": note,
+        "last_ball": ordered_balls[-1] if ordered_balls else None,
+        "batters": summary["batting"],
+        "bowlers": summary["bowling"],
+    }
+
+
+def _scorebook_primary_team_names(match: dict[str, Any]) -> set[str]:
+    names = {
+        str(match.get("club_name") or "").strip().lower(),
+        str(match.get("club_short_name") or "").strip().lower(),
+        str((match.get("club") or {}).get("name") or "").strip().lower(),
+        str((match.get("club") or {}).get("short_name") or "").strip().lower(),
+    }
+    return {name for name in names if name}
+
+
+def _scorebook_is_primary_side(match: dict[str, Any], team_name: str) -> bool:
+    batting = str(team_name or "").strip().lower()
+    if not batting:
+        return False
+    primary_names = _scorebook_primary_team_names(match)
+    if batting in primary_names:
+        return True
+    return any(primary in batting or batting in primary for primary in primary_names)
 
 
 def rebuild_fixture_performances_from_scorebook(match: dict[str, Any]) -> None:
@@ -769,7 +937,7 @@ def sync_fixture_scorecard_from_scorebook(match: dict[str, Any]) -> None:
         runs = str(summary.get("runs", ""))
         wickets = str(summary.get("wickets", ""))
         overs = str(summary.get("overs", ""))
-        if _is_heartlake_side(batting_team):
+        if _scorebook_is_primary_side(match, batting_team):
             scorecard["heartlake_runs"] = runs
             scorecard["heartlake_wickets"] = wickets
             scorecard["heartlake_overs"] = overs
@@ -2495,6 +2663,13 @@ def enrich_archive_record(item: dict[str, Any], members: list[dict[str, Any]]) -
     normalized = normalize_archive(item)
     file_path = Path(normalized.get("file_path") or "")
     if not file_path.is_file():
+        resolved_path = resolve_existing_upload_path(str(file_path), normalized.get("file_name", ""))
+        if resolved_path:
+            normalized["file_path"] = str(resolved_path)
+            normalized["preview_url"] = f"/uploads/{resolved_path.name}"
+            file_path = resolved_path
+
+    if not file_path.is_file():
         return normalized
     if normalized.get("ocr_processed_at"):
         return normalized
@@ -2571,12 +2746,19 @@ def reset_archive_extraction(item: dict[str, Any]) -> dict[str, Any]:
     return normalized
 
 
+def archive_status_is_pending_review(item: dict[str, Any]) -> bool:
+    status = str(item.get("status") or "").strip().lower()
+    return status in {"pending review", "ready for review", "historical archive review"} or status.startswith("pending")
+
+
 def extract_archive_by_id(store: dict[str, Any], upload_id: str) -> dict[str, Any]:
     logger.debug("Extract archive requested → upload_id=%s", upload_id)
     members = store["members"]
     for index, item in enumerate(store.get("archive_uploads", [])):
         if item.get("id") != upload_id:
             continue
+        if not archive_status_is_pending_review(item):
+            raise ValueError("Archive upload cannot be re-extracted unless its status is pending review, ready for review, or historical archive review.")
         extracted = enrich_archive_record(reset_archive_extraction(item), members)
         extracted["extraction_template"] = scorecard_template_from_archive(extracted)
         store["archive_uploads"][index] = extracted
@@ -2707,6 +2889,15 @@ def normalize_fixture(fixture: dict[str, Any], members: list[dict[str, Any]]) ->
     return normalized
 
 
+def _fixture_dedupe_key(fixture: dict[str, Any]) -> tuple[str, str, str, str]:
+    return (
+        str(fixture.get("club_id") or "").strip().lower(),
+        str(fixture.get("date") or "").strip().lower(),
+        str(fixture.get("opponent") or "").strip().lower(),
+        str((fixture.get("details") or {}).get("scheduled_time") or "").strip().lower(),
+    )
+
+
 def normalize_viewer_profile(profile: dict[str, Any] | None, club: dict[str, Any], members: list[dict[str, Any]]) -> dict[str, Any]:
     normalized = dict(DEFAULT_VIEWER_PROFILE)
     if isinstance(profile, dict):
@@ -2786,7 +2977,29 @@ def normalize_store(store: dict[str, Any]) -> dict[str, Any]:
     members = [normalize_member(item) for item in normalized.get("members", [])]
     normalized["members"] = members
     fixtures = [normalize_fixture(item, members) for item in normalized.get("fixtures", [])]
-    normalized["fixtures"] = fixtures
+    deduped_fixtures: list[dict[str, Any]] = []
+    seen_fixture_keys: dict[tuple[str, str, str, str], int] = {}
+    for fixture in fixtures:
+        key = _fixture_dedupe_key(fixture)
+        existing_index = seen_fixture_keys.get(key)
+        if existing_index is None:
+            seen_fixture_keys[key] = len(deduped_fixtures)
+            deduped_fixtures.append(fixture)
+            continue
+        existing_fixture = deduped_fixtures[existing_index]
+        existing_rank = (
+            str(existing_fixture.get("updated_at") or existing_fixture.get("created_at") or ""),
+            str(existing_fixture.get("id") or ""),
+        )
+        candidate_rank = (
+            str(fixture.get("updated_at") or fixture.get("created_at") or ""),
+            str(fixture.get("id") or ""),
+        )
+        if candidate_rank >= existing_rank:
+            deduped_fixtures[existing_index] = fixture
+    if len(deduped_fixtures) != len(fixtures):
+        logger.debug("Deduplicated fixtures → before=%s after=%s", len(fixtures), len(deduped_fixtures))
+    normalized["fixtures"] = deduped_fixtures
     normalized["archive_uploads"] = [normalize_archive(item) for item in normalized.get("archive_uploads", [])]
     for archive in normalized["archive_uploads"]:
         if archive_has_persisted_json(archive) and str(archive.get("status") or "").strip().lower() not in {"approved", "applied to match", "deleted"}:
@@ -4679,8 +4892,8 @@ def _read_relational_state(connection: sqlite3.Connection) -> dict[str, Any]:
                 "club_name": club_id_to_name.get(row["club_id"], ""),
                 "date": row["date"] or "",
                 "date_label": row["date_label"] or "",
-                "opponent": row["opponent"] or "",
-                "visiting_team": row["visiting_team"] or row["opponent"] or "",
+                "opponent": canonical_team_name(row["opponent"] or ""),
+                "visiting_team": canonical_team_name(row["visiting_team"] or row["opponent"] or ""),
                 "heartlake_captain": row["heartlake_captain_name"] or member_id_to_name.get(row["heartlake_captain_member_id"], ""),
                 "availability_seed": availability_seed,
                 "availability_statuses": availability_statuses,
@@ -5366,7 +5579,7 @@ def get_archive_or_404(store: dict[str, Any], upload_id: str) -> dict[str, Any]:
 def build_visiting_teams(fixtures: list[dict[str, Any]]) -> list[dict[str, Any]]:
     grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for match in fixtures:
-        grouped[match["visiting_team"]].append(match)
+        grouped[canonical_team_name(match["visiting_team"])].append(match)
     cards = []
     for team_name, matches in grouped.items():
         upcoming = sorted(matches, key=lambda item: item["date"])[0]
@@ -6486,29 +6699,19 @@ def _club_owned_fixtures(store: dict[str, Any], club: dict[str, Any]) -> list[di
     return owned
 
 
-def _club_owned_archives(archives: list[dict[str, Any]], club: dict[str, Any]) -> list[dict[str, Any]]:
+def _club_owned_archives(
+    archives: list[dict[str, Any]],
+    club: dict[str, Any],
+    clubs: list[dict[str, Any]] | None = None,
+    members: list[dict[str, Any]] | None = None,
+    fixtures: list[dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
     club_id = str(club.get("id") or "").strip().lower()
     club_name = str(club.get("name") or "").strip().lower()
     club_short_name = str(club.get("short_name") or "").strip().lower()
     owned: list[dict[str, Any]] = []
     for archive in archives:
-        archive_club_ids = {str(item or "").strip().lower() for item in _coerce_archive_string_list(archive.get("club_ids"))}
-        archive_club_names = {str(item or "").strip().lower() for item in _coerce_archive_string_list(archive.get("club_names"))}
-        archive_club_id = str(archive.get("club_id") or "").strip().lower()
-        archive_club_name = str(archive.get("club_name") or "").strip().lower()
-        if club_id and club_id in archive_club_ids:
-            owned.append(archive)
-            continue
-        if club_name and club_name in archive_club_names:
-            owned.append(archive)
-            continue
-        if club_short_name and club_short_name in archive_club_names:
-            owned.append(archive)
-            continue
-        if club_id and archive_club_id == club_id:
-            owned.append(archive)
-            continue
-        if archive_club_name and archive_club_name in {club_name, club_short_name}:
+        if archive_belongs_to_club(archive, club, clubs or [], members or [], fixtures or []):
             owned.append(archive)
     return owned
 
@@ -6676,7 +6879,13 @@ def scoped_store_for_club(store: dict[str, Any], club: dict[str, Any]) -> dict[s
             focused_teams.append(team)
 
     focused_fixtures = _club_owned_fixtures(store, club)
-    focused_archives = _club_owned_archives(store.get("archive_uploads", []), club)
+    focused_archives = _club_owned_archives(
+        store.get("archive_uploads", []),
+        club,
+        store.get("clubs", []),
+        store.get("members", []),
+        store.get("fixtures", []),
+    )
 
     focused["club"] = club
     focused["members"] = focused_members
@@ -6713,6 +6922,7 @@ def build_dashboard(
     global_members = list(store.get("members", []))
     global_fixtures = list(store.get("fixtures", []))
     global_archives = canonical_archive_uploads(store.get("archive_uploads", []))
+    focus_archives = _club_owned_archives(global_archives, focus_club, store.get("clubs", []), global_members, global_fixtures)
     club_duplicate_uploads = [
         duplicate
         for duplicate in list(reversed(store.get("duplicate_uploads", [])))
@@ -6722,7 +6932,7 @@ def build_dashboard(
     season_label = _season_label_for_year(selected_year)
     season_years = _dashboard_season_years(store)
     season_fixtures = _filter_fixtures_by_year(_club_owned_fixtures(store, focus_club), selected_year)
-    season_archives = _filter_archives_by_year(_club_owned_archives(global_archives, focus_club), selected_year)
+    season_archives = _filter_archives_by_year(focus_archives, selected_year)
     season_store = dict(focused_store)
     season_store["fixtures"] = season_fixtures
     season_store["archive_uploads"] = season_archives
@@ -6764,7 +6974,64 @@ def build_dashboard(
             "scores_100_plus": season_club_year_stats.get("scores_100_plus", summary.get("scores_100_plus")),
         }
     fixtures = sorted(season_fixtures, key=lambda item: item["date"])
-    upcoming = next((match for match in fixtures if match["status"] != "Completed"), fixtures[0] if fixtures else {})
+
+    def _fixture_date_value(item: dict[str, Any]) -> datetime.date:
+        raw_value = str(item.get("date") or "").strip()
+        try:
+            return datetime.fromisoformat(raw_value).date()
+        except Exception:
+            return datetime.min.date()
+
+    def _fixture_status_value(item: dict[str, Any]) -> str:
+        return str(item.get("status") or "").strip().lower()
+
+    current_local_date = _current_local_date()
+    live_matches = [
+        match
+        for match in fixtures
+        if _fixture_status_value(match) in {"live", "in progress", "scorecard in progress"}
+    ]
+    today_matches = [
+        match
+        for match in fixtures
+        if _fixture_date_value(match) == current_local_date
+    ]
+    future_matches = [
+        match
+        for match in fixtures
+        if _fixture_status_value(match) != "completed" and _fixture_date_value(match) >= current_local_date
+    ]
+    completed_matches = [
+        match
+        for match in fixtures
+        if _fixture_status_value(match) == "completed" or _fixture_date_value(match) < current_local_date
+    ]
+    today_matches.sort(
+        key=lambda item: (
+            0 if _fixture_status_value(item) in {"live", "in progress", "scorecard in progress"} else 1 if _fixture_status_value(item) != "completed" else 2,
+            str(item.get("details", {}).get("scheduled_time") or ""),
+            str(item.get("opponent") or ""),
+        )
+    )
+    live_matches.sort(key=lambda item: (_fixture_date_value(item), str(item.get("opponent") or "")))
+    future_matches.sort(key=lambda item: (_fixture_date_value(item), str(item.get("opponent") or "")))
+    completed_matches.sort(key=lambda item: (_fixture_date_value(item), str(item.get("opponent") or "")), reverse=True)
+    # Prefer the most relevant match for dashboard work:
+    # live today first, then today's scheduled match, then the latest completed match,
+    # and only then a future fixture.
+    upcoming = (
+        live_matches[0]
+        if live_matches
+        else (
+            today_matches[0]
+            if today_matches
+            else (
+                future_matches[0]
+                if future_matches
+                else (completed_matches[0] if completed_matches else {})
+            )
+        )
+    )
     global_pending_player_stats = build_player_pending_stats(global_archives, global_members)
     global_player_stats = build_player_stats(global_fixtures, global_members)
     global_combined_player_stats = build_combined_player_stats(global_fixtures, global_archives, global_members)
@@ -6778,7 +7045,10 @@ def build_dashboard(
     season_club_rankings: dict[str, dict[str, list[dict[str, Any]]]] = {}
     for club in store.get("clubs", []) or []:
         club_store = scoped_store_for_club(store, club)
-        club_archives = _filter_archives_by_year(_club_owned_archives(global_archives, club), selected_year)
+        club_archives = _filter_archives_by_year(
+            _club_owned_archives(global_archives, club, store.get("clubs", []), global_members, global_fixtures),
+            selected_year,
+        )
         club_fixtures = _filter_fixtures_by_year(_club_owned_fixtures(store, club), selected_year)
         club_stats = build_combined_player_stats(club_fixtures, club_archives, club_store.get("members", []))
         club_name = str(club.get("name") or "").strip()
@@ -6844,13 +7114,13 @@ def build_dashboard(
         "ranking_years": season_years,
         "default_ranking_year": selected_year,
         "player_pending_stats": pending_player_stats,
-        "archive_uploads": list(reversed(season_archives)),
-        "archive_file_uploads": list(reversed(focused_store["archive_uploads"])),
+        "archive_uploads": list(reversed(focus_archives)),
+        "archive_file_uploads": list(reversed(focus_archives)),
         "duplicate_uploads": club_duplicate_uploads,
         "llm": llm_status,
         "insights": focused_store["insights"],
         "viewer_profile": store.get("viewer_profile", dict(DEFAULT_VIEWER_PROFILE)),
-        "landing_upcoming_matches": focus_fixtures[:10],
+        "landing_upcoming_matches": (today_matches or live_matches or future_matches or completed_matches)[:10],
         "landing_club_stats": {
             "member_count": len(_club_member_names(store, focus_club)),
             "team_count": _club_team_count(store, focus_club, _club_member_names(store, focus_club)),

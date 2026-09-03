@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Fixtures · CricketClubApp</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Sora:wght@400;600;700;800&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/assets/tailwind.css?v=20260430b" />
+    <link rel="stylesheet" href="/assets/styles.css?v=20260511l" />
+    <link rel="stylesheet" href="/assets/live.css?v=20260511r" />
+  </head>
+  <body class="public-fixtures-page">
+    <main class="page-shell fixtures-shell">
+      <div data-public-header></div>
+
+      <section class="panel onboarding-panel fixtures-hero-panel">
+        <div class="stack-card fixtures-hero-card">
+          <div class="panel-head compact-head fixtures-hero-head">
+            <div>
+              <p class="section-kicker">Fixtures</p>
+              <h1 class="fixtures-title">Fixtures across clubs</h1>
+              <p id="fixturesHeroSummary" class="lede">Browse upcoming fixtures by club. Signed-in users see their club fixtures in read-only mode.</p>
+            </div>
+          </div>
+
+          <div class="summary-grid fixtures-summary-grid">
+            <article class="summary-card"><span>Total fixtures</span><strong id="fixturesTotalCount">--</strong></article>
+            <article class="summary-card"><span>Clubs</span><strong id="fixturesClubCount">--</strong></article>
+            <article class="summary-card"><span>Upcoming</span><strong id="fixturesUpcomingCount">--</strong></article>
+            <article class="summary-card"><span>Mode</span><strong id="fixturesModeLabel">Public</strong></article>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel onboarding-panel fixtures-list-panel">
+        <div class="stack-card">
+          <div class="panel-head compact-head">
+            <div>
+              <p class="section-kicker">Fixture list</p>
+              <h2 id="fixturesListHeading">All clubs</h2>
+            </div>
+            <span id="fixturesListBadge" class="signin-widget-pill">Loading</span>
+          </div>
+          <div id="fixturesGroups" class="fixtures-groups"></div>
+        </div>
+      </section>
+    </main>
+    <script src="/assets/public_header.js?v=20260511b"></script>
+    <script src="/assets/fixtures.js?v=20260511a"></script>
+  </body>
+</html>

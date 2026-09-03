@@ -1,17 +1,45 @@
-<nav class="top-nav">
-  <a href="/dashboard">Home</a>
-  <a href="/clubs">Clubs</a>
-  <a href="/dashboard/widgets/scoring">Scoring</a>
-  <a href="/dashboard/widgets/schedule">Fixtures</a>
-  <a href="/player-availability">Availability</a>
-  <a href="/dashboard/widgets/archive">Archives</a>
-  <a href="/dashboard/widgets/performance">Performances</a>
-  <a href="/profile">Profile</a>
-  <a href="/dashboard/widgets/assistant">AI Assistant</a>
-  <a href="/admin-center" data-admin-only hidden>Admin Center</a>
+<header class="app-header page-topbar">
+  <a class="brand" href="/dashboard" aria-label="Cricket Canada Clubs">
+    <span class="brand-logo" aria-hidden="true">CC</span>
+    <span class="brand-copy">
+      <strong>Cricket Canada Clubs</strong>
+      <small>Club portal</small>
+    </span>
+  </a>
+
+  <div class="nav-wrapper">
+    <nav class="main-nav top-nav template-nav" aria-label="Primary">
+      <a href="/dashboard"><span class="nav-icon" aria-hidden="true">🏠</span><span class="nav-text">Home</span></a>
+      <a href="/clubs"><span class="nav-icon" aria-hidden="true">🏏</span><span class="nav-text">Clubs</span></a>
+      <a href="/dashboard/widgets/scoring"><span class="nav-icon" aria-hidden="true">🎯</span><span class="nav-text">Scoring</span></a>
+      <a href="/dashboard/widgets/schedule"><span class="nav-icon" aria-hidden="true">📅</span><span class="nav-text">Fixtures</span></a>
+      <a href="/player-availability"><span class="nav-icon" aria-hidden="true">✅</span><span class="nav-text">Availability</span></a>
+      <a href="/dashboard/widgets/archive"><span class="nav-icon" aria-hidden="true">🗂️</span><span class="nav-text">Archives</span></a>
+      <a href="/dashboard/widgets/performance"><span class="nav-icon" aria-hidden="true">📊</span><span class="nav-text">Performances</span></a>
+      <a href="/profile"><span class="nav-icon" aria-hidden="true">👤</span><span class="nav-text">Profile</span></a>
+      <a href="/dashboard/widgets/assistant"><span class="nav-icon" aria-hidden="true">🤖</span><span class="nav-text">Assistant</span></a>
+      <a href="/admin-center" data-admin-only hidden><span class="nav-icon" aria-hidden="true">⚙️</span><span class="nav-text">Admin</span></a>
+    </nav>
+  </div>
+
+  <div class="header-right topbar-actions">
+    <div id="currentClubBadge" class="club-chip club-card" aria-live="polite" hidden></div>
+    <div id="userIdentityBadge" class="user-chip profile-button" aria-live="polite" hidden></div>
+    <a class="secondary-button template-signout" href="/signout" aria-label="Sign out">
+      <span aria-hidden="true">🚪</span>
+    </a>
+  </div>
+</header>
+
+<nav id="bottomAppNav" class="bottom-app-nav" aria-label="Primary">
+  <a class="bottom-app-nav-item" href="/dashboard"><span aria-hidden="true">🏠</span><span>Home</span></a>
+  <a class="bottom-app-nav-item" href="/clubs"><span aria-hidden="true">🏏</span><span>Clubs</span></a>
+  <a class="bottom-app-nav-item" href="/dashboard/widgets/scoring"><span aria-hidden="true">🎯</span><span>Scoring</span></a>
+  <a class="bottom-app-nav-item" href="/dashboard/widgets/schedule"><span aria-hidden="true">📅</span><span>Fixtures</span></a>
+  <a class="bottom-app-nav-item" href="/player-availability"><span aria-hidden="true">✅</span><span>Availability</span></a>
+  <a class="bottom-app-nav-item" href="/dashboard/widgets/archive"><span aria-hidden="true">🗂️</span><span>Archives</span></a>
+  <a class="bottom-app-nav-item" href="/dashboard/widgets/performance"><span aria-hidden="true">📊</span><span>Performances</span></a>
+  <a class="bottom-app-nav-item" href="/profile"><span aria-hidden="true">👤</span><span>Profile</span></a>
+  <a class="bottom-app-nav-item" href="/dashboard/widgets/assistant"><span aria-hidden="true">🤖</span><span>Assistant</span></a>
+  <a class="bottom-app-nav-item" href="/admin-center" data-admin-only hidden><span aria-hidden="true">⚙️</span><span>Admin</span></a>
 </nav>
-<div class="topbar-actions">
-  <div id="currentClubBadge" class="club-chip" aria-live="polite" hidden></div>
-  <div id="userIdentityBadge" class="user-chip" aria-live="polite" hidden></div>
-  <a class="secondary-button template-signout" href="/signout">Sign out</a>
-</div>

@@ -161,7 +161,12 @@ form.addEventListener("submit", async (event) => {
     renderFixtures();
     const savedCount = Array.isArray(result.fixtures) ? result.fixtures.length : 0;
     debug(isEditing ? "Fixture update completed." : "Fixture create completed.", { clubId: result.club?.id || "", seasonYear: submittedYear, savedCount });
-    setStatus("", "info");
+    setStatus(
+      isEditing
+        ? `Updated ${fixturePayload.date_label || fixturePayload.date} for ${fixturePayload.opponent || "selected club"}.`
+        : `Created ${fixturePayload.date_label || fixturePayload.date} for ${fixturePayload.opponent || "selected club"}.`,
+      "success"
+    );
   } catch (error) {
     debug("Fixture create failed.", { error: error?.message || error });
     setStatus(error.message, "error");

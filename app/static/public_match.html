@@ -7,11 +7,12 @@
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
-      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=Source+Serif+4:opsz,wght@8..60;400;500;600;700&display=swap"
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Sora:wght@400;600;700;800&display=swap"
       rel="stylesheet"
     />
     <link rel="stylesheet" href="/assets/tailwind.css?v=20260430b" />
-    <link rel="stylesheet" href="/assets/styles.css?v=20260510c" />
+    <link rel="stylesheet" href="/assets/styles.css?v=20260511l" />
+    <link rel="stylesheet" href="/assets/live.css?v=20260511r" />
   </head>
   <body class="public-scorecard-page">
     <div class="public-scorecard-bg">
@@ -21,15 +22,12 @@
     </div>
 
     <div class="page-shell public-scorecard-shell">
+      <div data-public-header></div>
       <section class="public-scorecard-hero">
         <div class="public-scorecard-hero-top">
           <div class="public-scorecard-live-pill">
             <span class="public-scorecard-live-dot"></span>
             <span>PUBLIC LIVE SCORECARD</span>
-          </div>
-          <div class="inline-actions">
-            <a class="primary-link auth-cta-link secondary" href="/signin">Sign in</a>
-            <a class="primary-link auth-cta-link" href="/register">Register</a>
           </div>
         </div>
 
@@ -162,6 +160,7 @@
         <div id="publicMatchPerformances" class="public-player-cards"></div>
       </section>
     </div>
-    <script src="/assets/public_match.js?v=20260510c"></script>
+    <script src="/assets/public_header.js?v=20260511b"></script>
+    <script src="/assets/public_match.js?v=20260511j"></script>
   </body>
 </html>

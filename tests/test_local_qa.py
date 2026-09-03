@@ -1,3 +1,4 @@
+import base64
 import html as html_lib
 import importlib
 import os
@@ -59,6 +60,16 @@ def _extract_snapshot_title(page_html: str) -> str:
         flags=re.S,
     )
     return html_lib.unescape(match.group(1).strip()) if match else ""
+
+
+def _tiny_png_bytes() -> bytes:
+    return base64.b64decode(
+        b"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO2b5XQAAAAASUVORK5CYII="
+    )
+
+
+def _tiny_unique_png_bytes() -> bytes:
+    return _tiny_png_bytes() + b"qa-mobile-upload"
 
 
 class LocalQATestCase(unittest.TestCase):
@@ -301,6 +312,55 @@ class FunctionalQATests(LocalQATestCase):
         self.assertIsNotNone(created)
         self.assertEqual(created["club_id"], "club-testclub")
         self.assertEqual(result["club"]["id"], "club-testclub")
+
+    def test_f05a_captain_cannot_create_duplicate_future_fixture(self) -> None:
+        auth = self.signin("2222222222")
+        token = auth["token"]
+        fixture_args = {
+            "club_id": "club-testclub",
+            "season_year": int(str(datetime.utcnow().year)),
+            "date": (datetime.utcnow().date() + timedelta(days=7)).isoformat(),
+            "date_label": (datetime.utcnow().date() + timedelta(days=7)).strftime("%d %b %Y"),
+            "opponent": "Duplicate Block Test",
+            "venue": "QA Ground",
+            "match_type": "Friendly",
+            "scheduled_time": "09:00",
+            "overs": "20",
+        }
+        response1 = self.client.post("/api/season-setup/fixtures", json=fixture_args, headers=self.auth_headers(token))
+        self.assertEqual(response1.status_code, 200, response1.text)
+        response2 = self.client.post("/api/season-setup/fixtures", json=fixture_args, headers=self.auth_headers(token))
+        self.assertEqual(response2.status_code, 409, response2.text)
+        self.assertIn("already exists", response2.text)
+
+    def test_f05b_coca_cola_archive_dashboard_is_club_scoped(self) -> None:
+        dashboard = self.main.current_dashboard(self.main.load_store(), "club-coca-cola-xi", "2024")
+        archive_uploads = dashboard.get("archive_uploads") or []
+        self.assertTrue(archive_uploads, "expected Coca Cola archives to be present")
+        self.assertTrue(all(str(item.get("club_id") or "").strip() == "club-coca-cola-xi" for item in archive_uploads))
+        self.assertTrue(all("Heartlake Cricket Club" not in str(item.get("club_name") or "") for item in archive_uploads))
+
+    def test_f05c_mobile_style_image_upload_returns_success_message(self) -> None:
+        payload = self.signin("14164508695", "Amit S")
+        response = self.client.post(
+            "/api/scorecards/upload",
+            headers={"X-Auth-Token": payload["token"]},
+            files={
+                "file": (
+                    "mobile-scorecard.heic",
+                    _tiny_unique_png_bytes(),
+                    "image/heic",
+                )
+            },
+            data={
+                "season": "2025 Season",
+                "focus_club_id": "club-coca-cola-xi",
+            },
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        response_payload = response.json()
+        self.assertIn("uploaded successfully", str(response_payload.get("message") or "").lower())
+        self.assertEqual(str(response_payload.get("upload", {}).get("original_file_name") or ""), "mobile-scorecard.heic")
 
     def test_f06_clubadmin_can_edit_future_fixture(self) -> None:
         captain_auth = self.signin("2222222222")
@@ -644,7 +704,29 @@ class FunctionalQATests(LocalQATestCase):
         self.assertTrue(llm_documents, "saving the store should rebuild the indexed LLM document corpus")
         self.assertTrue(any(doc.get("doc_type") == "prompt" for doc in llm_documents))
 
-    def test_f23_llm_registry_and_status_endpoints(self) -> None:
+    def test_f23_database_export_and_import_round_trip(self) -> None:
+        superadmin_auth = self.signin("14164508695")
+        headers = self.auth_headers(superadmin_auth["token"])
+        export_response = self.client.get("/api/admin/db/export", headers=headers)
+        self.assertEqual(export_response.status_code, 200, export_response.text)
+        self.assertGreater(len(export_response.content), 0)
+
+        import_response = self.client.post(
+            "/api/admin/db/import",
+            files={"database": ("cricketclubapp.db", export_response.content, "application/x-sqlite3")},
+            headers=headers,
+        )
+        self.assertEqual(import_response.status_code, 200, import_response.text)
+        payload = import_response.json()
+        self.assertTrue(payload.get("ok"))
+        self.assertGreater(payload.get("members", 0), 0)
+        self.assertGreater(payload.get("fixtures", 0), 0)
+
+        refreshed = self.main.load_store()
+        self.assertGreater(len(refreshed.get("members", [])), 0)
+        self.assertGreater(len(refreshed.get("fixtures", [])), 0)
+
+    def test_f24_llm_registry_and_status_endpoints(self) -> None:
         status = self.client.get("/api/llm/status")
         prompts = self.client.get("/api/llm/prompts")
         documents = self.client.get("/api/llm/documents", params={"limit": 5})
@@ -654,7 +736,7 @@ class FunctionalQATests(LocalQATestCase):
         self.assertGreaterEqual(status.json().get("prompt_count", 0), 1)
         self.assertIn("SYSTEM_PROMPT", [item.get("name") for item in prompts.json().get("prompts", [])])
 
-    def test_f24_llm_infer_endpoint_uses_registry_prompt(self) -> None:
+    def test_f25_llm_infer_endpoint_uses_registry_prompt(self) -> None:
         llm_service = importlib.import_module("app.llm_service")
 
         class _FakeResponse:
@@ -701,7 +783,7 @@ class FunctionalQATests(LocalQATestCase):
         self.assertEqual(payload["result"].get("prompt_name"), "CLUB_PERFORMANCE")
         self.assertIn("club outlook", payload["result"].get("answer", "").lower())
 
-    def test_f24_llm_cache_clear_endpoint_resets_cached_answers(self) -> None:
+    def test_f26_llm_cache_clear_endpoint_resets_cached_answers(self) -> None:
         response = self.client.post("/api/llm/cache/clear", headers=self.auth_headers(self.signin("1111111111")["token"]))
         self.assertEqual(response.status_code, 200, response.text)
         payload = response.json()

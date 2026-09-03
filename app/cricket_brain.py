@@ -17,6 +17,7 @@ try:
         build_player_pending_stats,
         build_player_stats,
         build_summary,
+        build_rankings_for_year,
         canonical_archive_uploads,
         player_name_variants,
     )
@@ -30,6 +31,7 @@ except ModuleNotFoundError:
         build_player_pending_stats,
         build_player_stats,
         build_summary,
+        build_rankings_for_year,
         canonical_archive_uploads,
         player_name_variants,
     )
@@ -2342,10 +2344,40 @@ def _heuristic_answer(question: str, store: dict[str, Any], history: list[dict[s
         )
     elif matched_member and total_score_intent:
         display_name = _display_name(matched_member)
-        scope_entries = matched_filtered_entries if requested_clubs else matched_entries
-        if query_year or query_month:
-            scope_entries = [item for item in scope_entries if _date_matches(item.get("date", ""), query_year, query_month)]
-        scoped_totals = _aggregate_entries(scope_entries) if scope_entries else {"matches": 0, "runs": 0, "balls": 0, "wickets": 0, "catches": 0}
+        scoped_totals: dict[str, Any] | None = None
+        if query_year:
+            year_bundle = build_rankings_for_year(store, query_year)
+            candidate_names = {
+                str(matched_member.get("name", "")).strip().casefold(),
+                str(matched_member.get("full_name", "")).strip().casefold(),
+                display_name.strip().casefold(),
+            }
+            candidate_names.update(
+                str(alias).strip().casefold()
+                for alias in (matched_member.get("aliases", []) or [])
+                if str(alias).strip()
+            )
+            year_row = next(
+                (
+                    item
+                    for item in year_bundle.get("player_stats", [])
+                    if str(item.get("player_name", "")).strip().casefold() in candidate_names
+                ),
+                None,
+            )
+            if year_row:
+                scoped_totals = {
+                    "matches": int(year_row.get("matches", 0) or 0),
+                    "runs": int(year_row.get("runs", 0) or 0),
+                    "balls": int(year_row.get("balls", 0) or 0),
+                    "wickets": int(year_row.get("wickets", 0) or 0),
+                    "catches": int(year_row.get("catches", 0) or 0),
+                }
+        if scoped_totals is None:
+            scope_entries = matched_filtered_entries if requested_clubs else matched_entries
+            if query_year or query_month:
+                scope_entries = [item for item in scope_entries if _date_matches(item.get("date", ""), query_year, query_month)]
+            scoped_totals = _aggregate_entries(scope_entries) if scope_entries else {"matches": 0, "runs": 0, "balls": 0, "wickets": 0, "catches": 0}
         if scoped_totals["matches"]:
             scope_bits = []
             if requested_clubs:
@@ -2531,8 +2563,38 @@ def _heuristic_answer(question: str, store: dict[str, Any], history: list[dict[s
             )
         else:
             if query_year or query_month:
-                scope_entries = [item for item in matched_entries if _date_matches(item.get("date", ""), query_year, query_month)]
-                scoped_totals = _aggregate_entries(scope_entries) if scope_entries else {"matches": 0, "runs": 0, "balls": 0, "wickets": 0, "catches": 0}
+                scoped_totals: dict[str, Any] | None = None
+                if query_year and not query_month:
+                    year_bundle = build_rankings_for_year(store, query_year)
+                    candidate_names = {
+                        str(matched_member.get("name", "")).strip().casefold(),
+                        str(matched_member.get("full_name", "")).strip().casefold(),
+                        display_name.strip().casefold(),
+                    }
+                    candidate_names.update(
+                        str(alias).strip().casefold()
+                        for alias in (matched_member.get("aliases", []) or [])
+                        if str(alias).strip()
+                    )
+                    year_row = next(
+                        (
+                            item
+                            for item in year_bundle.get("player_stats", [])
+                            if str(item.get("player_name", "")).strip().casefold() in candidate_names
+                        ),
+                        None,
+                    )
+                    if year_row:
+                        scoped_totals = {
+                            "matches": int(year_row.get("matches", 0) or 0),
+                            "runs": int(year_row.get("runs", 0) or 0),
+                            "balls": int(year_row.get("balls", 0) or 0),
+                            "wickets": int(year_row.get("wickets", 0) or 0),
+                            "catches": int(year_row.get("catches", 0) or 0),
+                        }
+                if scoped_totals is None:
+                    scope_entries = [item for item in matched_entries if _date_matches(item.get("date", ""), query_year, query_month)]
+                    scoped_totals = _aggregate_entries(scope_entries) if scope_entries else {"matches": 0, "runs": 0, "balls": 0, "wickets": 0, "catches": 0}
                 if scoped_totals["matches"]:
                     scope_bits = ["across all clubs"]
                     if query_year:

@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Live · CricketClubApp</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Sora:wght@400;600;700;800&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/assets/tailwind.css?v=20260430b" />
+    <link rel="stylesheet" href="/assets/styles.css?v=20260511l" />
+    <link rel="stylesheet" href="/assets/live.css?v=20260511r" />
+  </head>
+  <body class="public-live-page">
+    <main class="live-shell">
+      <div data-public-header></div>
+
+      <section class="live-hero panel onboarding-panel">
+        <div class="stack-card">
+          <div class="live-hero-top">
+            <div class="live-pill">
+              <span class="live-dot"></span>
+              <span>LIVE</span>
+            </div>
+          </div>
+
+          <div class="live-hero-body">
+            <div class="live-hero-copy">
+              <p class="live-kicker">Canada cricket, live and local</p>
+              <h1>Live Local Cricket Across Canada</h1>
+              <p>Follow live scorecards, watch recent balls, and jump straight into the match view.</p>
+            </div>
+            <div id="liveHeroFeature" class="live-feature-card"></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel onboarding-panel">
+        <div class="stack-card">
+          <div class="panel-head compact-head">
+            <div>
+              <p class="section-kicker">Live Matches</p>
+              <h2>Today on the field</h2>
+            </div>
+            <span id="liveMatchesCount" class="signin-widget-pill">Loading</span>
+          </div>
+          <div id="liveMatches" class="live-match-grid"></div>
+        </div>
+      </section>
+    </main>
+    <script src="/assets/public_header.js?v=20260511b"></script>
+    <script src="/assets/live.js?v=20260511n"></script>
+  </body>
+</html>
