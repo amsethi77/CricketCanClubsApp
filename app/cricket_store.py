@@ -8,6 +8,7 @@ import shutil
 import sqlite3
 import subprocess
 import uuid
+import platform
 from collections import Counter, defaultdict
 from datetime import date, datetime, timezone
 from copy import deepcopy
@@ -15,8 +16,10 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any
 from zoneinfo import ZoneInfo
+import pillow_heif
+pillow_heif.register_heif_opener()
 
-import httpx
+import httpx        
 
 try:
     from llm_registry import prompt_documents, prompt_manifest, build_prompt
@@ -297,6 +300,8 @@ def image_datetime_from_metadata(path: Path) -> tuple[str, str]:
                     check=True,
                     capture_output=True,
                     text=True,
+                    encoding="utf-8",
+                    errors="replace",
                     timeout=4,
                 )
             except Exception:
@@ -2039,8 +2044,10 @@ def preferred_text_llm_model() -> str:
     return ""
 
 
-def local_ocr_available() -> bool:
-    return bool(shutil.which("tesseract") and shutil.which("sips"))
+def tesseract_ocr_available() -> bool:
+    if platform.system() == "Darwin":
+        return bool(shutil.which("tesseract") and shutil.which("sips"))
+    return bool(shutil.which("tesseract"))
 
 
 def vision_ocr_available() -> bool:
@@ -2066,45 +2073,38 @@ def extract_text_from_image(path: Path) -> str:
                 check=True,
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=40,
             )
             vision_candidate = vision_result.stdout.strip()
         except Exception:
             pass
-    if not local_ocr_available():
+    if not tesseract_ocr_available():
         return vision_candidate
     with TemporaryDirectory() as temp_dir:
         png_path = Path(temp_dir) / "ocr-source.png"
         jpg_path = Path(temp_dir) / "ocr-source.jpg"
         try:
-            subprocess.run(
-                ["sips", "-s", "format", "png", str(path), "--out", str(png_path)],
-                check=True,
-                capture_output=True,
-                text=True,
-                timeout=8,
-            )
-            subprocess.run(
-                ["sips", "-Z", "2600", str(png_path), "--out", str(png_path)],
-                check=True,
-                capture_output=True,
-                text=True,
-                timeout=8,
-            )
-            subprocess.run(
-                ["sips", "-s", "format", "jpeg", str(path), "--out", str(jpg_path)],
-                check=True,
-                capture_output=True,
-                text=True,
-                timeout=8,
-            )
-            subprocess.run(
-                ["sips", "-Z", "2600", str(jpg_path), "--out", str(jpg_path)],
-                check=True,
-                capture_output=True,
-                text=True,
-                timeout=8,
-            )
+            from PIL import Image, ImageOps, ImageFilter
+
+            with Image.open(path) as img:
+                img = ImageOps.exif_transpose(img)  # fix phone photo rotation
+                img = img.convert("L")  # grayscale
+                img = ImageOps.autocontrast(img, cutoff=1)  # boost contrast
+                img = img.filter(ImageFilter.SHARPEN)  # slight sharpen
+
+                resized = img.copy()
+                resized.thumbnail((2600, 2600))
+                if resized.width < 1200:
+                    scale = 1200 / resized.width
+                    new_size = (int(resized.width * scale), int(resized.height * scale))
+                    resized = resized.resize(new_size, Image.LANCZOS)
+
+                resized = resized.convert("RGB")
+                resized.save(png_path, format="PNG")
+                resized.save(jpg_path, format="JPEG")
+
 
             tesseract_candidates: list[str] = []
             for source_path in [png_path, jpg_path]:
@@ -2122,6 +2122,8 @@ def extract_text_from_image(path: Path) -> str:
                         check=True,
                         capture_output=True,
                         text=True,
+                        encoding="utf-8", 
+                        errors="replace",
                         timeout=12,
                     )
                     text = result.stdout.strip()
@@ -3008,7 +3010,7 @@ def normalize_store(store: dict[str, Any]) -> dict[str, Any]:
     normalized["duplicate_uploads"] = [normalize_duplicate(item) for item in normalized.get("duplicate_uploads", [])]
     insights = dict(normalized.get("insights", {}))
     insights.setdefault("free_llm_mode", "heuristic")
-    insights["ocr_status"] = "local OCR enabled" if local_ocr_available() else "filename-only draft review"
+    insights["ocr_status"] = "local OCR enabled" if tesseract_ocr_available() else "filename-only draft review"
     insights["voice_commentary_status"] = "browser speech-to-text capture"
     normalized["insights"] = insights
     existing_teams = [dict(item) for item in normalized.get("teams", [])]
@@ -3018,6 +3020,7 @@ def normalize_store(store: dict[str, Any]) -> dict[str, Any]:
             {
                 "name": "Club",
                 "type": "club",
+
                 "display_name": club.get("name", "Club"),
             },
         )
