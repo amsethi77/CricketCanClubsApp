@@ -6941,22 +6941,14 @@ async def upload_scorecard(
     incoming_hash = file_sha256_from_bytes(content)
     for existing in store["archive_uploads"]:
         if existing.get("file_hash") == incoming_hash:
-            logger.debug("Duplicate scorecard upload found. filename=%s hash=%s", file.filename or "", incoming_hash)
-            duplicate_record = create_duplicate_record_from_bytes(
-                original_path=Path(existing["file_path"]),
-                duplicate_file_name=file.filename or f"duplicate{suffix}",
-                duplicate_content=content,
-                file_hash=incoming_hash,
-                source="upload",
+            logger.debug("Duplicate scorecard upload rejected. filename=%s hash=%s", file.filename or "", incoming_hash)
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"This scorecard image was already uploaded as '{existing.get('file_name', 'an existing file')}'. "
+                    "Duplicate uploads are not allowed."
+                ),
             )
-            store.setdefault("duplicate_uploads", []).append(duplicate_record)
-            save_store(store)
-            return {
-                "message": "Duplicate scorecard moved to duplicates review folder with the original.",
-                "dashboard": current_dashboard(load_store(), selected_club.get("id", "")),
-                "upload": existing,
-                "duplicate_review": duplicate_record,
-            }
 
     file_token = f"{uuid.uuid4().hex[:10]}{suffix}"
     destination = UPLOAD_DIR / file_token

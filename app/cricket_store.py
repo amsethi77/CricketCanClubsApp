@@ -2061,6 +2061,71 @@ def clean_ocr_lines(text: str) -> list[str]:
 def _normalized_phrase(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", " ", str(value or "").lower()).strip()
 
+def _reconstruct_lines_from_tesseract_tsv(tsv_text: str) -> str:
+    """Rebuild reading order from Tesseract's TSV word-box output.
+
+    Tesseract's plain-text output can scramble multi-column tables (like
+    cricket scorecards) into column-major order -- e.g. every player's name
+    printed first, followed by every "runs" value, instead of each row
+    staying together. This groups individual word boxes back into visual
+    rows (by vertical position) and orders words left-to-right within each
+    row, so a line like "Amit S 50 40 6 1" comes out together instead of
+    "Amit S" and "50" landing many lines apart.
+    """
+    rows = tsv_text.splitlines()
+    if not rows:
+        return ""
+    header = rows[0].split("\t")
+    try:
+        idx = {name: header.index(name) for name in ("level", "left", "top", "width", "height", "conf", "text")}
+    except ValueError:
+        return ""
+    words: list[dict[str, Any]] = []
+    for row in rows[1:]:
+        cols = row.split("\t")
+        if len(cols) <= max(idx.values()):
+            continue
+        text = cols[idx["text"]].strip()
+        if not text:
+            continue
+        try:
+            level = int(cols[idx["level"]])
+            left = float(cols[idx["left"]])
+            top = float(cols[idx["top"]])
+            width = float(cols[idx["width"]])
+            height = float(cols[idx["height"]])
+        except ValueError:
+            continue
+        if level != 5:  # word-level rows only
+            continue
+        words.append({"text": text, "left": left, "top": top, "width": width, "height": height})
+    if not words:
+        return ""
+
+    heights = [word["height"] for word in words if word["height"] > 0]
+    median_height = sorted(heights)[len(heights) // 2] if heights else 20.0
+    tolerance = max(median_height * 0.6, 8.0)
+
+    for word in words:
+        word["center_y"] = word["top"] + word["height"] / 2
+
+    words.sort(key=lambda word: word["center_y"])
+
+    line_clusters: list[list[dict[str, Any]]] = []
+    for word in words:
+        if line_clusters:
+            last_cluster = line_clusters[-1]
+            cluster_avg = sum(item["center_y"] for item in last_cluster) / len(last_cluster)
+            if abs(word["center_y"] - cluster_avg) <= tolerance:
+                last_cluster.append(word)
+                continue
+        line_clusters.append([word])
+
+    reconstructed_lines: list[str] = []
+    for cluster in line_clusters:
+        cluster.sort(key=lambda item: item["left"])
+        reconstructed_lines.append(" ".join(item["text"] for item in cluster))
+    return "\n".join(reconstructed_lines)
 
 def extract_text_from_image(path: Path) -> str:
     if not path.is_file():
@@ -2105,7 +2170,6 @@ def extract_text_from_image(path: Path) -> str:
                 resized.save(png_path, format="PNG")
                 resized.save(jpg_path, format="JPEG")
 
-
             tesseract_candidates: list[str] = []
             for source_path in [png_path, jpg_path]:
                 for psm in ["6", "11"]:
@@ -2118,15 +2182,16 @@ def extract_text_from_image(path: Path) -> str:
                             psm,
                             "-c",
                             "preserve_interword_spaces=1",
+                            "tsv",
                         ],
                         check=True,
                         capture_output=True,
                         text=True,
-                        encoding="utf-8", 
+                        encoding="utf-8",
                         errors="replace",
                         timeout=12,
                     )
-                    text = result.stdout.strip()
+                    text = _reconstruct_lines_from_tesseract_tsv(result.stdout)
                     if text:
                         tesseract_candidates.append(text)
 
@@ -2637,22 +2702,27 @@ def extract_player_suggestions(text: str, members: list[dict[str, Any]]) -> list
             continue
         numbers = [int(value) for value in re.findall(r"(?<!\d)(\d{1,3})(?!\d)", line)]
         numbers = [value for value in numbers if value <= 200]
-        matched = False
+        best_member: dict[str, Any] | None = None
+        best_variant_length = -1
         for member in members:
             member_key = normalize_name(member["name"])
             if member_key in seen_players:
                 continue
             variants = {_normalized_phrase(value) for value in player_name_variants(member)}
             variants = {value for value in variants if value}
-            if not variants or not any(variant in normalized_line for variant in variants):
+            matching_variants = [variant for variant in variants if variant in normalized_line]
+            if not matching_variants:
                 continue
-            if not numbers:
-                break
+            longest_variant = max(matching_variants, key=len)
+            if len(longest_variant) > best_variant_length:
+                best_variant_length = len(longest_variant)
+                best_member = member
+        matched = False
+        if best_member is not None and numbers:
             runs = numbers[0]
             balls = numbers[1] if len(numbers) > 1 and numbers[1] <= 120 else 0
-            add_suggestion(member["name"], runs, balls, line, "ocr-suggested")
+            add_suggestion(best_member["name"], runs, balls, line, "ocr-suggested")
             matched = True
-            break
         if matched:
             continue
         fallback_name, fallback_runs, fallback_balls = fallback_row_from_line(line)
@@ -2752,16 +2822,31 @@ def archive_status_is_pending_review(item: dict[str, Any]) -> bool:
     status = str(item.get("status") or "").strip().lower()
     return status in {"pending review", "ready for review", "historical archive review"} or status.startswith("pending")
 
-
 def extract_archive_by_id(store: dict[str, Any], upload_id: str) -> dict[str, Any]:
-    logger.debug("Extract archive requested → upload_id=%s", upload_id)
-    members = store["members"]
+    logger.debug("Extract archive requested â†’ upload_id=%s", upload_id)
+    all_members = store["members"]
     for index, item in enumerate(store.get("archive_uploads", [])):
         if item.get("id") != upload_id:
             continue
         if not archive_status_is_pending_review(item):
             raise ValueError("Archive upload cannot be re-extracted unless its status is pending review, ready for review, or historical archive review.")
-        extracted = enrich_archive_record(reset_archive_extraction(item), members)
+        # Only match player names against members belonging to this archive's
+        # own club, so a scorecard never gets attributed to a similarly-named
+        # player in a completely different club. A member can belong to
+        # multiple clubs (club_memberships), so we check membership rather
+        # than a single club_id field.
+        archive_club_id = str(item.get("club_id") or "").strip()
+        if archive_club_id:
+            scoped_members = [
+                m for m in all_members
+                if any(
+                    str(membership.get("club_id") or "").strip() == archive_club_id
+                    for membership in (m.get("club_memberships") or [])
+                )
+            ]
+        else:
+            scoped_members = all_members
+        extracted = enrich_archive_record(reset_archive_extraction(item), scoped_members)
         extracted["extraction_template"] = scorecard_template_from_archive(extracted)
         store["archive_uploads"][index] = extracted
         logger.debug(

@@ -1,0 +1,471 @@
+{
+  "meta": {
+    "source": "tesseract",
+    "processed_by": "converted to PNG/JPG via sips, then best OCR candidate selected",
+    "confidence": "OCR draft",
+    "status": "template",
+    "created_at": "2026-09-10T15:35:30Z",
+    "updated_at": "2026-09-10T15:35:32Z"
+  },
+  "match": {
+    "match_id": null,
+    "match_type": "club",
+    "format": null,
+    "date": "2026-09-10",
+    "venue": null,
+    "teams": {
+      "team_1": null,
+      "team_2": null
+    },
+    "overs_limit": null
+  },
+  "innings": [
+    {
+      "inning_number": 1,
+      "batting_team": null,
+      "bowling_team": null,
+      "summary": {
+        "runs": 94,
+        "wickets": 3,
+        "overs": "20.0",
+        "balls": null
+      },
+      "batting": [
+        {
+          "player": {
+            "name": "Player",
+            "normalized_name": "player",
+            "member_id": null
+          },
+          "runs": 1,
+          "balls": null,
+          "fours": null,
+          "sixes": null,
+          "strike_rate": null,
+          "dismissal": {
+            "type": null,
+            "fielder": null,
+            "bowler": null
+          }
+        },
+        {
+          "player": {
+            "name": null,
+            "normalized_name": null,
+            "member_id": null
+          },
+          "runs": null,
+          "balls": null,
+          "fours": null,
+          "sixes": null,
+          "strike_rate": null,
+          "dismissal": {
+            "type": null,
+            "fielder": null,
+            "bowler": null
+          }
+        },
+        {
+          "player": {
+            "name": null,
+            "normalized_name": null,
+            "member_id": null
+          },
+          "runs": null,
+          "balls": null,
+          "fours": null,
+          "sixes": null,
+          "strike_rate": null,
+          "dismissal": {
+            "type": null,
+            "fielder": null,
+            "bowler": null
+          }
+        },
+        {
+          "player": {
+            "name": null,
+            "normalized_name": null,
+            "member_id": null
+          },
+          "runs": null,
+          "balls": null,
+          "fours": null,
+          "sixes": null,
+          "strike_rate": null,
+          "dismissal": {
+            "type": null,
+            "fielder": null,
+            "bowler": null
+          }
+        },
+        {
+          "player": {
+            "name": null,
+            "normalized_name": null,
+            "member_id": null
+          },
+          "runs": null,
+          "balls": null,
+          "fours": null,
+          "sixes": null,
+          "strike_rate": null,
+          "dismissal": {
+            "type": null,
+            "fielder": null,
+            "bowler": null
+          }
+        },
+        {
+          "player": {
+            "name": null,
+            "normalized_name": null,
+            "member_id": null
+          },
+          "runs": null,
+          "balls": null,
+          "fours": null,
+          "sixes": null,
+          "strike_rate": null,
+          "dismissal": {
+            "type": null,
+            "fielder": null,
+            "bowler": null
+          }
+        },
+        {
+          "player": {
+            "name": null,
+            "normalized_name": null,
+            "member_id": null
+          },
+          "runs": null,
+          "balls": null,
+          "fours": null,
+          "sixes": null,
+          "strike_rate": null,
+          "dismissal": {
+            "type": null,
+            "fielder": null,
+            "bowler": null
+          }
+        },
+        {
+          "player": {
+            "name": null,
+            "normalized_name": null,
+            "member_id": null
+          },
+          "runs": null,
+          "balls": null,
+          "fours": null,
+          "sixes": null,
+          "strike_rate": null,
+          "dismissal": {
+            "type": null,
+            "fielder": null,
+            "bowler": null
+          }
+        },
+        {
+          "player": {
+            "name": null,
+            "normalized_name": null,
+            "member_id": null
+          },
+          "runs": null,
+          "balls": null,
+          "fours": null,
+          "sixes": null,
+          "strike_rate": null,
+          "dismissal": {
+            "type": null,
+            "fielder": null,
+            "bowler": null
+          }
+        },
+        {
+          "player": {
+            "name": null,
+            "normalized_name": null,
+            "member_id": null
+          },
+          "runs": null,
+          "balls": null,
+          "fours": null,
+          "sixes": null,
+          "strike_rate": null,
+          "dismissal": {
+            "type": null,
+            "fielder": null,
+            "bowler": null
+          }
+        },
+        {
+          "player": {
+            "name": null,
+            "normalized_name": null,
+            "member_id": null
+          },
+          "runs": null,
+          "balls": null,
+          "fours": null,
+          "sixes": null,
+          "strike_rate": null,
+          "dismissal": {
+            "type": "did_not_bat",
+            "fielder": null,
+            "bowler": null
+          }
+        }
+      ],
+      "bowling": [
+        {
+          "player": {
+            "name": null,
+            "normalized_name": null
+          },
+          "overs": null,
+          "runs_conceded": null,
+          "wickets": null,
+          "economy": null
+        }
+      ],
+      "extras": {
+        "wides": null,
+        "no_balls": null,
+        "byes": null,
+        "leg_byes": null,
+        "penalties": null,
+        "total": null
+      }
+    },
+    {
+      "inning_number": 2,
+      "batting_team": null,
+      "bowling_team": null,
+      "summary": {
+        "runs": null,
+        "wickets": null,
+        "overs": null,
+        "balls": null
+      },
+      "batting": [
+        {
+          "player": {
+            "name": null,
+            "normalized_name": null,
+            "member_id": null
+          },
+          "runs": null,
+          "balls": null,
+          "fours": null,
+          "sixes": null,
+          "strike_rate": null,
+          "dismissal": {
+            "type": null,
+            "fielder": null,
+            "bowler": null
+          }
+        },
+        {
+          "player": {
+            "name": null,
+            "normalized_name": null,
+            "member_id": null
+          },
+          "runs": null,
+          "balls": null,
+          "fours": null,
+          "sixes": null,
+          "strike_rate": null,
+          "dismissal": {
+            "type": null,
+            "fielder": null,
+            "bowler": null
+          }
+        },
+        {
+          "player": {
+            "name": null,
+            "normalized_name": null,
+            "member_id": null
+          },
+          "runs": null,
+          "balls": null,
+          "fours": null,
+          "sixes": null,
+          "strike_rate": null,
+          "dismissal": {
+            "type": null,
+            "fielder": null,
+            "bowler": null
+          }
+        },
+        {
+          "player": {
+            "name": null,
+            "normalized_name": null,
+            "member_id": null
+          },
+          "runs": null,
+          "balls": null,
+          "fours": null,
+          "sixes": null,
+          "strike_rate": null,
+          "dismissal": {
+            "type": null,
+            "fielder": null,
+            "bowler": null
+          }
+        },
+        {
+          "player": {
+            "name": null,
+            "normalized_name": null,
+            "member_id": null
+          },
+          "runs": null,
+          "balls": null,
+          "fours": null,
+          "sixes": null,
+          "strike_rate": null,
+          "dismissal": {
+            "type": null,
+            "fielder": null,
+            "bowler": null
+          }
+        },
+        {
+          "player": {
+            "name": null,
+            "normalized_name": null,
+            "member_id": null
+          },
+          "runs": null,
+          "balls": null,
+          "fours": null,
+          "sixes": null,
+          "strike_rate": null,
+          "dismissal": {
+            "type": null,
+            "fielder": null,
+            "bowler": null
+          }
+        },
+        {
+          "player": {
+            "name": null,
+            "normalized_name": null,
+            "member_id": null
+          },
+          "runs": null,
+          "balls": null,
+          "fours": null,
+          "sixes": null,
+          "strike_rate": null,
+          "dismissal": {
+            "type": null,
+            "fielder": null,
+            "bowler": null
+          }
+        },
+        {
+          "player": {
+            "name": null,
+            "normalized_name": null,
+            "member_id": null
+          },
+          "runs": null,
+          "balls": null,
+          "fours": null,
+          "sixes": null,
+          "strike_rate": null,
+          "dismissal": {
+            "type": null,
+            "fielder": null,
+            "bowler": null
+          }
+        },
+        {
+          "player": {
+            "name": null,
+            "normalized_name": null,
+            "member_id": null
+          },
+          "runs": null,
+          "balls": null,
+          "fours": null,
+          "sixes": null,
+          "strike_rate": null,
+          "dismissal": {
+            "type": null,
+            "fielder": null,
+            "bowler": null
+          }
+        },
+        {
+          "player": {
+            "name": null,
+            "normalized_name": null,
+            "member_id": null
+          },
+          "runs": null,
+          "balls": null,
+          "fours": null,
+          "sixes": null,
+          "strike_rate": null,
+          "dismissal": {
+            "type": null,
+            "fielder": null,
+            "bowler": null
+          }
+        },
+        {
+          "player": {
+            "name": null,
+            "normalized_name": null,
+            "member_id": null
+          },
+          "runs": null,
+          "balls": null,
+          "fours": null,
+          "sixes": null,
+          "strike_rate": null,
+          "dismissal": {
+            "type": "did_not_bat",
+            "fielder": null,
+            "bowler": null
+          }
+        }
+      ],
+      "bowling": [
+        {
+          "player": {
+            "name": null,
+            "normalized_name": null
+          },
+          "overs": null,
+          "runs_conceded": null,
+          "wickets": null,
+          "economy": null
+        }
+      ],
+      "extras": {
+        "wides": null,
+        "no_balls": null,
+        "byes": null,
+        "leg_byes": null,
+        "penalties": null,
+        "total": null
+      }
+    }
+  ],
+  "validation": {
+    "inning_1_total": 94,
+    "inning_2_total": null,
+    "expected_result": "Result: TestClub won by 15 runs",
+    "is_consistent": null,
+    "notes": "Template preserved for admin review."
+  }
+}
