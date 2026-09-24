@@ -4630,6 +4630,12 @@ button:hover,
 }
 
 @media (max-width: 640px) {
+  
+    .app-header.page-topbar .top-nav,
+  .app-header.page-topbar .template-nav {
+    display: none;
+  }
+
   .page-shell {
     width: min(100%, calc(100% - 16px));
     padding-top: 12px;
@@ -4646,7 +4652,7 @@ button:hover,
   }
 
   .top-nav {
-    display: flex;
+    display: none;
     flex-wrap: nowrap;
     gap: 6px;
     width: 100%;
@@ -4791,9 +4797,11 @@ button:hover,
     left: 50%;
     bottom: 0;
     z-index: 60;
-    display: grid;
-    grid-template-columns: repeat(5, minmax(0, 1fr));
-    grid-auto-rows: minmax(54px, auto);
+    display: flex;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
     gap: 6px;
     width: min(100%, 640px);
     transform: translateX(-50%);
@@ -4816,6 +4824,8 @@ button:hover,
     color: var(--muted);
     text-decoration: none;
     transition: transform 160ms ease, background 160ms ease, color 160ms ease;
+    flex: 0 0 auto;
+    min-width: 64px;
   }
 
   .bottom-app-nav-item span:first-child {
@@ -4897,7 +4907,7 @@ button:hover,
   }
 
   .top-nav {
-    display: flex;
+    display: none;
     flex-wrap: nowrap;
     gap: 6px;
     width: 100%;
@@ -5395,5 +5405,1522 @@ input,
     height: 28px;
     border-radius: 10px;
     font-size: 0.75rem;
+  }
+}
+/* ===== Consolidated nav: single fixed top bar, "More" menu on mobile ===== */
+.bottom-app-nav {
+  display: none !important;
+}
+
+.nav-more-toggle {
+  display: none;
+  background: none;
+  border: none;
+  cursor: pointer;
+  font: inherit;
+}
+
+@media (max-width: 640px) {
+  .app-header .top-nav {
+    display: flex !important;
+    flex-wrap: wrap;
+    position: relative;
+  }
+
+  .app-header .top-nav .nav-overflow-item {
+    display: none !important;
+  }
+
+  .app-header .top-nav .nav-more-toggle {
+    display: inline-flex !important;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    padding: 8px;
+    min-width: 62px;
+  }
+
+  .app-header .top-nav.nav-expanded .nav-overflow-item {
+    display: flex !important;
+    flex: 1 1 100%;
+  }
+}
+
+/* =====================================================================
+   Signed-in navbar (shared_header.html, set up by multipage.js)
+   Laptop (>=1280px): one row with every link, no "More".
+   Tablet / phone:   Home, Scoring, Fixtures + "More" at the right edge.
+                     More opens the other pages plus club, user, sign out.
+   ===================================================================== */
+
+/* The outer <header class="page-topbar"> is only a holder: remove its card look
+   so we don't get a card inside a card. */
+header.page-topbar.shared-topbar-host {
+  position: sticky;
+  top: 8px;
+  z-index: 100;
+  display: block;
+  padding: 0;
+  margin: 0 0 16px;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+.shared-topbar-host > .app-header {
+  position: static;
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 14px;
+  min-height: 0;
+  margin: 0;
+  padding: 10px 14px;
+  border-radius: 22px;
+  background: rgba(255, 255, 255, 0.94);
+  border: 1px solid rgba(225, 29, 72, 0.08);
+  box-shadow: 0 12px 32px rgba(15, 23, 42, 0.06);
+  backdrop-filter: blur(18px);
+  overflow: visible;
+}
+
+/* Brand: CC mark only */
+.shared-topbar-host .brand {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  width: auto;
+}
+
+.shared-topbar-host .brand-logo {
+  width: 46px;
+  height: 46px;
+  border-radius: 15px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(135deg, #e11d48, #fb7185);
+  color: #fff;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  box-shadow: 0 10px 25px rgba(225, 29, 72, 0.15);
+}
+
+.shared-topbar-host .brand-copy {
+  display: none !important;
+}
+
+/* Nav row */
+.shared-topbar-host .nav-wrapper {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.shared-topbar-host .top-nav {
+  display: flex !important;
+  flex-wrap: nowrap !important;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-width: 0 !important;
+  padding: 0;
+}
+
+.shared-topbar-host .top-nav > a {
+  display: inline-flex !important;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  flex-shrink: 0;
+  width: auto !important;
+  min-width: 64px !important;
+  height: 56px !important;
+  padding: 0 10px !important;
+  border-radius: 16px !important;
+  background: rgba(255, 255, 255, 0.95);
+  border: 1px solid rgba(225, 29, 72, 0.08);
+  box-shadow: 0 4px 12px rgba(15, 23, 42, 0.03);
+  color: #111827;
+  text-decoration: none;
+}
+
+.shared-topbar-host .top-nav > a[aria-current="page"] {
+  background: linear-gradient(135deg, #e11d48, #f43f5e);
+  color: #fff;
+  border-color: transparent;
+  box-shadow: 0 12px 26px rgba(225, 29, 72, 0.18);
+}
+
+.shared-topbar-host .top-nav > a.is-disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.shared-topbar-host .top-nav .nav-icon {
+  font-size: 1.05rem;
+  line-height: 1;
+}
+
+.shared-topbar-host .top-nav .nav-text {
+  font-size: 0.66rem;
+  font-weight: 700;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+/* Admin-only links stay hidden unless multipage.js un-hides them for the superadmin */
+.shared-topbar-host .top-nav [hidden] {
+  display: none !important;
+}
+
+/* More button: hidden on laptop */
+.shared-topbar-host .top-nav .nav-more-toggle {
+  display: none !important;
+}
+
+/* Right side: club, user, sign out as compact icon buttons */
+.shared-topbar-host .header-right {
+  display: flex !important;
+  flex-direction: row !important;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+  width: auto !important;
+}
+
+.shared-topbar-host .header-right > * {
+  width: 44px !important;
+  height: 44px !important;
+  min-width: 44px !important;
+  padding: 0 !important;
+  border-radius: 14px !important;
+  display: inline-flex !important;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+.shared-topbar-host .header-right > [hidden] {
+  display: none !important;
+}
+
+.shared-topbar-host .club-chip-copy,
+.shared-topbar-host .user-chip-copy {
+  display: none !important;
+}
+
+.shared-topbar-host .club-chip-mark,
+.shared-topbar-host .user-chip-mark {
+  width: 30px;
+  height: 30px;
+  border-radius: 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.72rem;
+  font-weight: 800;
+  color: #fff;
+}
+
+/* ---------- Tablet / phone ---------- */
+@media (max-width: 1279px) {
+  /* Keep Home, Scoring, Fixtures in the row; everything else goes into More */
+  .shared-topbar-host .top-nav > a:nth-of-type(n + 4) {
+    display: none !important;
+  }
+
+  .shared-topbar-host .top-nav > a {
+    min-width: 0 !important;
+    width: 64px !important;
+    padding: 0 !important;
+  }
+
+  .shared-topbar-host .top-nav .nav-more-toggle {
+    display: inline-flex !important;
+    margin-left: auto;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    flex-shrink: 0;
+    width: 64px;
+    height: 56px;
+    padding: 0;
+    border-radius: 16px;
+    background: rgba(255, 255, 255, 0.95);
+    border: 1px solid rgba(225, 29, 72, 0.08);
+    box-shadow: 0 4px 12px rgba(15, 23, 42, 0.03);
+    color: #111827;
+    font: inherit;
+    cursor: pointer;
+  }
+
+  .shared-topbar-host .top-nav .nav-more-toggle[aria-expanded="true"] {
+    background: rgba(225, 29, 72, 0.08);
+    border-color: rgba(225, 29, 72, 0.2);
+    color: #be123c;
+  }
+
+  /* On a page that lives inside More (Clubs, Profile, ...), show More as active */
+  .shared-topbar-host .top-nav:has(> a:nth-of-type(n + 4)[aria-current="page"]) .nav-more-toggle {
+    background: linear-gradient(135deg, #e11d48, #f43f5e);
+    border-color: transparent;
+    color: #fff;
+  }
+}
+
+@media (max-width: 640px) {
+  .shared-topbar-host > .app-header {
+    gap: 8px;
+    padding: 8px 10px;
+  }
+
+  /* Club, user and sign out move into the More menu on phones */
+  .shared-topbar-host .header-right {
+    display: none !important;
+  }
+
+  .shared-topbar-host .brand-logo {
+    width: 40px;
+    height: 40px;
+    border-radius: 13px;
+    font-size: 0.85rem;
+  }
+
+  .shared-topbar-host .top-nav {
+    gap: 8px;
+  }
+
+  .shared-topbar-host .top-nav > a,
+  .shared-topbar-host .top-nav .nav-more-toggle {
+    width: 58px !important;
+    height: 54px !important;
+    border-radius: 14px !important;
+  }
+}
+
+@media (max-width: 360px) {
+  .shared-topbar-host > .app-header {
+    gap: 6px;
+    padding: 8px;
+  }
+
+  .shared-topbar-host .top-nav {
+    gap: 4px;
+  }
+
+  .shared-topbar-host .top-nav > a,
+  .shared-topbar-host .top-nav .nav-more-toggle {
+    width: 52px !important;
+  }
+
+  .shared-topbar-host .top-nav .nav-text {
+    font-size: 0.6rem;
+  }
+}
+
+/* ---------- More dropdown (added to <body> by multipage.js) ---------- */
+.signed-in-more-menu {
+  position: fixed;
+  z-index: 1000;
+  min-width: 220px;
+  max-height: calc(100vh - 100px);
+  overflow-y: auto;
+  padding: 6px;
+  display: grid;
+  gap: 2px;
+  background: #fff;
+  border: 1px solid rgba(225, 29, 72, 0.12);
+  border-radius: 16px;
+  box-shadow: 0 18px 40px rgba(15, 23, 42, 0.14);
+}
+
+.signed-in-more-menu a {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 11px 12px;
+  border-radius: 12px;
+  color: #111827;
+  font-size: 0.92rem;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.signed-in-more-menu a:hover,
+.signed-in-more-menu a:focus-visible {
+  background: rgba(225, 29, 72, 0.06);
+  color: #be123c;
+}
+
+.signed-in-more-menu a[aria-current="page"] {
+  background: linear-gradient(135deg, #e11d48, #f43f5e);
+  color: #fff;
+}
+
+.signed-in-more-menu .menu-icon {
+  width: 22px;
+  text-align: center;
+  font-size: 1.05rem;
+}
+
+.signed-in-more-menu .menu-divider {
+  height: 1px;
+  margin: 4px 8px;
+  background: rgba(15, 23, 42, 0.08);
+}
+
+.signed-in-more-menu .menu-account {
+  padding: 8px 12px 4px;
+  display: grid;
+  gap: 2px;
+}
+
+.signed-in-more-menu .menu-account strong {
+  font-size: 0.9rem;
+  color: #111827;
+}
+
+.signed-in-more-menu .menu-account small {
+  font-size: 0.75rem;
+  color: #64748b;
+}
+
+/* =====================================================================
+   Player Profile page (player_profile.html)
+   Laptop: form in 2 columns with labels. Phone: 1 column, nothing
+   wider than the screen.
+   ===================================================================== */
+.player-profile-page .onboarding-panel,
+.player-profile-page .onboarding-panel > .stack-card {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.player-profile-page #playerProfileTitle {
+  max-width: none;
+  margin: 0 0 6px;
+  font-size: clamp(1.5rem, 3vw, 2.1rem);
+  line-height: 1.15;
+}
+
+.player-profile-page #playerProfileSummary,
+.player-profile-page .detail-card > .lede {
+  max-width: none;
+  margin-top: 0;
+}
+
+.player-profile-page .profile-form {
+  display: grid !important;
+  grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  gap: 12px 16px;
+  width: 100%;
+  min-width: 0;
+  margin: 16px 0 20px;
+}
+
+.player-profile-page .profile-field {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.player-profile-page .profile-field > span {
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: #475569;
+  letter-spacing: 0.01em;
+}
+
+.player-profile-page .profile-field input,
+.player-profile-page .profile-field select,
+.player-profile-page .profile-field textarea {
+  width: 100% !important;
+  min-width: 0 !important;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+
+.player-profile-page .profile-field-wide,
+.player-profile-page .profile-form > .wide {
+  grid-column: 1 / -1 !important;
+}
+
+.player-profile-page .detail-card {
+  min-width: 0;
+  max-width: 100%;
+  margin-top: 16px;
+}
+
+.player-profile-page .review-table-wrap {
+  max-width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+@media (max-width: 640px) {
+  .player-profile-page .profile-form {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  .player-profile-page .player-summary-grid {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  .player-profile-page .player-summary-grid .summary-card {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
+  /* Match history: keep the table readable and let it scroll sideways inside its card */
+  .player-profile-page .review-table {
+    min-width: 560px;
+    font-size: 0.8rem;
+  }
+}
+
+/* =====================================================================
+   Site tools: navbar Search + Dark / light mode (site_tools.js)
+   ===================================================================== */
+.app-header .site-tools {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.app-header.public-header .site-tools {
+  margin-left: auto;
+}
+
+.site-tool-button {
+  width: 44px;
+  height: 44px;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.95);
+  border: 1px solid rgba(225, 29, 72, 0.1);
+  box-shadow: 0 4px 12px rgba(15, 23, 42, 0.04);
+  color: #1e293b;
+  cursor: pointer;
+  transition: transform 0.2s ease, border-color 0.2s ease;
+}
+
+.site-tool-button:hover {
+  transform: translateY(-1px);
+  border-color: rgba(225, 29, 72, 0.25);
+  color: #be123c;
+}
+
+.site-tool-button[aria-expanded="true"] {
+  background: rgba(225, 29, 72, 0.08);
+  border-color: rgba(225, 29, 72, 0.25);
+  color: #be123c;
+}
+
+/* Search bar + results (added to <body>) */
+.site-search-panel {
+  position: fixed;
+  z-index: 1100;
+  display: grid;
+  gap: 8px;
+}
+
+.site-search-panel[hidden] {
+  display: none;
+}
+
+.site-search-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 8px 0 14px;
+  height: 52px;
+  background: #fff;
+  border: 1px solid rgba(15, 23, 42, 0.12);
+  border-radius: 14px;
+  box-shadow: 0 18px 40px rgba(15, 23, 42, 0.16);
+  color: #334155;
+}
+
+.site-search-bar-icon {
+  display: inline-flex;
+  color: #475569;
+}
+
+.site-search-input {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  border: 0 !important;
+  outline: none;
+  background: transparent !important;
+  box-shadow: none !important;
+  padding: 0 !important;
+  font: inherit;
+  font-size: 1rem;
+  color: #0f172a;
+}
+
+.site-search-input::placeholder {
+  color: #64748b;
+}
+
+.site-search-close {
+  width: 36px;
+  height: 36px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: #64748b;
+  cursor: pointer;
+}
+
+.site-search-close:hover {
+  background: rgba(15, 23, 42, 0.06);
+  color: #0f172a;
+}
+
+.site-search-results {
+  max-height: min(60vh, 460px);
+  overflow-y: auto;
+  padding: 6px;
+  background: #fff;
+  border: 1px solid rgba(15, 23, 42, 0.1);
+  border-radius: 14px;
+  box-shadow: 0 18px 40px rgba(15, 23, 42, 0.14);
+}
+
+.site-search-results:empty {
+  display: none;
+}
+
+.site-search-group + .site-search-group {
+  margin-top: 4px;
+  padding-top: 4px;
+  border-top: 1px solid rgba(15, 23, 42, 0.06);
+}
+
+.site-search-group-title {
+  margin: 6px 10px 4px;
+  font-size: 0.7rem;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: #e11d48;
+}
+
+.site-search-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px;
+  border-radius: 10px;
+  color: #0f172a;
+  text-decoration: none;
+}
+
+.site-search-item:hover,
+.site-search-item:focus-visible {
+  background: rgba(225, 29, 72, 0.06);
+}
+
+.site-search-item-icon {
+  width: 32px;
+  height: 32px;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 10px;
+  background: rgba(15, 23, 42, 0.05);
+}
+
+.site-search-item-body {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.site-search-item-body strong {
+  font-size: 0.92rem;
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.site-search-item-body small {
+  font-size: 0.78rem;
+  color: #64748b;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.site-search-hint {
+  margin: 0;
+  padding: 12px;
+  font-size: 0.88rem;
+  color: #64748b;
+}
+
+/* Phones: only the search button fits in the row; Dark mode is in the More menu */
+@media (max-width: 640px) {
+  .app-header .site-theme-button {
+    display: none !important;
+  }
+
+  .site-tool-button {
+    width: 40px;
+    height: 40px;
+    border-radius: 12px;
+  }
+
+  .app-header .site-tools {
+    gap: 6px;
+  }
+}
+
+@media (max-width: 360px) {
+  .site-tool-button {
+    width: 36px;
+    height: 36px;
+  }
+}
+
+/* =====================================================================
+   Dark mode (whole site)
+   The page colours are inverted, and photos / emoji icons are flipped
+   back so they keep their real colours.
+   ===================================================================== */
+html[data-theme="dark"] {
+  /* the area behind the page is not inverted, so it gets a real dark colour */
+  background: #0f1115;
+  filter: invert(0.92) hue-rotate(180deg);
+  color-scheme: dark;
+}
+
+html[data-theme="dark"] img,
+html[data-theme="dark"] video,
+html[data-theme="dark"] picture,
+html[data-theme="dark"] canvas,
+html[data-theme="dark"] iframe,
+html[data-theme="dark"] .nav-icon,
+html[data-theme="dark"] .menu-icon,
+html[data-theme="dark"] .nav-more-menu-icon,
+html[data-theme="dark"] .site-search-item-icon,
+html[data-theme="dark"] .bottom-app-nav-item span:first-child,
+html[data-theme="dark"] .assistant-fab span {
+  filter: invert(1) hue-rotate(180deg);
+}
+
+/* =====================================================================
+   Phone navbar sizing with the Search button (both navbars)
+   ===================================================================== */
+@media (max-width: 640px) {
+  html body .app-header .top-nav {
+    gap: 8px !important;
+  }
+
+  html body .app-header .top-nav > a,
+  html body .app-header.public-header .top-nav .nav-item,
+  html body .app-header .top-nav .nav-more-toggle,
+  html body .app-header.public-header .top-nav .nav-more-toggle {
+    width: 54px !important;
+    min-width: 0 !important;
+    height: 52px !important;
+  }
+
+  html body .app-header .top-nav .nav-text {
+    font-size: 0.62rem;
+  }
+
+  html body .app-header.public-header,
+  html body .shared-topbar-host > .app-header {
+    gap: 8px;
+  }
+}
+
+@media (max-width: 360px) {
+  html body .app-header .top-nav {
+    gap: 4px !important;
+  }
+
+  html body .app-header .top-nav > a,
+  html body .app-header.public-header .top-nav .nav-item,
+  html body .app-header .top-nav .nav-more-toggle,
+  html body .app-header.public-header .top-nav .nav-more-toggle {
+    width: 48px !important;
+    height: 50px !important;
+    border-radius: 12px !important;
+  }
+
+  html body .app-header .top-nav .nav-text {
+    font-size: 0.56rem;
+  }
+
+  html body .app-header.public-header,
+  html body .shared-topbar-host > .app-header {
+    gap: 6px;
+    padding-left: 6px;
+    padding-right: 6px;
+  }
+
+  html body .app-header .public-brand-mark,
+  html body .shared-topbar-host .brand-logo {
+    width: 36px !important;
+    height: 36px !important;
+    border-radius: 12px !important;
+    font-size: 0.78rem;
+  }
+}
+
+@media (max-width: 360px) {
+  /* Sign In / Register header has extra side margins; match the other public pages */
+  html body.public-auth-page .app-header {
+    width: calc(100% - 12px) !important;
+    max-width: none !important;
+  }
+}
+
+/* Hide the browser's own clear (x) inside the search box; we have our own close button */
+.site-search-input::-webkit-search-cancel-button,
+.site-search-input::-webkit-search-decoration {
+  -webkit-appearance: none;
+  appearance: none;
+  display: none;
+}
+
+/* The global button padding would squeeze these icons */
+.site-search-close,
+.site-tool-button {
+  padding: 0 !important;
+  min-width: 0;
+}
+
+.site-search-close svg,
+.site-tool-button svg {
+  flex-shrink: 0;
+}
+
+/* =====================================================================
+   Search box next to the search icon (laptop / tablet)
+   ===================================================================== */
+.app-header .site-tools {
+  position: relative;
+}
+
+.app-header.search-open {
+  overflow: visible !important;
+}
+
+.site-search-inline {
+  position: absolute;
+  top: 50%;
+  right: calc(100% + 8px);
+  transform: translateY(-50%);
+  z-index: 20;
+  width: min(460px, 52vw);
+  height: 48px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 6px 0 14px;
+  background: #fff;
+  border: 1px solid rgba(15, 23, 42, 0.14);
+  border-radius: 14px;
+  box-shadow: 0 10px 30px rgba(15, 23, 42, 0.12);
+  color: #334155;
+  animation: site-search-in 0.16s ease-out;
+}
+
+.site-search-inline[hidden],
+.site-search-dropdown[hidden] {
+  display: none !important;
+}
+
+@keyframes site-search-in {
+  from { opacity: 0; width: 120px; }
+  to { opacity: 1; }
+}
+
+.site-search-dropdown {
+  position: absolute;
+  top: calc(100% + 14px);
+  right: calc(100% + 8px);
+  z-index: 20;
+  width: min(460px, 52vw);
+}
+
+/* =====================================================================
+   Phone navbar, Cricinfo-style: ☰  CC Cricket Canada Clubs  ⚙️
+   ===================================================================== */
+.mobile-icon-button {
+  display: none;
+}
+
+.mobile-tabbar,
+.mobile-drawer,
+.mobile-sheet,
+.mobile-backdrop {
+  display: none;
+}
+
+@media (max-width: 640px) {
+  html body .app-header .nav-wrapper,
+  html body .app-header .site-tools,
+  html body .app-header .header-right {
+    display: none !important;
+  }
+
+  html body .app-header {
+    display: flex !important;
+    align-items: center;
+    gap: 10px !important;
+    min-height: 60px;
+    padding: 8px 10px !important;
+  }
+
+  html body .shared-topbar-host > .app-header {
+    padding: 8px 10px !important;
+  }
+
+  .mobile-icon-button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    width: 42px;
+    height: 42px;
+    padding: 0 !important;
+    border: 0;
+    border-radius: 12px;
+    background: transparent;
+    color: #0f172a;
+    cursor: pointer;
+  }
+
+  .mobile-icon-button:active {
+    background: rgba(15, 23, 42, 0.06);
+  }
+
+  .mobile-settings-button {
+    margin-left: auto;
+  }
+
+  /* Brand: CC mark + name */
+  html body .app-header .brand {
+    display: inline-flex !important;
+    align-items: center;
+    gap: 8px;
+    flex: 0 1 auto !important;
+    min-width: 0 !important;
+    overflow: hidden;
+    padding: 0 !important;
+    background: transparent !important;
+    border: 0 !important;
+    box-shadow: none !important;
+  }
+
+  html body .app-header .brand .brand-logo,
+  html body .app-header .brand .public-brand-mark {
+    width: 36px !important;
+    height: 36px !important;
+    border-radius: 11px !important;
+    font-size: 0.8rem !important;
+  }
+
+  html body .app-header .brand .brand-copy,
+  html body .app-header .brand .public-brand-copy {
+    display: grid !important;
+    min-width: 0;
+    overflow: hidden;
+  }
+
+  html body .app-header .brand .brand-copy strong,
+  html body .app-header .brand .public-brand-copy strong {
+    font-size: 0.98rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  html body .app-header .brand .brand-copy small,
+  html body .app-header .brand .public-brand-copy small {
+    display: none;
+  }
+
+  /* ---------- Bottom tab bar ---------- */
+  .mobile-tabbar {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 900;
+    display: grid;
+    grid-template-columns: repeat(var(--tab-count, 5), minmax(0, 1fr));
+    padding: 6px 4px calc(6px + env(safe-area-inset-bottom));
+    background: rgba(255, 255, 255, 0.98);
+    border-top: 1px solid rgba(15, 23, 42, 0.08);
+    box-shadow: 0 -8px 24px rgba(15, 23, 42, 0.06);
+  }
+
+  .mobile-tab {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 3px;
+    min-width: 0;
+    padding: 6px 2px;
+    border-radius: 12px;
+    color: #475569;
+    text-decoration: none;
+  }
+
+  .mobile-tab-icon {
+    font-size: 1.25rem;
+    line-height: 1;
+  }
+
+  .mobile-tab-label {
+    max-width: 100%;
+    font-size: 0.7rem;
+    font-weight: 600;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .mobile-tab.is-active {
+    color: #e11d48;
+  }
+
+  .mobile-tab.is-active .mobile-tab-label {
+    font-weight: 800;
+  }
+
+  .mobile-tab.is-disabled {
+    opacity: 0.45;
+  }
+
+  body.has-mobile-tabbar {
+    padding-bottom: calc(76px + env(safe-area-inset-bottom));
+  }
+
+  /* The old floating Assistant button sits above the tab bar */
+  .assistant-fab {
+    bottom: calc(84px + env(safe-area-inset-bottom)) !important;
+  }
+
+  /* ---------- Shared bits for the drawer and the sheet ---------- */
+  .mobile-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 1200;
+    display: block;
+    background: rgba(15, 23, 42, 0.45);
+  }
+
+  .mobile-backdrop[hidden] {
+    display: none;
+  }
+
+  .mobile-panel-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 16px 16px 12px 20px;
+  }
+
+  .mobile-panel-head strong {
+    font-size: 1.2rem;
+    font-weight: 700;
+    color: #0f172a;
+  }
+
+  .mobile-panel-close {
+    width: 40px;
+    height: 40px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0 !important;
+    border: 0;
+    border-radius: 12px;
+    background: transparent;
+    color: #0f172a;
+    cursor: pointer;
+  }
+
+  /* ---------- ☰ Menu drawer (slides in from the left) ---------- */
+  .mobile-drawer {
+    position: fixed;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    z-index: 1300;
+    display: flex;
+    flex-direction: column;
+    width: min(86vw, 380px);
+    background: #fff;
+    box-shadow: 16px 0 40px rgba(15, 23, 42, 0.18);
+    transform: translateX(-102%);
+    transition: transform 0.22s ease;
+    overflow-y: auto;
+  }
+
+  .mobile-drawer.is-open {
+    transform: translateX(0);
+  }
+
+  .mobile-drawer-search {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin: 0 16px 10px;
+    padding: 0 14px;
+    height: 50px;
+    border: 1px solid rgba(15, 23, 42, 0.16);
+    border-radius: 12px;
+    background: #fff;
+    color: #475569;
+  }
+
+  .mobile-drawer-links {
+    display: grid;
+    padding: 4px 8px 24px;
+  }
+
+  .mobile-drawer-links[hidden],
+  .mobile-drawer-results[hidden] {
+    display: none !important;
+  }
+
+  .mobile-drawer-link {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    width: 100%;
+    min-height: 54px;
+    padding: 0 12px !important;
+    border: 0;
+    border-radius: 12px;
+    background: transparent;
+    color: #0f172a;
+    font: inherit;
+    font-size: 1.02rem;
+    font-weight: 600;
+    text-align: left;
+    text-decoration: none;
+    cursor: pointer;
+  }
+
+  .mobile-drawer-link:active {
+    background: rgba(15, 23, 42, 0.05);
+  }
+
+  .mobile-drawer-link.is-active {
+    background: rgba(225, 29, 72, 0.08);
+    color: #be123c;
+  }
+
+  .mobile-drawer-link.is-disabled {
+    opacity: 0.45;
+  }
+
+  .mobile-drawer-icon {
+    width: 26px;
+    display: inline-flex;
+    justify-content: center;
+    font-size: 1.2rem;
+  }
+
+  .mobile-drawer-signout {
+    margin-top: 8px;
+    border-top: 1px solid rgba(15, 23, 42, 0.08);
+    border-radius: 0 0 12px 12px;
+    padding-top: 8px !important;
+  }
+
+  .mobile-drawer-results {
+    margin: 0 16px 24px;
+    border: 0;
+    box-shadow: none;
+    padding: 0;
+    max-height: none;
+  }
+
+  /* ---------- ⚙️ Settings sheet (slides up from the bottom) ---------- */
+  .mobile-sheet {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 1300;
+    display: block;
+    padding-bottom: calc(20px + env(safe-area-inset-bottom));
+    background: #fff;
+    border-radius: 20px 20px 0 0;
+    box-shadow: 0 -16px 40px rgba(15, 23, 42, 0.18);
+    transform: translateY(105%);
+    transition: transform 0.22s ease;
+  }
+
+  .mobile-sheet.is-open {
+    transform: translateY(0);
+  }
+
+  .mobile-sheet .mobile-panel-head {
+    border-bottom: 1px solid rgba(15, 23, 42, 0.08);
+  }
+
+  .mobile-sheet-row {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    width: 100%;
+    min-height: 60px;
+    padding: 0 20px !important;
+    border: 0;
+    background: transparent;
+    color: #0f172a;
+    font: inherit;
+    font-size: 1.02rem;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    text-align: left;
+    cursor: pointer;
+  }
+
+  .sheet-row-icon {
+    display: inline-flex;
+    color: #0f172a;
+  }
+
+  /* Stop the page scrolling behind an open drawer / sheet */
+  body.mobile-panel-open {
+    overflow: hidden;
+  }
+}
+
+/* Emoji icons keep their real colours in dark mode */
+html[data-theme="dark"] .mobile-tab-icon,
+html[data-theme="dark"] .mobile-drawer-icon:not(.mobile-drawer-svg) {
+  filter: invert(1) hue-rotate(180deg);
+}
+
+/* Public header: always as wide as the page, so Search + Mode sit at the right edge */
+[data-public-header] {
+  width: 100% !important;
+  max-width: 100% !important;
+  justify-self: stretch !important;
+  align-self: start;
+}
+
+/* Fixtures / Rankings / Clubs: one full-width column, so the header and every panel
+   stretch across the page (the old column spans made the header stop short). */
+main.fixtures-shell {
+  grid-template-columns: minmax(0, 1fr) !important;
+}
+
+main.fixtures-shell > * {
+  grid-column: 1 / -1 !important;
+}
+
+[data-public-header] > .app-header {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+/* Phone Settings sheet: account section */
+@media (max-width: 640px) {
+  .mobile-sheet-account {
+    border-top: 1px solid rgba(15, 23, 42, 0.08);
+  }
+
+  .mobile-sheet-account:empty {
+    display: none;
+  }
+
+  a.mobile-sheet-row {
+    text-decoration: none;
+  }
+
+  .mobile-sheet-row.is-active {
+    color: #be123c;
+  }
+
+  .mobile-sheet-user {
+    display: grid;
+    gap: 2px;
+    padding: 14px 20px 4px;
+  }
+
+  .mobile-sheet-user strong {
+    font-size: 1rem;
+    color: #0f172a;
+  }
+
+  .mobile-sheet-user small {
+    font-size: 0.8rem;
+    color: #64748b;
+  }
+
+  .sheet-row-emoji {
+    width: 24px;
+    justify-content: center;
+    font-size: 1.15rem;
+  }
+}
+
+html[data-theme="dark"] .sheet-row-emoji {
+  filter: invert(1) hue-rotate(180deg);
+}
+
+/* Search box: sized by site_tools.js to the free space; when there is no room,
+   only the nav links it would cover step aside while searching */
+.app-header .search-hidden-link {
+  visibility: hidden;
+}
+
+.site-search-dropdown:empty {
+  display: none !important;
+}
+
+/* =====================================================================
+   Signed-in navbar v2 (laptop / tablet, above 640px)
+   - As many links as fit are shown; multipage.js marks the rest
+     .is-overflowed and they go into More. More only shows when needed.
+   - One account button replaces the club / user / sign-out icons.
+   ===================================================================== */
+@media (min-width: 641px) {
+  html body .shared-topbar-host .top-nav > a:nth-of-type(n + 4) {
+    display: inline-flex !important;
+  }
+
+  html body .shared-topbar-host .top-nav > a {
+    width: auto !important;
+    min-width: 64px !important;
+    padding: 0 10px !important;
+  }
+
+  html body .shared-topbar-host .top-nav > a.is-overflowed,
+  html body .shared-topbar-host .top-nav > a[hidden] {
+    display: none !important;
+  }
+
+  html body .shared-topbar-host .top-nav .nav-more-toggle {
+    display: none !important;
+  }
+
+  html body .shared-topbar-host .top-nav.has-overflow .nav-more-toggle {
+    display: inline-flex !important;
+    margin-left: auto;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    flex-shrink: 0;
+    width: 64px !important;
+    height: 56px !important;
+    padding: 0 !important;
+    border-radius: 16px !important;
+    background: rgba(255, 255, 255, 0.95) !important;
+    border: 1px solid rgba(225, 29, 72, 0.08) !important;
+    box-shadow: 0 4px 12px rgba(15, 23, 42, 0.03) !important;
+    color: #111827 !important;
+    font: inherit;
+    cursor: pointer;
+  }
+
+  html body .shared-topbar-host .top-nav.has-overflow .nav-more-toggle[aria-expanded="true"] {
+    background: rgba(225, 29, 72, 0.08) !important;
+    border-color: rgba(225, 29, 72, 0.2) !important;
+    color: #be123c !important;
+  }
+
+  html body .shared-topbar-host .top-nav.has-overflow.more-current .nav-more-toggle {
+    background: linear-gradient(135deg, #e11d48, #f43f5e) !important;
+    border-color: transparent !important;
+    color: #fff !important;
+  }
+
+  /* Right side: one account button instead of club / user / door */
+  html body .shared-topbar-host .header-right > #currentClubBadge,
+  html body .shared-topbar-host .header-right > #userIdentityBadge,
+  html body .shared-topbar-host .header-right > .template-signout {
+    display: none !important;
+  }
+
+  html body .shared-topbar-host .header-right > .account-button {
+    width: auto !important;
+    min-width: 0 !important;
+    height: 44px !important;
+    padding: 0 8px 0 4px !important;
+    gap: 4px;
+    border-radius: 14px !important;
+    background: #fff;
+    border: 1px solid rgba(225, 29, 72, 0.12);
+    box-shadow: 0 4px 12px rgba(15, 23, 42, 0.04);
+    color: #111827;
+    cursor: pointer;
+  }
+
+  html body .shared-topbar-host .header-right > .account-button:hover,
+  html body .shared-topbar-host .header-right > .account-button[aria-expanded="true"] {
+    border-color: rgba(225, 29, 72, 0.3);
+    background: rgba(225, 29, 72, 0.05);
+  }
+}
+
+.account-button-mark,
+.menu-account-mark {
+  width: 34px;
+  height: 34px;
+  border-radius: 11px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(135deg, #7c3aed, #e11d48);
+  color: #fff;
+  font-size: 0.78rem;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  flex-shrink: 0;
+}
+
+.account-button-caret {
+  font-size: 0.7rem;
+  color: #64748b;
+}
+
+/* Hide the account button on phones (Settings sheet has the account section there) */
+@media (max-width: 640px) {
+  .shared-topbar-host .account-button {
+    display: none !important;
+  }
+}
+
+.signed-in-account-menu {
+  min-width: 260px;
+}
+
+.signed-in-account-menu .menu-account-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px 8px;
+}
+
+.signed-in-account-menu .menu-account-head > span:last-child {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.signed-in-account-menu .menu-account-club {
+  display: grid;
+  gap: 2px;
+  margin: 2px 8px 4px;
+  padding: 8px 10px;
+  border-radius: 12px;
+  background: rgba(225, 29, 72, 0.05);
+}
+
+.signed-in-account-menu .menu-account-club small {
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #be123c;
+}
+
+.signed-in-account-menu .menu-account-club strong {
+  font-size: 0.9rem;
+  color: #111827;
+}
+
+/* =====================================================================
+   Signed-in navbar v3: Profile + Admin moved into the account (AS) menu,
+   Assistant is a floating button at the bottom right on every screen.
+   ===================================================================== */
+@media (min-width: 641px) {
+  html body .shared-topbar-host .top-nav > a.nav-account-item,
+  html body .shared-topbar-host .top-nav > a.nav-fab-item {
+    display: none !important;
+  }
+}
+
+html body .assistant-fab {
+  position: fixed;
+  right: 24px;
+  bottom: calc(24px + env(safe-area-inset-bottom));
+  z-index: 900;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 18px 12px 14px;
+  border-radius: 999px;
+  background: linear-gradient(135deg, #e11d48, #be123c);
+  color: #fff;
+  text-decoration: none;
+  font-weight: 700;
+  box-shadow: 0 16px 36px rgba(225, 29, 72, 0.32);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+html body .assistant-fab:hover,
+html body .assistant-fab:focus-visible {
+  transform: translateY(-2px);
+  box-shadow: 0 20px 44px rgba(225, 29, 72, 0.4);
+  color: #fff;
+}
+
+html body .assistant-fab span {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.2);
+  font-size: 1.05rem;
+}
+
+html body .assistant-fab strong {
+  font-size: 0.9rem;
+  letter-spacing: 0.01em;
+}
+
+html body .assistant-fab[hidden] {
+  display: none !important;
+}
+
+@media (max-width: 640px) {
+  html body .assistant-fab {
+    right: 14px;
+    bottom: calc(84px + env(safe-area-inset-bottom));
+    padding: 10px 14px 10px 10px;
+  }
+
+  html body.mobile-panel-open .assistant-fab {
+    display: none !important;
   }
 }

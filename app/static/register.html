@@ -12,52 +12,113 @@
     />
     <link rel="stylesheet" href="/assets/tailwind.css?v=20260426a" />
     <link rel="stylesheet" href="/assets/styles.css?v=20260511l" />
-    <link rel="stylesheet" href="/assets/live.css?v=20260511r" />
+    <link rel="stylesheet" href="/assets/live.css?v=20260923d" />
+    <link rel="stylesheet" href="/assets/signin.css?v=20260924b" />
+    <link rel="stylesheet" href="/assets/register.css?v=20260924a" />
   </head>
-  <body class="public-auth-page">
+  <body class="public-auth-page signin-v2 register-v2">
     <div data-public-header></div>
     <div class="page-shell">
       <section class="register-layout">
-        <div class="panel onboarding-panel register-form-panel">
+        <div class="panel onboarding-panel register-form-panel signin-form-panel">
           <div class="stack-card">
-            <p class="section-kicker">Registration</p>
-            <h1>Create a local account</h1>
-            <p class="lede">Register as a player or club admin with mobile or email, then choose your primary club.</p>
+            <div class="si-brand" aria-hidden="true">CC</div>
+            <p class="section-kicker">Register</p>
+            <h1 class="signin-title">Create your account</h1>
+            <p class="lede">Join as a player or club admin. It takes about a minute.</p>
             <div id="registerStatus" class="status-banner" hidden></div>
-            <form id="registerForm" class="form-grid">
-              <input id="registerDisplayName" type="text" placeholder="Display name" required />
-              <input id="registerMobile" type="tel" placeholder="Mobile number" />
-              <input id="registerEmail" type="email" placeholder="Email address" />
-              <input id="registerPassword" type="password" placeholder="Password" required />
-              <select id="registerRole">
-                <option value="">Loading roles...</option>
-              </select>
-              <input id="registerClubSearch" type="search" placeholder="Search existing clubs" />
-              <select id="registerClub"></select>
-              <div id="registerMemberRow" class="wide">
-                <select id="registerMember"></select>
-              </div>
-              <div class="stack-card wide">
-                <div class="panel-head compact-head">
-                  <div>
-                    <p class="section-kicker">Add club</p>
-                    <h2>Can't find your club?</h2>
+            <form id="registerForm" class="form-grid si-form">
+              <fieldset class="rg-step">
+                <legend><span class="rg-num">1</span> Your details</legend>
+                <label class="si-field rg-full" for="registerDisplayName">
+                  <span class="si-label">Full name</span>
+                  <span class="si-input"><span class="si-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 4-6 8-6s8 2 8 6"/></svg></span><input id="registerDisplayName" type="text" placeholder="e.g. Amit Sethi" autocomplete="name" required /></span>
+                </label>
+                <div class="rg-row">
+                  <label class="si-field" for="registerMobile">
+                    <span class="si-label">Mobile</span>
+                    <span class="si-input"><span class="si-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="7" y="2" width="10" height="20" rx="2"/><path d="M11 18h2"/></svg></span><input id="registerMobile" type="tel" placeholder="4165550123" autocomplete="tel" /></span>
+                  </label>
+                  <label class="si-field" for="registerEmail">
+                    <span class="si-label">Email</span>
+                    <span class="si-input"><span class="si-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 7l9 6 9-6"/></svg></span><input id="registerEmail" type="email" placeholder="you@email.com" autocomplete="email" /></span>
+                  </label>
+                </div>
+                <span class="si-hint rg-hint">Add a mobile number or an email (or both). You'll use it to sign in.</span>
+                <label class="si-field rg-full" for="registerPassword">
+                  <span class="si-label">Password</span>
+                  <span class="si-input"><span class="si-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg></span><input id="registerPassword" type="password" placeholder="Create a password" autocomplete="new-password" required /><button type="button" class="si-toggle" id="registerPasswordToggle" aria-label="Show password" aria-pressed="false">Show</button></span>
+                </label>
+              </fieldset>
+
+              <fieldset class="rg-step">
+                <legend><span class="rg-num">2</span> Your role</legend>
+                <label class="si-field rg-full" for="registerRole">
+                  <span class="si-label">I am a…</span>
+                  <select id="registerRole" class="rg-select"><option value="">Loading roles...</option></select>
+                </label>
+              </fieldset>
+
+              <fieldset class="rg-step">
+                <legend><span class="rg-num">3</span> Your club</legend>
+                <label class="si-field rg-full" for="registerClubSearch">
+                  <span class="si-label">Find your club</span>
+                  <span class="si-input"><span class="si-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg></span><input id="registerClubSearch" type="search" placeholder="Type a club name" /></span>
+                </label>
+                <label class="si-field rg-full" for="registerClub">
+                  <span class="si-label">Club</span>
+                  <select id="registerClub" class="rg-select"></select>
+                </label>
+                <div id="registerMemberRow" class="wide rg-full">
+                  <label class="si-field" for="registerMember">
+                    <span class="si-label">Link to your player profile <small>(if your club already added you)</small></span>
+                    <select id="registerMember" class="rg-select"></select>
+                  </label>
+                </div>
+                <details class="si-quick rg-full">
+                  <summary>Can't find your club? Add it</summary>
+                  <div class="rg-newclub">
+                    <label class="si-field rg-full" for="registerNewClubName">
+                      <span class="si-label">Club name</span>
+                      <span class="si-input rg-plain"><input id="registerNewClubName" type="text" placeholder="e.g. Heartlake Cricket Club" /></span>
+                    </label>
+                    <div class="rg-row">
+                      <label class="si-field" for="registerNewClubCity">
+                        <span class="si-label">City</span>
+                        <span class="si-input rg-plain"><input id="registerNewClubCity" type="text" placeholder="Toronto" /></span>
+                      </label>
+                      <label class="si-field" for="registerNewClubCountry">
+                        <span class="si-label">Country</span>
+                        <span class="si-input rg-plain"><input id="registerNewClubCountry" type="text" placeholder="Canada" /></span>
+                      </label>
+                    </div>
+                    <span class="si-hint">Club names are matched ignoring case, so the same club can't be added twice.</span>
                   </div>
-                </div>
-                <p class="lede">If your club is not listed, add it here. Club names are matched ignoring case to prevent duplicates.</p>
-                <div class="form-grid">
-                  <input id="registerNewClubName" type="text" placeholder="Club name" />
-                  <input id="registerNewClubCity" type="text" placeholder="City" />
-                  <input id="registerNewClubCountry" type="text" placeholder="Country" />
-                </div>
-              </div>
-              <button class="primary-button wide" type="submit">Register and continue</button>
-              <a class="primary-link auth-cta-link secondary wide" href="/signin">Already have an account? Sign in</a>
+                </details>
+              </fieldset>
+
+              <button class="primary-button wide si-submit" type="submit">Create account</button>
             </form>
+            <div class="si-divider"><span>Already have an account?</span></div>
+            <a class="primary-link auth-cta-link secondary wide si-register" href="/signin">Sign in</a>
           </div>
         </div>
       </section>
     </div>
+    <script>
+      (function () {
+        var input = document.getElementById("registerPassword");
+        var toggle = document.getElementById("registerPasswordToggle");
+        if (!input || !toggle) return;
+        toggle.addEventListener("click", function () {
+          var show = input.type === "password";
+          input.type = show ? "text" : "password";
+          toggle.textContent = show ? "Hide" : "Show";
+          toggle.setAttribute("aria-pressed", show ? "true" : "false");
+          toggle.setAttribute("aria-label", show ? "Hide password" : "Show password");
+        });
+      })();
+    </script>
     <script src="/assets/public_header.js?v=20260511b"></script>
     <script src="/assets/multipage.js?v=20260511k"></script>
     <script>

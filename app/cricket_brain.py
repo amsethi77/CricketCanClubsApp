@@ -2838,6 +2838,26 @@ def answer_question(
             str(moderated.get("answer", ""))[:300],
         )
         return moderated
+    # Player / club insights: form, predictions and improvement tips from the stored stats.
+    try:
+        try:
+            from cricket_insights import answer as _insights_answer
+        except ModuleNotFoundError:
+            from app.cricket_insights import answer as _insights_answer
+        insight = _insights_answer(effective_question, store)
+    except Exception as exc:  # never break the chat because of the insights layer
+        logger.exception("chat.insights failed: %s", exc)
+        insight = None
+    if insight:
+        result = {
+            **insight,
+            "session_id": session_id or "",
+            "llm": llm_status,
+            "source_provider": "insights",
+            "source_label": "Club stats analysis",
+        }
+        logger.info("chat.answer source=insights mode=%s question=%s", result.get("mode", ""), question[:200])
+        return result
     if _prediction_question_intent(effective_question):
         forecast = _forecast_answer(question, store, history=history)
         if forecast:

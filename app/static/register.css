@@ -1,0 +1,116 @@
+/* Register page v2 (uses the Sign In look from signin.css). Scoped to body.register-v2. */
+
+html body.register-v2 .register-layout {
+  display: block !important;
+  width: min(640px, 100%) !important;
+  max-width: none !important;
+  margin: 0 auto !important;
+  padding: 0 !important;
+}
+
+html body.register-v2 .register-layout > .panel {
+  width: 100% !important;
+  max-width: none !important;
+  margin: 0 !important;
+}
+
+html body.register-v2 .register-form-panel .form-grid {
+  display: grid !important;
+  grid-template-columns: minmax(0, 1fr) !important;
+  gap: 18px !important;
+}
+
+.register-v2 .rg-step {
+  display: grid;
+  gap: 14px;
+  margin: 0;
+  padding: 18px;
+  border: 1px solid #eef2f7;
+  border-radius: 18px;
+  background: #fcfcfd;
+  min-width: 0;
+}
+
+.register-v2 .rg-step legend {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 6px;
+  font-size: 0.92rem;
+  font-weight: 800;
+  color: #0f172a;
+}
+
+.register-v2 .rg-num {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: #e11d48;
+  color: #fff;
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
+.register-v2 .rg-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.register-v2 .rg-hint {
+  margin-top: -6px;
+}
+
+html body.register-v2 .rg-select {
+  width: 100% !important;
+  max-width: none !important;
+  height: 50px !important;
+  margin: 0 !important;
+  padding: 0 40px 0 14px !important;
+  border-radius: 14px !important;
+  border: 1.5px solid #e2e8f0 !important;
+  background: #f8fafc url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%2364748b' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E") no-repeat right 14px center !important;
+  color: #0f172a !important;
+  font: inherit !important;
+  font-size: 0.97rem !important;
+  appearance: none;
+  -webkit-appearance: none;
+  box-shadow: none !important;
+}
+
+html body.register-v2 .rg-select:focus {
+  outline: none !important;
+  border-color: #e11d48 !important;
+  background-color: #fff !important;
+  box-shadow: 0 0 0 4px rgba(225, 29, 72, 0.12) !important;
+}
+
+html body.register-v2 .rg-plain input {
+  padding-left: 14px !important;
+}
+
+html body.register-v2 #registerMemberRow[hidden] {
+  display: none !important;
+}
+
+.register-v2 .rg-newclub {
+  display: grid;
+  gap: 12px;
+}
+
+html body.register-v2 .register-form-panel .si-quick {
+  background: #fff;
+}
+
+@media (max-width: 640px) {
+  .register-v2 .rg-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .register-v2 .rg-step {
+    padding: 14px;
+  }
+}

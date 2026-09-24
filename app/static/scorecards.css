@@ -1,0 +1,697 @@
+/* Digital scorecards: /scorecards (archive by game date) and /scorecards/{id} (Cricinfo-style card). */
+
+.scorecards-page {
+  --sc-ink: #172554;
+  --sc-text: #1e293b;
+  --sc-muted: #64748b;
+  --sc-line: rgba(15, 23, 42, 0.09);
+  --sc-soft: #f8fafc;
+  --sc-accent: #dc2626;
+}
+
+/* ---------- Filters ---------- */
+.sc-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.sc-filter {
+  display: grid;
+  gap: 6px;
+  min-width: 160px;
+  flex: 1 1 160px;
+  max-width: 240px;
+}
+
+.sc-filter span {
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--sc-muted);
+}
+
+.sc-filter input,
+.sc-filter select {
+  height: 44px;
+  width: 100%;
+  padding: 0 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(15, 23, 42, 0.14);
+  background: #fff;
+  color: var(--sc-text);
+  font: inherit;
+  font-size: 0.95rem;
+}
+
+.sc-filter input:focus,
+.sc-filter select:focus {
+  outline: 2px solid rgba(220, 38, 38, 0.35);
+  outline-offset: 1px;
+}
+
+.scorecards-page .sc-clear {
+  height: 44px;
+  padding: 0 16px !important;
+  border-radius: 12px;
+  border: 1px solid rgba(220, 38, 38, 0.25);
+  background: #fff;
+  color: var(--sc-accent);
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.sc-clear[hidden] {
+  display: none !important;
+}
+
+/* ---------- Date list ---------- */
+.sc-list {
+  display: grid;
+  gap: 22px;
+}
+
+.sc-month-title {
+  margin: 0 0 10px;
+  font-family: var(--font-display, "Sora", sans-serif);
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: var(--sc-ink);
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--sc-line);
+}
+
+.sc-month-items {
+  display: grid;
+  gap: 10px;
+}
+
+.sc-card {
+  display: grid;
+  grid-template-columns: 64px minmax(0, 1fr) 20px;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 16px;
+  border-radius: 16px;
+  border: 1px solid var(--sc-line);
+  background: #fff;
+  color: var(--sc-text);
+  text-decoration: none;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.sc-card:hover,
+.sc-card:focus-visible {
+  border-color: rgba(220, 38, 38, 0.35);
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.07);
+}
+
+.sc-card-date {
+  display: grid;
+  justify-items: center;
+  padding: 8px 0;
+  border-radius: 12px;
+  background: rgba(220, 38, 38, 0.07);
+  color: var(--sc-accent);
+  line-height: 1.1;
+}
+
+.sc-card-date span {
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.sc-card-date strong {
+  font-family: var(--font-display, "Sora", sans-serif);
+  font-size: 1.4rem;
+  color: var(--sc-ink);
+}
+
+.sc-card-body {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.sc-card-teams {
+  display: grid;
+  gap: 4px;
+}
+
+.sc-team-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+}
+
+.sc-team-name {
+  font-weight: 600;
+  color: var(--sc-ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sc-team-score {
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.sc-team-score strong {
+  font-weight: 800;
+  color: var(--sc-ink);
+}
+
+.sc-team-score small,
+.sc-dash {
+  color: var(--sc-muted);
+}
+
+.sc-card-result {
+  margin: 2px 0 0;
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: #b45309;
+}
+
+.sc-card-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.sc-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  background: var(--sc-soft);
+  border: 1px solid var(--sc-line);
+  font-size: 0.75rem;
+  color: var(--sc-muted);
+}
+
+.sc-tag-photo {
+  color: #1d4ed8;
+  border-color: rgba(29, 78, 216, 0.18);
+  background: rgba(29, 78, 216, 0.06);
+}
+
+.sc-card-go {
+  font-size: 1.6rem;
+  color: var(--sc-muted);
+  justify-self: end;
+}
+
+.sc-notice {
+  margin-bottom: 14px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: rgba(245, 158, 11, 0.08);
+  border: 1px solid rgba(245, 158, 11, 0.25);
+  color: #92400e;
+  font-size: 0.92rem;
+  line-height: 1.6;
+}
+
+.sc-notice[hidden] {
+  display: none !important;
+}
+
+.scorecards-page .sc-chip {
+  display: inline-flex;
+  margin: 2px 4px 2px 0;
+  padding: 4px 10px !important;
+  border-radius: 999px;
+  border: 1px solid rgba(220, 38, 38, 0.25);
+  background: #fff;
+  color: var(--sc-accent);
+  font-weight: 700;
+  font-size: 0.82rem;
+  cursor: pointer;
+}
+
+/* ---------- Detail page ---------- */
+.sc-back {
+  justify-self: start;
+  color: var(--sc-accent);
+  font-weight: 700;
+  text-decoration: none;
+  padding: 4px 2px;
+}
+
+.sc-back:hover {
+  text-decoration: underline;
+}
+
+.sc-header {
+  display: grid;
+  gap: 10px;
+}
+
+.sc-meta {
+  margin: 0;
+  color: var(--sc-muted);
+  font-size: 0.88rem;
+}
+
+.sc-title {
+  margin: 0;
+  font-family: var(--font-display, "Sora", sans-serif);
+  font-size: clamp(1.2rem, 2.4vw, 1.6rem);
+  font-weight: 800;
+  color: var(--sc-ink);
+  letter-spacing: -0.02em;
+}
+
+.sc-hero-teams {
+  display: grid;
+  gap: 8px;
+  margin-top: 4px;
+  max-width: 560px;
+}
+
+.sc-hero-team {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 16px;
+}
+
+.sc-hero-team.is-muted {
+  opacity: 0.6;
+}
+
+.sc-hero-name {
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: var(--sc-ink);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sc-hero-score {
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.sc-hero-score strong {
+  font-family: var(--font-display, "Sora", sans-serif);
+  font-size: 1.3rem;
+  font-weight: 800;
+  color: var(--sc-ink);
+}
+
+.sc-hero-score small {
+  color: var(--sc-muted);
+  margin-right: 6px;
+}
+
+.sc-hero-result {
+  margin: 4px 0 0;
+  font-weight: 700;
+  color: #b45309;
+}
+
+.sc-tabs {
+  display: flex;
+  gap: 4px;
+  border-bottom: 1px solid var(--sc-line);
+  margin-bottom: 16px;
+  overflow-x: auto;
+}
+
+.scorecards-page .sc-tab {
+  padding: 12px 14px !important;
+  border: 0;
+  border-bottom: 3px solid transparent;
+  border-radius: 0;
+  background: transparent;
+  color: var(--sc-muted);
+  font-weight: 700;
+  font-size: 0.95rem;
+  white-space: nowrap;
+  cursor: pointer;
+  box-shadow: none;
+}
+
+.scorecards-page .sc-tab.is-active {
+  color: var(--sc-ink);
+  border-bottom-color: var(--sc-accent);
+}
+
+.sc-panel[hidden] {
+  display: none !important;
+}
+
+.sc-innings {
+  border: 1px solid var(--sc-line);
+  border-radius: 14px;
+  overflow: hidden;
+  margin-bottom: 16px;
+  background: #fff;
+}
+
+.sc-innings-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  background: #1e293b;
+  color: #fff;
+  cursor: pointer;
+  list-style: none;
+}
+
+.sc-innings-head::-webkit-details-marker {
+  display: none;
+}
+
+.sc-innings-team {
+  font-weight: 700;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sc-innings-team small {
+  font-weight: 500;
+  opacity: 0.7;
+  margin-left: 6px;
+}
+
+.sc-innings-score {
+  flex-shrink: 0;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+}
+
+.sc-innings-score small {
+  font-weight: 500;
+  opacity: 0.75;
+}
+
+.sc-innings-head::after {
+  content: "▾";
+  margin-left: 4px;
+  opacity: 0.7;
+  transition: transform 0.15s ease;
+}
+
+.sc-innings:not([open]) .sc-innings-head::after {
+  transform: rotate(-90deg);
+}
+
+.sc-table-wrap {
+  overflow-x: auto;
+}
+
+.sc-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.92rem;
+  color: var(--sc-text);
+}
+
+.sc-table th {
+  padding: 10px 12px;
+  background: var(--sc-soft);
+  color: var(--sc-muted);
+  font-size: 0.78rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  text-align: left;
+  border-bottom: 1px solid var(--sc-line);
+}
+
+.sc-table td {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--sc-line);
+  vertical-align: top;
+}
+
+.sc-table .sc-num {
+  text-align: right;
+  width: 56px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.sc-table .sc-name {
+  font-weight: 600;
+  color: #1d4ed8;
+  white-space: nowrap;
+}
+
+.sc-table th.sc-name {
+  color: var(--sc-muted);
+}
+
+.sc-table .sc-how {
+  color: var(--sc-muted);
+  font-size: 0.86rem;
+}
+
+.sc-table .sc-strong {
+  font-weight: 800;
+  color: var(--sc-ink);
+}
+
+.sc-notout {
+  margin-left: 2px;
+  color: var(--sc-accent);
+}
+
+.sc-extras td,
+.sc-total td {
+  background: #fff;
+}
+
+.sc-extras .sc-name,
+.sc-total .sc-name {
+  color: var(--sc-ink);
+}
+
+.sc-total td {
+  font-weight: 800;
+  border-bottom: 2px solid var(--sc-line);
+}
+
+.sc-empty-row {
+  color: var(--sc-muted);
+  font-style: italic;
+}
+
+.sc-dnb {
+  margin: 0;
+  padding: 10px 12px;
+  font-size: 0.88rem;
+  color: var(--sc-text);
+  border-bottom: 1px solid var(--sc-line);
+}
+
+.sc-dnb.sc-muted {
+  color: var(--sc-muted);
+  font-style: italic;
+}
+
+.sc-bowling {
+  margin-top: 4px;
+}
+
+.sc-info {
+  margin-top: 8px;
+  border: 1px solid var(--sc-line);
+  border-radius: 14px;
+  overflow: hidden;
+  background: #fff;
+}
+
+.sc-info h3 {
+  margin: 0;
+  padding: 12px 16px;
+  background: var(--sc-soft);
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: var(--sc-ink);
+  border-bottom: 1px solid var(--sc-line);
+}
+
+.sc-info dl {
+  margin: 0;
+}
+
+.sc-info dl > div {
+  display: grid;
+  grid-template-columns: 110px minmax(0, 1fr);
+  gap: 12px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--sc-line);
+}
+
+.sc-info dl > div:last-child {
+  border-bottom: 0;
+}
+
+.sc-info dt {
+  font-weight: 700;
+  color: var(--sc-muted);
+  font-size: 0.86rem;
+}
+
+.sc-info dd {
+  margin: 0;
+  color: var(--sc-text);
+}
+
+.scorecards-page .sc-link {
+  padding: 0 !important;
+  border: 0;
+  background: none;
+  color: #1d4ed8;
+  font: inherit;
+  font-weight: 700;
+  text-decoration: underline;
+  cursor: pointer;
+  box-shadow: none;
+}
+
+.sc-photo {
+  margin: 0;
+  display: grid;
+  gap: 8px;
+  justify-items: center;
+}
+
+.sc-photo img {
+  display: block;
+  max-width: 100%;
+  max-height: 80vh;
+  border-radius: 12px;
+  border: 1px solid var(--sc-line);
+  background: #fff;
+}
+
+.sc-photo figcaption {
+  color: var(--sc-muted);
+  font-size: 0.85rem;
+}
+
+/* Keep the photo looking like a photo in dark mode (the site inverts colours). */
+html[data-theme="dark"] .sc-photo img {
+  filter: invert(1) hue-rotate(180deg);
+}
+
+/* ---------- Phone ---------- */
+@media (max-width: 640px) {
+  .sc-filter {
+    max-width: none;
+    flex-basis: calc(50% - 6px);
+    min-width: 0;
+  }
+
+  .sc-filter:first-child {
+    flex-basis: 100%;
+  }
+
+  .sc-card {
+    grid-template-columns: 52px minmax(0, 1fr) 14px;
+    gap: 10px;
+    padding: 12px;
+  }
+
+  .sc-card-date strong {
+    font-size: 1.15rem;
+  }
+
+  .sc-table {
+    font-size: 0.86rem;
+  }
+
+  .sc-table th,
+  .sc-table td {
+    padding: 8px 8px;
+  }
+
+  .sc-table .sc-num {
+    width: 40px;
+  }
+
+  .sc-hide-sm {
+    display: none;
+  }
+
+  /* Dismissal goes under the batter's name, like Cricinfo's phone view. */
+  .sc-batting .sc-how {
+    display: none;
+  }
+
+  .sc-batting tbody tr:not(.sc-extras):not(.sc-total) .sc-name {
+    white-space: normal;
+  }
+
+  .sc-batting .sc-name[data-how]::after {
+    content: attr(data-how);
+    display: block;
+    font-weight: 400;
+    font-size: 0.78rem;
+    color: var(--sc-muted);
+  }
+
+  .sc-info dl > div {
+    grid-template-columns: 84px minmax(0, 1fr);
+  }
+}
+
+/* Page title size (the shared .fixtures-title is small). */
+.scorecards-page .fixtures-title {
+  font-size: clamp(1.35rem, 2.6vw, 1.8rem);
+  line-height: 1.2;
+}
+
+.sc-card-body,
+.sc-card-teams,
+.sc-team-row {
+  min-width: 0;
+}
+
+.sc-team-name {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+@media (max-width: 640px) {
+  .sc-card {
+    grid-template-columns: 46px minmax(0, 1fr);
+  }
+
+  .sc-card-go {
+    display: none;
+  }
+
+  .sc-team-score small {
+    display: none;
+  }
+}
+
+.scorecards-page .sc-title,
+.scorecards-page .fixtures-title {
+  max-width: none;
+  width: auto;
+}
+
+.sc-innings-score {
+  margin-left: auto;
+}

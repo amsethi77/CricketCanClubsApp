@@ -1,0 +1,204 @@
+/* Shared look for every signed-in page (Scoring, Fixtures, Archives, Performances,
+   Availability, Profile, Clubs, Admin). Loaded by multipage.js; scoped to body. */
+
+/* ---------- Page background ---------- */
+body {
+  background:
+    radial-gradient(circle at 8% 0%, rgba(225, 29, 72, 0.05), transparent 30%),
+    linear-gradient(180deg, #fbfbfd 0%, #f4f6fa 100%) !important;
+}
+
+/* ---------- Panels: plain white cards ---------- */
+body .page-shell .panel:not(.dashboard-hero-panel):not(.page-topbar) {
+  background: #fff !important;
+  border: 1px solid rgba(15, 23, 42, 0.08) !important;
+  border-radius: 22px !important;
+  box-shadow: 0 12px 30px rgba(15, 23, 42, 0.05) !important;
+  backdrop-filter: none !important;
+}
+
+body .page-shell .panel .stack-card,
+body .page-shell .panel .detail-card,
+body .page-shell .panel .mini-stat,
+body .page-shell .panel .summary-card {
+  background: #f8fafc !important;
+  border: 1px solid #eef2f7 !important;
+  box-shadow: none !important;
+  backdrop-filter: none !important;
+}
+
+/* Nested card inside a card: keep it white so it doesn't go grey-on-grey */
+body .page-shell .panel .stack-card .detail-card,
+body .page-shell .panel .stack-card .stack-card {
+  background: #fff !important;
+}
+
+/* ---------- Headings: one sans-serif style everywhere (no serif) ---------- */
+body .page-shell h1,
+body .page-shell h2,
+body .page-shell h3 {
+  font-family: "Sora", "Inter", system-ui, sans-serif !important;
+  font-weight: 800 !important;
+  letter-spacing: -0.02em !important;
+}
+
+body .page-shell .panel-head h2,
+body .page-shell .panel-head h3 {
+  color: #0f172a;
+}
+
+body .page-shell .panel-head h2 {
+  font-size: 1.2rem !important;
+}
+
+body .page-shell .panel-head h3 {
+  font-size: 1rem !important;
+}
+
+body .section-kicker {
+  color: #e11d48 !important;
+  letter-spacing: 0.12em !important;
+  font-weight: 800 !important;
+}
+
+/* ---------- Form fields: same look as Sign In ---------- */
+body .page-shell .panel input:not([type="checkbox"]):not([type="radio"]):not([type="file"]):not([type="range"]),
+body .page-shell .panel select,
+body .page-shell .panel textarea {
+  border: 1.5px solid #e2e8f0 !important;
+  border-radius: 12px !important;
+  background-color: #fff !important;
+  color: #0f172a !important;
+  box-shadow: none !important;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+body .page-shell .panel input:focus,
+body .page-shell .panel select:focus,
+body .page-shell .panel textarea:focus {
+  outline: none !important;
+  border-color: #e11d48 !important;
+  box-shadow: 0 0 0 4px rgba(225, 29, 72, 0.12) !important;
+}
+
+/* ---------- Buttons ---------- */
+body .page-shell .primary-button {
+  border-radius: 12px !important;
+  background: linear-gradient(135deg, #e11d48, #dc2626) !important;
+  box-shadow: 0 10px 22px rgba(225, 29, 72, 0.22) !important;
+  font-weight: 800 !important;
+}
+
+body .page-shell .secondary-button {
+  border-radius: 12px !important;
+  background: #fff !important;
+  border: 1px solid rgba(15, 23, 42, 0.14) !important;
+  color: #0f172a !important;
+  box-shadow: none !important;
+  font-weight: 700 !important;
+}
+
+body .page-shell .secondary-button:hover {
+  border-color: rgba(225, 29, 72, 0.35) !important;
+  color: #be123c !important;
+}
+
+/* ---------- Status messages: a small toast at the top instead of a banner that pushes the page ---------- */
+body .page-shell > .status-banner:not([hidden]),
+body #statusBanner:not([hidden]),
+body #playerAvailabilityStatus:not([hidden]) {
+  position: fixed !important;
+  top: 104px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 1100;
+  width: auto !important;
+  max-width: min(520px, calc(100% - 32px));
+  margin: 0 !important;
+  padding: 10px 16px !important;
+  border-radius: 12px !important;
+  box-shadow: 0 16px 36px rgba(15, 23, 42, 0.18) !important;
+  font-weight: 600;
+}
+
+body .status-banner.info:not(.error) {
+  background: #fff !important;
+  border: 1px solid #e2e8f0 !important;
+  color: #334155 !important;
+}
+
+/* ---------- Availability page ---------- */
+body .avail-head {
+  margin-bottom: 16px;
+}
+
+body .avail-title {
+  margin: 4px 0 6px !important;
+  font-size: clamp(1.5rem, 2.6vw, 2rem) !important;
+}
+
+body #playerFixtures {
+  display: grid !important;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px !important;
+}
+
+body #playerFixtures .availability-card {
+  display: grid;
+  gap: 4px;
+  margin: 0 !important;
+  padding: 16px !important;
+  border-radius: 16px !important;
+  background: #fff !important;
+}
+
+body #playerFixtures .availability-card strong {
+  font-size: 1rem;
+  color: #0f172a;
+}
+
+body #playerFixtures .availability-card p {
+  margin: 0;
+  color: #64748b;
+}
+
+body #playerFixtures .availability-slider {
+  margin-top: 8px;
+  padding: 0 !important;
+  background: none !important;
+  border: 0 !important;
+}
+
+body #playerFixtures .availability-quick-actions {
+  display: grid !important;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+body #playerFixtures .status-toggle {
+  width: 100%;
+  min-height: 40px;
+  border-radius: 10px !important;
+}
+
+@media (max-width: 900px) {
+  body #playerFixtures {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* ---------- Dark mode: the site inverts colours, nothing extra needed ---------- */
+
+/* Scoring page: the score console gets the full width (the voice/notes panel sits below it) */
+body[data-dashboard-widget="scoring"] .dashboard > .panel {
+  grid-column: 1 / -1 !important;
+}
+
+/* Dark mode inverts the whole page with a CSS filter. Blur effects on top of that
+   make Chrome on some Windows graphics cards flicker, so turn blur off in dark mode. */
+html[data-theme="dark"] *,
+html[data-theme="dark"] *::before,
+html[data-theme="dark"] *::after {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}

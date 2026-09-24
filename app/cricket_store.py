@@ -1257,8 +1257,11 @@ def _archive_fixture_clubs(archive: dict[str, Any], clubs: list[dict[str, Any]])
             continue
         add_club(_resolve_club_reference(clubs, str(fixture.get("club_id") or "")))
         add_club(_resolve_club_reference(clubs, str(fixture.get("club_name") or "")))
-        if multi_club_archive or str(archive.get("applied_to_match_id") or "").strip():
-            add_club(_resolve_club_reference(clubs, str(fixture.get("opponent") or fixture.get("visiting_team") or "")))
+        # Always link the opponent's club too, so a scorecard for a fixture
+        # between two real clubs shows up in both clubs' archives -- not
+        # only once the scorecard is already confirmed multi-innings or
+        # already applied to a match.
+        add_club(_resolve_club_reference(clubs, str(fixture.get("opponent") or fixture.get("visiting_team") or "")))
 
     batting_team = archive_batting_team_name(archive)
     bowling_team = archive_bowling_team_name(archive)
@@ -5775,7 +5778,8 @@ def _finalize_batting_metrics(bucket: dict[str, Any]) -> None:
     else:
         denominator = 0
     bucket["batting_average"] = round((bucket["runs"] / denominator), 2) if denominator else 0.0
-    bucket["strike_rate"] = round((bucket["runs"] / balls) * 100, 2) if balls else 0.0
+    sr_runs = int(bucket.get("sr_runs", bucket["runs"]) or 0)
+    bucket["strike_rate"] = round((sr_runs / balls) * 100, 2) if balls else 0.0
 
 
 def build_player_stats(fixtures: list[dict[str, Any]], members: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -5828,6 +5832,9 @@ def build_player_stats(fixtures: list[dict[str, Any]], members: list[dict[str, A
             )
             stats[name]["runs"] += int(performance.get("runs", 0) or 0)
             stats[name]["balls"] += int(performance.get("balls", 0) or 0)
+            if int(performance.get("balls", 0) or 0) > 0:
+                # Strike rate only counts runs from innings where balls faced were recorded.
+                stats[name]["sr_runs"] = int(stats[name].get("sr_runs", 0) or 0) + int(performance.get("runs", 0) or 0)
             stats[name]["wickets"] += int(performance.get("wickets", 0) or 0)
             stats[name]["catches"] += int(performance.get("catches", 0) or 0)
             stats[name]["fours"] += int(performance.get("fours", 0) or 0)
@@ -5943,6 +5950,9 @@ def build_player_pending_stats(archive_uploads: list[dict[str, Any]], members: l
             )
             stats[name]["runs"] += int(performance.get("runs", 0) or 0)
             stats[name]["balls"] += int(performance.get("balls", 0) or 0)
+            if int(performance.get("balls", 0) or 0) > 0:
+                # Strike rate only counts runs from innings where balls faced were recorded.
+                stats[name]["sr_runs"] = int(stats[name].get("sr_runs", 0) or 0) + int(performance.get("runs", 0) or 0)
             stats[name]["wickets"] += int(performance.get("wickets", 0) or 0)
             stats[name]["catches"] += int(performance.get("catches", 0) or 0)
             _apply_batting_sample(stats[name], performance)
@@ -6034,6 +6044,7 @@ def build_combined_player_stats(
         pending = pending_by_name.get(name, {})
         runs = int(live.get("runs", 0) or 0) + int(pending.get("runs", 0) or 0)
         balls = int(live.get("balls", 0) or 0) + int(pending.get("balls", 0) or 0)
+        sr_runs = int(live.get("sr_runs", live.get("runs", 0) if live.get("balls") else 0) or 0) + int(pending.get("sr_runs", pending.get("runs", 0) if pending.get("balls") else 0) or 0)
         wickets = int(live.get("wickets", 0) or 0) + int(pending.get("wickets", 0) or 0)
         catches = int(live.get("catches", 0) or 0) + int(pending.get("catches", 0) or 0)
         matches = int(live.get("matches", 0) or 0) + int(pending.get("matches", 0) or 0)
@@ -6044,6 +6055,7 @@ def build_combined_player_stats(
             "player_name": name,
             "runs": runs,
             "balls": balls,
+            "sr_runs": sr_runs,
             "wickets": wickets,
             "catches": catches,
             "fours": int(live.get("fours", 0) or 0),

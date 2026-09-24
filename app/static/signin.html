@@ -12,74 +12,125 @@
     />
     <link rel="stylesheet" href="/assets/tailwind.css?v=20260430b" />
     <link rel="stylesheet" href="/assets/styles.css?v=20260511l" />
-    <link rel="stylesheet" href="/assets/live.css?v=20260511r" />
+    <link rel="stylesheet" href="/assets/live.css?v=20260923d" />
+    <link rel="stylesheet" href="/assets/signin.css?v=20260924a" />
   </head>
-  <body class="public-auth-page">
+  <body class="public-auth-page signin-v2">
     <div data-public-header></div>
     <div class="page-shell">
       <div class="signin-page-grid">
         <section class="signin-layout">
           <div class="panel onboarding-panel signin-form-panel">
             <div class="stack-card">
-              <p class="section-kicker">Sign In</p>
-              <h1 class="signin-title">Cricket Canada Clubs Login</h1>
-              <p class="lede">Sign in with mobile or email and password, or use your saved player mobile/email for quick access. Add player name only if needed.</p>
+              <div class="si-brand" aria-hidden="true">CC</div>
+              <p class="section-kicker">Sign in</p>
+              <h1 class="signin-title">Welcome back</h1>
+              <p class="lede">Sign in to score matches, mark availability and follow your club's stats.</p>
               <div id="signinStatus" class="status-banner" hidden></div>
-              <form id="signinForm" class="form-grid" method="post" action="/signin/quick">
-                <input id="signinIdentifier" name="identifier" type="text" placeholder="Mobile or email" required />
-                <input id="signinPassword" name="password" type="password" placeholder="Password" />
-                <input id="signinPlayerName" name="player_name" type="text" placeholder="Player name for quick access" />
-                <button class="primary-button wide" type="submit">Sign in</button>
+              <form id="signinForm" class="form-grid si-form" method="post" action="/signin/quick">
+                <label class="si-field" for="signinIdentifier">
+                  <span class="si-label">Mobile or email</span>
+                  <span class="si-input">
+                    <span class="si-icon" aria-hidden="true">
+                      <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 4-6 8-6s8 2 8 6"/></svg>
+                    </span>
+                    <input id="signinIdentifier" name="identifier" type="text" placeholder="e.g. 4165550123 or you@email.com" autocomplete="username" required />
+                  </span>
+                </label>
+                <label class="si-field" for="signinPassword">
+                  <span class="si-label">Password</span>
+                  <span class="si-input">
+                    <span class="si-icon" aria-hidden="true">
+                      <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>
+                    </span>
+                    <input id="signinPassword" name="password" type="password" placeholder="Your password" autocomplete="current-password" />
+                    <button type="button" class="si-toggle" id="signinPasswordToggle" aria-label="Show password" aria-pressed="false">Show</button>
+                  </span>
+                </label>
+                <details class="si-quick" id="signinQuick">
+                  <summary>No password? Use quick access</summary>
+                  <label class="si-field" for="signinPlayerName">
+                    <span class="si-label">Player name <small>(optional)</small></span>
+                    <span class="si-input">
+                      <span class="si-icon" aria-hidden="true">
+                        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20l4-1 10-10-3-3L5 16z"/><path d="M14 7l3 3"/></svg>
+                      </span>
+                      <input id="signinPlayerName" name="player_name" type="text" placeholder="Name as saved by your club" autocomplete="name" />
+                    </span>
+                    <span class="si-hint">Leave the password empty and enter your saved mobile or email. Add your player name only if asked.</span>
+                  </label>
+                </details>
+                <button class="primary-button wide si-submit" type="submit">Sign in</button>
               </form>
-              <a class="primary-link auth-cta-link secondary wide" href="/register">Create an account</a>
+              <div class="si-divider"><span>New to Cricket Canada Clubs?</span></div>
+              <a class="primary-link auth-cta-link secondary wide si-register" href="/register">Create an account</a>
             </div>
           </div>
         </section>
         <section class="panel onboarding-panel signin-leaders-panel">
           <div class="stack-card signin-stats-shell">
-          <div class="signin-stats-head">
-            <div>
-              <p class="section-kicker">League Leaders</p>
-              <h2 class="signin-stats-title">Who’s leading right now</h2>
+            <div class="signin-stats-head">
+              <div>
+                <p class="section-kicker">League leaders</p>
+                <h2 class="signin-stats-title">Who's leading right now</h2>
+              </div>
+              <p class="lede signin-stats-lede">Top batting, bowling and club records across Cricket Canada Clubs.</p>
             </div>
-            <p class="lede signin-stats-lede">A quick snapshot of the current batting, bowling, and club standings across Cricket Canada Clubs.</p>
+            <div class="signin-stats-grid">
+              <article class="signin-widget">
+                <div class="signin-widget-head">
+                  <div>
+                    <p class="signin-widget-kicker">🏏 Batting</p>
+                    <h3>Top 5 batters</h3>
+                  </div>
+                  <span id="signinBatsmenCount" class="signin-widget-pill">Loading</span>
+                </div>
+                <div id="signinTopBatsmen" class="signin-leader-list" aria-live="polite"></div>
+              </article>
+              <article class="signin-widget">
+                <div class="signin-widget-head">
+                  <div>
+                    <p class="signin-widget-kicker">🎯 Bowling</p>
+                    <h3>Top 5 bowlers</h3>
+                  </div>
+                  <span id="signinBowlersCount" class="signin-widget-pill">Loading</span>
+                </div>
+                <div id="signinTopBowlers" class="signin-leader-list" aria-live="polite"></div>
+              </article>
+              <article class="signin-widget signin-widget-wide">
+                <div class="signin-widget-head">
+                  <div>
+                    <p class="signin-widget-kicker">🏆 Clubs</p>
+                    <h3>Top clubs by win rate</h3>
+                  </div>
+                  <span id="signinClubsCount" class="signin-widget-pill">Loading</span>
+                </div>
+                <div id="signinTopClubs" class="signin-club-list" aria-live="polite"></div>
+              </article>
+            </div>
           </div>
-          <div class="signin-stats-grid">
-            <article class="signin-widget">
-              <div class="signin-widget-head">
-                <div>
-                  <p class="signin-widget-kicker">Batting</p>
-                  <h3>Top 5 Batsmen</h3>
-                </div>
-                <span id="signinBatsmenCount" class="signin-widget-pill">Loading</span>
-              </div>
-              <div id="signinTopBatsmen" class="signin-leader-list" aria-live="polite"></div>
-            </article>
-            <article class="signin-widget">
-              <div class="signin-widget-head">
-                <div>
-                  <p class="signin-widget-kicker">Bowling</p>
-                  <h3>Top 5 Bowlers</h3>
-                </div>
-                <span id="signinBowlersCount" class="signin-widget-pill">Loading</span>
-              </div>
-              <div id="signinTopBowlers" class="signin-leader-list" aria-live="polite"></div>
-            </article>
-            <article class="signin-widget signin-widget-wide">
-              <div class="signin-widget-head">
-                <div>
-                  <p class="signin-widget-kicker">Clubs</p>
-                  <h3>Top 10 Clubs by Win Rate</h3>
-                </div>
-                <span id="signinClubsCount" class="signin-widget-pill">Loading</span>
-              </div>
-              <div id="signinTopClubs" class="signin-club-list" aria-live="polite"></div>
-            </article>
-          </div>
-        </div>
-      </section>
+        </section>
       </div>
     </div>
+    <script>
+      (function () {
+        var input = document.getElementById("signinPassword");
+        var toggle = document.getElementById("signinPasswordToggle");
+        var quick = document.getElementById("signinQuick");
+        var player = document.getElementById("signinPlayerName");
+        if (toggle && input) {
+          toggle.addEventListener("click", function () {
+            var show = input.type === "password";
+            input.type = show ? "text" : "password";
+            toggle.textContent = show ? "Hide" : "Show";
+            toggle.setAttribute("aria-pressed", show ? "true" : "false");
+            toggle.setAttribute("aria-label", show ? "Hide password" : "Show password");
+          });
+        }
+        // Keep quick access open if the browser filled in a player name.
+        setTimeout(function () { if (player && player.value && quick) quick.open = true; }, 300);
+      })();
+    </script>
     <script src="/assets/public_header.js?v=20260511b"></script>
     <script src="/assets/multipage.js?v=20260511k"></script>
     <script src="/assets/signin.js?v=20260511j"></script>

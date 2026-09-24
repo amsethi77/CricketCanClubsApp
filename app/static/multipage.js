@@ -1,3 +1,14 @@
+// Dark / light mode + navbar search (site_tools.js). Apply the saved theme right away to avoid a flash.
+(function loadSiteTools() {
+  try {
+    if (localStorage.getItem("cricketClubAppTheme") === "dark") document.documentElement.setAttribute("data-theme", "dark");
+  } catch (e) { /* ignore */ }
+  if (document.querySelector('script[src^="/assets/site_tools.js"]')) return;
+  const script = document.createElement("script");
+  script.src = "/assets/site_tools.js";
+  document.head.appendChild(script);
+})();
+
 (function () {
 const TOKEN_KEY = "cricketClubAppAuthToken";
 const CLUB_KEY = "cricketClubAppPrimaryClubId";
@@ -332,6 +343,7 @@ function syncUserBadge(user) {
       <span>${role}</span>
     </span>
   `;
+  renderAccountButton();
 }
 
 function renderSharedBottomNav(user = null) {
@@ -382,10 +394,322 @@ function renderSharedBottomNav(user = null) {
     fab.className = "assistant-fab";
     fab.href = "/dashboard/widgets/assistant";
     fab.innerHTML = `<span aria-hidden="true">🤖</span><strong>Assistant</strong>`;
+    fab.setAttribute("aria-label", "Open Assistant");
     shell.appendChild(fab);
   }
+  // No floating button on the Assistant page itself.
+  fab.hidden = currentPath === "/dashboard/widgets/assistant";
   return nav;
 }
+
+let signedInMenuUser = null;
+let signedInMoreMenuReady = false;
+
+// Show the Admin link only to the superadmin (the header loads after the page's
+// own admin check, so it needs its own pass).
+function syncHeaderAdminLinks(user) {
+  const role = String(user?.effective_role || user?.role || "").trim();
+  const isAdmin = role === "superadmin";
+  document.querySelectorAll(".shared-topbar-host [data-admin-only]").forEach((node) => {
+    node.hidden = !isAdmin;
+  });
+  scheduleSignedInNavFit();
+}
+
+// "More" dropdown for the signed-in navbar (tablet / phone).
+// Uses one document-level listener, so it keeps working if the header is re-rendered.
+function setupSignedInMoreMenu() {
+  if (signedInMoreMenuReady) return;
+  signedInMoreMenuReady = true;
+
+  let menu = null;
+  let activeButton = null;
+
+  function closeMenu() {
+    if (menu) menu.remove();
+    if (activeButton) activeButton.setAttribute("aria-expanded", "false");
+    menu = null;
+    activeButton = null;
+  }
+
+  function positionMenu() {
+    if (!menu || !activeButton) return;
+    const rect = activeButton.getBoundingClientRect();
+    menu.style.top = `${rect.bottom + 8}px`;
+    menu.style.right = `${Math.max(8, window.innerWidth - rect.right)}px`;
+  }
+
+  function openMenu(button) {
+    const nav = button.closest(".top-nav");
+    if (!nav) return;
+    closeMenu();
+    activeButton = button;
+    menu = document.createElement("div");
+    menu.className = "signed-in-more-menu";
+    menu.setAttribute("role", "menu");
+
+    // Laptop / tablet: the links that didn't fit in the row. Phone: every link after the first three.
+    const allLinks = Array.from(nav.querySelectorAll(":scope > a")).filter((link) => !link.hidden);
+    const overflowed = allLinks.filter((link) => link.classList.contains("is-overflowed") && !link.matches(".nav-account-item, .nav-fab-item"));
+    const links = overflowed.length ? overflowed : allLinks.slice(3);
+    links.forEach((link) => {
+      const item = document.createElement("a");
+      item.href = link.getAttribute("href") || "#";
+      item.setAttribute("role", "menuitem");
+      if (link.getAttribute("aria-current") === "page") item.setAttribute("aria-current", "page");
+      const icon = link.querySelector(".nav-icon");
+      const text = link.querySelector(".nav-text");
+      item.innerHTML =
+        `<span class="menu-icon" aria-hidden="true">${escapeHtml(icon ? icon.textContent : "")}</span>` +
+        `<span>${escapeHtml(text ? text.textContent : link.textContent.trim())}</span>`;
+      menu.appendChild(item);
+    });
+
+    // On phones the club / user / sign-out buttons are hidden, so add them here.
+    if (window.matchMedia("(max-width: 640px)").matches) {
+      const user = signedInMenuUser || {};
+      const name = String(user.display_name || user.full_name || user.mobile || "Signed in").trim();
+      const role = formatRoleLabel(user.effective_role || user.role || "player");
+      const club = String(user.current_club_name || user.primary_club_name || "").trim();
+      menu.insertAdjacentHTML(
+        "beforeend",
+        `<div class="menu-divider" role="separator"></div>
+         <div class="menu-account">
+           <strong>${escapeHtml(name)}</strong>
+           <small>${escapeHtml(role)}${club ? ` · ${escapeHtml(club)}` : ""}</small>
+         </div>
+         <a href="/signout" role="menuitem" data-menu-signout><span class="menu-icon" aria-hidden="true">🚪</span><span>Sign out</span></a>`
+      );
+    }
+
+    // Dark / light mode (the toggle button is hidden in the phone navbar)
+    if (window.CCSiteTools && window.matchMedia("(max-width: 640px)").matches) {
+      const label = window.CCSiteTools.themeMenuLabel();
+      menu.insertAdjacentHTML(
+        "beforeend",
+        `<a href="#" role="menuitem" data-menu-theme><span class="menu-icon" aria-hidden="true">${label.icon}</span><span>${label.text}</span></a>`
+      );
+    }
+
+    document.body.appendChild(menu);
+    button.setAttribute("aria-expanded", "true");
+    button.setAttribute("aria-haspopup", "menu");
+    positionMenu();
+  }
+
+  // Capture phase: runs before any older click handler on the More button.
+  document.addEventListener(
+    "click",
+    (event) => {
+      const button = event.target.closest(".shared-topbar-host .nav-more-toggle");
+      if (button) {
+        event.preventDefault();
+        event.stopPropagation();
+        if (menu && activeButton === button) closeMenu();
+        else openMenu(button);
+        return;
+      }
+      if (menu && event.target.closest("[data-menu-theme]")) {
+        event.preventDefault();
+        closeMenu();
+        if (window.CCSiteTools) window.CCSiteTools.toggleTheme();
+        return;
+      }
+      if (menu && event.target.closest("[data-menu-signout]")) {
+        event.preventDefault();
+        closeMenu();
+        signOut();
+        return;
+      }
+      if (menu && !menu.contains(event.target)) closeMenu();
+    },
+    true
+  );
+
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && menu) {
+      const button = activeButton;
+      closeMenu();
+      if (button) button.focus();
+    }
+  });
+  window.addEventListener("resize", closeMenu);
+  window.addEventListener("scroll", positionMenu, { passive: true });
+}
+
+// ---------------------------------------------------------------------------
+// Laptop / tablet navbar: show as many links as fit; only the rest go into More.
+// ---------------------------------------------------------------------------
+let signedInNavFitFrame = 0;
+
+function fitSignedInNav() {
+  const nav = document.querySelector(".shared-topbar-host .top-nav");
+  if (!nav) return;
+  // Profile / Admin live in the account menu and Assistant is the floating button,
+  // so on laptop they are not part of the row.
+  const links = Array.from(nav.querySelectorAll(":scope > a")).filter(
+    (link) => !link.hidden && !link.matches(".nav-account-item, .nav-fab-item")
+  );
+  const more = nav.querySelector(".nav-more-toggle");
+  links.forEach((link) => link.classList.remove("is-overflowed"));
+  nav.classList.remove("has-overflow", "more-current");
+  if (window.matchMedia("(max-width: 640px)").matches) return;
+
+  const gap = parseFloat(getComputedStyle(nav).columnGap || getComputedStyle(nav).gap) || 8;
+  const available = nav.clientWidth;
+  const widths = links.map((link) => link.getBoundingClientRect().width);
+  const total = widths.reduce((sum, width) => sum + width, 0) + gap * Math.max(0, links.length - 1);
+  if (total <= available + 1) return;
+
+  // Room for the More button too.
+  const moreWidth = 64 + gap;
+  let used = 0;
+  let fits = 0;
+  for (let index = 0; index < links.length; index += 1) {
+    const next = used + (index ? gap : 0) + widths[index];
+    if (next + moreWidth > available) break;
+    used = next;
+    fits += 1;
+  }
+  links.slice(Math.max(1, fits)).forEach((link) => link.classList.add("is-overflowed"));
+  nav.classList.add("has-overflow");
+  if (nav.querySelector(':scope > a.is-overflowed[aria-current="page"]')) nav.classList.add("more-current");
+  if (more) more.setAttribute("aria-label", "More menu");
+}
+
+function scheduleSignedInNavFit() {
+  if (signedInNavFitFrame) cancelAnimationFrame(signedInNavFitFrame);
+  signedInNavFitFrame = requestAnimationFrame(() => {
+    signedInNavFitFrame = 0;
+    fitSignedInNav();
+  });
+}
+
+window.addEventListener("resize", scheduleSignedInNavFit);
+if (document.fonts && document.fonts.ready) document.fonts.ready.then(scheduleSignedInNavFit).catch(() => {});
+
+// ---------------------------------------------------------------------------
+// Account button (laptop / tablet): one avatar that opens your name, club,
+// Profile, Clubs and Sign out. Replaces the separate club / user / door icons.
+// ---------------------------------------------------------------------------
+let signedInAccountMenuReady = false;
+
+function isAdminUser() {
+  const role = String(signedInMenuUser?.effective_role || signedInMenuUser?.role || "").trim();
+  if (role) return role === "superadmin";
+  const adminLink = document.querySelector('.shared-topbar-host .top-nav a[href="/admin-center"]');
+  return Boolean(adminLink && !adminLink.hidden);
+}
+
+function accountDetails() {
+  const user = signedInMenuUser || {};
+  const userBadge = document.getElementById(USER_BADGE_ID);
+  const clubBadge = document.getElementById(CLUB_BADGE_ID);
+  const name = String(user.display_name || user.full_name || userBadge?.title || user.mobile || "Signed in").trim();
+  const role = user.effective_role || user.role
+    ? formatRoleLabel(user.effective_role || user.role)
+    : String(userBadge?.querySelector(".user-chip-copy > span")?.textContent || "").trim();
+  const club = String(user.current_club_name || user.primary_club_name || clubBadge?.title || "").trim();
+  return { name, role, club, initials: formatInitials(name) };
+}
+
+function renderAccountButton() {
+  const actions = document.querySelector(".shared-topbar-host .topbar-actions");
+  if (!actions) return;
+  let button = actions.querySelector(".account-button");
+  if (!button) {
+    button = document.createElement("button");
+    button.type = "button";
+    button.className = "account-button";
+    button.setAttribute("aria-haspopup", "menu");
+    button.setAttribute("aria-expanded", "false");
+    actions.appendChild(button);
+  }
+  const details = accountDetails();
+  const label = `Account: ${details.name}${details.club ? `, ${details.club}` : ""}`;
+  const html = `<span class="account-button-mark" aria-hidden="true">${escapeHtml(details.initials)}</span><span class="account-button-caret" aria-hidden="true">▾</span>`;
+  if (button.innerHTML !== html) button.innerHTML = html;
+  button.setAttribute("aria-label", label);
+  button.title = label;
+  setupAccountMenu();
+}
+
+function setupAccountMenu() {
+  if (signedInAccountMenuReady) return;
+  signedInAccountMenuReady = true;
+  let menu = null;
+  let button = null;
+
+  function close() {
+    if (menu) menu.remove();
+    if (button) button.setAttribute("aria-expanded", "false");
+    menu = null;
+    button = null;
+  }
+
+  function open(trigger) {
+    close();
+    button = trigger;
+    const details = accountDetails();
+    menu = document.createElement("div");
+    menu.className = "signed-in-more-menu signed-in-account-menu";
+    menu.setAttribute("role", "menu");
+    const path = window.location.pathname.replace(/\/+$/, "");
+    const current = (href) => (path === href ? ' aria-current="page"' : "");
+    menu.innerHTML = `
+      <div class="menu-account menu-account-head">
+        <span class="menu-account-mark" aria-hidden="true">${escapeHtml(details.initials)}</span>
+        <span>
+          <strong>${escapeHtml(details.name)}</strong>
+          <small>${escapeHtml(details.role || "")}</small>
+        </span>
+      </div>
+      ${details.club ? `<div class="menu-account-club"><small>Current club</small><strong>${escapeHtml(details.club)}</strong></div>` : ""}
+      <div class="menu-divider" role="separator"></div>
+      <a href="/profile" role="menuitem"${current("/profile")}><span class="menu-icon" aria-hidden="true">👤</span><span>My profile</span></a>
+      <a href="/clubs" role="menuitem"${current("/clubs")}><span class="menu-icon" aria-hidden="true">🏏</span><span>My clubs / switch club</span></a>
+      ${isAdminUser() ? `<a href="/admin-center" role="menuitem"${current("/admin-center")}><span class="menu-icon" aria-hidden="true">⚙️</span><span>Admin center</span></a>` : ""}
+      <div class="menu-divider" role="separator"></div>
+      <a href="/signout" role="menuitem" data-account-signout><span class="menu-icon" aria-hidden="true">🚪</span><span>Sign out</span></a>`;
+    document.body.appendChild(menu);
+    const rect = trigger.getBoundingClientRect();
+    menu.style.top = `${rect.bottom + 8}px`;
+    menu.style.right = `${Math.max(8, window.innerWidth - rect.right)}px`;
+    trigger.setAttribute("aria-expanded", "true");
+  }
+
+  document.addEventListener(
+    "click",
+    (event) => {
+      const trigger = event.target.closest(".shared-topbar-host .account-button");
+      if (trigger) {
+        event.preventDefault();
+        event.stopPropagation();
+        if (menu && button === trigger) close();
+        else open(trigger);
+        return;
+      }
+      if (menu && event.target.closest("[data-account-signout]")) {
+        event.preventDefault();
+        close();
+        signOut();
+        return;
+      }
+      if (menu && !menu.contains(event.target)) close();
+    },
+    true
+  );
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && menu) {
+      const trigger = button;
+      close();
+      if (trigger) trigger.focus();
+    }
+  });
+  window.addEventListener("resize", close);
+  window.addEventListener("scroll", close, { passive: true });
+}
+
 
 async function renderSharedTopbar(user = null) {
   const topbar = document.querySelector(".page-topbar");
@@ -400,6 +724,13 @@ async function renderSharedTopbar(user = null) {
       signOutButton.addEventListener("click", signOut);
     }
   }
+  // Holder styling + More menu for the signed-in navbar (see styles.css).
+  topbar.classList.add("shared-topbar-host");
+  setupSignedInMoreMenu();
+  if (user) {
+    signedInMenuUser = user;
+    syncHeaderAdminLinks(user);
+  }
   if (user) {
     syncUserBadge(user);
   }
@@ -407,6 +738,8 @@ async function renderSharedTopbar(user = null) {
   if (user) {
     renderSharedBottomNav(user);
   }
+  renderAccountButton();
+  scheduleSignedInNavFit();
   return topbar;
 }
 
@@ -430,6 +763,12 @@ async function touchSessionIfNeeded(force = false) {
   } catch (error) {
     const message = String(error?.message || "").toLowerCase();
     if (message.includes("session expired") || message.includes("sign in first")) {
+      // On public pages (Sign In, Register, Live...) just forget the old login quietly:
+      // redirecting from here made the page reload.
+      if (!document.querySelector(".page-topbar")) {
+        setAuthToken("");
+        return null;
+      }
       signOut();
       return null;
     }

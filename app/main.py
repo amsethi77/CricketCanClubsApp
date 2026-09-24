@@ -81,6 +81,7 @@ if not logger.handlers:
 
 try:
     from cricket_brain import answer_question, get_llm_status
+    import cricket_insights as cricket_insights
     from llm_service import clear_query_cache, infer as llm_infer, list_llm_documents, list_prompt_manifest, reindex_llm_corpus
     from cricket_store import (
         BASE_DIR,
@@ -128,6 +129,7 @@ try:
     )
 except ModuleNotFoundError:
     from app.cricket_brain import answer_question, get_llm_status
+    from app import cricket_insights
     from app.llm_service import clear_query_cache, infer as llm_infer, list_llm_documents, list_prompt_manifest, reindex_llm_corpus
     from app.cricket_store import (
         BASE_DIR,
@@ -272,6 +274,8 @@ async def _log_http_requests(request: Request, call_next):
             getattr(response, "status_code", 0),
             duration_ms,
         )
+    if path.startswith("/assets/"):
+        response.headers["Cache-Control"] = "no-cache"
     return response
 
 app.mount("/assets", StaticFiles(directory=STATIC_DIR), name="assets")
@@ -818,6 +822,7 @@ def _clubs_page_html(request: Request, search: str = "", focus_club_id: str = ""
         <meta name="viewport" content="width=device-width, initial-scale=1.0" />
         <title>Select Club · CricketClubApp</title>
         <link rel="stylesheet" href="/assets/styles.css?v=20260509e" />
+        <link rel="stylesheet" href="/assets/app_polish.css?v=20260924b" />
       </head>
       <body>
         <div class="page-shell">
@@ -2020,7 +2025,9 @@ def _visible_club_choices_for_user(
         for club_membership in member.get("club_memberships", []) or []:
             add(club_membership.get("club_id"))
         for team_membership in member.get("team_memberships", []) or []:
-            add(team_membership.get("club_id"))
+            # Team memberships can be plain team names (saved from the profile page) - skip those.
+            if isinstance(team_membership, dict):
+                add(team_membership.get("club_id"))
 
     try:
         with _auth_connection() as connection:
@@ -2538,7 +2545,9 @@ def _attach_creator_to_club(store: dict[str, Any], club: dict[str, Any], member:
 
 
 def _primary_club_for_member(store: dict[str, Any], member: dict[str, Any]) -> dict[str, Any]:
-    for membership in member.get("team_memberships", []):
+    for membership in member.get("team_memberships", []) or []:
+        if not isinstance(membership, dict):
+            continue
         if membership.get("is_primary") and membership.get("club_id"):
             return _selected_club(store, str(membership.get("club_id") or ""))
     for membership in member.get("club_memberships", []):
@@ -3168,6 +3177,31 @@ def root() -> RedirectResponse:
 @app.on_event("startup")
 def startup_tasks() -> None:
     ensure_auth_schema()
+    _refresh_player_stats_once()
+
+
+STATS_REFRESH_VERSION = "strike-rate-fix-1"
+
+
+def _refresh_player_stats_once() -> None:
+    """Rebuild the saved player stats once after a stats formula change (runs in the background)."""
+    marker = Path(__file__).resolve().parent / "data" / ".stats_version"
+    try:
+        if marker.exists() and marker.read_text(encoding="utf-8").strip() == STATS_REFRESH_VERSION:
+            return
+    except OSError:
+        return
+
+    def _work() -> None:
+        try:
+            logger.info("Refreshing saved player stats (%s)...", STATS_REFRESH_VERSION)
+            save_store(load_store())
+            marker.write_text(STATS_REFRESH_VERSION, encoding="utf-8")
+            logger.info("Player stats refreshed.")
+        except Exception:
+            logger.exception("Player stats refresh failed; it will be retried on next start.")
+
+    threading.Thread(target=_work, name="stats-refresh", daemon=True).start()
 
 
 @app.get("/signin")
@@ -3739,6 +3773,634 @@ def _public_fixtures_page_payload(store: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+@app.get("/api/public/clubs")
+def public_clubs() -> dict[str, Any]:
+    """Read-only club directory for the public Clubs page (no player contact details)."""
+    store = load_store()
+    fixtures = list(store.get("fixtures", []) or [])
+    today = datetime.utcnow().date().isoformat()
+    clubs: list[dict[str, Any]] = []
+    for club in _sorted_club_choices(store):
+        club_id = str(club.get("id") or "")
+        club_fixtures = [fixture for fixture in fixtures if str(fixture.get("club_id") or "") == club_id]
+        upcoming = [
+            fixture
+            for fixture in club_fixtures
+            if str(fixture.get("date") or "") >= today and str(fixture.get("status") or "").lower() != "completed"
+        ]
+        clubs.append({**club, "fixture_count": len(club_fixtures), "upcoming_count": len(upcoming)})
+    return {"clubs": clubs, "generated_at": now_iso()}
+
+
+@app.get("/api/public/search")
+def public_search(q: str = "") -> dict[str, Any]:
+    """Navbar search: players, clubs and matches. Public data only (no phone, email or age)."""
+    query = normalize_name(q)
+    empty = {"query": q, "players": [], "clubs": [], "matches": []}
+    if len(query) < 2:
+        return empty
+    store = load_store()
+    limit = 6
+
+    def hit(*values: Any) -> bool:
+        return any(query in normalize_name(str(value or "")) for value in values)
+
+    stats_by_member = {
+        str(row.get("member_id") or ""): row
+        for row in store.get("member_summary_stats", []) or []
+        if isinstance(row, dict)
+    }
+    players: list[dict[str, Any]] = []
+    for member in store.get("members", []) or []:
+        aliases = [alias for alias in (member.get("aliases") or []) if isinstance(alias, str)]
+        if not hit(member.get("name"), member.get("full_name"), *aliases):
+            continue
+        stats = stats_by_member.get(str(member.get("id") or ""), {})
+        club_names = [
+            str(club.get("club_name") or "").strip()
+            for club in (member.get("club_memberships") or [])
+            if isinstance(club, dict) and str(club.get("club_name") or "").strip()
+        ] or [str(member.get("primary_club_name") or "").strip()]
+        players.append(
+            {
+                "id": str(member.get("id") or ""),
+                "name": str(member.get("full_name") or member.get("name") or "Player"),
+                "short_name": str(member.get("name") or ""),
+                "clubs": [name for name in club_names if name],
+                "matches": int(stats.get("matches") or 0),
+                "runs": int(stats.get("runs") or 0),
+                "wickets": int(stats.get("wickets") or 0),
+            }
+        )
+        if len(players) >= limit:
+            break
+
+    clubs = [
+        club
+        for club in _sorted_club_choices(store)
+        if hit(club.get("name"), club.get("short_name"), club.get("city"))
+    ][:limit]
+
+    matches: list[dict[str, Any]] = []
+    fixtures = sorted(
+        [fixture for fixture in store.get("fixtures", []) or [] if isinstance(fixture, dict)],
+        key=lambda fixture: str(fixture.get("date") or ""),
+        reverse=True,
+    )
+    for fixture in fixtures:
+        details = fixture.get("details") if isinstance(fixture.get("details"), dict) else {}
+        if not hit(fixture.get("club_name"), fixture.get("opponent"), details.get("venue"), fixture.get("date"), fixture.get("date_label")):
+            continue
+        matches.append(
+            {
+                "id": str(fixture.get("id") or ""),
+                "title": f"{fixture.get('club_name') or 'Club'} vs {fixture.get('opponent') or 'Opponent'}",
+                "date_label": str(fixture.get("date_label") or fixture.get("date") or ""),
+                "status": str(fixture.get("status") or "Scheduled"),
+                "score": " · ".join(
+                    part for part in [str(fixture.get("heartlake_score") or ""), str(fixture.get("opponent_score") or "")] if part
+                ),
+            }
+        )
+        if len(matches) >= limit:
+            break
+
+    return {"query": q, "players": players, "clubs": clubs, "matches": matches}
+
+
+# ---------------------------------------------------------------------------
+# Public digital scorecards (Cricinfo-style), built from APPROVED archive uploads.
+# Browsable by game date. Public data only: names and cricket figures.
+# ---------------------------------------------------------------------------
+
+_SCORECARD_JUNK_NAME = re.compile(r"scorecard|\bruns\b.*\bballs\b|^batter\b|^bowler\b|^total\b|^extras\b", re.IGNORECASE)
+_SCORECARD_TEAM_NOTE = re.compile(r"team:\s*([^|]+)", re.IGNORECASE)
+_SCORECARD_DISMISSAL_NOTE = re.compile(r"batting dismissal:\s*([a-z_ ]+)", re.IGNORECASE)
+_SCORECARD_WICKETS_NOTE = re.compile(r"bowling wickets:\s*(\d+)", re.IGNORECASE)
+_SCORECARD_FIELDER_NOTE = re.compile(r"fielder:\s*([^|]+)", re.IGNORECASE)
+_SCORECARD_OCR_BOWLING = re.compile(r"archive line:.*?\s(\d{1,2}\.\d)\s+(\d{1,3})\s+(\d{1,2})\s*$", re.IGNORECASE)
+_SCORECARD_OCR_BATTING = re.compile(r"archive line:.*?\s(\d{1,3})\s+(\d{1,3})\s+(\d{1,2})\s+(\d{1,2})\s*$", re.IGNORECASE)
+_SCORECARD_WON_BY = re.compile(r"^(.+?)\s+won by\b", re.IGNORECASE)
+
+
+def _scorecard_json(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str) and value.strip():
+        try:
+            parsed = json.loads(value)
+        except (TypeError, ValueError):
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+    return {}
+
+
+def _scorecard_int(value: Any) -> int | None:
+    if value is None or value == "":
+        return None
+    try:
+        return int(float(str(value).strip()))
+    except (TypeError, ValueError):
+        return None
+
+
+def _scorecard_text(value: Any) -> str:
+    return str(value or "").strip()
+
+
+def _scorecard_summary_parts(live_summary: str) -> dict[str, str]:
+    """Parse 'Batting team: X | Bowling team: Y | Venue: Z | ...' into a dict."""
+    parts: dict[str, str] = {}
+    for chunk in str(live_summary or "").split("|"):
+        if ":" not in chunk:
+            continue
+        key, _, value = chunk.partition(":")
+        key = key.strip().lower()
+        if key and value.strip():
+            parts[key] = value.strip()
+    return parts
+
+
+def _scorecard_clean_result(value: Any) -> str:
+    text = _scorecard_text(value)
+    text = re.sub(r"^result:\s*", "", text, flags=re.IGNORECASE)
+    lowered = text.lower()
+    if not text or lowered in {"tbd", "pending review"} or lowered.startswith("imported from") or "awaiting" in lowered:
+        return ""
+    return text
+
+
+def _scorecard_dismissal(raw: Any, fielder: Any = "", bowler: Any = "") -> tuple[str, bool, bool]:
+    """Return (dismissal text, is_not_out, did_not_bat)."""
+    text = _scorecard_text(raw).lower().replace("_", " ")
+    fielder = _scorecard_text(fielder)
+    bowler = _scorecard_text(bowler)
+    if not text:
+        return ("", False, False)
+    if "did not bat" in text or text == "dnb":
+        return ("", False, True)
+    if "not out" in text:
+        return ("not out", True, False)
+    if "retired" in text:
+        return ("retired", True, False)
+    if text in {"c and b", "c & b", "caught and bowled"}:
+        return (f"c & b {bowler}".strip(), False, False)
+    if text.startswith("caught") or text == "c":
+        return (" ".join(part for part in ["c " + fielder if fielder else "caught", "b " + bowler if bowler else ""] if part), False, False)
+    if text.startswith("bowled") or text == "b":
+        return (f"b {bowler}" if bowler else "bowled", False, False)
+    if text.startswith("lbw"):
+        return (f"lbw b {bowler}" if bowler else "lbw", False, False)
+    if text.startswith("stumped") or text == "st":
+        return (" ".join(part for part in ["st " + fielder if fielder else "stumped", "b " + bowler if bowler else ""] if part), False, False)
+    if text.startswith("run out"):
+        return (f"run out ({fielder})" if fielder else "run out", False, False)
+    if "hit wicket" in text:
+        return ("hit wicket", False, False)
+    return (text, False, False)
+
+
+def _scorecard_strike_rate(runs: int | None, balls: int | None) -> str:
+    if runs is None or not balls:
+        return ""
+    return f"{(runs / balls) * 100:.2f}"
+
+
+def _scorecard_overs_to_balls(overs: Any) -> int | None:
+    text = _scorecard_text(overs)
+    if not text:
+        return None
+    try:
+        whole, _, part = text.partition(".")
+        return int(whole or 0) * 6 + int(part or 0)
+    except ValueError:
+        return None
+
+
+def _scorecard_pick_template(archive: dict[str, Any]) -> dict[str, Any]:
+    """Pick the template with the most filled-in figures (reviewed copies win ties)."""
+    best: dict[str, Any] = {}
+    best_score = -1
+    for key in ("review_source_json", "review_template_json", "extraction_template"):
+        template = _scorecard_json(archive.get(key))
+        score = 0
+        for innings in template.get("innings", []) or []:
+            if not isinstance(innings, dict):
+                continue
+            summary = innings.get("summary") if isinstance(innings.get("summary"), dict) else {}
+            score += 3 if summary.get("runs") is not None else 0
+            score += sum(
+                1
+                for row in innings.get("batting", []) or []
+                if isinstance(row, dict) and _scorecard_text((row.get("player") or {}).get("name"))
+            )
+            score += sum(
+                1
+                for row in innings.get("bowling", []) or []
+                if isinstance(row, dict) and _scorecard_text((row.get("player") or {}).get("name"))
+            )
+        if score > best_score:
+            best, best_score = template, score
+    return best
+
+
+def _scorecard_archive_date(archive: dict[str, Any]) -> str:
+    for key in ("archive_date", "scorecard_date"):
+        value = _scorecard_text(archive.get(key))
+        if re.match(r"^\d{4}-\d{2}-\d{2}$", value):
+            return value
+    return ""
+
+
+def _scorecard_date_label(value: str) -> str:
+    try:
+        return datetime.strptime(value, "%Y-%m-%d").strftime("%a %d %b %Y")
+    except ValueError:
+        return value or "Date unknown"
+
+
+def _scorecard_photo_url(archive: dict[str, Any]) -> str:
+    preview = _scorecard_text(archive.get("preview_url"))
+    if not preview.startswith("/uploads/"):
+        return ""
+    name = preview[len("/uploads/"):]
+    if "/" in name or "\\" in name or ".." in name:
+        return ""
+    return preview if (UPLOAD_DIR / name).is_file() else ""
+
+
+def _scorecard_from_archive(archive: dict[str, Any]) -> dict[str, Any]:
+    template = _scorecard_pick_template(archive)
+    template_match = template.get("match") if isinstance(template.get("match"), dict) else {}
+    template_teams = template_match.get("teams") if isinstance(template_match.get("teams"), dict) else {}
+    validation = template.get("validation") if isinstance(template.get("validation"), dict) else {}
+    draft = archive.get("draft_scorecard") if isinstance(archive.get("draft_scorecard"), dict) else {}
+    parts = _scorecard_summary_parts(draft.get("live_summary"))
+    club_name = _scorecard_text(archive.get("club_name")) or "Club"
+
+    raw_innings = [item for item in (template.get("innings") or []) if isinstance(item, dict)]
+    while len(raw_innings) < 2:
+        raw_innings.append({"inning_number": len(raw_innings) + 1})
+
+    first_team = (
+        parts.get("batting team")
+        or _scorecard_text(raw_innings[0].get("batting_team"))
+        or _scorecard_text(template_teams.get("team_1"))
+        or club_name
+    )
+    second_team = (
+        parts.get("bowling team")
+        or _scorecard_text(raw_innings[1].get("batting_team"))
+        or _scorecard_text(raw_innings[0].get("bowling_team"))
+        or _scorecard_text(template_teams.get("team_2"))
+        or ("Opponent" if normalize_name(first_team) == normalize_name(club_name) else club_name)
+    )
+    if second_team == "Opponent":
+        # "X won by ..." where X is not the first team names the other side.
+        for candidate in (draft.get("result"), validation.get("expected_result")):
+            won = _SCORECARD_WON_BY.match(_scorecard_clean_result(candidate))
+            if won and normalize_name(won.group(1)) != normalize_name(first_team):
+                second_team = won.group(1).strip()
+                break
+    teams = [first_team, second_team]
+
+    # Player rows that came from the reviewed import (names, balls, dismissals, team tags).
+    performances = [
+        row
+        for row in archive.get("suggested_performances", []) or []
+        if isinstance(row, dict)
+        and _scorecard_text(row.get("player_name"))
+        and not _SCORECARD_JUNK_NAME.search(_scorecard_text(row.get("player_name")))
+    ]
+    tagged = any(_SCORECARD_TEAM_NOTE.search(_scorecard_text(row.get("notes"))) for row in performances)
+
+    def perf_team(row: dict[str, Any]) -> str:
+        found = _SCORECARD_TEAM_NOTE.search(_scorecard_text(row.get("notes")))
+        return found.group(1).strip() if found else ""
+
+    ocr_bowlers: dict[str, int] = {}
+    batting_perf: list[list[dict[str, Any]]] = [[], []]
+    bowling_perf: list[list[dict[str, Any]]] = [[], []]
+    for index, row in enumerate(performances):
+        notes = _scorecard_text(row.get("notes"))
+        ocr_bowling = _SCORECARD_OCR_BOWLING.search(notes)
+        if ocr_bowling:
+            # e.g. "Amit S 4.0 15 1" is a bowling line: overs, runs, wickets.
+            ocr_bowlers[normalize_name(_scorecard_text(row.get("player_name")))] = int(float(ocr_bowling.group(1)))
+            bowling_perf[0].append(
+                {
+                    "name": _scorecard_text(row.get("player_name")),
+                    "overs": ocr_bowling.group(1),
+                    "runs": int(ocr_bowling.group(2)),
+                    "wickets": int(ocr_bowling.group(3)),
+                }
+            )
+            continue
+        if tagged:
+            team = perf_team(row)
+            side = 1 if team and normalize_name(team) == normalize_name(second_team) else 0
+        else:
+            side = 0 if (len(performances) <= 11 or index < 11) else 1
+        dismissal_match = _SCORECARD_DISMISSAL_NOTE.search(notes)
+        wickets = _scorecard_int(row.get("wickets")) or 0
+        wickets_match = _SCORECARD_WICKETS_NOTE.search(notes)
+        bats = bool(dismissal_match) or not tagged
+        if tagged and not dismissal_match and not wickets_match:
+            bats = True
+        if bats:
+            batting_perf[side].append(row)
+        if wickets_match or (tagged and wickets):
+            # A bowler from this side bowled in the OTHER side's innings.
+            bowling_perf[1 - side].append(
+                {
+                    "name": _scorecard_text(row.get("player_name")),
+                    "overs": "",
+                    "runs": None,
+                    "wickets": int(wickets_match.group(1)) if wickets_match else wickets,
+                }
+            )
+
+    innings_out: list[dict[str, Any]] = []
+    for position, innings in enumerate(raw_innings[:2]):
+        summary = innings.get("summary") if isinstance(innings.get("summary"), dict) else {}
+        team = teams[position]
+        opponent = teams[1 - position]
+
+        # Batting: template rows first, then fill gaps / add rows from the imported performances.
+        rows: list[dict[str, Any]] = []
+        by_name: dict[str, dict[str, Any]] = {}
+        # When the reviewed import tags each player with a team, it is the reliable source.
+        template_batting = [] if tagged else (innings.get("batting", []) or [])
+        for item in template_batting:
+            if not isinstance(item, dict):
+                continue
+            name = _scorecard_text((item.get("player") or {}).get("name"))
+            if not name or _SCORECARD_JUNK_NAME.search(name):
+                continue
+            if normalize_name(name) in ocr_bowlers and _scorecard_int(item.get("runs")) == ocr_bowlers[normalize_name(name)]:
+                continue  # the OCR read a bowling line (overs) as a batting score
+            dismissal = item.get("dismissal") if isinstance(item.get("dismissal"), dict) else {}
+            row = {
+                "name": name,
+                "runs": _scorecard_int(item.get("runs")),
+                "balls": _scorecard_int(item.get("balls")),
+                "fours": _scorecard_int(item.get("fours")),
+                "sixes": _scorecard_int(item.get("sixes")),
+                "how": _scorecard_text(dismissal.get("type")),
+                "fielder": _scorecard_text(dismissal.get("fielder")),
+                "bowler": _scorecard_text(dismissal.get("bowler")),
+            }
+            rows.append(row)
+            by_name.setdefault(normalize_name(name), row)
+        for perf in batting_perf[position]:
+            name = _scorecard_text(perf.get("player_name"))
+            notes = _scorecard_text(perf.get("notes"))
+            dismissal_match = _SCORECARD_DISMISSAL_NOTE.search(notes)
+            fielder_match = _SCORECARD_FIELDER_NOTE.search(notes)
+            how = dismissal_match.group(1) if dismissal_match else notes.split("|")[0]
+            if "ocr suggested" in how.lower():
+                how = ""
+            balls = _scorecard_int(perf.get("balls"))
+            row = by_name.get(normalize_name(name))
+            if row is None:
+                row = {"name": name, "runs": None, "balls": None, "fours": None, "sixes": None, "how": "", "fielder": "", "bowler": ""}
+                rows.append(row)
+                by_name[normalize_name(name)] = row
+            if row["runs"] is None:
+                row["runs"] = _scorecard_int(perf.get("runs"))
+            if row["balls"] is None and balls:
+                row["balls"] = balls
+            if row["fours"] is None and _scorecard_int(perf.get("fours")):
+                row["fours"] = _scorecard_int(perf.get("fours"))
+            if row["sixes"] is None and _scorecard_int(perf.get("sixes")):
+                row["sixes"] = _scorecard_int(perf.get("sixes"))
+            ocr_batting = _SCORECARD_OCR_BATTING.search(notes)
+            if ocr_batting and row["runs"] == int(ocr_batting.group(1)):
+                row["fours"] = row["fours"] if row["fours"] is not None else int(ocr_batting.group(3))
+                row["sixes"] = row["sixes"] if row["sixes"] is not None else int(ocr_batting.group(4))
+            if not row["how"]:
+                row["how"] = how.strip()
+            if not row["fielder"] and fielder_match:
+                row["fielder"] = fielder_match.group(1).strip()
+
+        batting: list[dict[str, Any]] = []
+        did_not_bat: list[str] = []
+        for row in rows:
+            text, not_out, dnb = _scorecard_dismissal(row["how"], row["fielder"], row["bowler"])
+            if dnb or (row["how"] == "" and row["runs"] is None and row["balls"] is None):
+                did_not_bat.append(row["name"])
+                continue
+            batting.append(
+                {
+                    "name": row["name"],
+                    "dismissal": text,
+                    "not_out": not_out,
+                    "runs": row["runs"],
+                    "balls": row["balls"],
+                    "fours": row["fours"],
+                    "sixes": row["sixes"],
+                    "strike_rate": _scorecard_strike_rate(row["runs"], row["balls"]),
+                }
+            )
+        if position == 0 and parts.get("did not bat"):
+            for name in parts["did not bat"].split(","):
+                name = name.strip()
+                if name and normalize_name(name) not in {normalize_name(item) for item in did_not_bat}:
+                    did_not_bat.append(name)
+
+        # Bowling.
+        bowling: list[dict[str, Any]] = []
+        for item in innings.get("bowling", []) or []:
+            if not isinstance(item, dict):
+                continue
+            name = _scorecard_text((item.get("player") or {}).get("name"))
+            if not name:
+                continue
+            overs = _scorecard_text(item.get("overs"))
+            runs = _scorecard_int(item.get("runs_conceded"))
+            balls = _scorecard_overs_to_balls(overs)
+            economy = item.get("economy")
+            if economy in (None, "") and runs is not None and balls:
+                economy = runs / (balls / 6)
+            bowling.append(
+                {
+                    "name": name,
+                    "overs": overs,
+                    "maidens": _scorecard_int(item.get("maidens")),
+                    "runs": runs,
+                    "wickets": _scorecard_int(item.get("wickets")),
+                    "economy": f"{float(economy):.2f}" if economy not in (None, "") else "",
+                }
+            )
+        known_bowlers = {normalize_name(item["name"]) for item in bowling}
+        for item in bowling_perf[position]:
+            if normalize_name(item["name"]) in known_bowlers:
+                continue
+            balls = _scorecard_overs_to_balls(item["overs"])
+            bowling.append(
+                {
+                    "name": item["name"],
+                    "overs": item["overs"],
+                    "maidens": None,
+                    "runs": item["runs"],
+                    "wickets": item["wickets"],
+                    "economy": f"{item['runs'] / (balls / 6):.2f}" if item["runs"] is not None and balls else "",
+                }
+            )
+
+        # Totals: template first, then the reviewed draft figures.
+        draft_prefix = "heartlake" if position == 0 else "opponent"
+        runs = _scorecard_int(summary.get("runs"))
+        if runs is None:
+            runs = _scorecard_int(draft.get(f"{draft_prefix}_runs"))
+        if runs is None:
+            runs = _scorecard_int(validation.get(f"inning_{position + 1}_total"))
+        wickets = _scorecard_int(summary.get("wickets"))
+        if wickets is None:
+            wickets = _scorecard_int(draft.get(f"{draft_prefix}_wickets"))
+        overs = _scorecard_text(summary.get("overs")) or _scorecard_text(draft.get(f"{draft_prefix}_overs"))
+        if position == 1 and runs is None and parts.get("second innings"):
+            second = re.search(r"(\d+)\s*/\s*(\d+)\s*(?:\(([\d.]+)\))?", parts["second innings"])
+            if second:
+                runs, wickets, overs = int(second.group(1)), int(second.group(2)), second.group(3) or overs
+
+        extras = innings.get("extras") if isinstance(innings.get("extras"), dict) else {}
+        extras_total = _scorecard_int(extras.get("total"))
+        if extras_total is None and position == 0:
+            extras_total = _scorecard_int(parts.get("extras"))
+        extras_detail = ", ".join(
+            f"{label} {_scorecard_int(extras.get(key))}"
+            for key, label in (("byes", "b"), ("leg_byes", "lb"), ("wides", "w"), ("no_balls", "nb"), ("penalties", "pen"))
+            if _scorecard_int(extras.get(key))
+        )
+
+        has_data = bool(batting or bowling or runs is not None)
+        innings_out.append(
+            {
+                "number": position + 1,
+                "team": team,
+                "bowling_team": opponent,
+                "runs": runs,
+                "wickets": wickets,
+                "overs": overs,
+                "score": (f"{runs}" + (f"/{wickets}" if wickets is not None and wickets < 10 else "")) if runs is not None else "",
+                "extras": extras_total,
+                "extras_detail": extras_detail,
+                "batting": batting,
+                "did_not_bat": did_not_bat,
+                "bowling": bowling,
+                "has_data": has_data,
+            }
+        )
+
+    result = (
+        _scorecard_clean_result(draft.get("result"))
+        or _scorecard_clean_result(parts.get("result"))
+        or _scorecard_clean_result(parts.get("expected result"))
+        or _scorecard_clean_result(validation.get("expected_result"))
+    )
+    overs_limit = _scorecard_int(template_match.get("overs_limit"))
+    if overs_limit is None:
+        overs_values = [_scorecard_int(item["overs"]) for item in innings_out if item["overs"]]
+        overs_limit = max([value for value in overs_values if value], default=None)
+    game_date = _scorecard_archive_date(archive)
+    venue = parts.get("venue") or _scorecard_text(template_match.get("venue"))
+    has_details = any(item["batting"] or item["bowling"] for item in innings_out)
+    return {
+        "id": f"a-{_scorecard_text(archive.get('id'))}",
+        "source": "archive",
+        "date": game_date,
+        "date_label": _scorecard_date_label(game_date),
+        "year": game_date[:4],
+        "season": _scorecard_text(archive.get("season")),
+        "club_id": _scorecard_text(archive.get("club_id")),
+        "club_name": club_name,
+        "title": f"{teams[0]} vs {teams[1]}",
+        "teams": teams,
+        "venue": venue,
+        "toss": parts.get("toss", ""),
+        "match_type": (_scorecard_text(template_match.get("match_type")) or "club").title() + " match",
+        "overs_limit": overs_limit,
+        "result": result,
+        "innings": innings_out,
+        "has_details": has_details,
+        "photo_url": _scorecard_photo_url(archive),
+    }
+
+
+def _public_scorecards(store: dict[str, Any]) -> list[dict[str, Any]]:
+    cards = [
+        _scorecard_from_archive(archive)
+        for archive in store.get("archive_uploads", []) or []
+        if isinstance(archive, dict) and _scorecard_text(archive.get("status")).lower() == "approved"
+    ]
+    cards = [card for card in cards if card["date"]]
+    cards.sort(key=lambda card: (card["date"], card["id"]), reverse=True)
+    return cards
+
+
+def _scorecard_list_item(card: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": card["id"],
+        "date": card["date"],
+        "date_label": card["date_label"],
+        "year": card["year"],
+        "club_id": card["club_id"],
+        "club_name": card["club_name"],
+        "title": card["title"],
+        "teams": [
+            {"name": item["team"], "score": item["score"], "overs": item["overs"]} for item in card["innings"]
+        ],
+        "result": card["result"],
+        "venue": card["venue"],
+        "has_details": card["has_details"],
+        "has_photo": bool(card["photo_url"]),
+    }
+
+
+@app.get("/api/public/scorecards")
+def public_scorecards(date: str = "", club_id: str = "", year: str = "") -> dict[str, Any]:
+    """Approved scorecards, newest first, optionally filtered by game date, club or year."""
+    store = load_store()
+    cards = _public_scorecards(store)
+    clubs = sorted(
+        {(card["club_id"], card["club_name"]) for card in cards if card["club_id"]},
+        key=lambda item: item[1].lower(),
+    )
+    dates = sorted({card["date"] for card in cards}, reverse=True)
+    if club_id:
+        cards = [card for card in cards if card["club_id"] == club_id]
+    if year:
+        cards = [card for card in cards if card["year"] == year]
+    if date:
+        cards = [card for card in cards if card["date"] == date]
+    return {
+        "scorecards": [_scorecard_list_item(card) for card in cards],
+        "dates": dates,
+        "clubs": [{"id": club, "name": name} for club, name in clubs],
+        "generated_at": now_iso(),
+    }
+
+
+@app.get("/api/public/scorecards/{scorecard_id}")
+def public_scorecard_detail(scorecard_id: str) -> dict[str, Any]:
+    store = load_store()
+    for card in _public_scorecards(store):
+        if card["id"] == scorecard_id:
+            return {"scorecard": card, "generated_at": now_iso()}
+    raise HTTPException(status_code=404, detail="Scorecard not found.")
+
+
+@app.get("/scorecards")
+def scorecards_page() -> FileResponse:
+    return _page_response("scorecards.html")
+
+
+@app.get("/scorecards/{scorecard_id}")
+def scorecard_page(scorecard_id: str) -> FileResponse:
+    return _page_response("scorecard.html")
+
+
 @app.get("/api/public/match/{match_id}")
 def public_match(match_id: str) -> dict[str, Any]:
     logger.debug("Public scorecard requested. match_id=%s", match_id)
@@ -4034,6 +4696,7 @@ def _admin_center_html(request: Request) -> HTMLResponse:
         <meta name="viewport" content="width=device-width, initial-scale=1.0" />
         <title>Admin center · CricketClubApp</title>
         <link rel="stylesheet" href="/assets/styles.css?v=20260509e" />
+        <link rel="stylesheet" href="/assets/app_polish.css?v=20260924b" />
       </head>
       <body>
         <div class="page-shell">
@@ -4262,7 +4925,8 @@ def clubs_page(request: Request, search: str = "", focus_club_id: str = "") -> R
     logger.debug("Clubs page opened. search=%s focus_club_id=%s", search or "", focus_club_id or "")
     session = _require_page_session(request)
     if isinstance(session, RedirectResponse):
-        return session
+        # Signed-out visitors get the public, read-only club list instead of the sign-in page.
+        return _page_response("public_clubs.html")
     return _clubs_page_html(request, search, focus_club_id)
 
 
@@ -6150,7 +6814,8 @@ def _delete_club_member_core(club_id: str, member_id: str, token: str | None, co
     if remaining_memberships:
         fallback_primary_club_id = str(remaining_memberships[0].get("club_id") or "").strip()
     elif keep_member:
-        fallback_primary_club_id = str(member.get("team_memberships", [{}])[0].get("club_id") or "").strip() if member.get("team_memberships") else ""
+        first_membership = (member.get("team_memberships") or [{}])[0]
+        fallback_primary_club_id = str(first_membership.get("club_id") or "").strip() if isinstance(first_membership, dict) else ""
     _unlink_member_from_club_auth(member_id, str(club.get("id") or ""), fallback_primary_club_id)
     save_store(store)
     refreshed = load_store()
@@ -6665,6 +7330,44 @@ def delete_scorebook_ball(match_id: str, x_auth_token: str | None = Header(defau
     _touch_fixture_audit(match, user_row)
     save_store(store)
     return current_dashboard(load_store())
+
+
+@app.get("/api/insights/me")
+def insights_me(x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
+    """Signed-in user's own form/prediction/tips plus their current club's outlook."""
+    user_row, current_club_id = _auth_user_from_token(x_auth_token)
+    store = load_store()
+    member = _member_for_user(store, user_row)
+    club = cricket_insights.find_club(store, current_club_id)
+    if not club and member:
+        club = cricket_insights.find_club(store, str(member.get("primary_club_id") or ""))
+    return {
+        "player": cricket_insights.player_insights(store, member) if member else None,
+        "club": cricket_insights.club_insights(store, club) if club else None,
+        "best_xi": cricket_insights.best_xi(store, club) if club else None,
+        "outlook": cricket_insights.season_outlook(store, club) if club else None,
+        "generated_at": now_iso(),
+    }
+
+
+@app.get("/api/insights/player/{player_key}")
+def insights_player(player_key: str, x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
+    _auth_user_from_token(x_auth_token)
+    store = load_store()
+    member = cricket_insights.find_member(store, player_key)
+    if not member:
+        raise HTTPException(status_code=404, detail="Player not found.")
+    return {"player": cricket_insights.player_insights(store, member), "generated_at": now_iso()}
+
+
+@app.get("/api/insights/club/{club_key}")
+def insights_club(club_key: str, x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
+    _auth_user_from_token(x_auth_token)
+    store = load_store()
+    club = cricket_insights.find_club(store, club_key)
+    if not club:
+        raise HTTPException(status_code=404, detail="Club not found.")
+    return {"club": cricket_insights.club_insights(store, club), "generated_at": now_iso()}
 
 
 @app.post("/api/chat")

@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Live · CricketClubApp</title>
+    <title>Cricket Canada Clubs · Live scores, scorecards and fixtures</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
@@ -12,46 +12,98 @@
     />
     <link rel="stylesheet" href="/assets/tailwind.css?v=20260430b" />
     <link rel="stylesheet" href="/assets/styles.css?v=20260511l" />
-    <link rel="stylesheet" href="/assets/live.css?v=20260511r" />
+    <link rel="stylesheet" href="/assets/live.css?v=20260923d" />
+    <link rel="stylesheet" href="/assets/home.css?v=20260924a" />
   </head>
-  <body class="public-live-page">
-    <main class="live-shell">
+  <body class="public-live-page home-v2">
+    <main class="live-shell home-shell">
       <div data-public-header></div>
 
-      <section class="live-hero panel onboarding-panel">
-        <div class="stack-card">
-          <div class="live-hero-top">
-            <div class="live-pill">
-              <span class="live-dot"></span>
-              <span>LIVE</span>
-            </div>
-          </div>
-
-          <div class="live-hero-body">
-            <div class="live-hero-copy">
-              <p class="live-kicker">Canada cricket, live and local</p>
-              <h1>Live Local Cricket Across Canada</h1>
-              <p>Follow live scorecards, watch recent balls, and jump straight into the match view.</p>
-            </div>
-            <div id="liveHeroFeature" class="live-feature-card"></div>
-          </div>
+      <!-- Score strip: live, results, upcoming (like Cricinfo's top bar) -->
+      <section class="home-strip" aria-label="Matches">
+        <div class="home-strip-tabs" role="tablist">
+          <button type="button" class="home-strip-tab is-active" data-strip="all" role="tab" aria-selected="true">All</button>
+          <button type="button" class="home-strip-tab" data-strip="live" role="tab" aria-selected="false">Live</button>
+          <button type="button" class="home-strip-tab" data-strip="result" role="tab" aria-selected="false">Results</button>
+          <button type="button" class="home-strip-tab" data-strip="upcoming" role="tab" aria-selected="false">Upcoming</button>
+        </div>
+        <div class="home-strip-wrap">
+          <button type="button" class="home-strip-nav prev" aria-label="Scroll left">‹</button>
+          <div id="homeStrip" class="home-strip-row"><div class="home-strip-empty">Loading matches…</div></div>
+          <button type="button" class="home-strip-nav next" aria-label="Scroll right">›</button>
         </div>
       </section>
 
-      <section class="panel onboarding-panel">
-        <div class="stack-card">
-          <div class="panel-head compact-head">
-            <div>
-              <p class="section-kicker">Live Matches</p>
-              <h2>Today on the field</h2>
-            </div>
-            <span id="liveMatchesCount" class="signin-widget-pill">Loading</span>
+      <!-- Hero banner + featured match -->
+      <section class="home-hero">
+        <div class="home-hero-copy">
+          <span class="home-eyebrow"><span class="home-dot"></span> Local club cricket, live</span>
+          <h1>Every ball. Every club.<br />Across Canada.</h1>
+          <p>Live scores, digital scorecards, fixtures and player stats for community cricket clubs, all in one place.</p>
+          <div class="home-hero-actions">
+            <a class="home-btn primary" href="/register">Register your club</a>
+            <a class="home-btn ghost" href="/signin">Sign in</a>
           </div>
-          <div id="liveMatches" class="live-match-grid"></div>
+          <div class="home-stats">
+            <div><strong id="homeStatClubs">–</strong><span>Clubs</span></div>
+            <div><strong id="homeStatFixtures">–</strong><span>Fixtures</span></div>
+            <div><strong id="homeStatScorecards">–</strong><span>Scorecards</span></div>
+          </div>
+        </div>
+        <div id="homeFeature" class="home-feature">
+          <div class="home-feature-loading">Loading featured match…</div>
+        </div>
+      </section>
+
+      <!-- Latest scorecards -->
+      <section class="home-section">
+        <div class="home-section-head">
+          <div>
+            <p class="home-kicker">Scorecard archive</p>
+            <h2>Latest scorecards</h2>
+          </div>
+          <a class="home-link" href="/scorecards">View all scorecards →</a>
+        </div>
+        <div id="homeScorecards" class="home-card-grid"></div>
+      </section>
+
+      <!-- Results + upcoming -->
+      <section class="home-columns">
+        <div class="home-section">
+          <div class="home-section-head">
+            <div>
+              <p class="home-kicker">Results</p>
+              <h2>Recent results</h2>
+            </div>
+            <a class="home-link" href="/fixtures">All fixtures →</a>
+          </div>
+          <div id="homeResults" class="home-list"></div>
+        </div>
+        <div class="home-section">
+          <div class="home-section-head">
+            <div>
+              <p class="home-kicker">Fixtures</p>
+              <h2>Coming up</h2>
+            </div>
+            <a class="home-link" href="/fixtures">Full schedule →</a>
+          </div>
+          <div id="homeUpcoming" class="home-list"></div>
+        </div>
+      </section>
+
+      <!-- Join banner -->
+      <section class="home-join">
+        <div>
+          <h2>Run your club on Cricket Canada Clubs</h2>
+          <p>Score matches ball by ball, track availability, upload old scorecards and see every player's stats.</p>
+        </div>
+        <div class="home-hero-actions">
+          <a class="home-btn light" href="/register">Register your club</a>
+          <a class="home-btn outline-light" href="/clubs">Browse clubs</a>
         </div>
       </section>
     </main>
     <script src="/assets/public_header.js?v=20260511b"></script>
-    <script src="/assets/live.js?v=20260511n"></script>
+    <script src="/assets/home.js?v=20260924a"></script>
   </body>
 </html>

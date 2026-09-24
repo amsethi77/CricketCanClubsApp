@@ -8,22 +8,18 @@
   </a>
 
   <div class="nav-wrapper">
-    <nav class="main-nav top-nav template-nav" aria-label="Public">
+        <nav class="main-nav top-nav template-nav" aria-label="Public">
       <a class="nav-item" data-public-nav="live" href="/live"><span class="nav-icon" aria-hidden="true">🏠</span><span class="nav-text">LIVE</span></a>
       <a class="nav-item" data-public-nav="fixtures" href="/fixtures"><span class="nav-icon" aria-hidden="true">📅</span><span class="nav-text">Fixtures</span></a>
       <a class="nav-item" data-public-nav="rankings" href="/rankings"><span class="nav-icon" aria-hidden="true">📊</span><span class="nav-text">Rankings</span></a>
-      <a class="nav-item" data-public-nav="clubs" href="/clubs"><span class="nav-icon" aria-hidden="true">🏏</span><span class="nav-text">Clubs</span></a>
-      <a class="nav-item" data-public-nav="signin" href="/signin"><span class="nav-icon" aria-hidden="true">👤</span><span class="nav-text">Sign In</span></a>
-      <a class="nav-item" data-public-nav="register" href="/register"><span class="nav-icon" aria-hidden="true">✨</span><span class="nav-text">Register</span></a>
+      <a class="nav-item nav-overflow-item" data-public-nav="scorecards" href="/scorecards"><span class="nav-icon" aria-hidden="true">📋</span><span class="nav-text">Scorecards</span></a>
+      <a class="nav-item nav-overflow-item" data-public-nav="clubs" href="/clubs"><span class="nav-icon" aria-hidden="true">🏏</span><span class="nav-text">Clubs</span></a>
+      <a class="nav-item nav-overflow-item" data-public-nav="signin" href="/signin"><span class="nav-icon" aria-hidden="true">👤</span><span class="nav-text">Sign In</span></a>
+      <a class="nav-item nav-overflow-item" data-public-nav="register" href="/register"><span class="nav-icon" aria-hidden="true">✨</span><span class="nav-text">Register</span></a>
+      <button id="navMoreTogglePublic" class="nav-more-toggle" type="button" aria-expanded="false" aria-label="More menu">
+        <span class="nav-icon" aria-hidden="true">⋯</span>
+        <span class="nav-text">More</span>
+      </button>
     </nav>
-  </div>
-
-  <div class="header-right topbar-actions">
-    <a class="club-chip club-card" href="/signin" aria-label="Sign In">
-      <span class="club-avatar" aria-hidden="true">🔐</span>
-    </a>
-    <a class="user-chip profile-button" href="/register" aria-label="Register">
-      <span class="avatar" aria-hidden="true">✨</span>
-    </a>
   </div>
 </header>

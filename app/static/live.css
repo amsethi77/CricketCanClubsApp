@@ -1107,12 +1107,6 @@ body.public-auth-page .register-live-panel {
 }
 
 @media (max-width: 768px) {
-  .app-header {
-    padding: 0 12px;
-    gap: 12px;
-  }
-
-  .app-header .brand-logo,
   .app-header .public-brand-mark {
     width: 40px;
     height: 40px;
@@ -1131,6 +1125,14 @@ body.public-auth-page .register-live-panel {
   .app-header .nav-text,
   .app-header .nav-label {
     font-size: 0.62rem;
+  }
+
+  .app-header .top-nav {
+    display: none;
+  }
+
+  .app-header .template-nav {
+    display: none;
   }
 }
 
@@ -1183,4 +1185,253 @@ body.public-auth-page .register-live-panel {
     border-radius: 10px;
     font-size: 0.75rem;
   }
+}
+
+
+/* =====================================================================
+   Navbar "More" menu (works with nav_more.js)
+   Laptop (>768px): all links in the row, no "More".
+   Phone (<=768px): LIVE, Fixtures, Rankings + "More" at the right edge.
+                    "More" opens Clubs, Sign In, Register.
+   ===================================================================== */
+
+/* ---------- Laptop / tablet ---------- */
+@media (min-width: 769px) {
+  .app-header.public-header .top-nav .nav-overflow-item {
+    display: inline-flex !important;
+  }
+
+  .app-header.public-header .top-nav .nav-more-toggle,
+  .nav-more-menu {
+    display: none !important;
+  }
+}
+
+/* ---------- Phone ---------- */
+@media (max-width: 768px) {
+  .app-header.public-header {
+    gap: 10px;
+    padding: 0 10px;
+  }
+
+  /* Keep only the CC mark on the left */
+  .app-header.public-header .public-brand-copy {
+    display: none !important;
+  }
+
+  /* Lock + sparkle buttons duplicate Sign In / Register, which are now in More */
+  .app-header.public-header .header-right {
+    display: none !important;
+  }
+
+  .app-header.public-header .nav-wrapper {
+    flex: 1;
+    overflow: visible;
+  }
+
+  .app-header.public-header .top-nav {
+    display: flex !important;
+    flex-wrap: nowrap !important;
+    width: 100%;
+    min-width: 0 !important;
+    gap: 12px; /* space between LIVE, Fixtures, Rankings */
+    padding: 0;
+  }
+
+  /* LIVE, Fixtures, Rankings */
+  .app-header.public-header .top-nav .nav-item {
+    display: inline-flex !important;
+    width: 58px !important;
+    min-width: 0 !important; /* styles.css sets min-width: 76px on small screens */
+    height: 54px;
+    padding: 0 !important;
+    border-radius: 14px;
+  }
+
+  /* Clubs, Sign In, Register move into the More menu */
+  .app-header.public-header .top-nav .nav-overflow-item {
+    display: none !important;
+  }
+
+  /* More button, pushed to the right edge */
+  .app-header.public-header .top-nav .nav-more-toggle {
+    display: inline-flex !important;
+    margin-left: auto;
+    flex-shrink: 0;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 3px;
+    width: 58px;
+    min-width: 0 !important;
+    height: 54px;
+    padding: 0 !important;
+    border-radius: 14px;
+    background: rgba(255, 255, 255, 0.95);
+    border: 1px solid rgba(225, 29, 72, 0.08);
+    box-shadow: 0 4px 12px rgba(15, 23, 42, 0.03);
+    color: #111827;
+    cursor: pointer;
+  }
+
+  .app-header.public-header .top-nav .nav-more-toggle[aria-expanded="true"] {
+    background: rgba(225, 29, 72, 0.08);
+    border-color: rgba(225, 29, 72, 0.2);
+    color: #be123c;
+  }
+
+  /* The open page lives inside More (Clubs / Sign In / Register):
+     show More in the same red "active" style as the other tabs */
+  .app-header.public-header .top-nav .nav-more-toggle.is-active {
+    background: linear-gradient(135deg, #e11d48, #f43f5e);
+    border-color: transparent;
+    color: #fff;
+    box-shadow: 0 14px 30px rgba(225, 29, 72, 0.18);
+  }
+}
+
+/* Very small phones: tighten spacing so everything still fits */
+@media (max-width: 360px) {
+  .app-header.public-header .top-nav {
+    gap: 6px;
+  }
+}
+
+/* ---------- Dropdown panel (added to <body> by nav_more.js) ---------- */
+.nav-more-menu {
+  position: fixed;
+  z-index: 1000;
+  min-width: 190px;
+  padding: 6px;
+  display: grid;
+  gap: 2px;
+  background: #fff;
+  border: 1px solid rgba(225, 29, 72, 0.12);
+  border-radius: 16px;
+  box-shadow: 0 18px 40px rgba(15, 23, 42, 0.14);
+  font-family: var(--font-ui);
+}
+
+.nav-more-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px;
+  border-radius: 12px;
+  color: #111827;
+  font-size: 0.92rem;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.nav-more-menu-item:hover,
+.nav-more-menu-item:focus-visible {
+  background: rgba(225, 29, 72, 0.06);
+  color: #be123c;
+}
+
+.nav-more-menu-item[aria-current="page"] {
+  background: linear-gradient(135deg, #e11d48, #f43f5e);
+  color: #fff;
+}
+
+.nav-more-menu-icon {
+  width: 22px;
+  text-align: center;
+  font-size: 1.05rem;
+}
+/* Public Clubs page */
+.public-clubs-search {
+  width: 100%;
+  margin-top: 14px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  border: 1px solid rgba(239, 68, 68, 0.14);
+  background: rgba(255, 255, 255, 0.94);
+  font: inherit;
+}
+
+.public-clubs-search:focus {
+  outline: none;
+  border-color: rgba(239, 68, 68, 0.26);
+  box-shadow: 0 0 0 4px rgba(239, 68, 68, 0.08);
+}
+
+.public-clubs-cta {
+  margin-top: 16px;
+}
+
+/* =====================================================================
+   Sign In page layout
+   Laptop (>900px): login form on the left, League Leaders on the right.
+   Phone / tablet:   login form first, League Leaders underneath.
+   ===================================================================== */
+body.public-auth-page .signin-page-grid {
+  display: grid !important;
+  grid-template-columns: minmax(0, 420px) minmax(0, 1fr) !important;
+  grid-template-areas: none !important;
+  gap: 24px;
+  width: min(1200px, 100%);
+  margin-inline: auto;
+  align-items: start;
+}
+
+body.public-auth-page .signin-page-grid > .signin-layout {
+  grid-column: 1 !important;
+  grid-row: 1 !important;
+  width: 100% !important;
+  min-width: 0;
+  max-width: none;
+  display: block;
+  position: sticky;
+  top: 96px;
+}
+
+body.public-auth-page .signin-page-grid > .signin-leaders-panel {
+  grid-column: 2 !important;
+  grid-row: 1 !important;
+  width: 100% !important;
+  min-width: 0;
+  max-width: none;
+  margin: 0 !important;
+  justify-self: stretch;
+}
+
+/* The form column is narrow, so stack the inputs one per row */
+body.public-auth-page .signin-form-panel .form-grid {
+  grid-template-columns: minmax(0, 1fr) !important;
+}
+
+body.public-auth-page .signin-form-panel .form-grid > * {
+  grid-column: 1 / -1;
+}
+
+@media (max-width: 900px) {
+  body.public-auth-page .signin-page-grid {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  body.public-auth-page .signin-page-grid > .signin-layout,
+  body.public-auth-page .signin-page-grid > .signin-leaders-panel {
+    grid-column: 1 !important;
+    grid-row: auto !important;
+    position: static;
+  }
+
+  body.public-auth-page .signin-stats-grid {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+}
+
+/* Public header: centre the lock and sparkle icons in their buttons */
+.app-header.public-header .header-right .club-avatar,
+.app-header.public-header .header-right .avatar {
+  display: inline-flex !important;
+  align-items: center;
+  justify-content: center;
+  width: 100% !important;
+  height: 100% !important;
+  font-size: 1.15rem;
+  line-height: 1;
+  border-radius: inherit;
 }

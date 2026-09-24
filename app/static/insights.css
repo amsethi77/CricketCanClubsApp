@@ -1,0 +1,260 @@
+/* Insights panel on the Assistant page (insights.js) */
+
+.ins-panel {
+  display: grid;
+  gap: 16px;
+  margin: 4px 0 18px;
+  padding: 18px;
+  border-radius: 18px;
+  background: #f8fafc;
+  border: 1px solid #eef2f7;
+}
+
+.ins-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.ins-head h3 {
+  margin: 2px 0 0;
+  font-size: 1.1rem;
+}
+
+.ins-note {
+  font-size: 0.78rem;
+  color: #64748b;
+}
+
+.ins-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.ins-card {
+  display: grid;
+  gap: 6px;
+  align-content: start;
+  padding: 14px 16px;
+  border-radius: 14px;
+  background: #fff;
+  border: 1px solid #eef2f7;
+}
+
+.ins-kicker {
+  margin: 0;
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: #e11d48;
+}
+
+.ins-form-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.ins-form {
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 0.85rem;
+  font-weight: 800;
+}
+
+.ins-form.hot { background: #dcfce7; color: #15803d; }
+.ins-form.steady { background: #e0f2fe; color: #0369a1; }
+.ins-form.cold { background: #fee2e2; color: #b91c1c; }
+.ins-form.unknown { background: #f1f5f9; color: #475569; }
+
+.ins-runs {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.ins-run {
+  min-width: 30px;
+  height: 30px;
+  padding: 0 6px;
+  border-radius: 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: #f1f5f9;
+  font-weight: 800;
+  font-size: 0.85rem;
+  color: #0f172a;
+}
+
+.ins-big {
+  margin: 0;
+  font-size: 1.9rem;
+  font-weight: 800;
+  line-height: 1.1;
+  color: #0f172a;
+}
+
+.ins-big small {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: #64748b;
+}
+
+.ins-muted {
+  margin: 0;
+  font-size: 0.86rem;
+  color: #64748b;
+}
+
+.ins-conf {
+  margin: 0;
+  font-size: 0.78rem;
+  color: #94a3b8;
+}
+
+.ins-loading {
+  color: #64748b;
+  font-size: 0.9rem;
+}
+
+.ins-columns {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.ins-block {
+  display: grid;
+  gap: 8px;
+  align-content: start;
+  padding: 14px 16px;
+  border-radius: 14px;
+  background: #fff;
+  border: 1px solid #eef2f7;
+}
+
+.ins-tips {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 10px;
+}
+
+.ins-tips li {
+  display: grid;
+  gap: 2px;
+  padding-left: 12px;
+  border-left: 3px solid #fecdd3;
+}
+
+.ins-tips strong {
+  font-size: 0.92rem;
+  color: #0f172a;
+}
+
+.ins-tips span {
+  font-size: 0.84rem;
+  color: #475569;
+  line-height: 1.45;
+}
+
+.ins-tips .ins-tip-area {
+  font-size: 0.66rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #94a3b8;
+}
+
+.ins-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+body .ins-chip {
+  padding: 8px 12px !important;
+  border-radius: 999px !important;
+  border: 1px solid rgba(225, 29, 72, 0.25) !important;
+  background: #fff !important;
+  color: #be123c !important;
+  font-size: 0.84rem !important;
+  font-weight: 700 !important;
+  box-shadow: none !important;
+  cursor: pointer;
+}
+
+body .ins-chip:hover {
+  background: rgba(225, 29, 72, 0.06) !important;
+}
+
+/* Chat answers can have several paragraphs and bullet lists */
+#chatMessages .message.assistant .message-content {
+  white-space: pre-line;
+}
+
+@media (max-width: 900px) {
+  .ins-grid,
+  .ins-columns {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.ins-xi {
+  margin: 0;
+  padding-left: 22px;
+  display: grid;
+  gap: 6px;
+}
+
+.ins-xi li {
+  font-size: 0.88rem;
+  color: #0f172a;
+}
+
+.ins-xi li strong {
+  margin-right: 6px;
+}
+
+.ins-xi li span {
+  color: #64748b;
+  font-size: 0.82rem;
+}
+
+.ins-pill {
+  margin-left: 6px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-style: normal;
+  font-size: 0.7rem;
+  font-weight: 700;
+}
+
+.ins-pill.maybe { background: #fef3c7; color: #92400e; }
+.ins-pill.noresp { background: #f1f5f9; color: #475569; }
+
+.ins-mini {
+  margin: 4px 0 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 4px;
+}
+
+.ins-mini li {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 0.85rem;
+  color: #475569;
+}
+
+.ins-mini li strong {
+  color: #0f172a;
+}

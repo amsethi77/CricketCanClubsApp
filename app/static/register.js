@@ -1,7 +1,7 @@
-console.error("🚨 REGISTER JS FINAL LOADED - 20260428");
+console.log("Register page script loaded");
 
 document.addEventListener("DOMContentLoaded", () => {
-  console.error("🚨 DOM READY");
+  console.log("Register page ready");
 
   if (!window.CricketClubAppPages) {
     console.error("❌ ClubPages not available");
@@ -26,7 +26,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const emailInput = document.getElementById("registerEmail");
   const passwordInput = document.getElementById("registerPassword");
 
-  console.error("FORM FOUND:", form);
+  console.log("Register form found");
 
   if (!form) {
     console.error("❌ registerForm NOT FOUND");
@@ -122,7 +122,7 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   form.addEventListener("submit", async (event) => {
-    console.error("🚨 SUBMIT HANDLER TRIGGERED");
+    console.log("Submitting registration");
 
     event.preventDefault();
     event.stopPropagation();

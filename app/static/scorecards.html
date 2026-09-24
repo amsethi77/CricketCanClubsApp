@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Scorecards · CricketClubApp</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Sora:wght@400;600;700;800&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/assets/tailwind.css" />
+    <link rel="stylesheet" href="/assets/styles.css" />
+    <link rel="stylesheet" href="/assets/live.css" />
+    <link rel="stylesheet" href="/assets/scorecards.css" />
+  </head>
+  <body class="public-fixtures-page scorecards-page">
+    <main class="page-shell fixtures-shell">
+      <div data-public-header></div>
+
+      <section class="panel onboarding-panel fixtures-hero-panel">
+        <div class="stack-card fixtures-hero-card">
+          <div class="panel-head compact-head fixtures-hero-head">
+            <div>
+              <p class="section-kicker">Scorecard archive</p>
+              <h1 class="fixtures-title">Match scorecards</h1>
+              <p class="lede">Full digital scorecards from approved archive uploads. Pick a game date or browse the list.</p>
+            </div>
+          </div>
+          <div class="sc-filters">
+            <label class="sc-filter">
+              <span>Game date</span>
+              <input id="scDate" type="date" />
+            </label>
+            <label class="sc-filter">
+              <span>Club</span>
+              <select id="scClub"><option value="">All clubs</option></select>
+            </label>
+            <label class="sc-filter">
+              <span>Season</span>
+              <select id="scYear"><option value="">All years</option></select>
+            </label>
+            <button id="scClear" class="sc-clear" type="button" hidden>Clear</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel onboarding-panel fixtures-list-panel">
+        <div class="stack-card">
+          <div class="panel-head compact-head">
+            <div>
+              <p class="section-kicker">By game date</p>
+              <h2 id="scListTitle">All scorecards</h2>
+            </div>
+            <span id="scBadge" class="signin-widget-pill">Loading</span>
+          </div>
+          <div id="scNotice" class="sc-notice" hidden></div>
+          <div id="scList" class="sc-list"></div>
+        </div>
+      </section>
+    </main>
+    <script src="/assets/public_header.js"></script>
+    <script src="/assets/scorecards.js"></script>
+  </body>
+</html>

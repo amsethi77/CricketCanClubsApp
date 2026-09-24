@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Clubs · CricketClubApp</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Sora:wght@400;600;700;800&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/assets/tailwind.css" />
+    <link rel="stylesheet" href="/assets/styles.css" />
+    <link rel="stylesheet" href="/assets/live.css" />
+  </head>
+  <body class="public-fixtures-page">
+    <main class="page-shell fixtures-shell">
+      <div data-public-header></div>
+
+      <section class="panel onboarding-panel fixtures-hero-panel">
+        <div class="stack-card fixtures-hero-card">
+          <div class="panel-head compact-head fixtures-hero-head">
+            <div>
+              <p class="section-kicker">Clubs</p>
+              <h1 class="fixtures-title">Cricket clubs across Canada</h1>
+              <p class="lede">Browse the clubs on Cricket Canada Clubs. Sign in to see your own clubs, stats, and availability.</p>
+            </div>
+          </div>
+          <div class="summary-grid fixtures-summary-grid">
+            <article class="summary-card"><span>Clubs</span><strong id="publicClubsCount">--</strong></article>
+            <article class="summary-card"><span>Upcoming fixtures</span><strong id="publicClubsUpcoming">--</strong></article>
+          </div>
+          <input id="publicClubsSearch" class="public-clubs-search" type="search" placeholder="Search clubs by name or city" />
+        </div>
+      </section>
+
+      <section class="panel onboarding-panel fixtures-list-panel">
+        <div class="stack-card">
+          <div class="panel-head compact-head">
+            <div>
+              <p class="section-kicker">Club list</p>
+              <h2>All clubs</h2>
+            </div>
+            <span id="publicClubsBadge" class="signin-widget-pill">Loading</span>
+          </div>
+          <div id="publicClubsList" class="fixtures-grid"></div>
+          <div class="live-cta-row public-clubs-cta">
+            <a class="live-action primary" href="/signin">Sign in</a>
+            <a class="live-action secondary" href="/register">Register your club</a>
+          </div>
+        </div>
+      </section>
+    </main>
+    <script src="/assets/public_header.js"></script>
+    <script src="/assets/public_clubs.js"></script>
+  </body>
+</html>

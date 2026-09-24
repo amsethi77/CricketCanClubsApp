@@ -12,8 +12,9 @@
     />
     <link rel="stylesheet" href="/assets/tailwind.css?v=20260426a" />
     <link rel="stylesheet" href="/assets/styles.css?v=20260511l" />
+    <link rel="stylesheet" href="/assets/app_polish.css?v=20260924b" />
   </head>
-  <body>
+  <body class="player-profile-page">
     <div class="page-shell">
       <header class="page-topbar"></header>
       <section class="panel onboarding-panel">
@@ -21,22 +22,24 @@
           <h1 id="playerProfileTitle" hidden>Your player profile</h1>
           <p id="playerProfileSummary" class="lede" hidden>Set up your details for the selected club.</p>
           <div id="playerProfileStatus" class="status-banner" hidden></div>
-          <form id="playerProfileForm" class="form-grid">
-            <input id="profileFullName" type="text" placeholder="Full name" />
-            <select id="profileGender">
-              <option value="">Gender</option>
-              <option value="Male">Male</option>
-              <option value="Female">Female</option>
-            </select>
-            <input id="profileAge" type="number" min="0" placeholder="Age" />
-            <input id="profilePhone" type="tel" placeholder="Mobile number" />
-            <input id="profileEmail" type="email" placeholder="Email address" />
-            <input id="profileRole" type="text" placeholder="Role" />
-            <input id="profileBattingStyle" type="text" placeholder="Batting style" />
-            <input id="profileBowlingStyle" type="text" placeholder="Bowling style" />
-            <input id="profileAliases" type="text" placeholder="Aliases, comma separated" />
-            <input id="profileTeams" type="text" placeholder="Team memberships, comma separated" />
-            <textarea id="profileNotes" placeholder="Notes"></textarea>
+          <form id="playerProfileForm" class="form-grid profile-form">
+            <label class="profile-field"><span>Full name</span><input id="profileFullName" type="text" placeholder="Full name" /></label>
+            <label class="profile-field"><span>Gender</span>
+              <select id="profileGender">
+                <option value="">Gender</option>
+                <option value="Male">Male</option>
+                <option value="Female">Female</option>
+              </select>
+            </label>
+            <label class="profile-field"><span>Age</span><input id="profileAge" type="number" min="0" placeholder="Age" /></label>
+            <label class="profile-field"><span>Mobile number</span><input id="profilePhone" type="tel" placeholder="Mobile number" /></label>
+            <label class="profile-field"><span>Email address</span><input id="profileEmail" type="email" placeholder="Email address" /></label>
+            <label class="profile-field"><span>Role</span><input id="profileRole" type="text" placeholder="Role" /></label>
+            <label class="profile-field"><span>Batting style</span><input id="profileBattingStyle" type="text" placeholder="Batting style" /></label>
+            <label class="profile-field"><span>Bowling style</span><input id="profileBowlingStyle" type="text" placeholder="Bowling style" /></label>
+            <label class="profile-field"><span>Aliases</span><input id="profileAliases" type="text" placeholder="Comma separated" /></label>
+            <label class="profile-field"><span>Team memberships</span><input id="profileTeams" type="text" placeholder="Comma separated" /></label>
+            <label class="profile-field profile-field-wide"><span>Notes</span><textarea id="profileNotes" rows="3" placeholder="Notes"></textarea></label>
             <button class="primary-button wide" type="submit">Save player profile</button>
           </form>
           <div class="detail-card">

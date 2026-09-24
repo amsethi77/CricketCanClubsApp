@@ -70,7 +70,19 @@ async function renderSharedTopbar() {
     console.error("Failed to render shared topbar", err);
   }
 }
-
+function setupNavMoreToggle() {
+  try {
+    const nav = document.querySelector(".app-header .top-nav");
+    const toggle = document.getElementById("navMoreToggle");
+    if (!nav || !toggle) return;
+    toggle.addEventListener("click", () => {
+      const open = nav.classList.toggle("nav-expanded");
+      toggle.setAttribute("aria-expanded", open ? "true" : "false");
+    });
+  } catch (e) {
+    console.error("setupNavMoreToggle failed", e);
+  }
+}
 /* Mobile quick-nav toggle: inject a button into the topbar and wire open/close behavior */
 function setupMobileMenuToggle() {
   try {
@@ -1119,7 +1131,8 @@ function syncScoringLinkTargets(dashboard = state.dashboard || {}) {
   document.querySelectorAll('a[href="/dashboard/widgets/scoring"]').forEach((link) => {
     if (canScore) {
       link.href = url.pathname + (url.search ? url.search : "");
-      link.textContent = "Open scoring";
+      // Navbar tabs keep their icon + "Scoring" label; only page buttons change text.
+      if (!link.closest(".app-header")) link.textContent = "Open scoring";
       link.classList.remove("is-disabled");
       link.removeAttribute("aria-disabled");
       link.removeAttribute("tabindex");
@@ -1127,7 +1140,7 @@ function syncScoringLinkTargets(dashboard = state.dashboard || {}) {
       link.onclick = null;
     } else {
       link.href = "#";
-      link.textContent = "Scoring locked";
+      if (!link.closest(".app-header")) link.textContent = "Scoring locked";
       link.classList.add("is-disabled");
       link.setAttribute("aria-disabled", "true");
       link.setAttribute("tabindex", "-1");
@@ -4827,7 +4840,7 @@ async function loadDashboard() {
     queryParams.set("selected_season_year", seasonYear);
   }
   const query = queryParams.toString() ? `?${queryParams.toString()}` : "";
-  const dashboard = await runAction(() => getJson(`/api/dashboard${query}`), "Club dashboard loaded.", "load dashboard");
+  const dashboard = await runAction(() => getJson(`/api/dashboard${query}`), "", "load dashboard");
   if (dashboard) {
     dashboardDebug("Dashboard loaded.", {
       focusClub: dashboard.focus_club?.name || dashboard.club?.name || "",

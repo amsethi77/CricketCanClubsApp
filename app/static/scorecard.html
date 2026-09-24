@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Scorecard · CricketClubApp</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Sora:wght@400;600;700;800&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/assets/tailwind.css" />
+    <link rel="stylesheet" href="/assets/styles.css" />
+    <link rel="stylesheet" href="/assets/live.css" />
+    <link rel="stylesheet" href="/assets/scorecards.css" />
+  </head>
+  <body class="public-fixtures-page scorecards-page scorecard-detail-page">
+    <main class="page-shell fixtures-shell">
+      <div data-public-header></div>
+
+      <a id="scBack" class="sc-back" href="/scorecards">‹ All scorecards</a>
+
+      <section class="panel onboarding-panel fixtures-hero-panel">
+        <div id="scHeader" class="stack-card sc-header">
+          <p class="sc-meta">Loading scorecard…</p>
+        </div>
+      </section>
+
+      <section class="panel onboarding-panel fixtures-list-panel">
+        <div class="stack-card">
+          <div class="sc-tabs" role="tablist" aria-label="Scorecard views">
+            <button id="scTabCard" class="sc-tab is-active" type="button" role="tab" aria-selected="true" data-tab="card">Scorecard</button>
+            <button id="scTabPhoto" class="sc-tab" type="button" role="tab" aria-selected="false" data-tab="photo">Original scorecard</button>
+          </div>
+          <div id="scPanelCard" class="sc-panel" role="tabpanel" aria-labelledby="scTabCard"></div>
+          <div id="scPanelPhoto" class="sc-panel" role="tabpanel" aria-labelledby="scTabPhoto" hidden></div>
+        </div>
+      </section>
+    </main>
+    <script src="/assets/public_header.js"></script>
+    <script src="/assets/scorecard.js"></script>
+  </body>
+</html>
