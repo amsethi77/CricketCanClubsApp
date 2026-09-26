@@ -3789,8 +3789,81 @@ def _public_fixture_card_payload(fixture: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _past_fixture_scorecard_urls(store: dict[str, Any], fixtures: list[dict[str, Any]]) -> dict[str, str]:
+    """Return only unambiguous links from past fixtures to approved archive scorecards."""
+    today = datetime.utcnow().date().isoformat()
+    approved_archives = [
+        archive
+        for archive in (store.get("archive_uploads", []) or [])
+        if isinstance(archive, dict) and _scorecard_text(archive.get("status")).lower() == "approved"
+    ]
+    links: dict[str, str] = {}
+
+    for fixture in fixtures:
+        fixture_id = str(fixture.get("id") or "").strip()
+        fixture_date = str(fixture.get("date") or "")[:10]
+        club_id = str(fixture.get("club_id") or "").strip()
+        if not fixture_id or not club_id or not re.fullmatch(r"20\d{2}-\d{2}-\d{2}", fixture_date) or fixture_date >= today:
+            continue
+
+        scoped_archives = []
+        for archive in approved_archives:
+            archive_club_ids = set(_coerce_archive_string_list(archive.get("club_ids")))
+            archive_club_id = str(archive.get("club_id") or "").strip()
+            if archive_club_id:
+                archive_club_ids.add(archive_club_id)
+            if club_id in archive_club_ids:
+                scoped_archives.append(archive)
+
+        # An explicit applied/upload match reference is authoritative, but remains club-scoped.
+        direct = [
+            archive
+            for archive in scoped_archives
+            if fixture_id
+            in {
+                str(archive.get("applied_to_match_id") or "").strip(),
+                str(archive.get("match_id") or "").strip(),
+            }
+        ]
+        if len(direct) == 1:
+            links[fixture_id] = f"/scorecards/a-{_scorecard_text(direct[0].get('id'))}"
+            continue
+        if direct:
+            continue
+
+        fixture_opponent = normalize_name(str(fixture.get("opponent") or ""))
+        fixture_club_name = normalize_name(str(fixture.get("club_name") or ""))
+        matched = []
+        for archive in scoped_archives:
+            # Photo metadata may be the upload date, not the game date. Only use
+            # scorecard-extracted or explicitly assigned archive dates for inference.
+            date_source = str(archive.get("archive_date_source") or "").strip().lower()
+            if date_source not in {"scorecard", "manual-season"}:
+                continue
+            card = _scorecard_from_archive(archive)
+            if str(card.get("date") or "")[:10] != fixture_date:
+                continue
+            card_teams = {
+                normalize_name(str(team.get("team") or ""))
+                for team in (card.get("innings") or [])
+                if isinstance(team, dict) and team.get("team")
+            }
+            # The scorecard must identify both sides; never match on date/club alone.
+            if fixture_opponent and fixture_club_name and {fixture_opponent, fixture_club_name}.issubset(card_teams):
+                matched.append(archive)
+
+        # Ambiguous same-day fixtures deliberately remain unlinked.
+        if len(matched) == 1:
+            links[fixture_id] = f"/scorecards/a-{_scorecard_text(matched[0].get('id'))}"
+
+    return links
+
+
 def _public_fixtures_page_payload(store: dict[str, Any]) -> dict[str, Any]:
     fixtures = [_public_fixture_card_payload(fixture) for fixture in list(store.get("fixtures", []) or [])]
+    scorecard_urls = _past_fixture_scorecard_urls(store, fixtures)
+    for fixture in fixtures:
+        fixture["scorecard_url"] = scorecard_urls.get(str(fixture.get("id") or ""), "")
     fixtures.sort(
         key=lambda item: (
             str(item.get("date") or ""),

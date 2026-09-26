@@ -36,19 +36,39 @@
   function fixtureCard(fixture, modeLabel) {
     const link = fixture?.id ? `/live/${encodeURIComponent(fixture.id)}` : "#";
     return `
-      <a class="live-card fixtures-card" href="${link}">
-        <div class="live-card-head">
-          <div>
-            <div class="live-pill"><span class="live-dot"></span><span>${escapeHtml(String(fixture.status || "Scheduled").toUpperCase())}</span></div>
-            <h4>${escapeHtml(fixture.club_name || "Club")} vs ${escapeHtml(fixture.opponent || "Opponent")}</h4>
-            <p>${escapeHtml(fixture.date_label || fixture.date || "Date TBD")} · ${escapeHtml(fixture.venue || "Venue TBD")} · ${escapeHtml(fixture.match_type || "Friendly")}</p>
+      <div class="fixtures-card-wrap">
+        <a class="live-card fixtures-card" href="${link}">
+          <div class="live-card-head">
+            <div>
+              <div class="live-pill"><span class="live-dot"></span><span>${escapeHtml(String(fixture.status || "Scheduled").toUpperCase())}</span></div>
+              <h4>${escapeHtml(fixture.club_name || "Club")} vs ${escapeHtml(fixture.opponent || "Opponent")}</h4>
+              <p>${escapeHtml(fixture.date_label || fixture.date || "Date TBD")} · ${escapeHtml(fixture.venue || "Venue TBD")} · ${escapeHtml(fixture.match_type || "Friendly")}</p>
+            </div>
+            <div class="live-score">${escapeHtml(scoreline(fixture))}</div>
           </div>
-          <div class="live-score">${escapeHtml(scoreline(fixture))}</div>
-        </div>
-        <p>${escapeHtml(fixture.scheduled_time || "Time TBD")} · ${escapeHtml(fixture.overs || "")}</p>
-        <p class="fixtures-card-meta">${escapeHtml(modeLabel)}</p>
-      </a>
+          <p>${escapeHtml(fixture.scheduled_time || "Time TBD")} · ${escapeHtml(fixture.overs || "")}</p>
+          <p class="fixtures-card-meta">${escapeHtml(modeLabel)}</p>
+        </a>
+        ${fixture.scorecard_url ? `<a class="fixtures-scorecard-link" href="${escapeHtml(fixture.scorecard_url)}">View scorecard</a>` : ""}
+      </div>
     `;
+  }
+
+  async function addArchiveScorecardLinks(fixtures) {
+    try {
+      const response = await fetch("/api/public/fixtures-page", { headers: { Accept: "application/json" } });
+      if (!response.ok) return fixtures;
+      const data = await response.json();
+      const linksById = new Map(
+        (Array.isArray(data.fixtures) ? data.fixtures : [])
+          .filter((fixture) => fixture.id && fixture.scorecard_url)
+          .map((fixture) => [String(fixture.id), fixture.scorecard_url])
+      );
+      return fixtures.map((fixture) => ({ ...fixture, scorecard_url: linksById.get(String(fixture.id || "")) || "" }));
+    } catch (error) {
+      console.warn("[Fixtures] Could not load archive links.", error);
+      return fixtures;
+    }
   }
 
   function renderGroups(groups, modeLabel) {
@@ -89,13 +109,12 @@
         });
         if (response.ok) {
           const dashboard = await response.json();
-          const fixtures = Array.isArray(dashboard.fixtures) ? dashboard.fixtures : [];
+          const dashboardFixtures = Array.isArray(dashboard.fixtures) ? dashboard.fixtures : [];
+          const fixtures = await addArchiveScorecardLinks(dashboardFixtures);
           const club = dashboard.focus_club || dashboard.club || {};
           const clubName = club.name || "Selected club";
           const readOnlyLabel = `Read-only club fixtures${selectedClubId ? ` · ${clubName}` : ""}`;
-          if (fixturesHeroSummaryEl) {
-            fixturesHeroSummaryEl.textContent = `Read-only fixtures for ${clubName}. Use this page to review upcoming games without editing.`;
-          }
+          if (fixturesHeroSummaryEl) fixturesHeroSummaryEl.hidden = true;
           if (fixturesTotalCountEl) fixturesTotalCountEl.textContent = String(fixtures.length || 0);
           if (fixturesClubCountEl) fixturesClubCountEl.textContent = "1";
           if (fixturesUpcomingCountEl) {
