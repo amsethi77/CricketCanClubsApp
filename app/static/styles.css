@@ -1,4 +1,16 @@
+@import url("https://fonts.googleapis.com/css2?family=Anton&family=Inter:wght@400;500;600;700;800&family=Space+Mono:wght@400;700&display=swap");
+
 :root {
+  --sports-canvas: #f8f9fa;
+  --sports-ink: #1a1a1a;
+  --sports-muted: #6c757d;
+  --sports-crimson: #d32f2f;
+  --sports-crimson-deep: #9a1b1b;
+  --sports-line: #eaeaea;
+  --sports-shadow: 0 12px 32px rgba(26, 26, 26, 0.055);
+  --font-sports-display: "Anton", Impact, sans-serif;
+  --font-sports-ui: "Inter", "Segoe UI", system-ui, sans-serif;
+  --font-sports-data: "Space Mono", "SFMono-Regular", Consolas, monospace;
   --bg: #eff6ff;
   --panel: rgba(255, 255, 255, 0.88);
   --panel-strong: #ffffff;
@@ -28,15 +40,86 @@ html {
 
 body {
   margin: 0;
-  color: var(--text);
-  font-family: "Inter", "Segoe UI", system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+  color: var(--sports-ink);
+  font-family: var(--font-sports-ui);
   font-size: 16px;
   line-height: 1.55;
-  background:
-    radial-gradient(circle at 10% 10%, rgba(101, 181, 255, 0.34), transparent 20%),
-    radial-gradient(circle at 88% 8%, rgba(214, 31, 66, 0.18), transparent 16%),
-    radial-gradient(circle at 50% 108%, rgba(31, 111, 229, 0.12), transparent 20%),
-    linear-gradient(180deg, #f7fbff, #eef5ff 38%, #ffffff 100%);
+  background: var(--sports-canvas);
+}
+
+.sports-title {
+  font-family: var(--font-sports-display);
+  font-size: clamp(2.35rem, 6vw, 4.5rem);
+  font-weight: 400;
+  line-height: 0.98;
+  letter-spacing: 0.015em;
+  text-transform: uppercase;
+}
+
+.sports-subtitle {
+  color: var(--sports-crimson);
+  font-family: var(--font-sports-ui);
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.stat-card {
+  border: 1px solid var(--sports-line);
+  border-radius: 18px;
+  background: #fff;
+  box-shadow: var(--sports-shadow);
+}
+
+.rank-badge {
+  display: inline-flex;
+  min-width: 2rem;
+  min-height: 2rem;
+  align-items: center;
+  justify-content: center;
+  padding: 0 0.45rem;
+  border-radius: 8px;
+  background: var(--sports-crimson);
+  color: #fff;
+  font-family: var(--font-sports-data);
+  font-size: 0.82rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.numeric-data {
+  font-family: var(--font-sports-data);
+  font-variant-numeric: tabular-nums;
+}
+
+.custom-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: var(--font-sports-ui);
+  text-align: left;
+}
+
+.custom-table th {
+  padding: 0.85rem 1rem;
+  color: var(--sports-muted);
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+
+.custom-table td {
+  padding: 0.9rem 1rem;
+  border-bottom: 1px solid var(--sports-line);
+  color: var(--sports-ink);
+}
+
+.custom-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.custom-table tbody tr:hover {
+  background: #fcfcfc;
 }
 
 .page-shell {

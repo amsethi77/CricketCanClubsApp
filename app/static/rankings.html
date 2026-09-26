@@ -7,12 +7,12 @@
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
-      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Sora:wght@400;600;700;800&display=swap"
+      href="https://fonts.googleapis.com/css2?family=Anton&family=Inter:wght@400;500;600;700;800&family=Space+Mono:wght@400;700&display=swap"
       rel="stylesheet"
     />
     <link rel="stylesheet" href="/assets/tailwind.css?v=20260430b" />
     <link rel="stylesheet" href="/assets/styles.css?v=20260511l" />
-    <link rel="stylesheet" href="/assets/live.css?v=20260923d" />
+    <link rel="stylesheet" href="/assets/live.css?v=20260926a" />
   </head>
   <body class="public-rankings-page">
     <main class="fixtures-shell">
@@ -22,16 +22,16 @@
         <div class="stack-card fixtures-hero-card">
           <div class="panel-head compact-head fixtures-hero-head">
             <div>
-              <p class="section-kicker">Rankings</p>
-              <h1 class="fixtures-title">League leaders</h1>
+              <p class="section-kicker sports-subtitle">Rankings</p>
+              <h1 class="fixtures-title sports-title">League leaders</h1>
               <p class="lede">Public batting, bowling, and club standings from the current season.</p>
             </div>
           </div>
           <div class="summary-grid fixtures-summary-grid">
-            <article class="summary-card"><span>Batting</span><strong id="rankingsBattingCount">--</strong></article>
-            <article class="summary-card"><span>Bowling</span><strong id="rankingsBowlingCount">--</strong></article>
-            <article class="summary-card"><span>Clubs</span><strong id="rankingsClubCount">--</strong></article>
-            <article class="summary-card"><span>Mode</span><strong>Public</strong></article>
+            <article class="summary-card stat-card"><span>Batting</span><strong id="rankingsBattingCount">--</strong></article>
+            <article class="summary-card stat-card"><span>Bowling</span><strong id="rankingsBowlingCount">--</strong></article>
+            <article class="summary-card stat-card"><span>Clubs</span><strong id="rankingsClubCount">--</strong></article>
+            <article class="summary-card stat-card"><span>Mode</span><strong>Public</strong></article>
           </div>
         </div>
       </section>
@@ -44,7 +44,11 @@
               <h2>Top batsmen</h2>
             </div>
           </div>
-          <div id="rankingsBatting" class="rankings-card-list"></div>
+          <div id="rankingsBatting" class="rankings-table-wrap"></div>
+          <section class="rankings-chart-panel" aria-labelledby="rankingsChartTitle" hidden>
+            <h3 id="rankingsChartTitle">Runs by player</h3>
+            <div id="rankingsBattingChart" role="img" aria-label="Bar chart showing total runs by player" hidden></div>
+          </section>
         </div>
       </section>
 
@@ -56,7 +60,7 @@
               <h2>Top bowlers</h2>
             </div>
           </div>
-          <div id="rankingsBowling" class="rankings-card-list"></div>
+          <div id="rankingsBowling" class="rankings-table-wrap"></div>
         </div>
       </section>
 
@@ -68,11 +72,12 @@
               <h2>Top clubs by win rate</h2>
             </div>
           </div>
-          <div id="rankingsClubs" class="rankings-card-list"></div>
+          <div id="rankingsClubs" class="rankings-table-wrap"></div>
         </div>
       </section>
     </main>
     <script src="/assets/public_header.js?v=20260511b"></script>
-    <script src="/assets/rankings.js?v=20260511a"></script>
+    <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+    <script src="/assets/rankings.js?v=20260926a"></script>
   </body>
 </html>
