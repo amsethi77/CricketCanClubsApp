@@ -231,15 +231,23 @@ This section captures the user requirements in the order they were given and ref
 
 ## Run locally
 
+Use the repository startup script from the project root:
+
 ```bash
-cd /Users/amitsethi/Downloads/HeartlakeCricketApp
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-python3 app/main.py
+./startup.sh
 ```
 
+The script creates `.venv` if needed, installs `requirements.txt`, and starts the FastAPI server on port `8091` by default. You can override the port when needed:
+
+```bash
+PORT=8092 ./startup.sh
+```
+
+<<<<<<< ours
 Open `http://127.0.0.1:8090`
+=======
+Open `http://127.0.0.1:8091`.
+>>>>>>> theirs
 
 ## Project shape
 
