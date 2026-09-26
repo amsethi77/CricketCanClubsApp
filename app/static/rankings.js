@@ -43,7 +43,7 @@
       </table>`;
   }
 
-  function renderBattingChart(rows) {
+  async function renderBattingChart(rows) {
     const panel = document.querySelector(".rankings-chart-panel");
     const chart = document.getElementById("rankingsBattingChart");
     if (!panel || !chart || !window.Plotly || !rows.length) {
@@ -51,33 +51,20 @@
       return;
     }
 
-    const players = rows.map((row) => String(row.player_name || "Player"));
-    const runs = rows.map((row) => Number(row.runs) || 0);
-    chart.hidden = false;
-    panel.hidden = false;
-
-    window.Plotly.newPlot(
-      chart,
-      [{
-        type: "bar",
-        x: players,
-        y: runs,
-        marker: { color: "#D32F2F", line: { color: "#9A1B1B", width: 1 } },
-        hovertemplate: "%{x}<br>%{y} runs<extra></extra>",
-      }],
-      {
-        paper_bgcolor: "rgba(0,0,0,0)",
-        plot_bgcolor: "rgba(0,0,0,0)",
-        font: { family: "Inter, sans-serif", color: "#1A1A1A" },
-        margin: { t: 12, r: 12, b: 72, l: 48 },
-        xaxis: { tickangle: -25, automargin: true, showgrid: false, zeroline: false },
-        yaxis: { title: "Runs", gridcolor: "#EAEAEA", zeroline: false, rangemode: "tozero" },
-      },
-      { responsive: true, displayModeBar: false }
-    ).catch((error) => {
+    try {
+      const response = await fetch("/api/public/rankings-chart", { headers: { Accept: "application/json" } });
+      if (!response.ok) throw new Error("Unable to load the rankings chart.");
+      const figure = await response.json();
+      chart.hidden = false;
+      panel.hidden = false;
+      await window.Plotly.newPlot(chart, figure.data || [], figure.layout || {}, {
+        responsive: true,
+        displayModeBar: false,
+      });
+    } catch (error) {
       console.warn("[Rankings] Chart could not be rendered.", error);
       panel.hidden = true;
-    });
+    }
   }
 
   async function loadRankings() {

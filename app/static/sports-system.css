@@ -1,0 +1,287 @@
+/* Shared sports visual system. Defaults are mobile-first; wider layouts enhance them below. */
+:root {
+  --sports-canvas: #f8f9fa;
+  --sports-ink: #1a1a1a;
+  --sports-muted: #6c757d;
+  --sports-crimson: #d32f2f;
+  --sports-crimson-deep: #9a1b1b;
+  --sports-line: #eaeaea;
+  --sports-shadow: 0 12px 32px rgba(26, 26, 26, 0.055);
+  --font-sports-display: "Anton", Impact, sans-serif;
+  --font-sports-ui: "Inter", "Segoe UI", system-ui, sans-serif;
+  --font-sports-data: "Space Mono", "SFMono-Regular", Consolas, monospace;
+  --font-ui: var(--font-sports-ui);
+  --font-display: var(--font-sports-ui);
+}
+
+html {
+  font-family: var(--font-sports-ui);
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
+body {
+  color: var(--sports-ink);
+  background: var(--sports-canvas);
+  font-family: var(--font-sports-ui);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+body :is(.page-shell, .live-shell, .fixtures-shell, .home-shell, .scorecards-shell, .signin-page-grid, .register-layout, .admin-shell) {
+  width: min(100% - 24px, 1380px);
+  margin-inline: auto;
+}
+
+body :is(.page-shell, .live-shell, .fixtures-shell, .home-shell, .scorecards-shell) {
+  padding-top: clamp(12px, 3vw, 28px);
+  padding-bottom: clamp(24px, 5vw, 56px);
+}
+
+body :is(.page-shell, .live-shell, .fixtures-shell, .home-shell, .scorecards-shell) > *,
+body :is(.panel, .stack-card, .detail-card, .summary-card, .mini-stat, .stat-card) {
+  min-width: 0;
+}
+
+body :is(.page-shell, .live-shell, .fixtures-shell, .home-shell, .scorecards-shell, .signin-page-grid, .register-layout)
+  :is(h1, .template-title, .fixtures-title, .signin-title, .clubs-greeting):not(.sports-title) {
+  color: var(--sports-ink);
+  font-family: var(--font-sports-ui) !important;
+  font-size: clamp(1.7rem, 4.2vw, 2.6rem) !important;
+  font-weight: 700 !important;
+  letter-spacing: -0.035em !important;
+  line-height: 1.12 !important;
+  text-transform: none;
+  text-wrap: balance;
+}
+
+body :is(.page-shell, .live-shell, .fixtures-shell, .home-shell, .scorecards-shell, .signin-page-grid, .register-layout)
+  :is(h2, h3):not(.sports-title) {
+  color: var(--sports-ink);
+  font-family: var(--font-sports-ui) !important;
+  font-weight: 700 !important;
+  letter-spacing: -0.02em !important;
+  line-height: 1.25 !important;
+  text-transform: none;
+}
+
+body :is(.page-shell, .live-shell, .fixtures-shell, .home-shell, .scorecards-shell, .signin-page-grid, .register-layout)
+  h2:not(.sports-title) {
+  font-size: clamp(1.1rem, 2.7vw, 1.45rem) !important;
+}
+
+body :is(.page-shell, .live-shell, .fixtures-shell, .home-shell, .scorecards-shell, .signin-page-grid, .register-layout)
+  h3:not(.sports-title) {
+  font-size: clamp(1rem, 2.2vw, 1.2rem) !important;
+}
+
+/* Reserve Anton for display headlines that explicitly request sports-title. */
+body .sports-title {
+  font-family: var(--font-sports-display) !important;
+  font-size: clamp(2rem, 5vw, 3.35rem) !important;
+  font-weight: 400 !important;
+  letter-spacing: 0.01em !important;
+  line-height: 1 !important;
+  text-transform: uppercase;
+}
+
+body :is(.section-kicker, .template-kicker, .sports-subtitle, .ins-kicker) {
+  color: var(--sports-crimson);
+  font-family: var(--font-sports-ui);
+  font-weight: 800 !important;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+body :is(.panel-head h2, .panel-head h3, .signin-widget-head h3, .sports-section-title) {
+  color: var(--sports-ink);
+  font-family: var(--font-sports-ui);
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  text-wrap: balance;
+}
+
+body :is(.panel, .stat-card, .summary-card, .mini-stat, .rankings-preview-card, .ins-card, .ins-block) {
+  border-color: var(--sports-line);
+  border-radius: 18px;
+  box-shadow: var(--sports-shadow);
+}
+
+.stat-card {
+  background: #fff;
+}
+
+body :is(.panel, .stat-card, .summary-card, .mini-stat, .custom-table, input, select, textarea, button) {
+  font-family: var(--font-sports-ui);
+}
+
+.custom-table {
+  width: 100%;
+  border-collapse: collapse;
+  color: var(--sports-ink);
+  font-family: var(--font-sports-ui);
+  text-align: left;
+}
+
+.custom-table th {
+  padding: 0.85rem 1rem;
+  color: var(--sports-muted);
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+
+.custom-table td {
+  padding: 0.9rem 1rem;
+  border-bottom: 1px solid var(--sports-line);
+  font-family: var(--font-sports-ui);
+}
+
+.custom-table tbody tr:last-child td { border-bottom: 0; }
+.custom-table tbody tr:hover { background: #fcfcfc; }
+
+.rank-badge {
+  display: inline-flex;
+  min-width: 2rem;
+  min-height: 2rem;
+  align-items: center;
+  justify-content: center;
+  padding-inline: 0.45rem;
+  border-radius: 8px;
+  background: var(--sports-crimson);
+  color: #fff;
+  font-family: var(--font-sports-data);
+  font-size: 0.82rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.numeric-data,
+:where(.mini-stat, .summary-card, .signin-widget-pill, .score-number) .numeric-data {
+  font-family: var(--font-sports-data);
+  font-variant-numeric: tabular-nums;
+}
+
+body :is(.rankings-table-wrap, .table-wrap, .table-scroll, .review-table-wrap, .scorecard-table-wrap, [class*="table-wrap"]) {
+  max-width: 100%;
+  overflow-x: auto;
+  overscroll-behavior-inline: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+body :is(button, input, select, textarea, .primary-button, .secondary-button, .home-btn, .status-toggle, .signin-tab) {
+  font-family: var(--font-sports-ui);
+}
+
+body :is(button, .primary-button, .secondary-button, .home-btn, .status-toggle, .signin-tab) {
+  min-height: 44px;
+  touch-action: manipulation;
+}
+
+body :is(input:not([type="checkbox"]):not([type="radio"]):not([type="range"]), select, textarea) {
+  max-width: 100%;
+  min-height: 44px;
+  font-size: 16px;
+}
+
+body :is(input, select, textarea, button, a) {
+  -webkit-tap-highlight-color: rgba(211, 47, 47, 0.12);
+}
+
+body :is(input, select, textarea, button):focus-visible,
+a:focus-visible {
+  outline: 3px solid rgba(211, 47, 47, 0.34);
+  outline-offset: 2px;
+}
+
+body :is(.primary-button, .primary-link, .home-btn.primary) {
+  background-color: var(--sports-crimson);
+  border-color: var(--sports-crimson);
+}
+
+@media (max-width: 699px) {
+  body :is(.page-shell, .live-shell, .fixtures-shell, .home-shell, .scorecards-shell) {
+    width: calc(100% - 20px);
+    padding-top: 12px;
+    padding-bottom: 28px;
+  }
+
+  body :is(.dashboard, .split-grid, .form-grid, .three-column-grid, .landing-highlights,
+    .summary-grid, .template-kpi-grid, .widget-launcher-grid, .rankings-preview-grid,
+    .fixtures-grid, .scorebook-slot-grid, .scorebook-summary-grid, .player-summary-grid,
+    .signin-page-grid, .signin-layout, .register-layout, .signin-stats-shell,
+    .public-scorecard-grid, .public-scorecard-summary-grid, .ins-grid, .ins-columns,
+    .player-profile-grid, .season-grid, .admin-grid, .dashboard-grid, .card-grid) {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  body :is(.summary-grid, .template-kpi-grid, .public-scorecard-summary-grid) {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
+
+  body :is(.template-top-row, .template-identity-stack, .toolbar-actions, .hero-actions,
+    .dash-hero-actions, .archive-toolbar, .player-toolbar, .team-toolbar, .form-actions) {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .template-identity-stack { justify-items: stretch; }
+
+  body :is(.toolbar-actions, .hero-actions, .dash-hero-actions, .archive-toolbar, .player-toolbar, .team-toolbar) {
+    flex-wrap: wrap;
+  }
+
+  body :is(.toolbar-actions, .hero-actions, .dash-hero-actions) > :is(button, a, input, select) {
+    flex: 1 1 100%;
+    width: 100%;
+  }
+
+  body :is(.panel, .template-shell, .stat-card, .ins-panel) {
+    border-radius: 16px;
+  }
+
+  body :is(.panel, .template-shell) { padding: 16px !important; }
+
+  body :is(.page-shell, .live-shell, .fixtures-shell, .home-shell, .scorecards-shell, .signin-page-grid, .register-layout)
+    :is(h1, .template-title, .fixtures-title, .signin-title, .clubs-greeting):not(.sports-title) {
+    font-size: clamp(1.6rem, 8vw, 2.15rem) !important;
+    line-height: 1.14 !important;
+  }
+
+  body .sports-title {
+    font-size: clamp(1.9rem, 10vw, 2.8rem) !important;
+  }
+
+  .custom-table th,
+  .custom-table td { padding: 0.72rem 0.8rem; }
+
+  body :is(.page-topbar, .app-header, .public-header) { max-width: 100%; }
+
+  body :is(img, video, canvas, svg) { max-width: 100%; }
+}
+
+@media (min-width: 700px) and (max-width: 999px) {
+  body :is(.three-column-grid, .landing-highlights, .summary-grid, .template-kpi-grid,
+    .widget-launcher-grid, .rankings-preview-grid, .fixtures-grid, .ins-grid,
+    .public-scorecard-grid, .player-summary-grid) {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .signin-page-grid { grid-template-columns: minmax(0, 1fr); }
+}
+
+@media (min-width: 1000px) {
+  :where(.signin-page-grid, .register-layout) {
+    grid-template-columns: minmax(0, 1fr) minmax(360px, 0.9fr);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

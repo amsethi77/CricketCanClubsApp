@@ -823,6 +823,7 @@ def _clubs_page_html(request: Request, search: str = "", focus_club_id: str = ""
         <title>Select Club · CricketClubApp</title>
         <link rel="stylesheet" href="/assets/styles.css?v=20260509e" />
         <link rel="stylesheet" href="/assets/app_polish.css?v=20260924b" />
+        <link rel="stylesheet" href="/assets/sports-system.css?v=20260926a" />
       </head>
       <body>
         <div class="page-shell">
@@ -3491,6 +3492,53 @@ def public_signin_stats() -> dict[str, Any]:
     }
 
 
+def _build_public_batting_chart_figure(player_labels: list[str], total_runs: list[int]):
+    """Build the public batting-leaders chart with Plotly Graph Objects."""
+    import plotly.graph_objects as go
+
+    safe_labels = [str(label or "Player") for label in player_labels]
+    safe_runs = [max(0, int(runs or 0)) for runs in total_runs]
+    if len(safe_labels) != len(safe_runs):
+        raise ValueError("Player labels and run totals must have matching lengths.")
+
+    return go.Figure(
+        data=[
+            go.Bar(
+                x=safe_labels,
+                y=safe_runs,
+                name="Runs",
+                marker={"color": "#D32F2F", "line": {"color": "#9A1B1B", "width": 1}},
+                hovertemplate="%{x}<br>%{y} runs<extra></extra>",
+            )
+        ],
+        layout=go.Layout(
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(0,0,0,0)",
+            font={"family": "Inter, sans-serif", "color": "#1A1A1A"},
+            margin={"t": 12, "r": 12, "b": 72, "l": 48},
+            xaxis={"tickangle": -25, "automargin": True, "showgrid": False, "zeroline": False},
+            yaxis={
+                "title": "Runs",
+                "gridcolor": "#EAEAEA",
+                "zeroline": False,
+                "rangemode": "tozero",
+            },
+            showlegend=False,
+        ),
+    )
+
+
+@app.get("/api/public/rankings-chart")
+def public_rankings_chart() -> JSONResponse:
+    stats = public_signin_stats()
+    batting = stats.get("batting_leaders", [])
+    figure = _build_public_batting_chart_figure(
+        [str(row.get("player_name") or "Player") for row in batting],
+        [int(row.get("runs") or 0) for row in batting],
+    )
+    return JSONResponse(content=json.loads(figure.to_json()))
+
+
 def _public_live_matches(store: dict[str, Any]) -> list[dict[str, Any]]:
     today = datetime.utcnow().date().isoformat()
     live_statuses = {"live", "in progress", "ongoing"}
@@ -4697,6 +4745,7 @@ def _admin_center_html(request: Request) -> HTMLResponse:
         <title>Admin center · CricketClubApp</title>
         <link rel="stylesheet" href="/assets/styles.css?v=20260509e" />
         <link rel="stylesheet" href="/assets/app_polish.css?v=20260924b" />
+        <link rel="stylesheet" href="/assets/sports-system.css?v=20260926a" />
       </head>
       <body>
         <div class="page-shell">
