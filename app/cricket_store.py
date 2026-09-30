@@ -1922,7 +1922,17 @@ def archive_review_priority(item: dict[str, Any]) -> tuple[int, int, str, str]:
     return (priority, 1 if processed_at else 0, processed_at or created_at, normalized.get("id", ""))
 
 
+class _CanonicalArchiveList(list):
+    """A list that is already the output of canonical_archive_uploads (so it isn't redone).
+
+    Stats code calls canonical_archive_uploads() on the same list hundreds of times while
+    saving; skipping the repeat work makes each save (e.g. every live-scored ball) much faster.
+    """
+
+
 def canonical_archive_uploads(archive_uploads: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    if isinstance(archive_uploads, _CanonicalArchiveList):
+        return archive_uploads
     grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for item in archive_uploads:
         normalized = normalize_archive(item)
@@ -1940,7 +1950,7 @@ def canonical_archive_uploads(archive_uploads: list[dict[str, Any]]) -> list[dic
         chosen["family_hidden_count"] = len(siblings)
         chosen["family_hidden_files"] = siblings
         canonical.append(chosen)
-    return sorted(canonical, key=lambda item: (item.get("created_at", ""), item.get("id", "")))
+    return _CanonicalArchiveList(sorted(canonical, key=lambda item: (item.get("created_at", ""), item.get("id", ""))))
 
 
 def normalize_duplicate(item: dict[str, Any]) -> dict[str, Any]:
