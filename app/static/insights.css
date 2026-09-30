@@ -258,3 +258,27 @@ body .ins-chip:hover {
 .ins-mini li strong {
   color: #0f172a;
 }
+
+/* Plans: locked insight cards link to /pricing (README.md -> "Subscriptions and plans") */
+.ins-locked-row {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+a.ins-card.ins-locked {
+  display: grid;
+  gap: 4px;
+  text-decoration: none;
+  color: #0f172a;
+  background: linear-gradient(135deg, #faf5ff, #fff1f2);
+  border: 1px dashed #c4b5fd;
+}
+
+a.ins-card.ins-locked .ins-kicker {
+  color: #7c3aed;
+}
+
+.ins-intel {
+  border-color: #e9d5ff;
+}

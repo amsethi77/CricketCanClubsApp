@@ -11,7 +11,7 @@ from copy import deepcopy
 from urllib import request
 from urllib.parse import urlencode
 import uuid
-from datetime import datetime, date, timezone
+from datetime import datetime, date, timedelta, timezone
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -82,6 +82,9 @@ if not logger.handlers:
 try:
     from cricket_brain import answer_question, get_llm_status
     import cricket_insights as cricket_insights
+    import muse as muse
+    import subscriptions as subscriptions
+    import ai_scorer as ai_scorer
     from llm_service import clear_query_cache, infer as llm_infer, list_llm_documents, list_prompt_manifest, reindex_llm_corpus
     from cricket_store import (
         BASE_DIR,
@@ -130,6 +133,9 @@ try:
 except ModuleNotFoundError:
     from app.cricket_brain import answer_question, get_llm_status
     from app import cricket_insights
+    from app import muse
+    from app import subscriptions
+    from app import ai_scorer
     from app.llm_service import clear_query_cache, infer as llm_infer, list_llm_documents, list_prompt_manifest, reindex_llm_corpus
     from app.cricket_store import (
         BASE_DIR,
@@ -1655,6 +1661,7 @@ def ensure_auth_schema() -> None:
                 _sync_role_permissions(connection)
                 _migrate_multi_role_assignments(connection)
                 _migrate_auth_sessions(connection)
+                subscriptions.ensure_schema(connection)
         except sqlite3.OperationalError as exc:
             if "locked" not in str(exc).lower():
                 raise
@@ -2002,7 +2009,13 @@ def _auth_user_payload(user_row: sqlite3.Row, current_club_id: str = "") -> dict
         "primary_club_id": user_row["primary_club_id"] or "",
         "current_club_id": current_club_id or user_row["primary_club_id"] or "",
         "current_club_name": current_club_name,
+        **_plan_payload_fields(user_row, current_club_id),
     }
+
+
+def _plan_payload_fields(user_row: sqlite3.Row, current_club_id: str = "") -> dict[str, Any]:
+    plan = _plan_for(user_row, current_club_id)
+    return {"plan": plan.get("plan", "free"), "plan_name": plan.get("plan_name", "Free"), "plan_features": plan.get("features", [])}
 
 def _visible_club_choices_for_user(
     store: dict[str, Any],
@@ -4949,9 +4962,13 @@ def clubs_select(request: Request, club_id: str = Form(...), search: str = Form(
             """,
             status_code=401,
         )
-    _auth_user_from_token(token)
+    clubs_user_row, _ = _auth_user_from_token(token)
     store = load_store()
     selected_club = _selected_club(store, club_id)
+    try:
+        _require_multi_club(clubs_user_row, str(selected_club.get("id") or ""))
+    except HTTPException:
+        return RedirectResponse("/pricing?feature=multi_club", status_code=303)
     with _auth_connection() as connection:
         connection.execute(
             "UPDATE app_auth_sessions SET current_club_id = ? WHERE token = ?",
@@ -5778,6 +5795,7 @@ def select_club(request: SelectClubRequest, x_auth_token: str | None = Header(de
     user_row, _ = _auth_user_from_token(x_auth_token)
     store = load_store()
     selected_club = _selected_club(store, request.club_id)
+    _require_multi_club(user_row, str(selected_club.get("id") or ""))
     logger.debug(
         "Selected club saved. user_id=%s club_id=%s club_name=%s",
         user_row["id"],
@@ -6207,6 +6225,7 @@ def save_player_availability(request: PlayerAvailabilitySelfRequest, x_auth_toke
     club = _selected_club(store, request.club_id or current_club_id)
     if str(match.get("club_id") or "").strip() and str(match.get("club_id") or "").strip() != str(club.get("id") or "").strip():
         raise HTTPException(status_code=403, detail="This match is not in your selected club.")
+    _require_feature(user_row, current_club_id, "availability", club_id=str(club.get("id") or ""))
     match["availability_statuses"][member["name"]] = request.status
     if request.note.strip():
         match["availability_notes"][member["name"]] = request.note.strip()
@@ -6238,6 +6257,7 @@ def save_player_season_availability(
     user_row, current_club_id = _auth_user_from_token(x_auth_token)
     store = load_store()
     club = _selected_club(store, request.club_id or current_club_id)
+    _require_feature(user_row, current_club_id, "availability", club_id=str(club.get("id") or ""))
     with _auth_connection() as connection:
         connection.execute(
             """
@@ -7072,6 +7092,10 @@ def update_availability(match_id: str, request: AvailabilityUpdateRequest, x_aut
         player_name = requested_player_name
     elif requested_player_name and requested_player_name != player_name:
         raise HTTPException(status_code=403, detail="Only captains, club admins, or superadmins can update another player's availability.")
+    if player_name != member.get("name", ""):
+        _require_feature(user_row, current_club_id, "match_roster")
+    else:
+        _require_feature(user_row, current_club_id, "availability", club_id=str(match.get("club_id") or current_club_id))
     match["availability_statuses"][player_name] = request.status
     if request.note.strip():
         match["availability_notes"][player_name] = request.note.strip()
@@ -7085,6 +7109,7 @@ def update_availability(match_id: str, request: AvailabilityUpdateRequest, x_aut
 @app.post("/api/matches/{match_id}/lineup")
 def update_playing_xi(match_id: str, request: PlayingXiUpdateRequest, x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
     user_row, current_club_id = _require_permission(x_auth_token, "manage_fixtures")
+    _require_feature(user_row, current_club_id, "playing_xi")
     store = load_store()
     try:
         match = get_match_or_404(store, match_id)
@@ -7266,6 +7291,8 @@ def add_scorebook_ball(match_id: str, request: ScorebookBallRequest, x_auth_toke
             "commentary": request.commentary,
         }
     )
+    before_summary = summarize_innings_scorebook(innings)
+    before_summary["status"] = str(innings.get("status") or "")
     innings["balls"] = [item for item in innings.get("balls", []) if item.get("id") != ball["id"]]
     innings["balls"].append(ball)
     innings["balls"].sort(key=lambda item: (int(item.get("over_number", 1) or 1), int(item.get("ball_number", 1) or 1), str(item.get("created_at", ""))))
@@ -7293,6 +7320,15 @@ def add_scorebook_ball(match_id: str, request: ScorebookBallRequest, x_auth_toke
     sync_fixture_scorecard_from_scorebook(match)
     _touch_fixture_audit(match, user_row)
     save_store(store)
+    # Live score alerts (bell icon): match start, wickets, 50s/100s, end of innings
+    try:
+        alert_events = muse.live_score_events(match, innings, before_summary, summary, ball)
+        if alert_events and not (_has_feature(user_row, "", "score_updates") or _club_is_paid(str(match.get("club_id") or ""))):
+            alert_events = []  # Live score alerts are a Super feature
+        for kind, title, body in alert_events:
+            _notify(str(match.get("club_id") or ""), kind, title, body, f"/live/{match.get('id')}", str(match.get("id") or ""), "Live scoring")
+    except Exception:
+        logger.exception("Live score alert failed for match %s", match_id)
     return current_dashboard(load_store())
 
 
@@ -7332,6 +7368,907 @@ def delete_scorebook_ball(match_id: str, x_auth_token: str | None = Header(defau
     return current_dashboard(load_store())
 
 
+# ---------------------------------------------------------------------------
+# AI Muse, notifications and quick scoring (see README.md -> "AI Muse and notifications")
+# ---------------------------------------------------------------------------
+class MuseRequest(BaseModel):
+    message: str
+    focus_club_id: str | None = None
+    history: list[dict[str, Any]] = Field(default_factory=list)
+    session_id: str | None = None
+
+
+class MuseConfirmScoreRequest(BaseModel):
+    match_id: str
+    draft: dict[str, Any]
+
+
+class NotificationReadRequest(BaseModel):
+    ids: list[str] = Field(default_factory=list)
+    all: bool = False
+
+
+class QuickStartRequest(BaseModel):
+    opponent: str
+    overs: str = "20"
+    venue: str = ""
+    match_type: str = "Friendly"
+
+
+def _user_club_ids(store: dict[str, Any], user_row: sqlite3.Row, current_club_id: str) -> list[str]:
+    return [str(club.get("id") or "") for club in _visible_club_choices_for_user(store, user_row, current_club_id) if club.get("id")]
+
+
+def _club_fixtures(store: dict[str, Any], club_id: str) -> list[dict[str, Any]]:
+    return [fixture for fixture in store.get("fixtures", []) or [] if str(fixture.get("club_id") or "") == club_id]
+
+
+def _club_member_names(store: dict[str, Any], club: dict[str, Any]) -> list[str]:
+    club_id = str(club.get("id") or "")
+    names = []
+    for member in store.get("members", []) or []:
+        ids = {str(item.get("club_id") or "") for item in member.get("club_memberships") or [] if isinstance(item, dict)}
+        ids.add(str(member.get("primary_club_id") or ""))
+        if club_id in ids and member.get("name"):
+            names.append(str(member["name"]))
+    return sorted(set(names), key=str.lower)
+
+
+def _notify(club_id: str, kind: str, title: str, body: str = "", link: str = "", match_id: str = "", created_by: str = "") -> None:
+    try:
+        with _auth_connection() as connection:
+            muse.create_notification(connection, club_id=club_id, kind=kind, title=title, body=body, link=link, match_id=match_id, created_by=created_by)
+    except Exception:
+        logger.exception("Could not save notification kind=%s club=%s", kind, club_id)
+
+
+@app.get("/api/notifications")
+def notifications_list(x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
+    user_row, current_club_id = _auth_user_from_token(x_auth_token, touch=False)
+    store = load_store()
+    club_ids = _user_club_ids(store, user_row, current_club_id)
+    with _auth_connection() as connection:
+        items = muse.list_notifications(connection, int(user_row["id"]), club_ids)
+    return {"notifications": items, "unread": sum(1 for item in items if not item["read"]), "generated_at": now_iso()}
+
+
+@app.post("/api/notifications/read")
+def notifications_read(request: NotificationReadRequest, x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
+    user_row, current_club_id = _auth_user_from_token(x_auth_token, touch=False)
+    ids = list(request.ids or [])
+    if request.all:
+        store = load_store()
+        with _auth_connection() as connection:
+            ids = [item["id"] for item in muse.list_notifications(connection, int(user_row["id"]), _user_club_ids(store, user_row, current_club_id), limit=200)]
+    with _auth_connection() as connection:
+        marked = muse.mark_notifications_read(connection, int(user_row["id"]), ids)
+    return {"marked": marked}
+
+
+@app.post("/api/muse")
+def muse_chat(request: MuseRequest, x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
+    """AI Muse: actions (score entry, availability requests) first, otherwise the normal assistant."""
+    user_row, current_club_id = _auth_user_from_token(x_auth_token)
+    permissions = _user_permissions(user_row, current_club_id)
+    store = load_store()
+    club = _selected_club(store, request.focus_club_id or current_club_id)
+    club_id = str(club.get("id") or "")
+    club_name = str(club.get("name") or "your club")
+    actor = str(user_row["display_name"] or user_row["mobile"] or "AI Muse")
+    message = str(request.message or "").strip()
+    intent = muse.detect_intent(message)
+    fixtures = _club_fixtures(store, club_id)
+
+    def reply(text: str, **extra: Any) -> dict[str, Any]:
+        return {"reply": text, "intent": intent, "source_label": "AI Muse", **extra}
+
+    if not _has_feature(user_row, current_club_id, "ai_assistant"):
+        return _muse_free_reply(message, intent)
+
+    if intent == "availability_request":
+        if not ({"manage_fixtures", "manage_players"} & permissions):
+            return reply("Only captains and club admins can send availability requests. You can update your own availability on the Availability page.", links=[{"label": "My availability", "href": "/player-availability"}])
+        fixture = muse.pick_fixture(fixtures, message, prefer="upcoming")
+        if not fixture or str(fixture.get("date") or "") < _current_local_date().isoformat():
+            return reply(f"There's no upcoming fixture for {club_name} to ask about. Add one in Fixtures first.", links=[{"label": "Fixtures", "href": "/dashboard/widgets/schedule"}])
+        label = muse.fixture_label(fixture)
+        _notify(
+            club_id,
+            "availability",
+            f"Are you available? {label}",
+            f"{actor} is picking the team for {label}. Tap to mark Available, Maybe or Not available.",
+            f"/player-availability?fixture_id={fixture.get('id')}",
+            str(fixture.get("id") or ""),
+            actor,
+        )
+        members = _club_member_names(store, club)
+        return reply(f"Done. I've sent an availability request for {label} to all {len(members)} players of {club_name}. They'll see it under the bell icon. Ask me \"who is available?\" later to see replies.")
+
+    if intent == "availability_summary":
+        fixture = muse.pick_fixture(fixtures, message, prefer="upcoming")
+        if not fixture:
+            return reply(f"There are no fixtures on record for {club_name}.")
+        groups = muse.availability_summary(fixture, _club_member_names(store, club))
+        past = str(fixture.get("date") or "") < _current_local_date().isoformat()
+        lines = [f"Availability for {muse.fixture_label(fixture)}" + (" (last fixture, there is no upcoming one yet):" if past else ":")]
+        for key, label in (("available", "Available"), ("maybe", "Maybe"), ("unavailable", "Not available"), ("no response", "No reply yet")):
+            names = groups[key]
+            lines.append(f"• {label} ({len(names)}): {', '.join(names[:14]) + (' …' if len(names) > 14 else '') if names else '–'}")
+        return reply("\n".join(lines), links=[{"label": "Pick the playing XI", "href": f"/dashboard/widgets/schedule?match_id={fixture.get('id')}#selectedPlayingXiTitle"}])
+
+    if intent == "score_entry":
+        if "manage_scorecards" not in permissions:
+            return reply("Only scorers and club admins can save scores. Send the score to your captain, or upload a photo of the scorecard for review.")
+
+        def resolve_player(name: str) -> str | None:
+            found = cricket_insights.find_member(store, name)
+            return str(found.get("name")) if found else None
+
+        parsed = muse.parse_score_message(message, [club_name, str(club.get("short_name") or "")], resolve_player)
+        if not parsed["club_side"]:
+            return reply("I couldn't find a team score in that. Try: \"Heartlake 145/6 in 20 overs, Imran XI 120/9. Heartlake won by 25 runs. Amit S 45 off 30, Nick 3 wickets\".")
+        opponent_name = (parsed["opponent_side"] or {}).get("name", "")
+        fixture = muse.pick_fixture(fixtures, f"{message} {opponent_name}", prefer="past")
+        if not fixture:
+            return reply(f"I couldn't match this to a fixture for {club_name}. Add the fixture first, then send the score again.")
+        ours, theirs = parsed["club_side"], parsed["opponent_side"] or {}
+        draft = {
+            "scorecard": {
+                "heartlake_runs": ours.get("runs", ""),
+                "heartlake_wickets": ours.get("wickets", ""),
+                "heartlake_overs": ours.get("overs", ""),
+                "opponent_runs": theirs.get("runs", ""),
+                "opponent_wickets": theirs.get("wickets", ""),
+                "opponent_overs": theirs.get("overs", ""),
+                "result": parsed["result"] or "TBD",
+            },
+            "performances": parsed["performances"],
+        }
+        lines = [
+            f"Here's what I understood for {muse.fixture_label(fixture)}:",
+            f"• {club_name}: {ours.get('runs')}/{ours.get('wickets')}" + (f" ({ours.get('overs')} ov)" if ours.get("overs") else ""),
+            f"• {fixture.get('opponent') or opponent_name or 'Opponent'}: " + (f"{theirs.get('runs')}/{theirs.get('wickets')}" + (f" ({theirs.get('overs')} ov)" if theirs.get("overs") else "") if theirs else "not given"),
+            f"• Result: {parsed['result'] or 'not given'}",
+        ]
+        if parsed["performances"]:
+            lines.append("• Players: " + ", ".join(
+                f"{p['player_name']} " + " ".join(part for part in [
+                    f"{p['runs']}{'*' if p.get('not_out') else ''}" + (f" ({p['balls']})" if p.get("balls") else "") if p.get("runs") else "",
+                    f"{p['wickets']} wkts" if p.get("wickets") else "",
+                    f"{p['catches']} ct" if p.get("catches") else "",
+                ] if part)
+                for p in parsed["performances"]
+            ))
+        lines.append("Tap Confirm to save it, or send a corrected message.")
+        return reply("\n".join(lines), draft={"match_id": fixture.get("id"), **draft}, confirm_label="Confirm and save score")
+
+    if intent == "upload_help":
+        return reply("Tap the 📎 button below and choose the scorecard photo. I'll upload it to Archives, where it's read and then approved by an admin.", action="open_upload")
+    if intent == "scoring_help":
+        return reply("For ball-by-ball scoring, open Quick Score. It has big buttons, voice scoring (\"four\", \"wide\", \"bowled\") and it rotates the strike for you. Everyone following the club gets live alerts for wickets and fifties.", links=[{"label": "Open Quick Score", "href": "/score"}])
+    if intent == "alerts_help":
+        return reply("Alerts appear under the 🔔 bell at the top: availability requests, match start, wickets, fifties and results. Tap 'Turn on browser alerts' in the bell menu to get pop-up notifications too.")
+
+    chat_store = _chat_store_for(store, request.focus_club_id or club_id)
+    answer = answer_question(message, chat_store, history=request.history, session_id=request.session_id)
+    return {"reply": str(answer.get("answer") or ""), "intent": "chat", "source_label": answer.get("source_label") or "AI Muse"}
+
+
+@app.post("/api/muse/confirm-score")
+def muse_confirm_score(request: MuseConfirmScoreRequest, x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
+    muse_user_row, muse_club_id = _auth_user_from_token(x_auth_token, touch=False)
+    _require_feature(muse_user_row, muse_club_id, "ai_assistant")
+    user_row, _ = _require_permission(x_auth_token, "manage_scorecards")
+    store = load_store()
+    try:
+        match = get_match_or_404(store, request.match_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    card = dict(request.draft.get("scorecard") or {})
+    for key in ("heartlake_runs", "heartlake_wickets", "heartlake_overs", "opponent_runs", "opponent_wickets", "opponent_overs", "result"):
+        if key in card and str(card[key] or "").strip():
+            match.setdefault("scorecard", {})[key] = str(card[key]).strip()
+    match["heartlake_score"] = str(card.get("heartlake_runs") or match.get("heartlake_score") or "")
+    match["opponent_score"] = str(card.get("opponent_runs") or match.get("opponent_score") or "")
+    if str(card.get("result") or "").strip() and str(card.get("result")).strip().upper() != "TBD":
+        match["result"] = str(card["result"]).strip()
+        match["status"] = "Completed"
+    added = 0
+    for perf in request.draft.get("performances") or []:
+        name = resolve_member_name(store, str(perf.get("player_name") or ""))
+        if not name:
+            continue
+        match.setdefault("performances", []).append(
+            {
+                "id": str(uuid.uuid4())[:8],
+                "player_name": name,
+                "runs": int(perf.get("runs") or 0),
+                "balls": int(perf.get("balls") or 0),
+                "wickets": int(perf.get("wickets") or 0),
+                "catches": int(perf.get("catches") or 0),
+                "fours": 0,
+                "sixes": 0,
+                "notes": "not out" if perf.get("not_out") else "",
+                "source": "ai-muse",
+                "archive_upload_id": "",
+            }
+        )
+        added += 1
+    _touch_fixture_audit(match, user_row)
+    save_store(store)
+    result_text = str(match.get("result") or card.get("result") or "").strip()
+    _notify(
+        str(match.get("club_id") or ""),
+        "result",
+        f"Result: {match.get('club_name') or 'Club'} vs {match.get('opponent') or 'Opponent'}",
+        result_text if result_text and result_text.upper() != "TBD" else "Score updated.",
+        f"/live/{match.get('id')}",
+        str(match.get("id") or ""),
+        str(user_row["display_name"] or ""),
+    )
+    return {"reply": f"Saved. The score for {match.get('date_label') or match.get('date')} vs {match.get('opponent')} is updated" + (f" with {added} player performances." if added else ".") + " Everyone in the club got a result alert.", "match_id": match.get("id")}
+
+
+def _chat_store_for(store: dict[str, Any], focus_club_id: str) -> dict[str, Any]:
+    focus_club = next((club for club in store.get("clubs", []) if club.get("id") == focus_club_id), store.get("club", {}))
+    chat_store = dict(scoped_store_for_club(store, focus_club) if focus_club_id else dict(store))
+    chat_store["focus_club_id"] = str(focus_club_id or "").strip()
+    chat_store["focus_club"] = dict(focus_club or {})
+    for key, source in (
+        ("all_clubs", "clubs"), ("all_members", "members"), ("all_fixtures", "fixtures"), ("all_archive_uploads", "archive_uploads"),
+        ("all_teams", "teams"), ("all_member_summary_stats", "member_summary_stats"), ("all_member_year_stats", "member_year_stats"),
+        ("all_member_club_stats", "member_club_stats"), ("all_club_summary_stats", "club_summary_stats"), ("all_club_year_stats", "club_year_stats"),
+    ):
+        chat_store[key] = list(store.get(source, []) or [])
+    return chat_store
+
+
+@app.get("/api/quick-score/fixtures")
+def quick_score_fixtures(x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
+    user_row, current_club_id = _auth_user_from_token(x_auth_token)
+    permissions = _user_permissions(user_row, current_club_id)
+    store = load_store()
+    club = _selected_club(store, current_club_id)
+    today = _current_local_date().isoformat()
+    items = []
+    for fixture in _club_fixtures(store, str(club.get("id") or "")):
+        open_now = _scorebook_is_open(fixture)
+        if not open_now and str(fixture.get("date") or "") < today:
+            continue
+        items.append(
+            {
+                "id": fixture.get("id"),
+                "date": fixture.get("date"),
+                "date_label": fixture.get("date_label") or fixture.get("date"),
+                "opponent": fixture.get("opponent"),
+                "status": fixture.get("status"),
+                "overs": (fixture.get("details") or {}).get("overs") or "20",
+                "open": open_now,
+            }
+        )
+    items.sort(key=lambda item: (not item["open"], str(item["date"] or "")))
+    return {
+        "club": {"id": club.get("id"), "name": club.get("name")},
+        "fixtures": items[:12],
+        "can_score": "manage_scorecards" in permissions,
+        "can_create": "manage_fixtures" in permissions,
+        "today": today,
+    }
+
+
+@app.post("/api/quick-score/start")
+def quick_score_start(request: QuickStartRequest, x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
+    """Create a fixture for today so scoring can start straight away."""
+    user_row, current_club_id = _require_permission(x_auth_token, "manage_fixtures")
+    today = _current_local_date()
+    opponent = request.opponent.strip()
+    if not opponent:
+        raise HTTPException(status_code=400, detail="Enter the opponent's name.")
+    store = load_store()
+    club = _selected_club(store, current_club_id)
+    existing = next(
+        (f for f in _club_fixtures(store, str(club.get("id") or "")) if str(f.get("date") or "") == today.isoformat() and str(f.get("opponent") or "").strip().lower() == opponent.lower()),
+        None,
+    )
+    if not existing:
+        create_season_fixture(
+            SeasonFixtureRequest(
+                club_id=str(club.get("id") or ""),
+                season_year=today.year,
+                date=today.isoformat(),
+                date_label=today.strftime("%B %-d") if os.name != "nt" else today.strftime("%B %#d"),
+                opponent=opponent,
+                venue=request.venue,
+                match_type=request.match_type or "Friendly",
+                scheduled_time=datetime.now().strftime("%I:%M %p").lstrip("0"),
+                overs=request.overs or "20",
+            ),
+            x_auth_token,
+        )
+        store = load_store()
+        existing = next(
+            (f for f in _club_fixtures(store, str(club.get("id") or "")) if str(f.get("date") or "") == today.isoformat() and str(f.get("opponent") or "").strip().lower() == opponent.lower()),
+            None,
+        )
+    if not existing:
+        raise HTTPException(status_code=500, detail="Could not create today's match.")
+    return {"match_id": existing.get("id")}
+
+
+@app.get("/api/quick-score/{match_id}")
+def quick_score_state(match_id: str, x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
+    user_row, current_club_id = _auth_user_from_token(x_auth_token)
+    permissions = _user_permissions(user_row, current_club_id)
+    store = load_store()
+    try:
+        fixture = get_match_or_404(store, match_id)
+        payload = _public_match_payload(store, match_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    club = _selected_club(store, str(fixture.get("club_id") or current_club_id))
+    return {
+        "match": payload,
+        "open": _scorebook_is_open(fixture),
+        "can_score": "manage_scorecards" in permissions,
+        "roster": _club_member_names(store, club),
+        "club": {"id": club.get("id"), "name": club.get("name")},
+    }
+
+
+@app.get("/score")
+def quick_score_page(request: Request) -> Response:
+    session = _require_page_session(request)
+    if isinstance(session, RedirectResponse):
+        return session
+    return _page_response("quick_score.html")
+
+
+# ---------------------------------------------------------------------------
+# Public (signed-out) AI Muse: read-only answers from public data only.
+# Actions (saving scores, uploads, availability, alerts, team selection) ask the visitor to sign in.
+# See README.md -> "AI Muse and notifications" -> "Public AI Muse".
+# ---------------------------------------------------------------------------
+class PublicMuseRequest(BaseModel):
+    message: str
+
+
+_PUBLIC_SIGNIN_LINKS = [{"label": "Sign in", "href": "/signin"}, {"label": "Register", "href": "/register"}]
+_MONTHS = {m: i for i, m in enumerate(["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"], start=1)}
+
+
+def _public_date_from_text(text: str) -> str:
+    lowered = text.lower()
+    iso = re.search(r"\b(20\d{2})-(\d{1,2})-(\d{1,2})\b", lowered)
+    if iso:
+        return f"{iso.group(1)}-{int(iso.group(2)):02d}-{int(iso.group(3)):02d}"
+    day_month = re.search(r"\b(\d{1,2})(?:st|nd|rd|th)?\s+([a-z]{3})[a-z]*\.?,?\s+(20\d{2})\b", lowered)
+    month_day = re.search(r"\b([a-z]{3})[a-z]*\.?\s+(\d{1,2})(?:st|nd|rd|th)?,?\s+(20\d{2})\b", lowered)
+    if day_month and day_month.group(2) in _MONTHS:
+        return f"{day_month.group(3)}-{_MONTHS[day_month.group(2)]:02d}-{int(day_month.group(1)):02d}"
+    if month_day and month_day.group(1) in _MONTHS:
+        return f"{month_day.group(3)}-{_MONTHS[month_day.group(1)]:02d}-{int(month_day.group(2)):02d}"
+    return ""
+
+
+def _public_card_line(card: dict[str, Any]) -> str:
+    card = _scorecard_list_item(card) if card.get("innings") is not None else card
+    teams = " vs ".join(
+        f"{team['name']} {team['score']}" + (f" ({team['overs']} ov)" if team.get("overs") else "") if team.get("score") else team["name"]
+        for team in card.get("teams", [])
+    )
+    return f"{card['date_label']}: {teams}" + (f". {card['result']}" if card.get("result") else "")
+
+
+@app.post("/api/public/muse")
+def public_muse(request: PublicMuseRequest) -> dict[str, Any]:
+    message = " ".join(str(request.message or "").split())[:500]
+    lowered = f" {message.lower()} "
+    store = load_store()
+
+    def reply(text: str, links: list[dict[str, str]] | None = None, intent: str = "public") -> dict[str, Any]:
+        return {"reply": text, "links": links or [], "intent": intent, "source_label": "AI Muse"}
+
+    if not message:
+        return reply("Ask me about live scores, results, scorecards, players or clubs.")
+
+    # 2. How to join
+    if re.search(r"\b(register|sign ?up|join|create (an )?account|add (my|our) club|new club|how do i start|log ?in|sign ?in)\b", lowered):
+        return reply(
+            "To join Cricket Canada Clubs:\n• Tap Register, enter your name and mobile or email, and pick your club.\n• If your club isn't listed, add it on the same form.\n• Club admins can then add fixtures, score matches and invite players.",
+            _PUBLIC_SIGNIN_LINKS,
+            "join",
+        )
+
+    # 3. Live scores
+    if re.search(r"\b(live|right now|current score|score now|what'?s the score|who is playing|playing now)\b", lowered) and not re.search(r"\b(scoring|score (a|the|this|our) match|start)\b", lowered):
+        payload = _public_live_page_payload(store)
+        live = payload.get("live_matches") or []
+        if not live:
+            recent = (payload.get("recent_results") or [])[:3]
+            text = "No matches are live right now."
+            if recent:
+                text += "\nLatest results:\n" + "\n".join(
+                    f"• {item.get('club_name')} vs {item.get('opponent')}: {item.get('heartlake_score') or '–'} / {item.get('opponent_score') or '–'}. {str(item.get('result') or '').replace('Result: ', '')}"
+                    for item in recent
+                )
+            return reply(text, [{"label": "Fixtures", "href": "/fixtures"}], "live")
+        lines = ["Live now:"]
+        links = []
+        for item in live[:5]:
+            lines.append(f"• {item.get('club_name')} {item.get('heartlake_score') or '0'} vs {item.get('opponent')} {item.get('opponent_score') or ''}".rstrip())
+            links.append({"label": f"Follow {item.get('club_name')} vs {item.get('opponent')}", "href": f"/live/{item.get('id')}"})
+        return reply("\n".join(lines), links[:3], "live")
+
+    # 1. Things that need an account
+    action = muse.detect_intent(message)
+    if action in {"score_entry", "availability_request", "availability_summary", "upload_help", "alerts_help", "scoring_help"} or re.search(
+        r"\b(playing xi|playing 11|best xi|best team|team selection|who should play|lineup|line up|my (stats|profile|availability|club))\b", lowered
+    ):
+        what = {
+            "score_entry": "save a match score",
+            "availability_request": "send availability requests",
+            "availability_summary": "see who is available",
+            "upload_help": "upload a scorecard photo",
+            "alerts_help": "get match alerts",
+            "scoring_help": "score a match live",
+        }.get(action, "use team selection and personal stats")
+        return reply(
+            f"You need to sign in to {what}. Club members can do this with AI Muse after signing in. It's free to register your club.",
+            _PUBLIC_SIGNIN_LINKS,
+            "signin_required",
+        )
+
+    cards = _public_scorecards(store)
+
+    # 4. Scorecards by date
+    wanted_date = _public_date_from_text(message)
+    if wanted_date or re.search(r"\bscorecards?\b", lowered):
+        if wanted_date:
+            found = [card for card in cards if card["date"] == wanted_date]
+            if found:
+                return reply(
+                    "\n".join("• " + _public_card_line(card) for card in found),
+                    [{"label": f"Open scorecard ({card['title']})", "href": f"/scorecards/{card['id']}"} for card in found[:3]],
+                    "scorecard",
+                )
+            return reply(f"There's no approved scorecard on {wanted_date}.", [{"label": "Browse scorecards by date", "href": f"/scorecards?date={wanted_date}"}], "scorecard")
+        latest = cards[:4]
+        return reply(
+            "Latest scorecards:\n" + "\n".join("• " + _public_card_line(card) for card in latest) if latest else "No approved scorecards yet.",
+            [{"label": "All scorecards", "href": "/scorecards"}],
+            "scorecard",
+        )
+
+    # 5. Results ("who won", "result", "Coca Cola XI vs TP Community")
+    clubs_named = cricket_insights._matched_clubs(message, store)
+    if re.search(r"\b(who won|result|results|won|lost|beat|last match|latest match|recent)\b", lowered) and not re.search(r"\b(will|predict|chance)\b", lowered):
+        pool = cards
+        if clubs_named:
+            names = {normalize_name(club.get("name") or "") for club in clubs_named}
+            pool = [card for card in cards if any(normalize_name(team) in names for team in card.get("teams", []))]
+        fixtures = _public_fixtures_page_payload(store).get("fixtures") or []
+        completed = [f for f in fixtures if str(f.get("status_key") or "") == "completed"]
+        if clubs_named:
+            ids = {str(club.get("id") or "") for club in clubs_named}
+            names = {normalize_name(club.get("name") or "") for club in clubs_named}
+            completed = [f for f in completed if str(f.get("club_id") or "") in ids or normalize_name(f.get("opponent") or "") in names]
+        completed.sort(key=lambda f: str(f.get("date") or ""), reverse=True)
+        lines = [
+            f"• {f.get('date')}: {f.get('club_name')} {f.get('heartlake_score') or '–'} vs {f.get('opponent')} {f.get('opponent_score') or '–'}. {str(f.get('result') or '').replace('Result: ', '')}"
+            for f in completed[:3]
+        ] + ["• " + _public_card_line(card) for card in pool[:3]]
+        if not lines:
+            return reply("I couldn't find any recorded results for that yet.", [{"label": "All scorecards", "href": "/scorecards"}], "results")
+        return reply("Recent results:\n" + "\n".join(lines[:5]), [{"label": "All scorecards", "href": "/scorecards"}], "results")
+
+    # 6. Clubs on the app
+    if re.search(r"\b(which|what|list|all|how many)\b.*\bclubs?\b", lowered) or lowered.strip() in {"clubs", "teams"}:
+        clubs = [str(club.get("name") or "") for club in store.get("clubs", []) or [] if club.get("name")]
+        return reply(
+            f"{len(clubs)} clubs are on Cricket Canada Clubs: " + ", ".join(sorted(clubs, key=str.lower)) + ".",
+            [{"label": "Browse clubs", "href": "/clubs"}, {"label": "Register your club", "href": "/register"}],
+            "clubs",
+        )
+
+    # 7. Stats, form, predictions, rankings (public numbers only; no contact details or availability)
+    try:
+        insight = cricket_insights.answer(message, store)
+    except Exception:
+        logger.exception("Public Muse insights failed")
+        insight = None
+    if insight and not str(insight.get("mode") or "").endswith("best-xi"):
+        text = str(insight.get("answer") or "")
+        # Club tips mention availability and pending reviews; keep those for members.
+        text = "\n".join(
+            line for line in text.splitlines() if "available" not in line.lower() and "pending" not in line.lower() and "waiting for review" not in line.lower()
+        )
+        return reply(text.strip(), [{"label": "Rankings", "href": "/rankings"}], "stats")
+
+    return reply(
+        "I can help with live scores, results, scorecards by date, club rankings and player stats. Try:\n• What's the live score?\n• Who won the last Coca Cola XI match?\n• Scorecard for 19 Oct 2024\n• Top run scorers\n• How is Amit S doing?\nSign in for scoring, availability and alerts.",
+        _PUBLIC_SIGNIN_LINKS,
+        "help",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Subscriptions and plans (Free / Super / Premium) - see app/subscriptions.py
+# Documented in README.md -> "Subscriptions and plans".
+# ---------------------------------------------------------------------------
+class CheckoutRequest(BaseModel):
+    plan: str
+
+
+class AdminSetPlanRequest(BaseModel):
+    user: str
+    plan: str
+    days: int = 0
+    note: str = ""
+
+
+class AiScorerRequest(BaseModel):
+    text: str
+    innings_number: int = 1
+
+
+def _plan_for(user_row: sqlite3.Row, current_club_id: str = "") -> dict[str, Any]:
+    try:
+        with _auth_connection() as connection:
+            return subscriptions.effective_plan(connection, user_row, _user_role_names(user_row, current_club_id))
+    except Exception:
+        logger.exception("Plan lookup failed for user %s", user_row["id"])
+        # Never lock people out because of a billing error.
+        return {"plan": "premium", "plan_name": "Premium", "features": subscriptions.plan_features("premium"), "upload_limit": None, "uploads_used": 0, "uploads_left": None, "source": "fallback"}
+
+
+def _has_feature(user_row: sqlite3.Row, current_club_id: str, feature: str) -> bool:
+    return feature in _plan_for(user_row, current_club_id).get("features", [])
+
+
+def _club_is_paid(club_id: str) -> bool:
+    """A club is paid when one of its captains / club admins is on Super or Premium."""
+    if not club_id:
+        return False
+    try:
+        with _auth_connection() as connection:
+            return subscriptions.paid_manager_count(connection, club_id) > 0
+    except Exception:
+        logger.exception("Paid-club lookup failed for %s", club_id)
+        return True
+
+
+def _upgrade_error(feature: str) -> HTTPException:
+    return HTTPException(status_code=402, detail=subscriptions.upgrade_message(feature))
+
+
+def _require_feature(user_row: sqlite3.Row, current_club_id: str, feature: str, *, club_id: str = "") -> None:
+    """Raise 402 unless the user (or, when club_id is given, their club) has the feature."""
+    if _has_feature(user_row, current_club_id, feature):
+        return
+    if club_id and _club_is_paid(club_id):
+        return
+    raise _upgrade_error(feature)
+
+
+def _require_multi_club(user_row: sqlite3.Row, target_club_id: str) -> None:
+    """Free users stay on their home club; switching to another club needs Super."""
+    primary = str(user_row["primary_club_id"] or "").strip()
+    if not primary or not target_club_id or target_club_id == primary:
+        return
+    if _has_feature(user_row, target_club_id, "multi_club"):
+        return
+    raise _upgrade_error("multi_club")
+
+
+_MUSE_PAID_ACTIONS = {"score_entry", "availability_request", "availability_summary", "alerts_help"}
+
+
+def _muse_free_reply(message: str, intent: str) -> dict[str, Any]:
+    """Free plan: AI Muse answers stats questions (like the public Muse); actions need Super."""
+    plans_link = [{"label": "See plans", "href": "/pricing"}]
+    if intent in _MUSE_PAID_ACTIONS:
+        what = {
+            "score_entry": "Saving scores from a message or voice note",
+            "availability_request": "Sending availability requests",
+            "availability_summary": "Availability summaries",
+            "alerts_help": "Player alerts",
+        }.get(intent, "This")
+        return {
+            "reply": f"{what} is part of AI Muse on the Super plan ($4.99/month). On Free you can still score matches yourself with Quick Score and ask me about stats, results and scorecards.",
+            "intent": intent,
+            "source_label": "AI Muse",
+            "links": plans_link + ([{"label": "Quick Score", "href": "/score"}] if intent == "score_entry" else []),
+            "upgrade": "super",
+        }
+    if intent == "scoring_help":
+        return {
+            "reply": "Open Quick Score, pick today's match and tap the big buttons: 0–6, Wd, Nb, Bye, LB and W. Live scoring is free on every plan.",
+            "intent": intent,
+            "source_label": "AI Muse",
+            "links": [{"label": "Quick Score", "href": "/score"}],
+        }
+    if intent == "upload_help":
+        return {
+            "reply": "Tap 📎 to upload a scorecard photo. The Free plan includes 2 scorecard image uploads a month, Super 5 and Premium unlimited.",
+            "intent": intent,
+            "source_label": "AI Muse",
+            "links": plans_link,
+        }
+    result = public_muse(PublicMuseRequest(message=message))
+    links = [link for link in result.get("links") or [] if link.get("href") not in {"/signin", "/register"}]
+    reply_text = str(result.get("reply") or "")
+    if "sign in" in reply_text.lower():
+        reply_text = "That's part of AI Muse on the Super plan. On Free I can answer questions about live scores, results, scorecards, players and clubs."
+        links = plans_link
+    return {**result, "reply": reply_text, "links": links, "plan_note": "Free plan: stats answers only"}
+
+
+def _match_intelligence(store: dict[str, Any], club: dict[str, Any], club_info: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Premium: a pre-match briefing for the next fixture."""
+    next_match = (club_info or {}).get("next_match")
+    if not next_match:
+        return None
+    opponent = str(next_match.get("opponent") or "")
+    club_name = str(club.get("name") or "")
+    club_id = str(club.get("id") or "")
+    head_to_head = {"played": 0, "won": 0, "lost": 0, "last": ""}
+    for fixture in sorted(store.get("fixtures") or [], key=lambda item: str(item.get("date") or "")):
+        if str(fixture.get("club_id") or "") != club_id or normalize_name(str(fixture.get("opponent") or "")) != normalize_name(opponent):
+            continue
+        result = str(fixture.get("result") or "").strip()
+        if not result or not re.search(r"\b(won|win|beat|tied|tie|no result|abandoned)\b", result.lower()):
+            continue
+        head_to_head["played"] += 1
+        lowered = result.lower()
+        if normalize_name(club_name) and lowered.startswith(normalize_name(club_name)) and " won" in lowered:
+            head_to_head["won"] += 1
+        elif " won" in lowered:
+            head_to_head["lost"] += 1
+        head_to_head["last"] = f"{fixture.get('date')}: {result}"
+    opponent_club = cricket_insights.find_club(store, opponent)
+    danger: list[dict[str, Any]] = []
+    if opponent_club:
+        try:
+            opponent_info = cricket_insights.club_insights(store, opponent_club)
+            danger = [
+                {"name": row["name"], "runs": row["runs"], "form": row.get("form", "")}
+                for row in (opponent_info.get("batting") or {}).get("top_scorers", [])[:3]
+            ] + [
+                {"name": row["name"], "wickets": row["wickets"]}
+                for row in (opponent_info.get("bowling") or {}).get("wicket_takers", [])[:2]
+            ]
+        except Exception:
+            logger.exception("Opponent insights failed for %s", opponent)
+    in_form = ((club_info or {}).get("form") or {}).get("in_form", [])[:4]
+    keys: list[str] = []
+    chance = int(next_match.get("win_chance") or 50)
+    if chance >= 60:
+        keys.append(f"You start as favourites ({chance}%). Bat first and set a target if the pitch is good.")
+    elif chance <= 40:
+        keys.append(f"{opponent} are favourites ({100 - chance}%). Keep wickets in hand early and target their weaker bowlers.")
+    else:
+        keys.append("This looks like a close game. Fielding and extras will likely decide it.")
+    if int(next_match.get("available") or 0) < 11:
+        keys.append(f"Only {next_match.get('available', 0)} players are available so far. Chase replies before match day.")
+    if in_form:
+        keys.append("In form: " + ", ".join(in_form) + ". Give them the key batting slots.")
+    if danger:
+        keys.append(f"Watch out for {danger[0]['name']} from {opponent}.")
+    return {
+        "date": next_match.get("date"),
+        "opponent": opponent,
+        "win_chance": chance,
+        "confidence": next_match.get("confidence"),
+        "available": next_match.get("available"),
+        "head_to_head": head_to_head,
+        "opponent_key_players": danger,
+        "our_in_form": in_form,
+        "keys": keys,
+    }
+
+
+def _cross_club_stats(store: dict[str, Any], member: dict[str, Any]) -> list[dict[str, Any]]:
+    """Premium: the player's numbers for every club they have played for."""
+    member_id = str(member.get("id") or "")
+    rows = [row for row in store.get("member_club_stats") or [] if str(row.get("member_id") or "") == member_id]
+    return [
+        {
+            "club": row.get("club_name") or row.get("club_id"),
+            "matches": int(row.get("matches") or 0),
+            "runs": int(row.get("runs") or 0),
+            "average": round(float(row.get("batting_average") or 0), 1),
+            "highest": int(row.get("highest_score") or 0),
+            "wickets": int(row.get("wickets") or 0),
+            "catches": int(row.get("catches") or 0),
+        }
+        for row in sorted(rows, key=lambda item: -int(item.get("runs") or 0))
+    ]
+
+
+@app.get("/pricing")
+def pricing_page(request: Request) -> Response:
+    token = _auth_token_from_request(request)
+    if token:
+        try:
+            _auth_user_from_token(token, touch=False)
+            return _page_response("pricing.html")
+        except HTTPException:
+            pass
+    return _page_response("pricing_public.html")
+
+
+@app.get("/api/plans")
+def plans_catalog() -> dict[str, Any]:
+    return subscriptions.public_catalog()
+
+
+@app.get("/api/subscription/me")
+def subscription_me(x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
+    user_row, current_club_id = _auth_user_from_token(x_auth_token, touch=False)
+    plan = _plan_for(user_row, current_club_id)
+    is_superadmin = "superadmin" in _user_role_names(user_row, current_club_id)
+    return {
+        "subscription": plan,
+        "club_paid": _club_is_paid(current_club_id),
+        "is_site_admin": is_superadmin,
+        **subscriptions.public_catalog(),
+    }
+
+
+@app.post("/api/subscription/checkout")
+def subscription_checkout(request: CheckoutRequest, http_request: Request, x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
+    user_row, current_club_id = _auth_user_from_token(x_auth_token)
+    plan = str(request.plan or "").strip().lower()
+    if plan not in {"super", "premium"}:
+        raise HTTPException(status_code=400, detail="Choose Super or Premium.")
+    if not subscriptions.stripe_enabled():
+        raise HTTPException(
+            status_code=503,
+            detail="Online payment isn't switched on yet. Ask your site admin to upgrade your plan, or try again later.",
+        )
+    customer_id = ""
+    with _auth_connection() as connection:
+        row = connection.execute("SELECT stripe_customer_id FROM app_subscriptions WHERE user_id = ?", (int(user_row["id"]),)).fetchone()
+        customer_id = str(row["stripe_customer_id"] or "") if row else ""
+    try:
+        url = subscriptions.create_checkout_session(user_row, plan, str(http_request.base_url), customer_id)
+    except subscriptions.StripeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
+    _audit_event("subscription.checkout", "subscription", str(user_row["id"]), actor=user_row, club_id=current_club_id, details={"plan": plan}, source="api")
+    return {"url": url}
+
+
+@app.post("/api/subscription/portal")
+def subscription_portal(http_request: Request, x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
+    user_row, _ = _auth_user_from_token(x_auth_token)
+    if not subscriptions.stripe_enabled():
+        raise HTTPException(status_code=503, detail="Online payment isn't switched on yet.")
+    with _auth_connection() as connection:
+        row = connection.execute("SELECT stripe_customer_id FROM app_subscriptions WHERE user_id = ?", (int(user_row["id"]),)).fetchone()
+    customer_id = str(row["stripe_customer_id"] or "") if row else ""
+    if not customer_id:
+        raise HTTPException(status_code=400, detail="There's no card on file yet. Choose a plan first.")
+    try:
+        return {"url": subscriptions.create_portal_session(customer_id, str(http_request.base_url))}
+    except subscriptions.StripeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
+
+
+@app.post("/api/stripe/webhook")
+async def stripe_webhook(request: Request) -> dict[str, Any]:
+    payload = await request.body()
+    try:
+        event = subscriptions.verify_webhook(payload, request.headers.get("stripe-signature", ""))
+    except subscriptions.StripeError as exc:
+        logger.warning("Stripe webhook rejected: %s", exc)
+        raise HTTPException(status_code=400, detail=str(exc))
+    with _auth_connection() as connection:
+        result = subscriptions.handle_stripe_event(connection, event)
+    logger.info("Stripe webhook %s -> %s", event.get("type"), result)
+    return result
+
+
+def _find_user_for_admin(connection: sqlite3.Connection, identifier: str) -> sqlite3.Row | None:
+    clean = str(identifier or "").strip()
+    if not clean:
+        return None
+    if clean.isdigit() and len(clean) < 7:
+        row = connection.execute("SELECT * FROM app_users WHERE id = ?", (int(clean),)).fetchone()
+        if row:
+            return row
+    for candidate in _auth_identifier_candidates(clean):
+        row = connection.execute("SELECT * FROM app_users WHERE mobile = ? OR lower(email) = lower(?)", (candidate, candidate)).fetchone()
+        if row:
+            return row
+    rows = connection.execute("SELECT * FROM app_users WHERE lower(display_name) = lower(?)", (clean,)).fetchall()
+    return rows[0] if len(rows) == 1 else None
+
+
+@app.get("/api/admin/subscriptions")
+def admin_subscriptions(x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
+    _require_superadmin(x_auth_token)
+    with _auth_connection() as connection:
+        users = connection.execute("SELECT * FROM app_users ORDER BY display_name COLLATE NOCASE").fetchall()
+        rows = []
+        counts = {"free": 0, "super": 0, "premium": 0}
+        for user_row in users:
+            plan = subscriptions.effective_plan(connection, user_row, [str(user_row["role"] or "")])
+            counts[plan["plan"]] = counts.get(plan["plan"], 0) + 1
+            rows.append(
+                {
+                    "id": int(user_row["id"]),
+                    "name": user_row["display_name"] or "",
+                    "role": user_row["role"] or "",
+                    "plan": plan["plan_name"],
+                    "source": plan["source"],
+                    "period_end": plan["period_end"],
+                    "uploads_used": plan["uploads_used"],
+                }
+            )
+    return {"users": rows, "counts": counts, "stripe_enabled": subscriptions.stripe_enabled()}
+
+
+@app.post("/api/admin/subscriptions/set")
+def admin_set_subscription(request: AdminSetPlanRequest, x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
+    admin_row, current_club_id = _require_superadmin(x_auth_token)
+    plan = str(request.plan or "").strip().lower()
+    if plan not in subscriptions.PLANS:
+        raise HTTPException(status_code=400, detail="Plan must be free, super or premium.")
+    with _auth_connection() as connection:
+        target = _find_user_for_admin(connection, request.user)
+        if not target:
+            raise HTTPException(status_code=404, detail="No single user matches that name, mobile, email or id.")
+        period_end = datetime.now(timezone.utc) + timedelta(days=int(request.days)) if request.days and request.days > 0 else None
+        subscriptions.set_plan(
+            connection,
+            target,
+            plan,
+            source="admin" if plan != "free" else "free",
+            status="active",
+            period_end=period_end,
+            note=request.note.strip() or f"Set by {admin_row['display_name'] or 'site admin'}",
+        )
+        info = subscriptions.effective_plan(connection, target, [str(target["role"] or "")])
+    _audit_event(
+        "subscription.admin_set",
+        "subscription",
+        str(target["id"]),
+        actor=admin_row,
+        club_id=current_club_id,
+        details={"plan": plan, "days": request.days, "user": target["display_name"] or ""},
+        source="api",
+    )
+    until = f" until {info['period_end'][:10]}" if info.get("period_end") else ""
+    return {"message": f"{target['display_name'] or 'User'} is now on {info['plan_name']}{until}.", "subscription": info}
+
+
+@app.post("/api/matches/{match_id}/ai-scorer")
+def ai_live_scorer(match_id: str, request: AiScorerRequest, x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
+    """Premium AI Live Scorer: phrase -> validated ball events. The client posts each event to /scorebook/ball."""
+    user_row, current_club_id = _require_permission(x_auth_token, "manage_scorecards")
+    _require_feature(user_row, current_club_id, "ai_live_scorer")
+    store = load_store()
+    try:
+        match = get_match_or_404(store, match_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    if not _scorebook_is_open(match):
+        raise HTTPException(status_code=400, detail="Live scoring is only open on match day.")
+    scorebook = _match_scorebook(match)
+    innings_index = max(1, min(2, int(request.innings_number or 1))) - 1
+    innings = scorebook["innings"][innings_index]
+    summary = summarize_innings_scorebook(innings)
+    parsed = ai_scorer.interpret(request.text)
+    events, problems = ai_scorer.validate(parsed["events"], summary, int(innings.get("overs_limit", 20) or 20), str(innings.get("status") or ""))
+    for event in events:
+        event["label"] = ai_scorer.describe(event)
+    if parsed["unknown"]:
+        problems.append("Didn't understand: " + ", ".join(f"“{item}”" for item in parsed["unknown"][:3]))
+    before = f"{summary['runs']}/{summary['wickets']} ({summary['legal_balls'] // 6}.{summary['legal_balls'] % 6})"
+    after = events[-1].get("projected", before) if events else before
+    return {"heard": parsed["text"], "events": events, "problems": problems, "before": before, "after": after}
+
+
 @app.get("/api/insights/me")
 def insights_me(x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
     """Signed-in user's own form/prediction/tips plus their current club's outlook."""
@@ -7341,11 +8278,48 @@ def insights_me(x_auth_token: str | None = Header(default=None)) -> dict[str, An
     club = cricket_insights.find_club(store, current_club_id)
     if not club and member:
         club = cricket_insights.find_club(store, str(member.get("primary_club_id") or ""))
+    features = set(_plan_for(user_row, current_club_id).get("features", []))
+    player = cricket_insights.player_insights(store, member) if member else None
+    club_info = cricket_insights.club_insights(store, club) if club else None
+    locked: list[dict[str, str]] = []
+
+    def lock(feature: str) -> None:
+        if not any(item["feature"] == feature for item in locked):
+            plan = subscriptions.PLANS[subscriptions.feature_min_plan(feature)]
+            locked.append({"feature": feature, "label": subscriptions.FEATURES[feature]["label"], "plan": plan["id"], "plan_name": plan["name"]})
+
+    if "analysis" not in features:
+        lock("analysis")
+        if player:
+            player = {**player, "prediction": None, "recommendations": [], "timeline": []}
+        if club_info:
+            club_info = {**club_info, "recommendations": []}
+    if "match_intelligence" not in features:
+        lock("match_intelligence")
+        if club_info and club_info.get("next_match"):
+            next_match = dict(club_info["next_match"])
+            for key in ("win_chance", "confidence", "opponent_known"):
+                next_match.pop(key, None)
+            club_info = {**club_info, "next_match": next_match}
+    best = None
+    if club and "playing_xi" in features:
+        best = cricket_insights.best_xi(store, club)
+    elif club:
+        lock("playing_xi")
+    outlook = cricket_insights.season_outlook(store, club) if club and "analysis" in features else None
+    intelligence = _match_intelligence(store, club, club_info) if club and "match_intelligence" in features else None
+    cross_club = _cross_club_stats(store, member) if member and "cross_club_stats" in features else None
+    if "cross_club_stats" not in features:
+        lock("cross_club_stats")
     return {
-        "player": cricket_insights.player_insights(store, member) if member else None,
-        "club": cricket_insights.club_insights(store, club) if club else None,
-        "best_xi": cricket_insights.best_xi(store, club) if club else None,
-        "outlook": cricket_insights.season_outlook(store, club) if club else None,
+        "player": player,
+        "club": club_info,
+        "best_xi": best,
+        "outlook": outlook,
+        "match_intelligence": intelligence,
+        "cross_club": cross_club,
+        "locked": locked,
+        "plan": _plan_for(user_row, current_club_id).get("plan", "free"),
         "generated_at": now_iso(),
     }
 
@@ -7371,7 +8345,22 @@ def insights_club(club_key: str, x_auth_token: str | None = Header(default=None)
 
 
 @app.post("/api/chat")
-def chat(request: ChatRequest) -> dict[str, Any]:
+def chat(request: ChatRequest, x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
+    # Plans: predictions, tips, best XI and season outlook are Super analysis (README.md -> "Subscriptions and plans").
+    if x_auth_token and re.search(
+        r"\b(predict|prediction|forecast|projected|improve|improvement|tips?|advice|playing xi|best xi|playing 11|season outlook|outlook|win chance|chances? of)\b",
+        str(request.question or "").lower(),
+    ):
+        try:
+            chat_user, chat_club = _auth_user_from_token(x_auth_token, touch=False)
+        except HTTPException:
+            chat_user = None
+        if chat_user is not None and not _has_feature(chat_user, chat_club, "analysis"):
+            return {
+                "answer": "Predictions, improvement tips, best XI and season outlook are part of the Super plan ($4.99/month). On Free you can still ask about stats, results, rankings and scorecards. See Plans to upgrade.",
+                "source": "plans",
+                "links": [{"label": "See plans", "href": "/pricing?feature=analysis"}],
+            }
     store = load_store()
     focus_club = next((club for club in store.get("clubs", []) if club.get("id") == request.focus_club_id), store.get("club", {}))
     focused_store = scoped_store_for_club(store, focus_club) if request.focus_club_id else dict(store)
@@ -7631,7 +8620,17 @@ async def upload_scorecard(
     file: UploadFile = File(...),
 ) -> dict[str, Any]:
     token = _auth_token_from_request(request, x_auth_token)
-    user_row, _ = _require_permission(token, "manage_scorecards")
+    user_row, upload_club_id = _require_permission(token, "manage_scorecards")
+    plan_info = _plan_for(user_row, upload_club_id)
+    upload_limit = plan_info.get("upload_limit")
+    if upload_limit is not None and int(plan_info.get("uploads_used") or 0) >= int(upload_limit):
+        raise HTTPException(
+            status_code=402,
+            detail=(
+                f"You've used all {upload_limit} scorecard image uploads for this month on the {plan_info.get('plan_name', 'Free')} plan. "
+                "Upgrade at /pricing for more uploads, or wait until next month."
+            ),
+        )
     logger.debug("Scorecard upload started. match_id=%s season=%s focus_club_id=%s filename=%s", match_id or "", season or "", focus_club_id or "", file.filename or "")
     store = load_store()
     selected_club = _selected_club(store, focus_club_id)
@@ -7688,7 +8687,8 @@ async def upload_scorecard(
         source="api",
     )
     return {
-                "message": f"Scorecard image '{record.get('original_file_name') or file.filename or file_token}' uploaded successfully and queued for admin review.",
+                "message": f"Scorecard image '{record.get('original_file_name') or file.filename or file_token}' uploaded successfully and queued for admin review."
+                + ("" if upload_limit is None else f" {max(0, int(upload_limit) - int(plan_info.get('uploads_used') or 0) - 1)} of {upload_limit} uploads left this month."),
                 "dashboard": current_dashboard(load_store(), selected_club.get("id", "")),
                 "upload": record,
             }

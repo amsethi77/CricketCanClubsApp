@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <title>Quick Score · CricketClubApp</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Sora:wght@400;600;700;800&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/assets/tailwind.css?v=20260426a" />
+    <link rel="stylesheet" href="/assets/styles.css?v=20260511l" />
+    <link rel="stylesheet" href="/assets/app_polish.css?v=20260924b" />
+    <link rel="stylesheet" href="/assets/quick_score.css?v=20260929a" />
+  </head>
+  <body class="quick-score-page">
+    <div class="page-shell">
+      <header class="page-topbar"></header>
+      <main id="qsApp" class="qs-app" aria-live="polite">
+        <div class="qs-loading">Loading…</div>
+      </main>
+    </div>
+
+    <!-- Pop-up used for wickets, new bowler, new batter -->
+    <div id="qsModal" class="qs-modal" hidden>
+      <div class="qs-modal-card" role="dialog" aria-modal="true" aria-labelledby="qsModalTitle">
+        <h2 id="qsModalTitle"></h2>
+        <div id="qsModalBody"></div>
+        <div class="qs-modal-actions">
+          <button type="button" class="qs-btn ghost" data-modal-cancel>Cancel</button>
+          <button type="button" class="qs-btn primary" data-modal-ok>Save</button>
+        </div>
+      </div>
+    </div>
+
+    <script src="/assets/multipage.js?v=20260511k"></script>
+    <script src="/assets/quick_score.js?v=20260929a"></script>
+  </body>
+</html>

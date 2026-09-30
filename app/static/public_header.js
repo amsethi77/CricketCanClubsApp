@@ -3,6 +3,13 @@
   try {
     if (localStorage.getItem("cricketClubAppTheme") === "dark") document.documentElement.setAttribute("data-theme", "dark");
   } catch (e) { /* ignore */ }
+  // Public AI Muse (read-only chat for signed-out visitors). See README.md -> "Public AI Muse".
+  if (!document.querySelector('script[src^="/assets/muse_public.js"]')) {
+    const muse = document.createElement("script");
+    muse.src = "/assets/muse_public.js?v=20260927b";
+    muse.defer = true;
+    document.head.appendChild(muse);
+  }
   if (document.querySelector('script[src^="/assets/site_tools.js"]')) return;
   const script = document.createElement("script");
   script.src = "/assets/site_tools.js";
@@ -14,7 +21,7 @@
   if (!mount) return;
 
   try {
-    const response = await fetch('/assets/public_header.html?v=20260511b', {
+    const response = await fetch('/assets/public_header.html?v=20260929a', {
       cache: 'no-store',
     });
     if (!response.ok) return;
@@ -36,7 +43,9 @@
                 ? 'signin'
                 : path === '/register'
                   ? 'register'
-                  : null;
+                  : path === '/pricing'
+                    ? 'pricing'
+                    : null;
 
     mount.querySelectorAll('[data-public-nav]').forEach((link) => {
       const isActive = activeKey && link.dataset.publicNav === activeKey;

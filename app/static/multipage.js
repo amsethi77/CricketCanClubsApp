@@ -3,6 +3,23 @@
   try {
     if (localStorage.getItem("cricketClubAppTheme") === "dark") document.documentElement.setAttribute("data-theme", "dark");
   } catch (e) { /* ignore */ }
+  // AI Muse (floating chat + notifications bell) on signed-in pages. See README.md -> "AI Muse and notifications".
+  const loadMuse = () => {
+    if (!document.querySelector(".page-topbar") || document.querySelector('script[src^="/assets/muse.js"]')) return;
+    const museCss = document.createElement("link");
+    museCss.rel = "stylesheet";
+    museCss.href = "/assets/muse.css?v=20260927a";
+    document.head.appendChild(museCss);
+    const museJs = document.createElement("script");
+    museJs.src = "/assets/muse.js?v=20260927a";
+    document.head.appendChild(museJs);
+    // Plans: shows an "Upgrade" pop-up when a paid feature is used. See README.md -> "Subscriptions and plans".
+    const gate = document.createElement("script");
+    gate.src = "/assets/plan_gate.js?v=20260929a";
+    document.head.appendChild(gate);
+  };
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", loadMuse);
+  else loadMuse();
   if (document.querySelector('script[src^="/assets/site_tools.js"]')) return;
   const script = document.createElement("script");
   script.src = "/assets/site_tools.js";
@@ -17,19 +34,20 @@ const USER_BADGE_ID = "userIdentityBadge";
 const CLUB_BADGE_ID = "currentClubBadge";
 const BOTTOM_NAV_ID = "bottomAppNav";
 const ASSISTANT_FAB_ID = "assistantFloatingButton";
-const SHARED_HEADER_URL = "/assets/shared_header.html?v=20260511k";
+const SHARED_HEADER_URL = "/assets/shared_header.html?v=20260929a";
 const SESSION_ACTIVITY_DEBOUNCE_MS = 1200;
 const SESSION_TOUCH_INTERVAL_MS = 60000;
 const SHARED_NAV_ITEMS = [
   { href: "/dashboard", label: "Home" },
   { href: "/clubs", label: "Clubs" },
-  { href: "/dashboard/widgets/scoring", label: "Scoring" },
+  { href: "/score", label: "Scoring" },
   { href: "/dashboard/widgets/schedule", label: "Fixtures" },
   { href: "/player-availability", label: "Availability" },
   { href: "/dashboard/widgets/archive", label: "Archives" },
   { href: "/dashboard/widgets/performance", label: "Performances" },
   { href: "/profile", label: "Profile" },
   { href: "/dashboard/widgets/assistant", label: "Assistant" },
+  { href: "/pricing", label: "Plans" },
   { href: "/admin-center", label: "Admin", adminOnly: true },
 ];
 
@@ -364,13 +382,14 @@ function renderSharedBottomNav(user = null) {
   const items = [
     { href: "/dashboard", label: "Home", icon: "🏠" },
     { href: "/clubs", label: "Clubs", icon: "🏏" },
-    { href: "/dashboard/widgets/scoring", label: "Scoring", icon: "🏏" },
+    { href: "/score", label: "Scoring", icon: "🏏" },
     { href: "/dashboard/widgets/schedule", label: "Fixtures", icon: "📅" },
     { href: "/player-availability", label: "Availability", icon: "✅" },
     { href: "/dashboard/widgets/archive", label: "Archives", icon: "🗂️" },
     { href: "/dashboard/widgets/performance", label: "Performances", icon: "📊" },
     { href: "/profile", label: "Profile", icon: "👤" },
     { href: "/dashboard/widgets/assistant", label: "Assistant", icon: "🤖" },
+    { href: "/pricing", label: "Plans", icon: "⭐" },
     { href: "/admin-center", label: "Admin", icon: "⚙️", adminOnly: true },
   ].filter((item) => !item.adminOnly || isAdmin);
   nav.innerHTML = items

@@ -2,6 +2,9 @@
  * Insights panel on the Assistant page: your form, a next-innings prediction,
  * your club's outlook, improvement tips, and one-tap questions for the chat.
  * Data: GET /api/insights/me (computed from the club's own stored stats).
+ * Plans: Free shows form and club record; Super adds predictions, tips, best XI and season
+ * outlook; Premium adds match intelligence and cross-club stats. Locked parts show an
+ * "Unlock" card linking to /pricing (README.md -> "Subscriptions and plans").
  */
 (() => {
   if (document.body.dataset.dashboardWidget !== "assistant") return;
@@ -43,10 +46,20 @@
       .join("")}</ul>`;
   }
 
+  function lockedCard(item) {
+    return `<a class="ins-card ins-locked" href="/pricing?feature=${esc(item.feature)}">
+      <p class="ins-kicker">🔒 ${esc(item.plan_name)}</p>
+      <strong>${esc(item.label)}</strong>
+      <span class="ins-muted">Unlock with ${esc(item.plan_name)} ›</span>
+    </a>`;
+  }
+
   function render(data) {
     const player = data.player;
     const club = data.club;
     const cards = [];
+    const locked = data.locked || [];
+    const isLocked = (feature) => locked.some((item) => item.feature === feature);
 
     if (player) {
       const f = player.form || {};
@@ -63,7 +76,7 @@
           ${recent ? `<div class="ins-runs" title="Last innings, oldest to newest">${recent}</div>` : ""}
           <p class="ins-muted">${esc(c.runs)} runs · avg ${esc(c.average)} · best ${esc(c.highest)}${c.strike_rate ? ` · SR ${esc(c.strike_rate)}` : ""}</p>
         </article>`);
-      cards.push(`
+      if (p.expected_runs !== undefined) cards.push(`
         <article class="ins-card">
           <p class="ins-kicker">Next innings prediction</p>
           <p class="ins-big">${esc(p.expected_runs ?? "–")}<small> runs</small></p>
@@ -85,7 +98,7 @@
           }
           ${
             next
-              ? `<p class="ins-conf">Next: ${esc(next.date)} vs ${esc(next.opponent)} · ${esc(next.win_chance)}% win chance</p>`
+              ? `<p class="ins-conf">Next: ${esc(next.date)} vs ${esc(next.opponent)}${next.win_chance !== undefined ? ` · ${esc(next.win_chance)}% win chance` : ""}</p>`
               : `<p class="ins-conf">No upcoming fixture on record.</p>`
           }
         </article>`);
@@ -128,14 +141,48 @@
         </div>`;
     }
 
+    let intelHtml = "";
+    const intel = data.match_intelligence;
+    if (intel) {
+      const h = intel.head_to_head || {};
+      intelHtml = `
+        <div class="ins-block ins-intel">
+          <p class="ins-kicker">👑 Match intelligence · vs ${esc(intel.opponent)} (${esc(intel.date)})</p>
+          <p class="ins-big">${esc(intel.win_chance)}%<small> win chance · ${esc(intel.confidence)} confidence</small></p>
+          <p class="ins-muted">Head to head: ${h.played ? `played ${esc(h.played)}, won ${esc(h.won)}, lost ${esc(h.lost)}` : "no past results against them"} · ${esc(intel.available)} available so far</p>
+          ${
+            (intel.opponent_key_players || []).length
+              ? `<p class="ins-conf">Their key players: ${(intel.opponent_key_players || [])
+                  .map((pl) => `${esc(pl.name)} (${pl.runs !== undefined ? `${esc(pl.runs)} runs` : `${esc(pl.wickets)} wkts`})`)
+                  .join(", ")}</p>`
+              : ""
+          }
+          <ul class="ins-mini">${(intel.keys || []).map((k) => `<li><span>${esc(k)}</span></li>`).join("")}</ul>
+        </div>`;
+    }
+    let crossHtml = "";
+    if (data.cross_club && data.cross_club.length) {
+      crossHtml = `
+        <div class="ins-block">
+          <p class="ins-kicker">👑 Your stats across clubs</p>
+          <ul class="ins-mini">${data.cross_club
+            .map((row) => `<li><span>${esc(row.club)} · ${esc(row.matches)} matches</span><strong>${esc(row.runs)} runs · ${esc(row.wickets)} wkts</strong></li>`)
+            .join("")}</ul>
+        </div>`;
+    }
+    const lockedHtml = locked.length
+      ? `<div class="ins-locked-row"><p class="ins-kicker">Unlock more insights</p><div class="ins-grid">${locked.map(lockedCard).join("")}</div></div>`
+      : "";
+
     const playerName = player?.player?.name || "";
     const clubName = club?.club?.name || "";
+    const paid = !isLocked("analysis");
     const chips = [
-      playerName && `How can ${playerName} improve?`,
-      playerName && `Predict ${playerName} next match`,
-      clubName && `How can ${clubName} improve its ranking?`,
-      clubName && `Suggest the best playing XI for ${clubName}`,
-      clubName && `Season outlook for ${clubName}`,
+      paid && playerName && `How can ${playerName} improve?`,
+      paid && playerName && `Predict ${playerName} next match`,
+      paid && clubName && `How can ${clubName} improve its ranking?`,
+      !isLocked("playing_xi") && clubName && `Suggest the best playing XI for ${clubName}`,
+      paid && clubName && `Season outlook for ${clubName}`,
       clubName && `Tell me about ${clubName}`,
       "Who is the top run scorer?",
       "Show club rankings",
@@ -151,10 +198,12 @@
       </div>
       ${cards.length ? `<div class="ins-grid">${cards.join("")}</div>` : `<p class="ins-muted">Link your account to a player profile to see personal insights.</p>`}
       <div class="ins-columns">
-        ${player ? `<div class="ins-block"><p class="ins-kicker">How you can improve</p>${tipsHtml(player.recommendations)}</div>` : ""}
-        ${club ? `<div class="ins-block"><p class="ins-kicker">How ${esc(clubName)} can climb the rankings</p>${tipsHtml(club.recommendations)}</div>` : ""}
+        ${player && !isLocked("analysis") ? `<div class="ins-block"><p class="ins-kicker">How you can improve</p>${tipsHtml(player.recommendations)}</div>` : ""}
+        ${club && !isLocked("analysis") ? `<div class="ins-block"><p class="ins-kicker">How ${esc(clubName)} can climb the rankings</p>${tipsHtml(club.recommendations)}</div>` : ""}
       </div>
       ${xiHtml || outlookHtml ? `<div class="ins-columns">${xiHtml}${outlookHtml}</div>` : ""}
+      ${intelHtml || crossHtml ? `<div class="ins-columns">${intelHtml}${crossHtml}</div>` : ""}
+      ${lockedHtml}
       <div class="ins-chips" aria-label="Ask the assistant">
         ${chips.map((q) => `<button type="button" class="ins-chip" data-ask="${esc(q)}">${esc(q)}</button>`).join("")}
       </div>`;

@@ -59,7 +59,7 @@
       `<p class="dash-hello" id="dashHello"></p>
        <div class="dash-hero-actions">
          <a class="home-btn primary small" href="/player-availability">✅ Update availability</a>
-         <a class="home-btn ghost small" href="/dashboard/widgets/scoring">🎯 Open scoring</a>
+         <a class="home-btn ghost small" href="/score">🎯 Quick score</a>
          <a class="home-btn ghost small" href="/dashboard/widgets/archive">📤 Upload scorecard</a>
          <a class="home-btn ghost small" href="/scorecards">📋 Scorecards</a>
        </div>`
@@ -208,6 +208,43 @@
         </div>
       </a>`;
   }
+
+  // ---------- 4. AI Muse card at the bottom of Home ----------
+  const museCard = document.createElement("section");
+  museCard.className = "muse-home";
+  museCard.innerHTML = `
+    <div>
+      <p class="home-kicker">AI Muse</p>
+      <h2>Ask, score or send alerts with AI Muse</h2>
+      <p>Ask about players and clubs, type or say a match score, upload a scorecard photo, or ask the squad for availability.</p>
+    </div>
+    <form class="muse-home-form">
+      <input placeholder="e.g. How can Amit S improve?  or  Heartlake 145/6, Imran XI 120/9…" aria-label="Message AI Muse" />
+      <button type="submit">Ask Muse</button>
+    </form>
+    <div class="muse-home-chips">
+      <button type="button" data-muse="Who is available for the next match?">✅ Who's available?</button>
+      <button type="button" data-muse="Ask everyone for availability for the next match">📣 Ask for availability</button>
+      <button type="button" data-muse="Enter a match score">📝 Enter a score</button>
+      <button type="button" data-muse="Suggest the best playing XI">🏏 Best XI</button>
+      <button type="button" data-muse="How can our club improve its ranking?">📈 Improve our ranking</button>
+    </div>`;
+  shell.appendChild(museCard);
+  const openMuse = (text) => {
+    if (window.CCMuse) window.CCMuse.open("chat", text);
+    else setTimeout(() => window.CCMuse && window.CCMuse.open("chat", text), 600);
+  };
+  museCard.querySelector("form").addEventListener("submit", (event) => {
+    event.preventDefault();
+    const field = museCard.querySelector("input");
+    const text = field.value.trim();
+    field.value = "";
+    openMuse(text);
+  });
+  museCard.addEventListener("click", (event) => {
+    const chip = event.target.closest("[data-muse]");
+    if (chip) openMuse(chip.dataset.muse);
+  });
 
   // ---------- Load ----------
   (async () => {

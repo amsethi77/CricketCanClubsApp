@@ -2398,9 +2398,74 @@ function renderLandingClubStats(stats) {
   `;
 }
 
+// A fixture "has a score" when either side's runs or a real result was recorded.
+function fixtureHasScore(fixture) {
+  const card = fixture?.scorecard || {};
+  const result = String(card.result || fixture?.result || "").trim().toLowerCase();
+  return Boolean(
+    String(card.heartlake_runs || fixture?.heartlake_score || "").trim() ||
+      String(card.opponent_runs || fixture?.opponent_score || "").trim() ||
+      (result && result !== "tbd")
+  );
+}
+
+// Matchday tile: if there is no upcoming fixture, show the last match that has a score.
+function renderLastMatchHero(dashboard) {
+  const fixtures = Array.isArray(dashboard?.fixtures) ? dashboard.fixtures : [];
+  const played = fixtures
+    .filter((fixture) => (isPastFixture(fixture) || String(fixture.status || "").toLowerCase() === "completed") && fixtureHasScore(fixture))
+    .sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")));
+  const last = played[0];
+  const kicker = document.querySelector(".dashboard-match-panel .panel-head .section-kicker");
+  const title = document.querySelector(".dashboard-match-panel .panel-head h2");
+  if (kicker) kicker.textContent = "Last Match";
+  if (title) title.textContent = "Latest result";
+  if (!last) {
+    elements.dashboardMatchHero.innerHTML = `<p class="empty-state">No upcoming fixtures and no scored matches yet. Add fixtures in Fixtures or upload a scorecard in Archives.</p>`;
+    return true;
+  }
+  const card = last.scorecard || {};
+  const clubName = focusClubName();
+  const side = (runs, wickets, overs) => {
+    const r = String(runs || "").trim();
+    if (!r) return "--";
+    const w = String(wickets || "").trim();
+    return `${r}${w && w !== "10" ? `/${w}` : ""}${String(overs || "").trim() ? ` <small>(${overs} ov)</small>` : ""}`;
+  };
+  const result = String(card.result || last.result || "").trim();
+  elements.dashboardMatchHero.innerHTML = `
+    <article class="dashboard-match-card clickable-card" data-match-open="${last.id}">
+      <div class="dashboard-match-copy">
+        <div class="dashboard-match-kicker">
+          <span class="section-kicker">Last Match</span>
+          <span class="fixture-badge">${last.status || "Played"}</span>
+        </div>
+        <h3>${last.date_label || last.date || "Date TBD"} vs ${last.opponent || "Opponent"}</h3>
+        <p>${last.details?.venue || "Venue TBD"}</p>
+        <div class="dashboard-last-scores">
+          <div><span>${clubName}</span><strong>${side(card.heartlake_runs || last.heartlake_score, card.heartlake_wickets, card.heartlake_overs)}</strong></div>
+          <div><span>${last.opponent || "Opponent"}</span><strong>${side(card.opponent_runs || last.opponent_score, card.opponent_wickets, card.opponent_overs)}</strong></div>
+        </div>
+        <p class="dashboard-last-result">${result && result.toLowerCase() !== "tbd" ? result : "Result not recorded"}</p>
+        <div class="hero-actions">
+          <a class="secondary-button" href="/live/${encodeURIComponent(last.id)}">Open scorecard</a>
+          <a class="secondary-button" href="/dashboard/widgets/schedule">Add next fixture</a>
+        </div>
+      </div>
+    </article>
+  `;
+  return true;
+}
+
 function renderDashboardMatchHero(match, dashboard) {
   if (!elements.dashboardMatchHero) {
     return;
+  }
+  const hasUpcoming = (Array.isArray(dashboard?.fixtures) ? dashboard.fixtures : []).some(
+    (fixture) => !isPastFixture(fixture) && String(fixture.status || "").toLowerCase() !== "completed"
+  );
+  if (!hasUpcoming && (!match || isPastFixture(match) || String(match.status || "").toLowerCase() === "completed")) {
+    if (renderLastMatchHero(dashboard)) return;
   }
   if (!match) {
     elements.dashboardMatchHero.innerHTML = `<p class="empty-state">No match selected yet.</p>`;

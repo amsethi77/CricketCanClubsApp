@@ -2,6 +2,18 @@
 
 Local-first CricketClubApp product with a web app plus matching iOS and Android app surfaces. The three surfaces are kept in lockstep so the same cricket workflows are available everywhere.
 
+## Instructions for AI tools (read first)
+
+Any AI assistant or coding tool working on this repository (Claude, ChatGPT, Copilot, Cursor, Gemini, etc.) must follow these rules:
+
+1. **Document every change in this README.md.** When you add or change a feature, page, API, data rule or workflow, add or update the matching section below (and add a dated line to "Change log") in the same change. Future developers and AI tools rely on this file as the single source of truth.
+2. **Record the user's request.** Add the requirement, in plain words, to "Prompt And Requirement Log" so the reason behind the behaviour is kept.
+3. **Keep the three surfaces in lockstep.** The iOS and Android apps load these web pages, so web changes must work at phone width (390px) as well as laptop width.
+4. **Never commit local data or secrets.** Files in `app/data/` (`*.db`, `*.db-shm`, `*.db-wal`, `*_cache.json`, `.stats_version`), `app/uploads/` and the `.env` file (Stripe keys) stay out of git.
+5. **Test before you hand over:** restart with `python app\main.py`, check the pages you touched on laptop and phone widths, and note how to test in the README section you updated.
+
+The same rules are in `AGENTS.md` and `CLAUDE.md` so every tool picks them up. If you use GitHub Copilot, copy `AGENTS.md` to `.github/copilot-instructions.md`.
+
 ## What it includes
 
 - Team member profiles with age, role, picture URL, phone, email, and notes
@@ -19,6 +31,14 @@ Local-first CricketClubApp product with a web app plus matching iOS and Android 
 - Primary-club selection and club-first landing experience
 - Club search, player search, quick stats, and followed-player watchlist
 - Landing-page highlights for recent scorecards, matches, and club stats
+- Cricinfo-style digital scorecards browsable by game date (`/scorecards`)
+- Redesigned public home (`/live`) and signed-in Home (`/dashboard`)
+- Quick Score (`/score`): phone-first ball-by-ball scoring with big buttons, voice and shorthand
+- AI Muse: chat agent that answers questions, saves scores typed or spoken, uploads scorecard photos and sends availability requests
+- In-app notifications (bell icon): availability requests, live score alerts and results
+- Player/club insights: form, predictions, improvement tips, suggested playing XI and season outlook
+- Plans (`/pricing`): Free, Super ($4.99/month) and Premium ($100/year) with feature limits, monthly upload quotas, a 60-day Premium trial for existing members, Stripe Checkout (off until keys are added) and admin plan management
+- AI Live Scorer (Premium): say or type "wide, then two runs" in Quick Score and the balls are added for you
 
 ## Canonical Product Rules
 
@@ -36,6 +56,19 @@ These rules are the source of truth for the current implementation. If older log
 ## Prompt And Requirement Log
 
 This section captures the user requirements in the order they were given and refined during the build.
+
+### September 2026 requests
+- Navbar: no More on laptop unless links don't fit; on phone More sits at the edge. Profile and Admin live inside the account (initials) button; Assistant sits at the bottom right.
+- Signed-out visitors can open a public Clubs page, search the site and switch dark/light mode.
+- Digital scorecard like Cricinfo, available from archives by game date; approved archives only; public; original photo as a tab.
+- Home page redesign for both public and signed-in users (live and recent matches, latest scorecards, join/sign-in banner); white/off-white banners.
+- AI for chatting about clubs and players, with predictive analysis and recommendations for players and clubs to improve rankings and performance.
+- Matchday tile must not show a past date: if there is no new fixture, show the last score.
+- Live scoring must be very easy.
+- AI Muse agent: chat with players/admins, add/upload scorecards, accept scores by text or voice, send availability requests and live score alerts (in-app notifications).
+- Any instructions given to an AI tool must ask it to record the change in README.md for future reference.
+- AI Muse should also be available before login, as a safe read-only version (public scores, results, scorecards, stats) that asks visitors to sign in for actions.
+- Subscription model (#7, from "Cricket App Subscription & Feature Model"): keep live scoring, player/club stats and scorecard viewing free; Free 2 scorecard image uploads a month; Super $4.99/month (5 uploads, multi-club, rosters, availability, Playing XI, alerts, live score updates, AI assistant, analysis); Premium $100/year (unlimited uploads, advanced AI, AI Live Scorer that turns spoken ball-by-ball events into structured events for the scoring engine, match intelligence, cross-club stats, advanced analysis, retro-score help, priority support). Decisions: pay with Stripe (switched off until keys are added; site admins set plans by hand until then); existing users get 60 days of Premium free, new users start on Free.
 
 ### Original feature scope
 
@@ -390,3 +423,138 @@ When reviewing imported historical scorecards, use prompts or pasted review note
 - Player identity comes from persisted data in SQLite and cache, not hard-coded name maps.
 - Matching uses the saved `name`, `full_name`, and `aliases` fields on each member record.
 - If you want a new alias to be recognized by chat, archive review, and score extraction, add it to the player profile in the website so it is persisted.
+
+## September 2026 update: UI redesign, scorecards and AI features
+
+This section documents the work done in September 2026. See "Change log" at the end for dates.
+
+### Navigation and look and feel
+- **Public header** (`static/public_header.html/js`): LIVE, Fixtures, Rankings, Scorecards, Clubs, Sign In, Register. On phones it becomes a Cricinfo-style layout: ☰ menu drawer with search, ⚙️ settings sheet (Change Mode, Sign In/Register) and a bottom tab bar. Logic lives in `static/site_tools.js`.
+- **Search and dark/light mode** on every page (`site_tools.js`, `GET /api/public/search`). Search never returns phone numbers, emails or ages. Dark mode inverts the page with a CSS filter; photos and the dark banners are flipped back.
+- **Signed-in navbar** (`static/shared_header.html`, `multipage.js`): shows as many links as fit and puts the rest under More. Profile, Admin center, club switch and Sign out are inside the account (initials) button. Scoring opens Quick Score.
+- **Shared look** for all signed-in pages: `static/app_polish.css` (white cards, one heading font, consistent inputs/buttons, status messages as a small toast). It is linked statically in each page's `<head>` to avoid a flash of old styles.
+- **Sign In / Register** pages: `static/signin.css`, `static/register.css` (Register is a 3-step card).
+- **Public Clubs page** for signed-out visitors: `GET /clubs` serves `public_clubs.html` (`GET /api/public/clubs`).
+
+### Digital scorecards (`/scorecards`)
+- `GET /api/public/scorecards?date=&club_id=&year=` lists **approved** archive scorecards, newest first; `GET /api/public/scorecards/{id}` returns one Cricinfo-style card (batting, bowling, extras, did-not-bat, match details, original photo URL).
+- Pages: `static/scorecards.html/js` (list grouped by month, date picker with "closest dates", club and season filters) and `static/scorecard.html/js` (innings tables + "Original scorecard" photo tab). Styles: `static/scorecards.css`.
+- Data comes from the best available copy of each archive's extraction (reviewed JSON, template, imported performances, draft scorecard). Missing figures show as "–".
+
+### Home pages
+- **Public home** `/live` (`static/home.js`, `static/home.css`): match strip (Live / Results / Upcoming), off-white banner with featured match, latest scorecards, recent results, coming up, join banner.
+- **Signed-in Home** `/dashboard` (`static/dashboard_home.js/css`, only on the overview): welcome card with quick actions, match strip, latest scorecards, and an **AI Muse** card at the bottom. Panels that duplicated the navbar (scoring keypad, main menu, registration form) are hidden on Home.
+- **Matchday tile**: if there is no upcoming fixture it shows the **last match that has a score** (both totals + result) instead of an old date (`renderLastMatchHero` in `app.js`).
+
+### Quick Score (`/score`)
+- Files: `static/quick_score.html/js/css`. APIs: `GET /api/quick-score/fixtures`, `GET /api/quick-score/{match_id}`, `POST /api/quick-score/start` (creates today's fixture), plus the existing `POST /api/matches/{id}/scorebook/setup`, `POST .../scorebook/ball` and `DELETE .../scorebook/ball` (undo).
+- Flow: pick today's match (or "Start a match now") → choose batting side, openers and bowler → score with big buttons `0 1 2 3 4 6 / Wd Nb Bye LB / W / Undo`.
+- Strike rotates automatically on odd runs and at the end of each over; after 6 legal balls it asks for the next bowler; W opens a pop-up for how out, fielder and the new batter; 2nd innings shows the target and required rate.
+- **Voice scoring** (Chrome/Edge): "dot", "single", "two", "four", "six", "wide", "no ball", "bye", "leg bye", "bowled", "caught", "LBW", "run out", "undo". **Shorthand**: type `1 4 0 wd 6 w`.
+- Taps are queued and saved in order ("Saving 2 balls…"), so fast scoring never loses a ball. Scoring is open only on the match day (rule in `_scorebook_is_open`); past games go through AI Muse or Archives.
+- Performance: `canonical_archive_uploads` now returns a marked list that isn't re-processed, which cut each save from ~8–19 s to ~2 s.
+
+### Insights and predictions (`app/cricket_insights.py`)
+- Player form (In form / Steady / Out of form from the last 5 innings vs the player's normal level), trend, next-innings projection with range and % chance of 25+/50+, and improvement tips with the reason from the stats.
+- Club record, rank, batting depth, wicket takers, next-match win chance, and tips to climb the rankings.
+- **Suggested playing XI** from available players (keeper, up to 5 bowling options, best batters, batting order) and **season outlook** (win chance per remaining fixture, projected wins/rank, projected top scorers).
+- APIs: `GET /api/insights/me`, `GET /api/insights/player/{key}`, `GET /api/insights/club/{key}` (signed-in only). Shown on the Assistant page (`static/insights.js/css`) and used by the chat.
+- Nothing is "trained": numbers are recomputed from stored matches and approved scorecards, so they improve automatically as more data is added.
+- Strike rate only counts runs from innings where balls faced were recorded (`sr_runs` in `cricket_store.py`); saved stats are rebuilt once on first start after this change (`app/data/.stats_version`).
+
+### AI Muse and notifications
+- **AI Muse** (`app/muse.py`, `static/muse.js/css`, loaded on every signed-in page by `multipage.js`): floating "✨ AI Muse" button (bottom right) that opens a chat panel with Chat and Alerts tabs, 🎙️ voice input and 📎 photo upload. The old Assistant button is replaced by it; the Home page also has an AI Muse card.
+- `POST /api/muse` handles actions before falling back to the normal assistant (`answer_question`):
+  - **Score entry by text/voice**, e.g. `Heartlake 145/6 in 20 overs, Imran XI 120/9. Heartlake won by 25 runs. Amit S 45 off 30, Nick 3 wickets, John 2 catches` → shows a draft; **Confirm** calls `POST /api/muse/confirm-score` (needs `manage_scorecards`), which saves the scorecard + performances and sends a result alert.
+  - **Availability request**: "Ask everyone for availability for the next match" (needs `manage_fixtures` or `manage_players`) → notification to every club member with a link to `/player-availability?fixture_id=…`.
+  - **Availability summary**: "Who is available for the next match?"
+  - **Photo upload**: 📎 posts the image to `POST /api/scorecards/upload` (goes to Archives for review).
+  - Help replies for live scoring and alerts.
+- **Notifications** are stored in SQLite tables `app_notifications` and `app_notification_reads` (created automatically). APIs: `GET /api/notifications`, `POST /api/notifications/read` (`{ids:[…]}` or `{all:true}`). The 🔔 bell (laptop header) and the Alerts tab poll every 30 s; "Turn on browser alerts" enables pop-up notifications while a tab is open.
+- **Live score alerts** are created automatically after each ball (`muse.live_score_events`): match started, second innings started, wicket, 50/100 for a batter, innings over. Results saved through AI Muse also send an alert.
+- **Public AI Muse (signed-out visitors, read-only)**: `static/muse_public.js` is loaded by `public_header.js` on public pages (Live, Fixtures, Rankings, Scorecards, Clubs, match pages; not Sign In/Register). It calls `POST /api/public/muse` (no login), which answers only from public data: live scores, latest results, scorecards by date ("Scorecard for 19 Oct 2024"), club list, how to register, player stats/form/predictions, club rankings and match-up win chances. Anything that needs an account (saving scores, photo upload, availability requests or replies, alerts, team selection) replies "You need to sign in…" with Sign in / Register buttons. It never returns contact details, availability or pending-review information.
+- Email / WhatsApp / SMS are not connected yet (in-app only, by choice). A provider such as SendGrid or Twilio can be added later in `_notify()` in `main.py`.
+
+### How to test (September 2026 features)
+1. Restart the app: `python app\main.py` (stop any old copy first: `netstat -ano | findstr :8090`, then `taskkill /PID <id> /F`).
+2. `/scorecards` → pick 10/19/2024 → open the card → check both tabs.
+3. `/live` (signed out) and `/dashboard` (signed in) → check the match strip, latest scorecards and the AI Muse card.
+4. `/score` → "Start a match now" (2 overs) → set openers/bowler → tap balls, try 🎙️ Voice and `1 4 0 wd 6` → check the 🔔 bell for "Live now" and wicket alerts → Undo.
+5. AI Muse → "Who is available for the next match?", "Ask everyone for availability for the next match", paste a score message → Confirm.
+6. Signed out on `/live`: tap "Ask AI Muse" → "What's the live score?", "Scorecard for 19 Oct 2024", then try a score message and check it asks you to sign in.
+7. Assistant page → Insights panel; chat: "How can Amit G improve?", "Suggest the best playing XI", "Season outlook".
+8. Plans: open `/pricing` signed out and signed in (see "Subscriptions and plans" → "How to test").
+
+## Subscriptions and plans
+
+Model: keep the core cricket experience free; charge for managing more cricket, importing more history, automation, communication and intelligence.
+
+| | Free ($0) | Super ($4.99/month) | Premium ($100/year ≈ $8.33/month) |
+|---|---|---|---|
+| Live scoring, player/club stats, view scorecards | ✓ | ✓ | ✓ |
+| Scorecard image uploads | 2 / month | 5 / month | Unlimited |
+| Multi-club selection, match roster, availability, Playing XI | – | ✓ | ✓ |
+| Alerts and live score updates to players | – | ✓ | ✓ |
+| AI Muse assistant (actions), analysis (predictions, tips, best XI, season outlook) | Stats answers only | ✓ | ✓ |
+| AI Live Scorer, match intelligence, cross-club stats, advanced analysis, priority support | – | – | ✓ |
+
+### How plans work
+- **Code:** `app/subscriptions.py` (plans, features, trial, Stripe), `app/ai_scorer.py` (AI Live Scorer), helpers `_plan_for`, `_has_feature`, `_require_feature`, `_club_is_paid` in `app/main.py`. Each feature has a minimum plan in `subscriptions.FEATURES`; change prices, limits or features there.
+- **Plans belong to a user.** Site admins (superadmin) always get Premium. A club counts as **paid** when one of its captains or club admins is on Super or Premium; then every player in that club can mark availability and gets match and live score alerts without paying.
+- **Trial:** the first time the app starts with plans it records the launch date (`app_subscription_meta.launch_at`). Users created before that get **60 days of Premium** (`source = trial`); after it ends they drop to Free automatically. New users start on Free.
+- **Upload quota:** counted from `archive.upload` rows in `app_audit_log` for the current calendar month (resets on the 1st).
+- **Tables** (created automatically): `app_subscriptions` (plan, status, source, period end, Stripe ids), `app_subscription_meta`, `app_payment_events` (Stripe webhook log, prevents double processing).
+- **What is locked** (server answers HTTP 402 with an upgrade message; `static/plan_gate.js` shows an "Upgrade" pop-up on every signed-in page):
+  - `POST /api/scorecards/upload` → monthly quota.
+  - `POST /api/auth/select-club` and `/clubs/select` → switching away from your home club needs Super (`multi_club`).
+  - `POST /api/player/availability`, `/api/player/season-availability`, `/api/matches/{id}/availability` → `availability` (you or your club paid); changing someone else's → `match_roster`.
+  - `POST /api/matches/{id}/lineup` → `playing_xi`.
+  - `POST /api/muse` → on Free, AI Muse answers stats questions only (like the public Muse); score entry, availability requests/summaries and alerts reply with a "See plans" link. `POST /api/muse/confirm-score` → `ai_assistant`.
+  - `POST /api/chat` (Assistant page) → predictions, tips, best XI and outlook questions need Super.
+  - Live score alerts after each ball are only sent when the scorer or the club is on a paid plan.
+  - `GET /api/insights/me` → Free gets form and club record; Super adds prediction, tips, best XI, season outlook; Premium adds `match_intelligence` (win chance, head to head, opponent key players, key points) and `cross_club` (your stats for every club). Locked parts come back in `locked` and the Assistant page shows "Unlock" cards.
+  - `POST /api/matches/{id}/ai-scorer` → Premium `ai_live_scorer`.
+- **Never locked:** live scoring (Quick Score buttons, basic voice and shorthand), stats, rankings, scorecards, public pages and the public AI Muse.
+
+### Plans page (`/pricing`)
+- Files: `static/pricing.html` (signed in), `static/pricing_public.html` (signed out), `static/pricing.js`, `static/pricing.css`. "Plans" is in the More menu (signed in and public).
+- Shows the three plan cards, a comparison table and FAQ. Signed in, "Your plan" shows the plan, trial days left or renewal date, and uploads used this month.
+- **Site admins** also see "Manage plans": counts per plan, a form to set any user's plan (name, mobile, email or id; plan; number of days, 0 = no end; note) and a list of every user's plan. Use this for cash payments, club deals or while Stripe is off.
+- APIs: `GET /api/plans` (public), `GET /api/subscription/me`, `POST /api/subscription/checkout {plan}`, `POST /api/subscription/portal`, `POST /api/stripe/webhook`, `GET /api/admin/subscriptions`, `POST /api/admin/subscriptions/set {user, plan, days, note}` (superadmin).
+- The signed-in user payload (`/api/auth/me` etc.) now includes `plan`, `plan_name` and `plan_features`.
+
+### Switching on Stripe payments
+1. In the Stripe dashboard create two recurring prices: Super **$4.99 every month** and Premium **$100 every year**. Copy their price ids (`price_…`).
+2. Copy `.env.example` to `.env` next to this README and fill in `STRIPE_SECRET_KEY` (start with a `sk_test_…` key), `STRIPE_PRICE_SUPER`, `STRIPE_PRICE_PREMIUM` and `APP_BASE_URL` (the address people use to open the app).
+3. Add a webhook endpoint in Stripe pointing to `https://<your site>/api/stripe/webhook` with the events `checkout.session.completed`, `customer.subscription.created`, `customer.subscription.updated` and `customer.subscription.deleted`. Put its signing secret in `STRIPE_WEBHOOK_SECRET`. For local testing use the Stripe CLI: `stripe listen --forward-to localhost:8090/api/stripe/webhook`.
+4. Turn on the Customer Portal in Stripe (for "Manage billing").
+5. Restart the app. `/pricing` then shows "Choose Super / Premium" buttons that open Stripe Checkout. After payment the webhook switches the plan on; cancelling in the portal moves the user back to Free at the end of the period.
+- No extra Python package is needed (Stripe is called with `urllib`). `.env` is in `.gitignore`: never commit real keys.
+
+### AI Live Scorer (Premium)
+- In Quick Score tap **🤖 AI Scorer**. The microphone keeps listening (Chrome/Edge); you can also type. Say what happened: "four", "dot", "wide, then two runs", "no ball and a six", "two leg byes", "three dots", "bowled", "caught by Sam", "undo".
+- `POST /api/matches/{id}/ai-scorer {text, innings_number}` → `ai_scorer.interpret()` splits the phrase into ball events (RUNS, WIDE, NO_BALL, BYE, LEG_BYE, WICKET, UNDO), `ai_scorer.validate()` checks them against the innings (innings over, 10 wickets, overs used) and returns the projected score ("0/0 (0.0) → 3/0 (0.1)").
+- The page then saves each event through the normal `POST /api/matches/{id}/scorebook/ball`, so the scoring engine still does all the cricket maths (totals, overs, strike, bowler changes). Wickets open the usual wicket pop-up pre-filled (how out, fielder) so the scorer confirms who is out and the new batter. At the end of an over it stops and asks for the next bowler.
+- Free and Super users see the button with a 🔒 and a short explanation linking to Premium.
+
+### How to test (plans)
+1. Restart the app. Sign in as the site admin and open `/pricing`: you should see Premium ("Site admins always have every feature") and the "Manage plans" panel. Existing users show Premium with source `trial`.
+2. In "Manage plans" set a club admin (e.g. `clubadmin1`) to **Free**. Sign in as them:
+   - `/pricing` shows Free and "0 of 2 uploads used".
+   - Assistant page shows form + club record and "Unlock more insights" cards.
+   - AI Muse: "Who is the top run scorer?" answers; "Ask everyone for availability" shows "See plans".
+   - Selecting the Playing XI or switching to another club shows the Upgrade pop-up.
+   - Upload 3 scorecard photos: the third is refused with "You've used all 2 … uploads".
+3. Set the same user to **Super** for 30 days: the XI, availability requests, predictions and season outlook work; a Free player in that club can now mark availability.
+4. As the site admin (Premium) open Quick Score on today's match → 🤖 AI Scorer → type "wide, then two runs" → the score goes 0/0 → 3/0 and the over shows `wd 2`; type "caught by Nick" → the wicket pop-up opens with Caught and Nick filled in.
+5. Stripe (optional, test mode): fill `.env`, restart, run `stripe listen`, choose Super on `/pricing` and pay with card `4242 4242 4242 4242`; the plan changes to Super.
+
+## Change log
+
+- 2026-09-22: Navbar More menu, public Clubs page, header/menu/profile alignment, search and dark mode, Cricinfo-style phone layout.
+- 2026-09-23: Digital scorecards by game date (#8).
+- 2026-09-24: Signed-in navbar with account menu and floating Assistant; Sign In and public/signed-in Home redesigns (#9); Register redesign, strike-rate fix, shared look for inside pages (#5).
+- 2026-09-24: Insights: form, predictions, tips, best XI, season outlook (#6).
+- 2026-09-27: Public read-only AI Muse for signed-out visitors (`POST /api/public/muse`, `static/muse_public.js`).
+- 2026-09-27: Matchday tile shows the last scored match when nothing is upcoming; Quick Score; AI Muse; in-app notifications and live score alerts; faster saves; AI tool instructions (this README rule, AGENTS.md, CLAUDE.md).
+- 2026-09-29: Subscriptions and plans (#7): Free / Super / Premium, feature limits and upload quotas, 60-day Premium trial for existing members, `/pricing` page with admin plan management, Stripe Checkout + webhook (off until keys are set), Upgrade pop-up, plan-aware insights (match intelligence, cross-club stats) and the Premium AI Live Scorer in Quick Score.

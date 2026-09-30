@@ -254,3 +254,46 @@ body[data-dashboard-widget="overview"] .dashboard-hero-panel .mini-stat strong {
 body[data-dashboard-widget="overview"] .dashboard-hero-panel .mini-stat small {
   color: #64748b !important;
 }
+
+/* Last match tile (shown when there is no upcoming fixture) */
+.dashboard-last-scores {
+  display: grid;
+  gap: 8px;
+  margin: 12px 0 6px;
+  max-width: 460px;
+}
+
+.dashboard-last-scores > div {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 16px;
+  padding: 10px 14px;
+  border-radius: 12px;
+  background: #f8fafc;
+  border: 1px solid #eef2f7;
+}
+
+.dashboard-last-scores span {
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.dashboard-last-scores strong {
+  font-size: 1.3rem;
+  font-weight: 800;
+  color: #0f172a;
+  font-variant-numeric: tabular-nums;
+}
+
+.dashboard-last-scores small {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: #64748b;
+}
+
+.dashboard-last-result {
+  margin: 4px 0 12px !important;
+  font-weight: 700;
+  color: #b45309 !important;
+}
