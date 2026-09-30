@@ -829,6 +829,7 @@ def _clubs_page_html(request: Request, search: str = "", focus_club_id: str = ""
         <title>Select Club · CricketClubApp</title>
         <link rel="stylesheet" href="/assets/styles.css?v=20260509e" />
         <link rel="stylesheet" href="/assets/app_polish.css?v=20260924b" />
+        <link rel="stylesheet" href="/assets/sports-system.css?v=20260926a" />
       </head>
       <body>
         <div class="page-shell">
@@ -3504,6 +3505,53 @@ def public_signin_stats() -> dict[str, Any]:
     }
 
 
+def _build_public_batting_chart_figure(player_labels: list[str], total_runs: list[int]):
+    """Build the public batting-leaders chart with Plotly Graph Objects."""
+    import plotly.graph_objects as go
+
+    safe_labels = [str(label or "Player") for label in player_labels]
+    safe_runs = [max(0, int(runs or 0)) for runs in total_runs]
+    if len(safe_labels) != len(safe_runs):
+        raise ValueError("Player labels and run totals must have matching lengths.")
+
+    return go.Figure(
+        data=[
+            go.Bar(
+                x=safe_labels,
+                y=safe_runs,
+                name="Runs",
+                marker={"color": "#D32F2F", "line": {"color": "#9A1B1B", "width": 1}},
+                hovertemplate="%{x}<br>%{y} runs<extra></extra>",
+            )
+        ],
+        layout=go.Layout(
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(0,0,0,0)",
+            font={"family": "Inter, sans-serif", "color": "#1A1A1A"},
+            margin={"t": 12, "r": 12, "b": 72, "l": 48},
+            xaxis={"tickangle": -25, "automargin": True, "showgrid": False, "zeroline": False},
+            yaxis={
+                "title": "Runs",
+                "gridcolor": "#EAEAEA",
+                "zeroline": False,
+                "rangemode": "tozero",
+            },
+            showlegend=False,
+        ),
+    )
+
+
+@app.get("/api/public/rankings-chart")
+def public_rankings_chart() -> JSONResponse:
+    stats = public_signin_stats()
+    batting = stats.get("batting_leaders", [])
+    figure = _build_public_batting_chart_figure(
+        [str(row.get("player_name") or "Player") for row in batting],
+        [int(row.get("runs") or 0) for row in batting],
+    )
+    return JSONResponse(content=json.loads(figure.to_json()))
+
+
 def _public_live_matches(store: dict[str, Any]) -> list[dict[str, Any]]:
     today = datetime.utcnow().date().isoformat()
     live_statuses = {"live", "in progress", "ongoing"}
@@ -3754,8 +3802,81 @@ def _public_fixture_card_payload(fixture: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _past_fixture_scorecard_urls(store: dict[str, Any], fixtures: list[dict[str, Any]]) -> dict[str, str]:
+    """Return only unambiguous links from past fixtures to approved archive scorecards."""
+    today = datetime.utcnow().date().isoformat()
+    approved_archives = [
+        archive
+        for archive in (store.get("archive_uploads", []) or [])
+        if isinstance(archive, dict) and _scorecard_text(archive.get("status")).lower() == "approved"
+    ]
+    links: dict[str, str] = {}
+
+    for fixture in fixtures:
+        fixture_id = str(fixture.get("id") or "").strip()
+        fixture_date = str(fixture.get("date") or "")[:10]
+        club_id = str(fixture.get("club_id") or "").strip()
+        if not fixture_id or not club_id or not re.fullmatch(r"20\d{2}-\d{2}-\d{2}", fixture_date) or fixture_date >= today:
+            continue
+
+        scoped_archives = []
+        for archive in approved_archives:
+            archive_club_ids = set(_coerce_archive_string_list(archive.get("club_ids")))
+            archive_club_id = str(archive.get("club_id") or "").strip()
+            if archive_club_id:
+                archive_club_ids.add(archive_club_id)
+            if club_id in archive_club_ids:
+                scoped_archives.append(archive)
+
+        # An explicit applied/upload match reference is authoritative, but remains club-scoped.
+        direct = [
+            archive
+            for archive in scoped_archives
+            if fixture_id
+            in {
+                str(archive.get("applied_to_match_id") or "").strip(),
+                str(archive.get("match_id") or "").strip(),
+            }
+        ]
+        if len(direct) == 1:
+            links[fixture_id] = f"/scorecards/a-{_scorecard_text(direct[0].get('id'))}"
+            continue
+        if direct:
+            continue
+
+        fixture_opponent = normalize_name(str(fixture.get("opponent") or ""))
+        fixture_club_name = normalize_name(str(fixture.get("club_name") or ""))
+        matched = []
+        for archive in scoped_archives:
+            # Photo metadata may be the upload date, not the game date. Only use
+            # scorecard-extracted or explicitly assigned archive dates for inference.
+            date_source = str(archive.get("archive_date_source") or "").strip().lower()
+            if date_source not in {"scorecard", "manual-season"}:
+                continue
+            card = _scorecard_from_archive(archive)
+            if str(card.get("date") or "")[:10] != fixture_date:
+                continue
+            card_teams = {
+                normalize_name(str(team.get("team") or ""))
+                for team in (card.get("innings") or [])
+                if isinstance(team, dict) and team.get("team")
+            }
+            # The scorecard must identify both sides; never match on date/club alone.
+            if fixture_opponent and fixture_club_name and {fixture_opponent, fixture_club_name}.issubset(card_teams):
+                matched.append(archive)
+
+        # Ambiguous same-day fixtures deliberately remain unlinked.
+        if len(matched) == 1:
+            links[fixture_id] = f"/scorecards/a-{_scorecard_text(matched[0].get('id'))}"
+
+    return links
+
+
 def _public_fixtures_page_payload(store: dict[str, Any]) -> dict[str, Any]:
     fixtures = [_public_fixture_card_payload(fixture) for fixture in list(store.get("fixtures", []) or [])]
+    scorecard_urls = _past_fixture_scorecard_urls(store, fixtures)
+    for fixture in fixtures:
+        fixture["scorecard_url"] = scorecard_urls.get(str(fixture.get("id") or ""), "")
     fixtures.sort(
         key=lambda item: (
             str(item.get("date") or ""),
@@ -4710,6 +4831,7 @@ def _admin_center_html(request: Request) -> HTMLResponse:
         <title>Admin center · CricketClubApp</title>
         <link rel="stylesheet" href="/assets/styles.css?v=20260509e" />
         <link rel="stylesheet" href="/assets/app_polish.css?v=20260924b" />
+        <link rel="stylesheet" href="/assets/sports-system.css?v=20260926a" />
       </head>
       <body>
         <div class="page-shell">

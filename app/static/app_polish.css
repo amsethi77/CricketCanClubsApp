@@ -3,9 +3,8 @@
 
 /* ---------- Page background ---------- */
 body {
-  background:
-    radial-gradient(circle at 8% 0%, rgba(225, 29, 72, 0.05), transparent 30%),
-    linear-gradient(180deg, #fbfbfd 0%, #f4f6fa 100%) !important;
+  color: #1a1a1a;
+  background: #f8f9fa !important;
 }
 
 /* ---------- Panels: plain white cards ---------- */

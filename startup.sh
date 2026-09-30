@@ -2,13 +2,46 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SITE_PACKAGES="$ROOT_DIR/.python_packages/lib/site-packages"
+cd "$ROOT_DIR"
 
-mkdir -p "$SITE_PACKAGES"
+PYTHON_BIN="${PYTHON_BIN:-python3}"
+PORT="${PORT:-8091}"
+HOST="${HOST:-0.0.0.0}"
+VENV_DIR="${VENV_DIR:-$ROOT_DIR/.venv}"
 
-if [[ ! -d "$SITE_PACKAGES/uvicorn" ]]; then
-  python3 -m pip install --no-cache-dir --target "$SITE_PACKAGES" -r "$ROOT_DIR/requirements.txt"
+create_venv() {
+  "$PYTHON_BIN" -m venv --system-site-packages "$VENV_DIR"
+}
+
+if [ ! -d "$VENV_DIR" ]; then
+  create_venv
 fi
 
-export PYTHONPATH="$SITE_PACKAGES${PYTHONPATH:+:$PYTHONPATH}"
-exec python3 -m uvicorn app.main:app --host 0.0.0.0 --port "${PORT:-8000}"
+# shellcheck disable=SC1091
+source "$VENV_DIR/bin/activate"
+
+if ! python - <<'PY' >/dev/null 2>&1
+import fastapi, uvicorn, httpx, multipart
+PY
+then
+  if [ ! -f "$VENV_DIR/pyvenv.cfg" ] || ! rg -q "include-system-site-packages = true" "$VENV_DIR/pyvenv.cfg"; then
+    deactivate || true
+    rm -rf "$VENV_DIR"
+    create_venv
+    # shellcheck disable=SC1091
+    source "$VENV_DIR/bin/activate"
+  fi
+fi
+
+if ! python - <<'PY' >/dev/null 2>&1
+import fastapi, uvicorn, httpx, multipart
+PY
+then
+  python -m pip install --disable-pip-version-check -r requirements.txt
+fi
+
+export PORT HOST
+export PYTHONPATH="$ROOT_DIR/app:${PYTHONPATH:-}"
+
+echo "Starting CricketCanClubsApp on http://127.0.0.1:${PORT}"
+exec python app/main.py

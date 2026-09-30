@@ -264,15 +264,19 @@ This section captures the user requirements in the order they were given and ref
 
 ## Run locally
 
+Use the repository startup script from the project root:
+
 ```bash
-cd /Users/amitsethi/Downloads/HeartlakeCricketApp
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-python3 app/main.py
+./startup.sh
 ```
 
-Open `http://127.0.0.1:8090`
+The script creates `.venv` if needed, installs `requirements.txt`, and starts the FastAPI server on port `8091` by default. You can override the port when needed:
+
+```bash
+PORT=8092 ./startup.sh
+```
+
+Open `http://127.0.0.1:8091`.
 
 ## Project shape
 
@@ -558,3 +562,40 @@ Model: keep the core cricket experience free; charge for managing more cricket, 
 - 2026-09-27: Public read-only AI Muse for signed-out visitors (`POST /api/public/muse`, `static/muse_public.js`).
 - 2026-09-27: Matchday tile shows the last scored match when nothing is upcoming; Quick Score; AI Muse; in-app notifications and live score alerts; faster saves; AI tool instructions (this README rule, AGENTS.md, CLAUDE.md).
 - 2026-09-29: Subscriptions and plans (#7): Free / Super / Premium, feature limits and upload quotas, 60-day Premium trial for existing members, `/pricing` page with admin plan management, Stripe Checkout + webhook (off until keys are set), Upgrade pop-up, plan-aware insights (match intelligence, cross-club stats) and the Premium AI Live Scorer in Quick Score.
+
+## New UI Look and Feel
+
+## 1. Typography & Global Layout Foundation
+Prompt for Copilot Chat / Panel:
+
+> Write a clean, modular CSS layout configuration for a premium light-themed sports website canvas. Import "Anton", "Inter", and "Space Mono" from Google Fonts. Set the global background canvas color to an off-white `#F8F9FA` and default text to `#1A1A1A`. Create two primary structural heading classes:
+> 
+> 
+> 1. `.sports-title`: Uses the font 'Anton', uppercase, large font sizing, for aggressive sports hero typography.
+> 2. `.sports-subtitle`: Uses 'Inter', weight 800, uppercase, letter-spaced, colored in crimson red `#D32F2F`.
+> Also, include a `.stat-card` class that mimics a floating dashboard panel: background white, smooth rounded corners, a subtle 1px border (`#EAEAEA`), and an ultra-soft drop shadow.
+
+---
+
+## 2. High-Performance Sports Table Grid
+Prompt for Copilot Chat / Panel:
+
+> Design a clean HTML/CSS data table layout engineered for a sports statistics leaderboard. Structure a table layout named `.custom-table` that removes harsh internal grid borders. Give table headers (`th`) a muted gray color (`#6C757D`), uppercase transformations, and generous layout padding. Table cells (`td`) must feature comfortable spacing, a thin baseline row divider, and use the 'Inter' font. Create two helper styling badge classes:
+> 
+> 
+> 1. `.rank-badge`: A compact inline-block background badge colored in crimson red `#D32F2F` with white text rendering numerical metrics using 'Space Mono'.
+> 2. `.numeric-data`: Applies the 'Space Mono' font family explicitly to numerical metrics like runs, averages, and wicket metrics to optimize visual scanning.
+
+---
+
+## 3. Integrated Charting Configuration (Plotly/Matplotlib)
+Prompt for Copilot Chat / Panel:
+
+> Generate a programmatic bar chart configuration function using Plotly Graph Objects that seamlessly binds into a light-themed user interface canvas. The chart needs to process individual player label arrays on the X-axis against their total scoring numbers on the Y-axis. Style the chart elements according to these visual constraints:
+> 
+> 
+> - Set bar fill colors strictly to athletic crimson red `#D32F2F` with a slightly deeper `#9A1B1B` outline border.
+> - Strip out all solid background panels (`plot_bgcolor` and `paper_bgcolor` must be completely transparent).
+> - Enable subtle horizontal grid lines using a very soft gray `#EAEAEA` for the Y-axis only.
+> - Bind the chart font configuration directly to the 'Inter' typeface family.
+
