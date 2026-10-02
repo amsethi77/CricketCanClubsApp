@@ -566,7 +566,7 @@ Model: keep the core cricket experience free; charge for managing more cricket, 
 ## New UI Look and Feel
 
 ## 1. Typography & Global Layout Foundation
-Prompt for Copilot Chat / Panel:
+
 
 > Write a clean, modular CSS layout configuration for a premium light-themed sports website canvas. Import "Anton", "Inter", and "Space Mono" from Google Fonts. Set the global background canvas color to an off-white `#F8F9FA` and default text to `#1A1A1A`. Create two primary structural heading classes:
 > 
@@ -578,7 +578,7 @@ Prompt for Copilot Chat / Panel:
 ---
 
 ## 2. High-Performance Sports Table Grid
-Prompt for Copilot Chat / Panel:
+
 
 > Design a clean HTML/CSS data table layout engineered for a sports statistics leaderboard. Structure a table layout named `.custom-table` that removes harsh internal grid borders. Give table headers (`th`) a muted gray color (`#6C757D`), uppercase transformations, and generous layout padding. Table cells (`td`) must feature comfortable spacing, a thin baseline row divider, and use the 'Inter' font. Create two helper styling badge classes:
 > 
@@ -589,7 +589,7 @@ Prompt for Copilot Chat / Panel:
 ---
 
 ## 3. Integrated Charting Configuration (Plotly/Matplotlib)
-Prompt for Copilot Chat / Panel:
+
 
 > Generate a programmatic bar chart configuration function using Plotly Graph Objects that seamlessly binds into a light-themed user interface canvas. The chart needs to process individual player label arrays on the X-axis against their total scoring numbers on the Y-axis. Style the chart elements according to these visual constraints:
 > 
