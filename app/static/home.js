@@ -59,7 +59,9 @@
   // ---------- Normalise matches from the fixtures API ----------
   function fromFixture(f) {
     const status = String(f.status_key || f.status || "").toLowerCase();
-    const kind = status === "live" ? "live" : status === "completed" ? "result" : "upcoming";
+    // A past game is never "live" or "upcoming": show it as a result.
+    const isPast = String(f.date || "").slice(0, 10) < new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+    const kind = isPast ? "result" : status === "live" ? "live" : status === "completed" ? "result" : "upcoming";
     return {
       id: f.id,
       kind,

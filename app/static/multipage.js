@@ -8,10 +8,10 @@
     if (!document.querySelector(".page-topbar") || document.querySelector('script[src^="/assets/muse.js"]')) return;
     const museCss = document.createElement("link");
     museCss.rel = "stylesheet";
-    museCss.href = "/assets/muse.css?v=20260927a";
+    museCss.href = "/assets/muse.css?v=20261004a";
     document.head.appendChild(museCss);
     const museJs = document.createElement("script");
-    museJs.src = "/assets/muse.js?v=20260927a";
+    museJs.src = "/assets/muse.js?v=20261004a";
     document.head.appendChild(museJs);
     // Plans: shows an "Upgrade" pop-up when a paid feature is used. See README.md -> "Subscriptions and plans".
     const gate = document.createElement("script");

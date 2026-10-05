@@ -1,6 +1,7 @@
 /*
  * Public AI Muse for signed-out visitors (read-only).
- * Loaded by public_header.js on public pages (Live, Fixtures, Rankings, Scorecards, Clubs).
+ * Loaded by public_header.js on every public page, including Sign In and Register (Oct 2026).
+ * Questions the built-in rules can't answer go to the LLM assistant on public data only.
  * Talks to POST /api/public/muse. Actions (saving scores, uploads, availability, alerts)
  * reply with Sign in / Register buttons.
  * Documented in README.md -> "AI Muse and notifications" -> "Public AI Muse".
@@ -10,7 +11,7 @@ function startPublicMuse() {
   // Signed-in pages use the full AI Muse (muse.js) instead.
   if (document.querySelector(".page-topbar")) return;
   const path = location.pathname.replace(/\/+$/, "") || "/";
-  if (path === "/signin" || path === "/register") return;
+  const onAuthPage = path === "/signin" || path === "/register";
 
   const HISTORY_KEY = "ccMusePublicHistory";
   const esc = (v) =>
@@ -36,14 +37,14 @@ function startPublicMuse() {
 
   const css = document.createElement("link");
   css.rel = "stylesheet";
-  css.href = "/assets/muse.css?v=20260927b";
+  css.href = "/assets/muse.css?v=20261005a";
   document.head.appendChild(css);
 
   const fab = document.createElement("button");
   fab.type = "button";
-  fab.className = "muse-fab muse-fab-public";
-  fab.setAttribute("aria-label", "Ask AI Muse");
-  fab.innerHTML = `<span class="muse-fab-icon" aria-hidden="true">✨</span><strong>Ask AI Muse</strong>`;
+  fab.className = `muse-fab muse-fab-public${onAuthPage ? " muse-fab-auth" : ""}`;
+  fab.setAttribute("aria-label", "Ask the AI assistant");
+  fab.innerHTML = `<span class="muse-fab-icon" aria-hidden="true">✨</span><strong>AI Assistant</strong>`;
   document.body.appendChild(fab);
 
   const panel = document.createElement("aside");
@@ -52,7 +53,7 @@ function startPublicMuse() {
   panel.setAttribute("aria-label", "AI Muse");
   panel.innerHTML = `
     <header class="muse-head">
-      <div class="muse-title"><span aria-hidden="true">✨</span><div><strong>AI Muse</strong><small>Scores, results and stats</small></div></div>
+      <div class="muse-title"><span aria-hidden="true">✨</span><div><strong>AI Muse · Assistant</strong><small>Ask about scores, results, players and clubs</small></div></div>
       <button type="button" class="muse-close" aria-label="Close">✕</button>
     </header>
     <div class="muse-body" data-view="chat">
@@ -81,7 +82,7 @@ function startPublicMuse() {
 
   function render() {
     if (!history.length) {
-      messagesEl.innerHTML = `<div class="muse-msg muse-bot"><div class="muse-text">Hi! I'm AI Muse ✨ Ask me about live scores, results, scorecards by date, club rankings or how a player is doing.</div></div>`;
+      messagesEl.innerHTML = `<div class="muse-msg muse-bot"><div class="muse-text">Hi! I'm AI Muse, the Cricket Canada Clubs assistant ✨ Ask me about live scores, results, scorecards by date, club rankings, how a player is doing, or how to join. Sign in and I can also mark your availability, update scores and more.</div></div>`;
       return;
     }
     messagesEl.innerHTML = history

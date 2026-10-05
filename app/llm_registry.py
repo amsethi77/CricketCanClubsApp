@@ -7,12 +7,18 @@ from typing import Any
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-READMELLM_FILE = REPO_ROOT / "READMELLM.md"
+# READMELLM.md holds the LLM prompts. It was moved into the MD/ folder in Sept 2026, so look in both places.
+READMELLM_CANDIDATES = [REPO_ROOT / "MD" / "READMELLM.md", REPO_ROOT / "READMELLM.md"]
+READMELLM_FILE = next((path for path in READMELLM_CANDIDATES if path.exists()), READMELLM_CANDIDATES[0])
 
 
 @lru_cache(maxsize=1)
 def _registry_text() -> str:
-    return READMELLM_FILE.read_text(encoding="utf-8")
+    for path in READMELLM_CANDIDATES:
+        if path.exists():
+            return path.read_text(encoding="utf-8")
+    # Missing prompt file: the assistant still works with its built-in defaults instead of crashing.
+    return ""
 
 
 @lru_cache(maxsize=1)

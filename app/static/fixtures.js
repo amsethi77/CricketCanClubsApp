@@ -110,7 +110,15 @@
         if (response.ok) {
           const dashboard = await response.json();
           const dashboardFixtures = Array.isArray(dashboard.fixtures) ? dashboard.fixtures : [];
-          const fixtures = await addArchiveScorecardLinks(dashboardFixtures);
+          const todayIso = new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+          // Past games that were never played/scored are hidden; played games stay as results.
+          const fixtures = (await addArchiveScorecardLinks(dashboardFixtures)).filter(
+            (fixture) =>
+              String(fixture.date || "").slice(0, 10) >= todayIso ||
+              String(fixture.status || "").toLowerCase() === "completed" ||
+              fixture.scorecard_url ||
+              !["", "TBD"].includes(String(fixture.result || fixture.scorecard?.result || "TBD").trim().toUpperCase())
+          );
           const club = dashboard.focus_club || dashboard.club || {};
           const clubName = club.name || "Selected club";
           const readOnlyLabel = `Read-only club fixtures${selectedClubId ? ` · ${clubName}` : ""}`;
@@ -118,7 +126,10 @@
           if (fixturesTotalCountEl) fixturesTotalCountEl.textContent = String(fixtures.length || 0);
           if (fixturesClubCountEl) fixturesClubCountEl.textContent = "1";
           if (fixturesUpcomingCountEl) {
-            fixturesUpcomingCountEl.textContent = String(fixtures.filter((fixture) => String(fixture.status || "").toLowerCase() !== "completed").length || 0);
+            const today = new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+            fixturesUpcomingCountEl.textContent = String(
+              fixtures.filter((fixture) => String(fixture.status || "").toLowerCase() !== "completed" && String(fixture.date || "").slice(0, 10) >= today).length || 0
+            );
           }
           if (fixturesModeLabelEl) fixturesModeLabelEl.textContent = "Read-only";
           if (fixturesListHeadingEl) fixturesListHeadingEl.textContent = `${clubName} fixtures`;

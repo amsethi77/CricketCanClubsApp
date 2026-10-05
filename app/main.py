@@ -7,6 +7,7 @@ import secrets
 import sqlite3
 import shutil
 import threading
+import httpx
 from copy import deepcopy
 from urllib import request
 from urllib.parse import urlencode
@@ -52,6 +53,28 @@ def _scorebook_is_open(match: dict[str, Any]) -> bool:
         return False
     return match_day == today or status in {"live", "in progress"}
 
+
+def _fixture_is_past(match: dict[str, Any]) -> bool:
+    """True when the fixture's date is before today (Toronto time). Past matches are read-only."""
+    raw_date = str((match or {}).get("date") or "").strip()[:10]
+    if not raw_date:
+        return False
+    try:
+        return datetime.fromisoformat(raw_date).date() < _current_local_date()
+    except Exception:
+        return False
+
+
+def _require_not_past(match: dict[str, Any], what: str = "scores and availability") -> None:
+    """Scores, availability and the playing XI of past matches can't be changed (README: "Past matches are locked")."""
+    if _fixture_is_past(match):
+        label = str(match.get("date_label") or match.get("date") or "an earlier date")
+        raise HTTPException(
+            status_code=403,
+            detail=f"This match was on {label}. Past matches are locked, so {what} can't be changed."
+            + (" To add an old score, upload the scorecard photo in Archives." if what == "scores" else ""),
+        )
+
 _AUTH_SCHEMA_BOOTSTRAP_LOCK = threading.Lock()
 _AUTH_SCHEMA_BOOTSTRAP_DONE = False
 
@@ -83,6 +106,7 @@ try:
     from cricket_brain import answer_question, get_llm_status
     import cricket_insights as cricket_insights
     import muse as muse
+    import muse_agent as muse_agent
     import subscriptions as subscriptions
     import ai_scorer as ai_scorer
     from llm_service import clear_query_cache, infer as llm_infer, list_llm_documents, list_prompt_manifest, reindex_llm_corpus
@@ -134,6 +158,7 @@ except ModuleNotFoundError:
     from app.cricket_brain import answer_question, get_llm_status
     from app import cricket_insights
     from app import muse
+    from app import muse_agent
     from app import subscriptions
     from app import ai_scorer
     from app.llm_service import clear_query_cache, infer as llm_infer, list_llm_documents, list_prompt_manifest, reindex_llm_corpus
@@ -3553,7 +3578,7 @@ def public_rankings_chart() -> JSONResponse:
 
 
 def _public_live_matches(store: dict[str, Any]) -> list[dict[str, Any]]:
-    today = datetime.utcnow().date().isoformat()
+    today = _current_local_date().isoformat()
     live_statuses = {"live", "in progress", "ongoing"}
     matches: list[dict[str, Any]] = []
     for fixture in store.get("fixtures", []) or []:
@@ -3562,6 +3587,8 @@ def _public_live_matches(store: dict[str, Any]) -> list[dict[str, Any]]:
         fixture_date = str(fixture.get("date") or "").strip()
         if fixture_date != today and status_key not in live_statuses:
             continue
+        if fixture_date[:10] < today:
+            continue  # a game from an earlier day is not live any more
         if status_key == "completed":
             continue
         scorecard = dict(fixture.get("scorecard") or {})
@@ -3877,6 +3904,16 @@ def _public_fixtures_page_payload(store: dict[str, Any]) -> dict[str, Any]:
     scorecard_urls = _past_fixture_scorecard_urls(store, fixtures)
     for fixture in fixtures:
         fixture["scorecard_url"] = scorecard_urls.get(str(fixture.get("id") or ""), "")
+        fixture["is_past"] = _fixture_is_past(fixture)
+    # Past games that were never played or scored are not "upcoming": hide them. Played games stay as results.
+    fixtures = [
+        fixture
+        for fixture in fixtures
+        if not fixture["is_past"]
+        or str(fixture.get("status_key") or "") == "completed"
+        or fixture.get("scorecard_url")
+        or str(fixture.get("result") or "TBD").strip().upper() not in {"", "TBD"}
+    ]
     fixtures.sort(
         key=lambda item: (
             str(item.get("date") or ""),
@@ -3899,7 +3936,7 @@ def _public_fixtures_page_payload(store: dict[str, Any]) -> dict[str, Any]:
             "summary": "Browse fixtures by club. Signed-in users see their club fixtures in read-only mode.",
             "total_fixtures": len(fixtures),
             "club_count": len(club_groups),
-            "upcoming_count": sum(1 for fixture in fixtures if str(fixture.get("status") or "").lower() != "completed"),
+            "upcoming_count": sum(1 for fixture in fixtures if str(fixture.get("status") or "").lower() != "completed" and not fixture.get("is_past")),
         },
         "fixtures": fixtures,
         "club_groups": club_groups,
@@ -6318,7 +6355,9 @@ def player_availability_data(x_auth_token: str | None = Header(default=None)) ->
     fixtures = [
         fixture
         for fixture in scoped.get("fixtures", [])
-        if (not active_year or fixture_season_year(fixture) == active_year) and fixture.get("status") != "Completed"
+        if (not active_year or fixture_season_year(fixture) == active_year)
+        and fixture.get("status") != "Completed"
+        and not _fixture_is_past(fixture)  # past games are locked and hidden (README: "Past matches are locked")
     ]
     fixtures.sort(key=lambda fixture: (str(fixture.get("date") or ""), str(fixture.get("opponent") or "")))
     member = _member_for_user(store, user_row)
@@ -6344,6 +6383,7 @@ def save_player_availability(request: PlayerAvailabilitySelfRequest, x_auth_toke
         match = get_match_or_404(store, request.fixture_id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
+    _require_not_past(match, "availability")
     club = _selected_club(store, request.club_id or current_club_id)
     if str(match.get("club_id") or "").strip() and str(match.get("club_id") or "").strip() != str(club.get("id") or "").strip():
         raise HTTPException(status_code=403, detail="This match is not in your selected club.")
@@ -7202,6 +7242,7 @@ def update_availability(match_id: str, request: AvailabilityUpdateRequest, x_aut
         match = get_match_or_404(store, match_id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
+    _require_not_past(match, "availability")
 
     member = _member_for_user(store, user_row)
     if not member:
@@ -7237,6 +7278,7 @@ def update_playing_xi(match_id: str, request: PlayingXiUpdateRequest, x_auth_tok
         match = get_match_or_404(store, match_id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
+    _require_not_past(match, "the playing XI")
 
     effective_role = _effective_role_name(user_row, current_club_id)
     selected_club = _selected_club(store, request.club_id or match.get("club_id") or current_club_id)
@@ -7284,6 +7326,7 @@ def update_scorecard(match_id: str, request: ScorecardUpdateRequest, x_auth_toke
         match = get_match_or_404(store, match_id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
+    _require_not_past(match, "scores")
 
     updates = request.model_dump(exclude_none=True)
     for key, value in updates.items():
@@ -7304,6 +7347,7 @@ def add_performance(match_id: str, request: PerformanceCreateRequest, x_auth_tok
         match = get_match_or_404(store, match_id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
+    _require_not_past(match, "scores")
 
     player_name = resolve_member_name(store, request.player_name)
     match["performances"].append(
@@ -7334,6 +7378,7 @@ def add_commentary(match_id: str, request: CommentaryRequest, x_auth_token: str 
         match = get_match_or_404(store, match_id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
+    _require_not_past(match, "commentary")
 
     match["commentary"].append(
         {
@@ -7569,70 +7614,348 @@ def notifications_read(request: NotificationReadRequest, x_auth_token: str | Non
 
 @app.post("/api/muse")
 def muse_chat(request: MuseRequest, x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
-    """AI Muse: actions (score entry, availability requests) first, otherwise the normal assistant."""
+    """AI Muse: carries out commands (with a Confirm step) and answers everything else with the LLM assistant.
+
+    README: MD/README.md -> "AI Muse and notifications" -> "AI Muse as an agent".
+    """
     user_row, current_club_id = _auth_user_from_token(x_auth_token)
-    permissions = _user_permissions(user_row, current_club_id)
     store = load_store()
     club = _selected_club(store, request.focus_club_id or current_club_id)
-    club_id = str(club.get("id") or "")
-    club_name = str(club.get("name") or "your club")
-    actor = str(user_row["display_name"] or user_row["mobile"] or "AI Muse")
-    message = str(request.message or "").strip()
+    message = " ".join(str(request.message or "").split())[:800]
+    ctx = _muse_context(user_row, current_club_id, store, club, x_auth_token)
+    if not message:
+        return _muse_reply("Tell me what you'd like to do, or ask me anything about your club.")
+
+    plan = muse_agent.parse_command(message, _current_local_date(), muse.looks_like_score_message)
+    if not plan and muse_agent.looks_like_command(message):
+        plan = muse_agent.llm_plan(message, _muse_llm_context(ctx), _muse_llm_call)
+    if plan:
+        return _muse_prepare(plan, ctx, message)
+
     intent = muse.detect_intent(message)
-    fixtures = _club_fixtures(store, club_id)
-
-    def reply(text: str, **extra: Any) -> dict[str, Any]:
-        return {"reply": text, "intent": intent, "source_label": "AI Muse", **extra}
-
-    if not _has_feature(user_row, current_club_id, "ai_assistant"):
-        return _muse_free_reply(message, intent)
-
-    if intent == "availability_request":
-        if not ({"manage_fixtures", "manage_players"} & permissions):
-            return reply("Only captains and club admins can send availability requests. You can update your own availability on the Availability page.", links=[{"label": "My availability", "href": "/player-availability"}])
-        fixture = muse.pick_fixture(fixtures, message, prefer="upcoming")
-        if not fixture or str(fixture.get("date") or "") < _current_local_date().isoformat():
-            return reply(f"There's no upcoming fixture for {club_name} to ask about. Add one in Fixtures first.", links=[{"label": "Fixtures", "href": "/dashboard/widgets/schedule"}])
-        label = muse.fixture_label(fixture)
-        _notify(
-            club_id,
-            "availability",
-            f"Are you available? {label}",
-            f"{actor} is picking the team for {label}. Tap to mark Available, Maybe or Not available.",
-            f"/player-availability?fixture_id={fixture.get('id')}",
-            str(fixture.get("id") or ""),
-            actor,
+    if intent == "upload_help":
+        return _muse_reply("Tap the 📎 button below and choose the scorecard photo. I'll upload it to Archives, where it's read and then approved by an admin.", action_hint="open_upload")
+    if intent == "scoring_help":
+        return _muse_reply(
+            "For ball-by-ball scoring open Quick Score: big buttons, voice and automatic strike rotation. You can also tell me the score as it goes, e.g. \"We are 85/3 after 12 overs\".",
+            links=[{"label": "Open Quick Score", "href": "/score"}],
         )
-        members = _club_member_names(store, club)
-        return reply(f"Done. I've sent an availability request for {label} to all {len(members)} players of {club_name}. They'll see it under the bell icon. Ask me \"who is available?\" later to see replies.")
 
-    if intent == "availability_summary":
-        fixture = muse.pick_fixture(fixtures, message, prefer="upcoming")
+    # Everything else: the LLM assistant (Ollama when it's running, otherwise the built-in data assistant).
+    chat_store = _chat_store_for(store, str(club.get("id") or ""))
+    answer = answer_question(message, chat_store, history=request.history, session_id=request.session_id)
+    return {
+        "reply": str(answer.get("answer") or "I couldn't find an answer to that."),
+        "intent": "chat",
+        "source_label": answer.get("source_label") or "AI Muse",
+        "llm": (answer.get("llm") or {}).get("model") or "",
+    }
+
+
+class MuseExecuteRequest(BaseModel):
+    tool: str
+    args: dict[str, Any] = Field(default_factory=dict)
+    focus_club_id: str | None = None
+
+
+@app.post("/api/muse/execute")
+def muse_execute(request: MuseExecuteRequest, x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
+    """Carry out a task AI Muse planned, after the person tapped Confirm. Everything is checked again here."""
+    user_row, current_club_id = _auth_user_from_token(x_auth_token)
+    store = load_store()
+    club = _selected_club(store, request.focus_club_id or current_club_id)
+    ctx = _muse_context(user_row, current_club_id, store, club, x_auth_token)
+    tool = str(request.tool or "")
+    if tool not in muse_agent.TOOLS or tool in {"chat", "availability_summary"}:
+        raise HTTPException(status_code=400, detail="Unknown task.")
+    _muse_require_plan(ctx, tool)
+    result = _muse_run(tool, dict(request.args or {}), ctx)
+    _audit_event("muse.execute", "muse", tool, actor=user_row, club_id=str(club.get("id") or ""), club_name=str(club.get("name") or ""), details={"tool": tool}, source="api")
+    return result
+
+
+# ---------------------------------------------------------------------------
+# AI Muse agent helpers
+# ---------------------------------------------------------------------------
+def _muse_reply(text: str, **extra: Any) -> dict[str, Any]:
+    return {"reply": text, "intent": extra.pop("intent", "agent"), "source_label": extra.pop("source_label", "AI Muse"), **extra}
+
+
+def _muse_context(user_row: sqlite3.Row, current_club_id: str, store: dict[str, Any], club: dict[str, Any], token: str | None) -> dict[str, Any]:
+    club_id = str(club.get("id") or "")
+    return {
+        "user": user_row,
+        "current_club_id": current_club_id,
+        "permissions": _user_permissions(user_row, current_club_id),
+        "role": _effective_role_name(user_row, current_club_id),
+        "store": store,
+        "club": club,
+        "club_id": club_id,
+        "club_name": str(club.get("name") or "your club"),
+        "fixtures": _club_fixtures(store, club_id),
+        "token": token,
+        "actor": str(user_row["display_name"] or user_row["mobile"] or "AI Muse"),
+    }
+
+
+def _muse_llm_context(ctx: dict[str, Any]) -> str:
+    upcoming = [f for f in ctx["fixtures"] if not _fixture_is_past(f) and str(f.get("status") or "").lower() != "completed"]
+    upcoming.sort(key=lambda f: str(f.get("date") or ""))
+    nxt = ", ".join(muse.fixture_label(f) for f in upcoming[:3]) or "none"
+    return f"Today is {_current_local_date().isoformat()}. Club: {ctx['club_name']}. Speaker: {ctx['actor']} ({ctx['role']}). Next fixtures: {nxt}."
+
+
+def _muse_llm_call(system_prompt: str, user_prompt: str) -> str:
+    """Ask the local Ollama model for a JSON tool choice. Raises if Ollama isn't running."""
+    status = get_llm_status()
+    if status.get("provider") != "ollama" or not status.get("model"):
+        raise RuntimeError("LLM offline")
+    response = httpx.post(
+        f"{str(status.get('base_url') or '').rstrip('/')}/api/chat",
+        json={
+            "model": status["model"],
+            "stream": False,
+            "format": "json",
+            "options": {"temperature": 0, "num_predict": 200},
+            "messages": [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}],
+        },
+        timeout=45.0,
+    )
+    response.raise_for_status()
+    return str(response.json().get("message", {}).get("content", "") or "")
+
+
+_MUSE_TOOL_LABELS = {
+    "mark_availability": "Updating availability",
+    "request_availability": "Sending availability requests",
+    "remind_pending": "Sending availability reminders",
+    "pick_xi": "Picking the playing XI",
+    "create_fixture": "Adding fixtures",
+    "live_update": "Updating the live score",
+    "record_result": "Saving match scores",
+}
+
+
+def _muse_require_plan(ctx: dict[str, Any], tool: str) -> None:
+    """AI Muse tasks are part of Super (the assistant). Reading availability stays free."""
+    if tool == "availability_summary":
+        return
+    if not _has_feature(ctx["user"], ctx["current_club_id"], "ai_assistant"):
+        raise HTTPException(
+            status_code=402,
+            detail=f"{_MUSE_TOOL_LABELS.get(tool, 'This task')} through AI Muse is part of the Super plan ($4.99 per month). See /pricing to upgrade.",
+        )
+
+
+def _muse_find_fixture(ctx: dict[str, Any], when_text: str, *, today_only: bool = False) -> dict[str, Any] | None:
+    """The fixture a command is about: a date ('Saturday', 'Oct 12'), an opponent, else the next upcoming one."""
+    today = _current_local_date()
+    fixtures = [f for f in ctx["fixtures"] if not _fixture_is_past(f) and str(f.get("status") or "").lower() != "completed"]
+    if today_only:
+        fixtures = [f for f in ctx["fixtures"] if str(f.get("date") or "")[:10] == today.isoformat()]
+    fixtures.sort(key=lambda f: (str(f.get("date") or ""), str((f.get("details") or {}).get("scheduled_time") or "")))
+    when = muse_agent.parse_when(when_text, today)
+    if when:
+        on_day = [f for f in fixtures if str(f.get("date") or "")[:10] == when.isoformat()]
+        return on_day[0] if on_day else None
+    lowered = str(when_text or "").lower()
+    by_opponent = [
+        f for f in fixtures
+        if str(f.get("opponent") or "").strip() and len(str(f.get("opponent")).split()[0]) >= 3 and str(f.get("opponent")).lower().split()[0] in lowered
+    ]
+    pool = by_opponent or fixtures
+    return pool[0] if pool else None
+
+
+def _muse_no_fixture(ctx: dict[str, Any], when_text: str) -> dict[str, Any]:
+    when = muse_agent.parse_when(when_text, _current_local_date())
+    day = f" on {when.strftime('%a %d %b')}" if when else ""
+    return _muse_reply(
+        f"I can't find an upcoming fixture for {ctx['club_name']}{day}. Past matches are locked, so I can only work with today's or future games. You can ask me to add one, e.g. \"Add a match vs Imran XI on Saturday at 10am\".",
+        links=[{"label": "Fixtures", "href": "/dashboard/widgets/schedule"}],
+    )
+
+
+def _muse_can_manage(ctx: dict[str, Any]) -> bool:
+    return ctx["role"] in {"captain", "club_admin", "superadmin"} or bool({"manage_fixtures", "manage_players"} & ctx["permissions"])
+
+
+def _muse_action(text: str, tool: str, args: dict[str, Any], confirm_label: str, **extra: Any) -> dict[str, Any]:
+    return _muse_reply(text, action={"tool": tool, "args": args, "confirm_label": confirm_label}, **extra)
+
+
+def _muse_resolve_players(ctx: dict[str, Any], names: list[str]) -> tuple[list[str], list[str]]:
+    club_names = {normalize_name(n): n for n in _club_member_names(ctx["store"], ctx["club"])}
+    found: list[str] = []
+    missing: list[str] = []
+    for raw in names:
+        member = cricket_insights.find_member(ctx["store"], raw)
+        name = str(member.get("name")) if member else resolve_member_name(ctx["store"], raw)
+        if name and normalize_name(name) in club_names:
+            if club_names[normalize_name(name)] not in found:
+                found.append(club_names[normalize_name(name)])
+        else:
+            missing.append(raw)
+    return found, missing
+
+
+_STATUS_LABEL = {"available": "Available", "maybe": "Maybe", "unavailable": "Not available"}
+
+
+def _muse_prepare(plan: dict[str, Any], ctx: dict[str, Any], message: str) -> dict[str, Any]:
+    tool = plan["tool"]
+    args = dict(plan.get("args") or {})
+    try:
+        _muse_require_plan(ctx, tool)
+    except HTTPException as exc:
+        return _muse_reply(str(exc.detail).replace(" See /pricing to upgrade.", ""), links=[{"label": "See plans", "href": "/pricing"}], upgrade=True)
+
+    if tool == "availability_summary":
+        fixture = _muse_find_fixture(ctx, args.get("when", ""))
         if not fixture:
-            return reply(f"There are no fixtures on record for {club_name}.")
-        groups = muse.availability_summary(fixture, _club_member_names(store, club))
-        past = str(fixture.get("date") or "") < _current_local_date().isoformat()
-        lines = [f"Availability for {muse.fixture_label(fixture)}" + (" (last fixture, there is no upcoming one yet):" if past else ":")]
+            return _muse_no_fixture(ctx, args.get("when", ""))
+        groups = muse.availability_summary(fixture, _club_member_names(ctx["store"], ctx["club"]))
+        lines = [f"Availability for {muse.fixture_label(fixture)}:"]
         for key, label in (("available", "Available"), ("maybe", "Maybe"), ("unavailable", "Not available"), ("no response", "No reply yet")):
             names = groups[key]
             lines.append(f"• {label} ({len(names)}): {', '.join(names[:14]) + (' …' if len(names) > 14 else '') if names else '–'}")
-        return reply("\n".join(lines), links=[{"label": "Pick the playing XI", "href": f"/dashboard/widgets/schedule?match_id={fixture.get('id')}#selectedPlayingXiTitle"}])
+        if groups["no response"] and _muse_can_manage(ctx):
+            lines.append("Say \"remind the players who haven't replied\" and I'll nudge them.")
+        return _muse_reply("\n".join(lines))
 
-    if intent == "score_entry":
-        if "manage_scorecards" not in permissions:
-            return reply("Only scorers and club admins can save scores. Send the score to your captain, or upload a photo of the scorecard for review.")
+    if tool == "mark_availability":
+        fixture = _muse_find_fixture(ctx, args.get("when", ""))
+        if not fixture:
+            return _muse_no_fixture(ctx, args.get("when", ""))
+        status = str(args.get("status") or "")
+        if status not in _STATUS_LABEL:
+            return _muse_reply("Should I mark Available, Maybe or Not available?")
+        players = [str(p) for p in args.get("players") or ["me"]]
+        if players == ["me"]:
+            member = _member_for_user(ctx["store"], ctx["user"])
+            if not member:
+                return _muse_reply("Your account isn't linked to a player profile yet, so I can't mark your availability. Ask your club admin to link it.")
+            return _muse_action(
+                f"Mark you ({member.get('name')}) as {_STATUS_LABEL[status]} for {muse.fixture_label(fixture)}?",
+                tool,
+                {"players": ["me"], "status": status, "match_id": fixture.get("id")},
+                f"Yes, mark {_STATUS_LABEL[status]}",
+            )
+        if not _muse_can_manage(ctx):
+            return _muse_reply("Only captains and club admins can change other players' availability. You can say \"mark me available\" for yourself.")
+        found, missing = _muse_resolve_players(ctx, players)
+        if not found:
+            return _muse_reply(f"I couldn't find {', '.join(missing)} in {ctx['club_name']}. Check the spelling or use the name on their profile.")
+        note = f"\n(I couldn't find: {', '.join(missing)}.)" if missing else ""
+        return _muse_action(
+            f"Mark {', '.join(found)} as {_STATUS_LABEL[status]} for {muse.fixture_label(fixture)}?{note}",
+            tool,
+            {"players": found, "status": status, "match_id": fixture.get("id")},
+            f"Yes, update {len(found)} player{'s' if len(found) != 1 else ''}",
+        )
+
+    if tool in {"request_availability", "remind_pending"}:
+        if not _muse_can_manage(ctx):
+            return _muse_reply("Only captains and club admins can send availability requests. You can update your own: say \"mark me available for the next match\".")
+        fixture = _muse_find_fixture(ctx, args.get("when", ""))
+        if not fixture:
+            return _muse_no_fixture(ctx, args.get("when", ""))
+        groups = muse.availability_summary(fixture, _club_member_names(ctx["store"], ctx["club"]))
+        if tool == "remind_pending":
+            pending = groups["no response"]
+            if not pending:
+                return _muse_reply(f"Everyone has replied for {muse.fixture_label(fixture)} ✓")
+            return _muse_action(
+                f"Send a reminder for {muse.fixture_label(fixture)}? {len(pending)} player{'s have' if len(pending) != 1 else ' has'} not replied: {', '.join(pending[:10])}{' …' if len(pending) > 10 else ''}.",
+                tool,
+                {"match_id": fixture.get("id")},
+                "Send reminder",
+            )
+        count = len(_club_member_names(ctx["store"], ctx["club"]))
+        return _muse_action(
+            f"Send an availability request for {muse.fixture_label(fixture)} to all {count} players of {ctx['club_name']}?",
+            tool,
+            {"match_id": fixture.get("id")},
+            "Send request",
+        )
+
+    if tool == "pick_xi":
+        if not ({"manage_fixtures"} & ctx["permissions"]) or not _has_feature(ctx["user"], ctx["current_club_id"], "playing_xi"):
+            return _muse_reply("Only captains and club admins on a paid plan can pick the playing XI.")
+        fixture = _muse_find_fixture(ctx, args.get("when", ""))
+        if not fixture:
+            return _muse_no_fixture(ctx, args.get("when", ""))
+        best = cricket_insights.best_xi(ctx["store"], ctx["club"])
+        statuses = {normalize_name(k): str(v or "").lower() for k, v in (fixture.get("availability_statuses") or {}).items()}
+        xi = [str(p.get("name") or "") for p in best.get("xi") or [] if p.get("name")]
+        eligible = [name for name in xi if statuses.get(normalize_name(name), "") in {"available", "maybe"}]
+        lines = [f"Suggested XI for {muse.fixture_label(fixture)}:"]
+        for index, player in enumerate(best.get("xi") or [], start=1):
+            mark = "" if normalize_name(str(player.get("name") or "")) in {normalize_name(n) for n in eligible} else " (hasn't said available)"
+            lines.append(f"{index}. {player.get('name')} – {player.get('reason') or ''}{mark}")
+        if not eligible:
+            lines.append("Nobody in this XI has said they're available yet, so I can't save it. Ask everyone for availability first.")
+            return _muse_reply("\n".join(lines))
+        if len(eligible) < len(xi):
+            lines.append(f"I'll save the {len(eligible)} player{'s' if len(eligible) != 1 else ''} who said Available or Maybe; the others can be added once they reply.")
+        return _muse_action("\n".join(lines), tool, {"match_id": fixture.get("id"), "players": eligible}, f"Save this XI ({len(eligible)})")
+
+    if tool == "create_fixture":
+        if "manage_fixtures" not in ctx["permissions"]:
+            return _muse_reply("Only captains and club admins can add fixtures.")
+        opponent = str(args.get("opponent") or "").strip()
+        when_raw = str(args.get("date") or "")
+        when = muse_agent.parse_when(when_raw, _current_local_date()) if when_raw else None
+        if not opponent or not when:
+            return _muse_reply("Tell me the opponent and the date, e.g. \"Add a match vs Imran XI on Saturday at 10am, 20 overs\".")
+        if when < _current_local_date():
+            return _muse_reply("That date has already passed. Past matches are locked, so I can only add today's or future fixtures.")
+        time_text = str(args.get("time") or "")
+        overs = str(args.get("overs") or "20")
+        venue = str(args.get("venue") or "")
+        return _muse_action(
+            f"Add {ctx['club_name']} vs {opponent} on {when.strftime('%a %d %b %Y')}{' at ' + time_text if time_text else ''} ({overs} overs{', ' + venue if venue else ''})?",
+            tool,
+            {"opponent": opponent, "date": when.isoformat(), "time": time_text, "overs": overs, "venue": venue},
+            "Add fixture",
+        )
+
+    if tool == "live_update":
+        if "manage_scorecards" not in ctx["permissions"]:
+            return _muse_reply("Only scorers and club admins can update the live score.")
+        fixture = _muse_find_fixture(ctx, "", today_only=True)
+        if not fixture:
+            return _muse_reply("There's no match for your club today. Start one in Quick Score, then tell me the score as it goes.", links=[{"label": "Quick Score", "href": "/score"}])
+        team = ctx["club_name"] if args.get("team") != "them" else str(fixture.get("opponent") or "Opponent")
+        overs = str(args.get("overs") or "")
+        return _muse_action(
+            f"Update the live score for {muse.fixture_label(fixture)}: {team} {args.get('runs')}/{args.get('wickets')}{f' after {overs} overs' if overs else ''}? Followers get a live alert.",
+            tool,
+            {"match_id": fixture.get("id"), "runs": str(args.get("runs") or ""), "wickets": str(args.get("wickets") or ""), "overs": overs, "team": "them" if args.get("team") == "them" else "us"},
+            "Update live score",
+        )
+
+    if tool == "record_result":
+        if "manage_scorecards" not in ctx["permissions"]:
+            return _muse_reply("Only scorers and club admins can save scores. Send the score to your captain, or upload a photo of the scorecard for review.")
+        store, club = ctx["store"], ctx["club"]
 
         def resolve_player(name: str) -> str | None:
             found = cricket_insights.find_member(store, name)
             return str(found.get("name")) if found else None
 
-        parsed = muse.parse_score_message(message, [club_name, str(club.get("short_name") or "")], resolve_player)
+        parsed = muse.parse_score_message(args.get("text") or message, [ctx["club_name"], str(club.get("short_name") or "")], resolve_player)
         if not parsed["club_side"]:
-            return reply("I couldn't find a team score in that. Try: \"Heartlake 145/6 in 20 overs, Imran XI 120/9. Heartlake won by 25 runs. Amit S 45 off 30, Nick 3 wickets\".")
+            return _muse_reply("I couldn't find a team score in that. Try: \"Heartlake 145/6 in 20 overs, Imran XI 120/9. Heartlake won by 25 runs. Amit S 45 off 30, Nick 3 wickets\".")
         opponent_name = (parsed["opponent_side"] or {}).get("name", "")
-        fixture = muse.pick_fixture(fixtures, f"{message} {opponent_name}", prefer="past")
-        if not fixture:
-            return reply(f"I couldn't match this to a fixture for {club_name}. Add the fixture first, then send the score again.")
+        fixture = muse.pick_fixture(ctx["fixtures"], f"{message} {opponent_name}", prefer="past")
+        if fixture and _fixture_is_past(fixture):
+            return _muse_reply(
+                f"That looks like {muse.fixture_label(fixture)}, which has already passed. Past matches are locked, so I can't change its score. To add an old score, upload the scorecard photo (📎) for admin review.",
+                action_hint="open_upload",
+            )
+        if not fixture or str(fixture.get("date") or "")[:10] != _current_local_date().isoformat():
+            return _muse_reply(f"I can only save the final score for today's match. I couldn't find a {ctx['club_name']} match today; start one in Quick Score first.", links=[{"label": "Quick Score", "href": "/score"}])
         ours, theirs = parsed["club_side"], parsed["opponent_side"] or {}
         draft = {
             "scorecard": {
@@ -7648,7 +7971,7 @@ def muse_chat(request: MuseRequest, x_auth_token: str | None = Header(default=No
         }
         lines = [
             f"Here's what I understood for {muse.fixture_label(fixture)}:",
-            f"• {club_name}: {ours.get('runs')}/{ours.get('wickets')}" + (f" ({ours.get('overs')} ov)" if ours.get("overs") else ""),
+            f"• {ctx['club_name']}: {ours.get('runs')}/{ours.get('wickets')}" + (f" ({ours.get('overs')} ov)" if ours.get("overs") else ""),
             f"• {fixture.get('opponent') or opponent_name or 'Opponent'}: " + (f"{theirs.get('runs')}/{theirs.get('wickets')}" + (f" ({theirs.get('overs')} ov)" if theirs.get("overs") else "") if theirs else "not given"),
             f"• Result: {parsed['result'] or 'not given'}",
         ]
@@ -7661,19 +7984,116 @@ def muse_chat(request: MuseRequest, x_auth_token: str | None = Header(default=No
                 ] if part)
                 for p in parsed["performances"]
             ))
-        lines.append("Tap Confirm to save it, or send a corrected message.")
-        return reply("\n".join(lines), draft={"match_id": fixture.get("id"), **draft}, confirm_label="Confirm and save score")
+        return _muse_action("\n".join(lines), tool, {"match_id": fixture.get("id"), "draft": draft}, "Save score")
 
-    if intent == "upload_help":
-        return reply("Tap the 📎 button below and choose the scorecard photo. I'll upload it to Archives, where it's read and then approved by an admin.", action="open_upload")
-    if intent == "scoring_help":
-        return reply("For ball-by-ball scoring, open Quick Score. It has big buttons, voice scoring (\"four\", \"wide\", \"bowled\") and it rotates the strike for you. Everyone following the club gets live alerts for wickets and fifties.", links=[{"label": "Open Quick Score", "href": "/score"}])
-    if intent == "alerts_help":
-        return reply("Alerts appear under the 🔔 bell at the top: availability requests, match start, wickets, fifties and results. Tap 'Turn on browser alerts' in the bell menu to get pop-up notifications too.")
+    return _muse_reply("I'm not sure how to do that yet. Try \"mark me available for Saturday\", \"who is available?\", \"pick the best XI\" or ask me a question.")
 
-    chat_store = _chat_store_for(store, request.focus_club_id or club_id)
-    answer = answer_question(message, chat_store, history=request.history, session_id=request.session_id)
-    return {"reply": str(answer.get("answer") or ""), "intent": "chat", "source_label": answer.get("source_label") or "AI Muse"}
+
+def _muse_run(tool: str, args: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
+    store = ctx["store"]
+    token = ctx["token"]
+    match: dict[str, Any] | None = None
+    if args.get("match_id"):
+        try:
+            match = get_match_or_404(store, str(args["match_id"]))
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc))
+        if str(match.get("club_id") or "") and str(match.get("club_id")) != ctx["club_id"]:
+            raise HTTPException(status_code=403, detail="That match belongs to another club.")
+        _require_not_past(match, "it")
+
+    if tool == "mark_availability":
+        status = str(args.get("status") or "")
+        if status not in _STATUS_LABEL or match is None:
+            raise HTTPException(status_code=400, detail="Missing availability details.")
+        players = [str(p) for p in args.get("players") or []]
+        if players == ["me"]:
+            member = _member_for_user(store, ctx["user"])
+            if not member:
+                raise HTTPException(status_code=400, detail="Your account isn't linked to a player profile.")
+            names = [str(member.get("name") or "")]
+        else:
+            if not _muse_can_manage(ctx):
+                raise HTTPException(status_code=403, detail="Only captains and club admins can change other players' availability.")
+            names, _ = _muse_resolve_players(ctx, players)
+        for name in names:
+            match.setdefault("availability_statuses", {})[name] = status
+        _touch_fixture_audit(match, ctx["user"])
+        save_store(store)
+        return _muse_reply(
+            f"Done ✓ {', '.join(names)} {'is' if len(names) == 1 else 'are'} marked {_STATUS_LABEL[status]} for {muse.fixture_label(match)}.",
+            links=[{"label": "Open availability", "href": f"/player-availability?fixture_id={match.get('id')}"}],
+        )
+
+    if tool in {"request_availability", "remind_pending"}:
+        if not _muse_can_manage(ctx) or match is None:
+            raise HTTPException(status_code=403, detail="Only captains and club admins can send availability requests.")
+        label = muse.fixture_label(match)
+        if tool == "remind_pending":
+            pending = muse.availability_summary(match, _club_member_names(store, ctx["club"]))["no response"]
+            _notify(ctx["club_id"], "availability", f"Reminder: are you available? {label}", f"{len(pending)} players haven't replied yet. Tap to mark Available, Maybe or Not available.", f"/player-availability?fixture_id={match.get('id')}", str(match.get("id") or ""), ctx["actor"])
+            return _muse_reply(f"Done ✓ Reminder sent for {label}. {len(pending)} player{'s' if len(pending) != 1 else ''} still need{'' if len(pending) != 1 else 's'} to reply; they'll see it under the 🔔 bell.")
+        _notify(ctx["club_id"], "availability", f"Are you available? {label}", f"{ctx['actor']} is picking the team for {label}. Tap to mark Available, Maybe or Not available.", f"/player-availability?fixture_id={match.get('id')}", str(match.get("id") or ""), ctx["actor"])
+        return _muse_reply(f"Done ✓ Availability request sent for {label}. Ask me \"who is available?\" later to see the replies.")
+
+    if tool == "pick_xi":
+        if match is None:
+            raise HTTPException(status_code=400, detail="Missing fixture.")
+        update_playing_xi(str(match.get("id")), PlayingXiUpdateRequest(player_names=[str(p) for p in args.get("players") or []], club_id=ctx["club_id"]), token)
+        return _muse_reply(
+            f"Done ✓ Playing XI saved for {muse.fixture_label(match)} ({len(args.get('players') or [])} player{'s' if len(args.get('players') or []) != 1 else ''}).",
+            links=[{"label": "Open fixture", "href": f"/dashboard/widgets/schedule?match_id={match.get('id')}#selectedPlayingXiTitle"}],
+        )
+
+    if tool == "create_fixture":
+        when = muse_agent.parse_when(str(args.get("date") or ""), _current_local_date())
+        opponent = str(args.get("opponent") or "").strip()
+        if not when or not opponent:
+            raise HTTPException(status_code=400, detail="Missing opponent or date.")
+        if when < _current_local_date():
+            raise HTTPException(status_code=400, detail="That date has already passed.")
+        create_season_fixture(
+            SeasonFixtureRequest(
+                club_id=ctx["club_id"],
+                season_year=when.year,
+                date=when.isoformat(),
+                date_label=f"{when.strftime('%B')} {when.day}",
+                opponent=opponent,
+                venue=str(args.get("venue") or ""),
+                match_type="Friendly",
+                scheduled_time=str(args.get("time") or ""),
+                overs=str(args.get("overs") or "20"),
+            ),
+            token,
+        )
+        return _muse_reply(
+            f"Done ✓ {ctx['club_name']} vs {opponent} is added for {when.strftime('%a %d %b %Y')}. Want me to ask everyone for availability?",
+            links=[{"label": "Fixtures", "href": "/dashboard/widgets/schedule"}],
+        )
+
+    if tool == "live_update":
+        if match is None or str(match.get("date") or "")[:10] != _current_local_date().isoformat():
+            raise HTTPException(status_code=400, detail="Live updates are only for today's match.")
+        runs, wickets, overs = str(args.get("runs") or ""), str(args.get("wickets") or ""), str(args.get("overs") or "")
+        ours = args.get("team") != "them"
+        team = ctx["club_name"] if ours else str(match.get("opponent") or "Opponent")
+        summary = f"{team} {runs}/{wickets}" + (f" after {overs} overs" if overs else "")
+        update = ScorecardUpdateRequest(
+            **({"heartlake_runs": runs, "heartlake_wickets": wickets, "heartlake_overs": overs or None} if ours else {"opponent_runs": runs, "opponent_wickets": wickets, "opponent_overs": overs or None}),
+            live_summary=summary,
+            status="Live" if str(match.get("status") or "").lower() != "completed" else None,
+        )
+        update_scorecard(str(match.get("id")), update, token)
+        _notify(ctx["club_id"], "live_score", f"Live: {summary}", f"{ctx['club_name']} vs {match.get('opponent') or 'Opponent'}", f"/live/{match.get('id')}", str(match.get("id") or ""), ctx["actor"])
+        return _muse_reply(f"Done ✓ Live score updated: {summary}. Followers got a live alert.", links=[{"label": "Open live scorecard", "href": f"/live/{match.get('id')}"}])
+
+    if tool == "record_result":
+        if match is None:
+            raise HTTPException(status_code=400, detail="Missing match.")
+        result = muse_confirm_score(MuseConfirmScoreRequest(match_id=str(match.get("id")), draft=dict(args.get("draft") or {})), token)
+        return _muse_reply("Done ✓ " + str(result.get("reply") or "Saved."), links=[{"label": "Open scorecard", "href": f"/live/{match.get('id')}"}])
+
+    raise HTTPException(status_code=400, detail="Unknown task.")
 
 
 @app.post("/api/muse/confirm-score")
@@ -7686,6 +8106,7 @@ def muse_confirm_score(request: MuseConfirmScoreRequest, x_auth_token: str | Non
         match = get_match_or_404(store, request.match_id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
+    _require_not_past(match, "scores")
     card = dict(request.draft.get("scorecard") or {})
     for key in ("heartlake_runs", "heartlake_wickets", "heartlake_overs", "opponent_runs", "opponent_wickets", "opponent_overs", "result"):
         if key in card and str(card[key] or "").strip():
@@ -8006,11 +8427,65 @@ def public_muse(request: PublicMuseRequest) -> dict[str, Any]:
         )
         return reply(text.strip(), [{"label": "Rankings", "href": "/rankings"}], "stats")
 
+    # 8. Tasks (mark availability, add fixtures, update scores...) need an account.
+    task = muse_agent.parse_command(message, _current_local_date(), muse.looks_like_score_message)
+    if task and task.get("tool") not in {"availability_summary"}:
+        return reply(
+            "I can do that for you once you sign in: marking availability, updating scores, picking the XI and adding fixtures all happen in your club's account.",
+            _PUBLIC_SIGNIN_LINKS,
+            "signin",
+        )
+
+    # 9. Anything else: the LLM assistant, on public data only (no phone, email, age, notes or availability).
+    try:
+        named = cricket_insights._matched_clubs(re.sub(r"['’]s\b", "", message), store)
+        answer = answer_question(message, _public_chat_store(store, str((named[0] if named else {}).get("id") or "")), history=[], session_id=None)
+        text = _public_scrub(str(answer.get("answer") or ""))
+        if text and not re.search(r"\b(i (don'?t|do not) (know|have)|couldn'?t find|no (data|information))\b", text.lower()):
+            return {**reply(text, [{"label": "Sign in for more", "href": "/signin"}], "chat"), "source_label": answer.get("source_label") or "AI Muse"}
+    except Exception:
+        logger.exception("Public Muse LLM answer failed")
+
     return reply(
         "I can help with live scores, results, scorecards by date, club rankings and player stats. Try:\n• What's the live score?\n• Who won the last Coca Cola XI match?\n• Scorecard for 19 Oct 2024\n• Top run scorers\n• How is Amit S doing?\nSign in for scoring, availability and alerts.",
         _PUBLIC_SIGNIN_LINKS,
         "help",
     )
+
+
+_PUBLIC_MEMBER_FIELDS = {
+    "id", "name", "full_name", "aliases", "role", "batting_style", "bowling_style", "jersey_number",
+    "primary_club_id", "primary_club_name", "club_memberships", "team_memberships", "team_name",
+}
+
+
+def _public_chat_store(store: dict[str, Any], focus_club_id: str = "") -> dict[str, Any]:
+    """A copy of the data that is safe to show signed-out visitors: no contact details, ages, notes,
+    availability or scorecards still waiting for review."""
+    safe = {key: value for key, value in store.items() if key not in {"llm_documents", "llm_query_cache", "viewer_profile", "duplicate_uploads"}}
+    safe["members"] = [{k: v for k, v in member.items() if k in _PUBLIC_MEMBER_FIELDS} for member in store.get("members", []) or []]
+    safe["fixtures"] = [
+        {
+            **{k: v for k, v in fixture.items() if k not in {"created_by_user_id", "updated_by_user_id"}},
+            # keep the keys (the assistant expects them) but empty: availability is members-only
+            "availability": [],
+            "availability_seed": [],
+            "availability_statuses": {},
+            "availability_notes": {},
+            "selected_playing_xi": [],
+            "selected_playing_xi_member_ids": [],
+        }
+        for fixture in store.get("fixtures", []) or []
+    ]
+    safe["archive_uploads"] = [upload for upload in store.get("archive_uploads", []) or [] if str(upload.get("status") or "").lower() == "approved"]
+    safe["viewer_profile"] = {}
+    return _chat_store_for(safe, focus_club_id)
+
+
+def _public_scrub(text: str) -> str:
+    """Belt and braces: remove anything that looks like an email address or phone number."""
+    text = re.sub(r"[\w.+-]+@[\w-]+\.[\w.-]+", "[hidden]", text)
+    return re.sub(r"(?<!\d)(?:\+?1[\s.-]?)?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}(?!\d)", "[hidden]", text)
 
 
 # ---------------------------------------------------------------------------

@@ -3041,6 +3041,32 @@ function renderFormValues(match) {
   elements.opponentOversInput.value = match.scorecard.opponent_overs || "";
   elements.resultInput.value = match.scorecard.result || "";
   elements.liveSummaryInput.value = match.scorecard.live_summary || "";
+  applyPastMatchLock(match);
+}
+
+// Past matches are read-only: scores, performances and commentary can't be changed (the server refuses too).
+function applyPastMatchLock(match) {
+  const locked = isPastFixture(match);
+  [elements.scoreForm, elements.performanceForm, elements.commentaryForm].filter(Boolean).forEach((form) => {
+    form.querySelectorAll("input, select, textarea, button").forEach((control) => {
+      if (locked) {
+        if (!control.dataset.pastLocked) control.dataset.pastLocked = control.disabled ? "keep" : "1";
+        control.disabled = true;
+      } else if (control.dataset.pastLocked) {
+        if (control.dataset.pastLocked === "1") control.disabled = false;
+        delete control.dataset.pastLocked;
+      }
+    });
+    let note = form.querySelector(".past-lock-note");
+    if (locked && !note) {
+      note = document.createElement("p");
+      note.className = "mode-note past-lock-note";
+      note.textContent = "This match has been played, so its score is locked. To add an old score, upload the scorecard photo in Archives.";
+      form.prepend(note);
+    } else if (!locked && note) {
+      note.remove();
+    }
+  });
 }
 
 function renderScorebook(match) {
@@ -3313,9 +3339,11 @@ function renderMembers(members) {
 }
 
 function renderSchedule(fixtures) {
-  elements.scheduleBoard.innerHTML = renderLimitedCollection(fixtures, {
+  // Past games are not "upcoming": they are hidden here (results live on Scorecards). README: "Past matches are locked".
+  const upcomingFixtures = (Array.isArray(fixtures) ? fixtures : []).filter((match) => !isPastFixture(match));
+  elements.scheduleBoard.innerHTML = renderLimitedCollection(upcomingFixtures, {
     key: "schedule-board",
-    emptyMessage: `<p class="empty-state">No fixtures scheduled yet.</p>`,
+    emptyMessage: `<p class="empty-state">No upcoming fixtures. Past results are on <a href="/scorecards">Scorecards</a>.</p>`,
     renderItem: (match) => `
       <article class="schedule-card clickable-card ${match.id === state.selectedMatchId ? "active-card" : ""}" data-match="${match.id}">
         <strong>${match.date_label}</strong>
@@ -3399,11 +3427,12 @@ function renderScheduleFixtureEditor(fixtures) {
   if (elements.scheduleFixtureYear && !elements.scheduleFixtureYear.value) {
     elements.scheduleFixtureYear.value = String(new Date().getFullYear());
   }
-  const sortedFixtures = Array.isArray(fixtures) ? [...fixtures] : [];
-  sortedFixtures.sort((a, b) => String(a.date || "").localeCompare(String(b.date || "")));
-  target.innerHTML = sortedFixtures.length
-    ? sortedFixtures
-        .map((fixture) => {
+  const allFixtures = Array.isArray(fixtures) ? [...fixtures] : [];
+  allFixtures.sort((a, b) => String(a.date || "").localeCompare(String(b.date || "")));
+  // Upcoming fixtures first; past ones are folded away (they can't be scored or marked any more).
+  const sortedFixtures = allFixtures.filter((fixture) => !isPastFixture(fixture));
+  const pastFixtures = allFixtures.filter((fixture) => isPastFixture(fixture)).reverse();
+  const fixtureCard = (fixture) => {
           const locked = isPastFixture(fixture);
           const editable = canMutateFixture(fixture);
           return `
@@ -3418,9 +3447,14 @@ function renderScheduleFixtureEditor(fixtures) {
               ${locked && !canEditPastFixtures() ? `<small>Past fixtures are read-only unless you are a club-admin or superadmin.</small>` : ""}
             </article>
           `;
-        })
-        .join("")
-    : `<p class="empty-state">No fixtures created yet for this club.</p>`;
+  };
+  const upcomingHtml = sortedFixtures.length
+    ? sortedFixtures.map(fixtureCard).join("")
+    : `<p class="empty-state">No upcoming fixtures. Add one above${pastFixtures.length ? " or ask AI Muse: “Add a match vs … on Saturday at 10am”" : ""}.</p>`;
+  const pastHtml = pastFixtures.length
+    ? `<details class="past-fixtures-fold"><summary>Past fixtures (${pastFixtures.length}) · scores and availability are locked</summary>${pastFixtures.map(fixtureCard).join("")}</details>`
+    : "";
+  target.innerHTML = upcomingHtml + pastHtml;
 }
 
 function renderVisitingTeams(teams) {
@@ -3453,8 +3487,8 @@ function renderAvailabilityMatrix(board, fixtures) {
   const selectedFixtureId = match?.id || state.selectedMatchId || fixtures?.[0]?.id || "";
   const selectedFixture = (Array.isArray(fixtures) ? fixtures : []).find((item) => item.id === selectedFixtureId) || match;
   const selectedClubId = state.selectedFocusClubId || state.dashboard?.focus_club?.id || state.dashboard?.club?.id || "";
-  const editable = selectedFixture ? canMutateFixture(selectedFixture) : false;
   const isLocked = selectedFixture ? isPastFixture(selectedFixture) : false;
+  const editable = selectedFixture ? !isLocked && canManageFixtures() : false;
   const selectedBoard = Array.isArray(board)
     ? board
         .map((row) => {
@@ -3486,7 +3520,7 @@ function renderAvailabilityMatrix(board, fixtures) {
         </div>
         <div class="toolbar-actions">
           <span class="fixture-badge">${selectedFixture?.status || "Scheduled"}</span>
-          ${isLocked ? `<span class="fixture-badge">${editable ? "Past fixture editable" : "Past fixture locked"}</span>` : ""}
+          ${isLocked ? `<span class="fixture-badge">Past match · locked</span>` : ""}
         </div>
       </div>
       <table class="matrix-table">
@@ -3495,7 +3529,7 @@ function renderAvailabilityMatrix(board, fixtures) {
         </thead>
         <tbody>${rows || `<tr><td colspan="3"><p class="empty-state">No availability has been set for this fixture yet.</p></td></tr>`}</tbody>
       </table>
-      ${isLocked && !editable ? `<p class="mode-note">Past fixtures are read-only unless you are a club-admin or superadmin.</p>` : ""}
+      ${isLocked ? `<p class="mode-note">This match has been played. Availability and scores for past matches can't be changed.</p>` : ""}
     </div>
   `;
   targets.forEach((target) => {
@@ -3510,7 +3544,9 @@ function renderAvailabilityFixtureEditor(fixtures) {
     return;
   }
   const activeClubId = state.selectedFocusClubId || state.dashboard?.focus_club?.id || state.dashboard?.club?.id || "";
-  const scopedFixtures = activeClubId ? fixtures.filter((match) => (match.club_id || "") === activeClubId) : fixtures;
+  const scopedFixtures = (activeClubId ? fixtures.filter((match) => (match.club_id || "") === activeClubId) : fixtures).filter(
+    (match) => !isPastFixture(match)
+  );
   const playerName = currentAvailabilityPlayerName();
   const cards = scopedFixtures.length
     ? scopedFixtures
@@ -3536,7 +3572,7 @@ function renderAvailabilityFixtureEditor(fixtures) {
           `;
         })
         .join("")
-    : `<p class="empty-state">No fixtures are stored yet for this club.</p>`;
+    : `<p class="empty-state">No upcoming fixtures to mark availability for.</p>`;
   targets.forEach((target) => {
     target.innerHTML = cards;
   });

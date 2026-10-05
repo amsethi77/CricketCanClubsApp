@@ -2,8 +2,10 @@
  * AI Muse: floating chat agent + notifications bell for signed-in pages.
  * Loaded by multipage.js on every signed-in page.
  *
- *  - Chat (POST /api/muse): questions, score entry by text/voice (with a Confirm step),
- *    availability requests and summaries. Falls back to the normal assistant for other questions.
+ *  - Chat (POST /api/muse): an agent that carries out tasks you ask for (availability for you or
+ *    named players, availability requests/reminders, best XI, new fixtures, live score updates,
+ *    today's final score). Each task shows a plan with Confirm / Cancel; Confirm calls
+ *    POST /api/muse/execute. Questions are answered by the LLM assistant (Ollama when running).
  *  - 📎 upload a scorecard photo (POST /api/scorecards/upload) straight from the chat.
  *  - 🎙️ voice input (browser speech recognition).
  *  - Alerts tab + 🔔 bell (GET /api/notifications, polled every 30 s) with optional browser pop-ups.
@@ -82,8 +84,8 @@
   const fab = document.createElement("button");
   fab.type = "button";
   fab.className = "muse-fab";
-  fab.setAttribute("aria-label", "Open AI Muse");
-  fab.innerHTML = `<span class="muse-fab-icon" aria-hidden="true">✨</span><strong>AI Muse</strong><span class="muse-badge" hidden></span>`;
+  fab.setAttribute("aria-label", "Open the AI assistant (AI Muse)");
+  fab.innerHTML = `<span class="muse-fab-icon" aria-hidden="true">✨</span><strong>AI Assistant</strong><span class="muse-badge" hidden></span>`;
   document.body.appendChild(fab);
 
   const panel = document.createElement("aside");
@@ -92,7 +94,7 @@
   panel.setAttribute("aria-label", "AI Muse");
   panel.innerHTML = `
     <header class="muse-head">
-      <div class="muse-title"><span aria-hidden="true">✨</span><div><strong>AI Muse</strong><small>Your club's assistant</small></div></div>
+      <div class="muse-title"><span aria-hidden="true">✨</span><div><strong>AI Muse · Assistant</strong><small class="muse-llm">Ask me anything, or tell me what to do</small></div></div>
       <div class="muse-tabs" role="tablist">
         <button type="button" role="tab" data-tab="chat" class="is-active">Chat</button>
         <button type="button" role="tab" data-tab="alerts">Alerts <span class="muse-tab-count" hidden></span></button>
@@ -102,16 +104,17 @@
     <div class="muse-body" data-view="chat">
       <div class="muse-messages" aria-live="polite"></div>
       <div class="muse-chips">
-        <button type="button" data-chip="Enter a match score">📝 Enter a score</button>
+        <button type="button" data-chip="Mark me available for the next match">✅ I'm available</button>
+        <button type="button" data-chip="Who is available for the next match?">👥 Who's available?</button>
         <button type="button" data-chip="Ask everyone for availability for the next match">📣 Ask availability</button>
-        <button type="button" data-chip="Who is available for the next match?">✅ Who's available?</button>
+        <button type="button" data-chip="Pick the best XI for the next match">🏏 Pick the XI</button>
+        <button type="button" data-chip="__fixture">📅 Add a fixture</button>
+        <button type="button" data-chip="__live">📝 Update score</button>
         <button type="button" data-chip="__upload">📷 Upload scorecard</button>
-        <button type="button" data-chip="Start live scoring">🎯 Live scoring</button>
-        <button type="button" data-chip="Suggest the best playing XI">🏏 Best XI</button>
       </div>
       <form class="muse-form">
         <button type="button" class="muse-icon" data-act="attach" aria-label="Upload a scorecard photo">📎</button>
-        <input class="muse-input" placeholder="Ask, or type a score…" autocomplete="off" />
+        <input class="muse-input" placeholder="Ask a question or tell me what to do…" autocomplete="off" />
         <button type="button" class="muse-icon" data-act="mic" aria-label="Speak">🎙️</button>
         <button type="submit" class="muse-send" aria-label="Send">➤</button>
       </form>
@@ -159,18 +162,29 @@
 
   function renderMessages() {
     if (!history.length) {
-      messagesEl.innerHTML = `<div class="muse-msg muse-bot"><div class="muse-text">Hi! I'm AI Muse ✨ I can answer questions about players and clubs, save a match score you type or say (e.g. “Heartlake 145/6 in 20 overs, Imran XI 120/9. Heartlake won by 25 runs. Amit S 45 off 30”), upload a scorecard photo, and send availability requests.</div></div>`;
+      messagesEl.innerHTML = `<div class="muse-msg muse-bot"><div class="muse-text">Hi! I'm AI Muse, your cricket assistant ✨ Ask me anything about players, clubs and matches, or tell me what to do and I'll do it for you:
+• “Mark me available for Saturday”
+• “Rahul and Nick are out for the next match”
+• “Ask everyone for availability” / “Remind the players who haven't replied”
+• “Pick the best XI for the next match”
+• “Add a match vs Imran XI on Oct 12 at 10am”
+• “We are 85/3 after 12 overs”
+I always show you the plan first, and nothing changes until you tap Confirm.</div></div>`;
       return;
     }
     messagesEl.innerHTML = history
       .map((m, index) => {
         const links = (m.links || []).map((l) => `<a class="muse-link" href="${esc(l.href)}">${esc(l.label)} ›</a>`).join("");
         const confirm =
-          m.draft && !m.confirmed
-            ? `<button type="button" class="muse-confirm" data-confirm="${index}">${esc(m.confirm_label || "Confirm")}</button>`
-            : m.confirmed
-              ? `<span class="muse-done">✓ Saved</span>`
-              : "";
+          m.action && !m.state
+            ? `<button type="button" class="muse-confirm" data-confirm="${index}">${esc(m.action.confirm_label || "Confirm")}</button><button type="button" class="muse-cancel" data-cancel="${index}">Cancel</button>`
+            : m.state === "done"
+              ? `<span class="muse-done">✓ Done</span>`
+              : m.state === "cancelled"
+                ? `<span class="muse-cancelled">Cancelled</span>`
+                : m.state === "working"
+                  ? `<span class="muse-done">Working…</span>`
+                  : "";
         return `<div class="muse-msg ${m.role === "user" ? "muse-user" : "muse-bot"}">${
           m.role !== "user" && m.source ? `<span class="muse-source">${esc(m.source)}</span>` : ""
         }<div class="muse-text">${esc(m.text)}</div>${links || confirm ? `<div class="muse-actions">${links}${confirm}</div>` : ""}</div>`;
@@ -182,6 +196,18 @@
   async function send(text) {
     const message = String(text || "").trim();
     if (!message || sending) return;
+    if (message === "__fixture") {
+      addMessage("bot", "Tell me the opponent, day and time, e.g. “Add a match vs Imran XI on Saturday at 10am, 20 overs”.");
+      input.value = "Add a match vs ";
+      input.focus();
+      return;
+    }
+    if (message === "__live") {
+      addMessage("bot", "Tell me the score as it goes, e.g. “We are 85/3 after 12 overs” or “They are 40/2 after 6 overs”. For the final result: “Heartlake 145/6, Imran XI 120/9, Heartlake won by 25 runs”.");
+      input.value = "We are ";
+      input.focus();
+      return;
+    }
     if (message === "Enter a match score") {
       addMessage("user", message);
       addMessage("bot", "Type or say the score like this:\n“Heartlake 145/6 in 20 overs, Imran XI 120/9. Heartlake won by 25 runs. Amit S 45 off 30, Nick 3 wickets, John 2 catches”\nI'll show you what I understood before saving.");
@@ -200,10 +226,9 @@
       addMessage("bot", res.reply || "…", {
         source: res.source_label || "AI Muse",
         links: res.links || [],
-        draft: res.draft || null,
-        confirm_label: res.confirm_label || "",
+        action: res.action && typeof res.action === "object" ? res.action : null,
       });
-      if (res.action === "open_upload") fileInput.click();
+      if (res.action_hint === "open_upload" || res.action === "open_upload") fileInput.click();
     } catch (e) {
       addMessage("bot", `Sorry, something went wrong: ${e.message}`);
     } finally {
@@ -212,19 +237,44 @@
     }
   }
 
-  async function confirmDraft(index) {
+  // Carry out a planned task after the person taps Confirm (the server checks everything again).
+  async function confirmAction(index) {
     const m = history[index];
-    if (!m || !m.draft) return;
+    if (!m || !m.action || m.state) return;
+    m.state = "working";
+    renderMessages();
     try {
-      const res = await api("POST", "/api/muse/confirm-score", { match_id: m.draft.match_id, draft: m.draft });
-      m.confirmed = true;
+      const res = await api("POST", "/api/muse/execute", { tool: m.action.tool, args: m.action.args || {}, focus_club_id: clubId() });
+      m.state = "done";
       write(sessionStorage, HISTORY_KEY, history);
-      addMessage("bot", res.reply || "Saved.", { links: [{ label: "Open scorecard", href: `/live/${res.match_id}` }] });
+      addMessage("bot", res.reply || "Done ✓", { source: "AI Muse", links: res.links || [] });
       pollNotifications();
     } catch (e) {
-      addMessage("bot", `Couldn't save: ${e.message}`);
+      m.state = "";
+      write(sessionStorage, HISTORY_KEY, history);
+      addMessage("bot", `I couldn't do that: ${e.message}`);
     }
   }
+
+  function cancelAction(index) {
+    const m = history[index];
+    if (!m || !m.action || m.state) return;
+    m.state = "cancelled";
+    write(sessionStorage, HISTORY_KEY, history);
+    addMessage("bot", "OK, I didn't change anything.");
+  }
+
+  // Show which AI model is answering (the LLM from the Assistant page).
+  api("GET", "/api/llm/status")
+    .then((status) => {
+      const label = panel.querySelector(".muse-llm");
+      if (!label || !status) return;
+      label.textContent =
+        status.provider === "ollama" && status.model
+          ? `Powered by ${status.model} · ask or tell me what to do`
+          : "AI model offline · answering from club data";
+    })
+    .catch(() => null);
 
   async function upload(file) {
     if (!file) return;
@@ -378,7 +428,9 @@
     const chip = event.target.closest("[data-chip]");
     if (chip) return chip.dataset.chip === "__upload" ? fileInput.click() : send(chip.dataset.chip);
     const confirmBtn = event.target.closest("[data-confirm]");
-    if (confirmBtn) return confirmDraft(Number(confirmBtn.dataset.confirm));
+    if (confirmBtn) return confirmAction(Number(confirmBtn.dataset.confirm));
+    const cancelBtn = event.target.closest("[data-cancel]");
+    if (cancelBtn) return cancelAction(Number(cancelBtn.dataset.cancel));
     const act = event.target.closest("[data-act]")?.dataset.act;
     if (act === "attach") return fileInput.click();
     if (act === "mic") return toggleMic();

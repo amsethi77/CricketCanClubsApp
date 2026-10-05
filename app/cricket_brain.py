@@ -1131,9 +1131,23 @@ def _archive_context_snippets(archives: list[dict[str, Any]]) -> list[dict[str, 
     return snippets
 
 
+def _next_upcoming_fixture(fixtures: list[dict[str, Any]]) -> dict[str, Any]:
+    """The next fixture from today on that isn't completed. Past games are never "next" (Oct 2026 fix)."""
+    from datetime import date as _date
+
+    today = _date.today().isoformat()
+    upcoming = [
+        match
+        for match in fixtures
+        if str(match.get("status") or "") != "Completed" and str(match.get("date") or "")[:10] >= today
+    ]
+    upcoming.sort(key=lambda match: str(match.get("date") or ""))
+    return upcoming[0] if upcoming else {}
+
+
 def _club_context_snippet(store: dict[str, Any], summary: dict[str, Any]) -> dict[str, Any]:
     fixtures = store.get("fixtures", [])
-    next_match = next((match for match in fixtures if match["status"] != "Completed"), fixtures[0] if fixtures else {})
+    next_match = _next_upcoming_fixture(fixtures)
     text = "\n".join(
         [
             f"[club] {store['club'].get('name', 'Club')}",
@@ -2021,7 +2035,7 @@ def _heuristic_answer(question: str, store: dict[str, Any], history: list[dict[s
         global_pending_player_stats,
         global_availability_board,
     )
-    next_match = next((match for match in fixtures if match["status"] != "Completed"), fixtures[0] if fixtures else {})
+    next_match = _next_upcoming_fixture(fixtures)
     matched_members = _matched_members(effective_question, analysis_members)
     matched_member = matched_members[0] if matched_members else None
     requested_clubs = _requested_club_terms(effective_question, store)
@@ -2690,11 +2704,11 @@ def _heuristic_answer(question: str, store: dict[str, Any], history: list[dict[s
         if next_match:
             answer = (
                 f"The next match is {next_match['date_label']} against {next_match['opponent']} at "
-                f"{next_match['details'].get('venue', store['club']['home_ground'])}. "
+                f"{(next_match.get('details') or {}).get('venue') or store['club'].get('home_ground') or 'venue TBD'}. "
                 f"{len(next_match['availability'])} players are currently marked available."
             )
         else:
-            answer = f"{store['club'].get('name', 'This club')} does not have a scheduled fixture stored yet."
+            answer = f"{store['club'].get('name', 'This club')} has no upcoming fixture stored yet."
     elif "availability" in q or "available" in q:
         if fixtures:
             lowest = min(fixtures, key=lambda item: len(item["availability"]))

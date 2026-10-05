@@ -68,6 +68,11 @@ This section captures the user requirements in the order they were given and ref
 - AI Muse agent: chat with players/admins, add/upload scorecards, accept scores by text or voice, send availability requests and live score alerts (in-app notifications).
 - Any instructions given to an AI tool must ask it to record the change in README.md for future reference.
 - AI Muse should also be available before login, as a safe read-only version (public scores, results, scorecards, stats) that asks visitors to sign in for actions.
+- (Oct 2026) Scores and availability of past-dated matches must not be editable.
+- (Oct 2026) Past games must not be shown as upcoming.
+- (Oct 2026) The AI assistant must be back and answer through the LLM model the app already had (it had been renamed to AI Muse).
+- (Oct 2026) AI Muse should act like an assistant that carries out tasks on command (score updates, availability, etc.), like Meta's Muse.
+- (Oct 2026) The AI assistant should also be available before sign-in.
 - Subscription model (#7, from "Cricket App Subscription & Feature Model"): keep live scoring, player/club stats and scorecard viewing free; Free 2 scorecard image uploads a month; Super $4.99/month (5 uploads, multi-club, rosters, availability, Playing XI, alerts, live score updates, AI assistant, analysis); Premium $100/year (unlimited uploads, advanced AI, AI Live Scorer that turns spoken ball-by-ball events into structured events for the scoring engine, match intelligence, cross-club stats, advanced analysis, retro-score help, priority support). Decisions: pay with Stripe (switched off until keys are added; site admins set plans by hand until then); existing users get 60 days of Premium free, new users start on Free.
 
 ### Original feature scope
@@ -479,6 +484,45 @@ This section documents the work done in September 2026. See "Change log" at the 
 - **Public AI Muse (signed-out visitors, read-only)**: `static/muse_public.js` is loaded by `public_header.js` on public pages (Live, Fixtures, Rankings, Scorecards, Clubs, match pages; not Sign In/Register). It calls `POST /api/public/muse` (no login), which answers only from public data: live scores, latest results, scorecards by date ("Scorecard for 19 Oct 2024"), club list, how to register, player stats/form/predictions, club rankings and match-up win chances. Anything that needs an account (saving scores, photo upload, availability requests or replies, alerts, team selection) replies "You need to sign in…" with Sign in / Register buttons. It never returns contact details, availability or pending-review information.
 - Email / WhatsApp / SMS are not connected yet (in-app only, by choice). A provider such as SendGrid or Twilio can be added later in `_notify()` in `main.py`.
 
+### AI Muse as an agent (Oct 2026)
+- The floating button is labelled **✨ AI Assistant** and opens AI Muse. Questions go to the same LLM assistant as the Assistant page (`cricket_brain.answer_question`: Ollama when it is running, otherwise the built-in data assistant). The panel header shows the model ("Powered by llama3…" or "AI model offline · answering from club data"), from `GET /api/llm/status`.
+- AI Muse **carries out tasks** you ask for (`app/muse_agent.py`):
+
+| Say | Task (tool) | Who can |
+|---|---|---|
+| "Mark me available for Saturday", "I can't play on Sunday", "count me in" | `mark_availability` (you) | any linked player |
+| "Rahul and Nick are out for the next match", "mark Amit S as maybe" | `mark_availability` (others) | captain / club admin |
+| "Ask everyone for availability" | `request_availability` (bell notification) | captain / club admin |
+| "Remind the players who haven't replied" | `remind_pending` | captain / club admin |
+| "Who is available for Sunday?" | `availability_summary` (answers straight away) | anyone |
+| "Pick the best XI for the next match" | `pick_xi` (saves players who said Available/Maybe) | captain / club admin |
+| "Add a match vs Imran XI on Oct 12 at 10am, 20 overs" | `create_fixture` (today or later only) | captain / club admin |
+| "We are 85/3 after 12 overs", "They are 40/2 after 6 overs" | `live_update` (today's match + live alert) | scorer / admin |
+| "Heartlake 145/6, Imran XI 120/9, Heartlake won by 25 runs" | `record_result` (today's match only) | scorer / admin |
+
+- **Plan → Confirm → Done.** `POST /api/muse` returns the plan with an `action` (`{tool, args, confirm_label}`); the chat shows **Confirm** and **Cancel**. Nothing changes until Confirm calls `POST /api/muse/execute`, which checks the person's role, their plan and the past-match lock again before doing anything, and writes an audit row (`muse.execute`).
+- Commands are recognised by rules first (`muse_agent.parse_command`, dates like "Saturday", "next Sunday", "Oct 12", times like "10am"). If the rules don't recognise something that looks like a command ("please…", "can you…", "set…") and Ollama is running, the LLM is asked to pick the tool (`muse_agent.llm_plan`, JSON output). Anything else is answered by the LLM assistant.
+- Running tasks through AI Muse is part of the **Super** plan (`ai_assistant`); "who is available?" and questions work on every plan.
+- **Prompt file fix:** `READMELLM.md` (the LLM prompts) moved to `MD/READMELLM.md`; `app/llm_registry.py` now looks in `MD/` first and then the repo root, and no longer crashes if the file is missing. Before this fix, adding a fixture or asking the assistant could fail with "No such file … READMELLM.md".
+
+### AI Assistant before sign-in (Oct 2026)
+- The public assistant (`static/muse_public.js`, loaded by `public_header.js`) now shows a **✨ AI Assistant** button on every public page, including **Sign In** and **Register** (on phones it sits above the bottom tab bar).
+- `POST /api/public/muse` still answers live scores, results, scorecards by date, clubs, rankings, player stats and how to join from its own rules. Anything else now goes to the **LLM assistant** (`answer_question`) on a public-only copy of the data (`_public_chat_store`: no phone, email, age, notes, availability, playing XI or scorecards waiting for review), scoped to the club named in the question, and the reply is scrubbed for anything that looks like an email or phone number (`_public_scrub`).
+- Tasks ("mark me available", "update the score", "add a match"…) reply with Sign in / Register buttons.
+- The assistant's "next match" answers now only use today's or future fixtures (`_next_upcoming_fixture` in `cricket_brain.py`), so a past game is never called the next match.
+
+### Past matches are locked (Oct 2026)
+- A match whose date is before today (Toronto time, `_current_local_date`) is read-only for everyone: scores (`/scorecard`, `/performances`, `/commentary`, ball-by-ball), availability (`/api/matches/{id}/availability`, `/api/player/availability`), the playing XI (`/lineup`) and AI Muse score/availability tasks all answer **403 "This match was on … Past matches are locked"** (`_require_not_past` in `main.py`). Old scores are added by uploading the scorecard photo to Archives for admin review.
+- The match centre disables the score, performance and commentary forms for a past match and shows a note (`applyPastMatchLock` in `app.js`).
+- Past games are no longer shown as upcoming: the Availability page and `/api/player/availability-data` list only today's and future fixtures; the Fixtures widget shows upcoming fixtures only (past ones are folded under "Past fixtures" in the fixture manager); the public and signed-in Fixtures pages hide past games that were never played or scored (played games stay as results); Home strips never show an earlier day's game as Live or Upcoming, and the public live list skips games from earlier days.
+- Admins can still edit or delete a past fixture's details (date, opponent) from the fixture manager.
+
+### How to test (Oct 2026)
+1. Restart the app. Open Availability: only today's and future fixtures are listed. Open Fixtures: no past "Scheduled" games; the fixture manager shows "Past fixtures (N)" folded.
+2. Open a past match in the match centre: the score form is disabled with "This match has been played…". Try saving availability for a past game from another page: you get "Past matches are locked".
+3. Tap **✨ AI Assistant** and try: "Add a match vs Old Boys XI on Saturday at 2pm" → Confirm; "Ask everyone for availability"; "Mark me available for the next match"; "Who is available for the next match?"; "Pick the best XI for the next match"; "We are 85/3 after 12 overs" (needs a match today, e.g. from Quick Score). Each shows a plan with Confirm / Cancel.
+4. Ask a question ("How is Amit S doing?"): it is answered by the LLM (the header says which model) or the built-in data assistant when Ollama is off.
+
 ### How to test (September 2026 features)
 1. Restart the app: `python app\main.py` (stop any old copy first: `netstat -ano | findstr :8090`, then `taskkill /PID <id> /F`).
 2. `/scorecards` → pick 10/19/2024 → open the card → check both tabs.
@@ -562,6 +606,9 @@ Model: keep the core cricket experience free; charge for managing more cricket, 
 - 2026-09-27: Public read-only AI Muse for signed-out visitors (`POST /api/public/muse`, `static/muse_public.js`).
 - 2026-09-27: Matchday tile shows the last scored match when nothing is upcoming; Quick Score; AI Muse; in-app notifications and live score alerts; faster saves; AI tool instructions (this README rule, AGENTS.md, CLAUDE.md).
 - 2026-09-29: Subscriptions and plans (#7): Free / Super / Premium, feature limits and upload quotas, 60-day Premium trial for existing members, `/pricing` page with admin plan management, Stripe Checkout + webhook (off until keys are set), Upgrade pop-up, plan-aware insights (match intelligence, cross-club stats) and the Premium AI Live Scorer in Quick Score.
+- 2026-09-29: Merged the GitHub changes (README moved to `MD/README.md`, new `sports-system.css` look) with the plans work.
+- 2026-10-04: Past matches locked (scores, availability, XI) and hidden from upcoming lists; AI Muse renamed back to "AI Assistant" on the button, answers through the LLM, and carries out tasks with Confirm/Cancel (`app/muse_agent.py`, `POST /api/muse/execute`); `READMELLM.md` is found in `MD/`.
+- 2026-10-05: AI Assistant button on all public pages including Sign In/Register; public questions fall back to the LLM on public-only data; "next match" answers skip past games.
 
 ## New UI Look and Feel
 

@@ -106,7 +106,9 @@
 
   function fromFixture(f, kindOverride) {
     const status = String(f.status_key || f.status || "").toLowerCase();
-    const kind = kindOverride || (status === "live" ? "live" : status === "completed" ? "result" : "upcoming");
+    // A past game is never "live" or "upcoming": show it as a result (README: "Past matches are locked").
+    const isPast = String(f.date || "").slice(0, 10) < new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+    const kind = kindOverride || (isPast ? "result" : status === "live" ? "live" : status === "completed" ? "result" : "upcoming");
     const sc = (v) => {
       const t = String(v ?? "").trim();
       return t && t !== "0" ? t : "";

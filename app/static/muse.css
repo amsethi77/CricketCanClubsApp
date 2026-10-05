@@ -535,3 +535,27 @@ html body .shared-topbar-host .header-right > .muse-bell {
     bottom: calc(84px + env(safe-area-inset-bottom));
   }
 }
+
+/* AI Muse agent: Confirm / Cancel on planned tasks (muse.js confirmAction) */
+.muse-cancel {
+  padding: 8px 14px !important;
+  border-radius: 10px !important;
+  border: 1px solid #e2e8f0 !important;
+  background: #fff !important;
+  color: #334155 !important;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.muse-cancelled {
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: #94a3b8;
+}
+
+.muse-llm {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 240px;
+}

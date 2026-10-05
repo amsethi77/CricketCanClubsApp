@@ -6,7 +6,7 @@
   // Public AI Muse (read-only chat for signed-out visitors). See README.md -> "Public AI Muse".
   if (!document.querySelector('script[src^="/assets/muse_public.js"]')) {
     const muse = document.createElement("script");
-    muse.src = "/assets/muse_public.js?v=20260927b";
+    muse.src = "/assets/muse_public.js?v=20261005a";
     muse.defer = true;
     document.head.appendChild(muse);
   }
