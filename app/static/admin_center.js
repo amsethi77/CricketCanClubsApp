@@ -849,6 +849,9 @@ function renderArchives(dashboard) {
                           <button class="primary-button" type="submit" data-action="approve" formaction="/api/admin/archive/${upload.id}/approve-form">Approve</button>
                         </div>
                       </form>
+                      <section class="admin-original-scorecard-image" data-scorecard-original="${escapeHtml(upload.id)}">
+                        <p class="empty-state">Loading original image…</p>
+                      </section>
                     </div>
                     <div class="inline-actions">
                       <button class="secondary-button" type="button" data-action="extract" onclick="return window.CricketClubAppAdminCenterArchiveAction(this, 'extract');">Re-extract</button>
@@ -875,6 +878,7 @@ function renderArchiveScorecardPreviews(uploads) {
   }
   for (const upload of uploads) {
     const root = archiveQueue?.querySelector(`[data-scorecard-preview="${upload.id}"]`);
+    const imageRoot = archiveQueue?.querySelector(`[data-scorecard-original="${upload.id}"]`);
     if (!root) continue;
     if (!upload.scorecard_preview) {
       root.innerHTML = `<p class="empty-state">Scorecard snapshot is unavailable. Refresh the review queue.</p>`;
@@ -882,6 +886,9 @@ function renderArchiveScorecardPreviews(uploads) {
       continue;
     }
     renderer.renderSnapshot(upload.scorecard_preview, root);
+    if (imageRoot && typeof renderer.renderOriginalImage === "function") {
+      renderer.renderOriginalImage(upload.scorecard_preview, imageRoot);
+    }
   }
 }
 

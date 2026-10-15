@@ -1,6 +1,7 @@
 import base64
 import html as html_lib
 import importlib
+import io
 import os
 import re
 import shutil
@@ -157,6 +158,21 @@ class LocalQATestCase(unittest.TestCase):
 
 
 class UnitQATests(LocalQATestCase):
+    def test_u00_heic_scorecard_preview_is_browser_compatible(self) -> None:
+        from PIL import Image
+
+        image_path = self.main.UPLOAD_DIR / "qa-scorecard.heic"
+        Image.new("RGB", (3, 2), (220, 40, 40)).save(image_path, format="PNG")
+
+        preview_url = self.main._scorecard_photo_url({"preview_url": "/uploads/qa-scorecard.heic"})
+        self.assertRegex(preview_url, r"^/uploads/\.previews/[0-9a-f]{24}\.jpg$")
+
+        response = self.client.get(preview_url)
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.headers["content-type"], "image/jpeg")
+        with Image.open(io.BytesIO(response.content)) as preview:
+            self.assertEqual(preview.size, (3, 2))
+
     def test_u01_auth_scoping_player1(self) -> None:
         auth = self.signin("1111111111")
         visible_clubs = auth.get("visible_clubs") or []
@@ -275,6 +291,8 @@ class UnitQATests(LocalQATestCase):
         superadmin_response = self.client.get("/admin-center", headers=self.auth_headers(superadmin_auth["token"]))
         self.assertEqual(superadmin_response.status_code, 200, superadmin_response.text)
         self.assertIn("Admin center", superadmin_response.text)
+        self.assertIn('data-scorecard-original="', superadmin_response.text)
+        self.assertIn("admin-original-scorecard-image", superadmin_response.text)
         queue_response = self.client.get(
             "/api/admin/review-queue",
             headers=self.auth_headers(superadmin_auth["token"]),

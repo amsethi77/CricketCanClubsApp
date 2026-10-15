@@ -249,7 +249,20 @@
     });
   }
 
-  window.CricketClubAppScorecardRenderer = { renderSnapshot };
+  function renderOriginalImage(sc, root) {
+    root.innerHTML = sc.photo_url
+      ? `
+        <h3>Original uploaded image</h3>
+        <figure class="sc-photo">
+          <img src="${escapeHtml(sc.photo_url)}" alt="Original scorecard image for ${escapeHtml(sc.title)}, ${escapeHtml(sc.date_label)}" loading="eager" decoding="async" />
+          <figcaption>Original uploaded scorecard image</figcaption>
+        </figure>`
+      : `
+        <h3>Original uploaded image</h3>
+        <div class="live-empty">The original scorecard image isn't available for this match.</div>`;
+  }
+
+  window.CricketClubAppScorecardRenderer = { renderSnapshot, renderOriginalImage };
 
   if (headerEl && cardPanel && photoPanel && backEl) {
     tabs.forEach((tab) => tab.addEventListener("click", () => showTab(tab.dataset.tab)));

@@ -74,8 +74,10 @@ This section captures the user requirements in the order they were given and ref
 - (Oct 2026) AI Muse should act like an assistant that carries out tasks on command (score updates, availability, etc.), like Meta's Muse.
 - (Oct 2026) The AI assistant should also be available before sign-in.
 - (Oct 2026) Default all users to Premium for now, make the default configurable, and switch it to Free at launch.
-- (Oct 2026) In Admin Center scorecard review, show the same digital scorecard snapshot and original photo view as the Scorecards section beside the editable JSON.
+- (Oct 2026) In Admin Center scorecard review, show the same digital scorecard snapshot as the Scorecards section, retain the editable JSON, and display the original uploaded image at the same time.
+- (Oct 2026) Show the uploaded scorecard image itself in Admin Center review instead of exposing its URL.
 - (Oct 2026) Reset scorecard and player-performance data across all years, including live fixtures, then restart image-based scorecard processing with 2024 only.
+- (Oct 2026) Reset all score data again across every year.
 - Subscription model (#7, from "Cricket App Subscription & Feature Model"): keep live scoring, player/club stats and scorecard viewing free; Free 2 scorecard image uploads a month; Super $4.99/month (5 uploads, multi-club, rosters, availability, Playing XI, alerts, live score updates, AI assistant, analysis); Premium $100/year (unlimited uploads, advanced AI, AI Live Scorer that turns spoken ball-by-ball events into structured events for the scoring engine, match intelligence, cross-club stats, advanced analysis, retro-score help, priority support). Decisions: pay with Stripe (switched off until keys are added; site admins set plans by hand until then); existing users get 60 days of Premium free; automatic default plan is configurable, Premium during development and Free at launch.
 
 ### Original feature scope
@@ -251,7 +253,7 @@ This section captures the user requirements in the order they were given and ref
 - The Match area now carries its own local sub-navigation for `Overview`, `Squad`, `Scoring`, `Commentary`, `Stats`, and `Summary`.
 - Scorecards, OCR, uploads, settings, admin, and profile live under the secondary `More` menu cards.
 - Dashboard season switching now requests the selected year explicitly and is cached to reduce repeated recomputation.
-- The Admin Center now renders the selected club first, filters its archive review queue by the active club, and groups uploaded scorecards clubwise for review. Each archive review shows the same Scorecards-page snapshot beside the editable JSON, including an original-photo tab.
+- The Admin Center now renders the selected club first, filters its archive review queue by the active club, and groups uploaded scorecards clubwise for review. Each archive review shows the same Scorecards-page snapshot beside the editable JSON, with the uploaded original image also visible at the same time.
 - Season Fixtures now supports editing future fixtures, while past fixtures are locked at both the UI and API layers.
 - Historical scorecards stay in the archive-review flow until superadmin approval attaches them back to the correct club or clubs.
 - Shared archives can appear in both clubs' Admin Center queues when the scorecard clearly belongs to a two-club match.
@@ -451,7 +453,7 @@ This section documents the work done in September 2026. See "Change log" at the 
 ### Digital scorecards (`/scorecards`)
 - `GET /api/public/scorecards?date=&club_id=&year=` lists **approved** archive scorecards, newest first; `GET /api/public/scorecards/{id}` returns one Cricinfo-style card (batting, bowling, extras, did-not-bat, match details, original photo URL).
 - Pages: `static/scorecards.html/js` (list grouped by month, date picker with "closest dates", club and season filters) and `static/scorecard.html/js` (innings tables + "Original scorecard" photo tab). Styles: `static/scorecards.css`.
-- Archive review uses the same shared `scorecard.js` renderer and `scorecards.css` for a digital snapshot beside the editable extraction JSON; the original-photo tab is included. Pending previews are returned only from the superadmin-protected Admin Center queue.
+- Archive review uses the same shared `scorecard.js` renderer and `scorecards.css` for a digital snapshot beside the editable extraction JSON; the uploaded original image is rendered directly in the review panel, without displaying its URL. HEIC/HEIF originals are converted to browser-compatible JPEG previews while preserving the original upload; an original-photo tab remains included in the snapshot. The three panels sit side by side on wide screens and stack on phones. Pending previews are returned only from the superadmin-protected Admin Center queue.
 - Data comes from the best available copy of each archive's extraction (reviewed JSON, template, imported performances, draft scorecard). Missing figures show as "–".
 
 ### Home pages
@@ -604,8 +606,12 @@ Model: keep the core cricket experience free; charge for managing more cricket, 
 
 ## Change log
 
+- 2026-10-15: Kept the uploaded original scorecard image visible beside the Admin Center snapshot and review JSON.
+- 2026-10-15: Rendered the original upload directly in Admin Center review without displaying its URL.
+- 2026-10-15: Arranged the Admin Center snapshot, JSON editor, and original image responsively, stacking the review panels on phones.
 - 2026-10-15: Added the shared Scorecards snapshot and original-photo tabs beside each Admin Center archive review JSON.
 - 2026-10-15: Reset scorecards and derived performance data across all years, including live fixtures; historical archives are retained for a fresh review starting with 2024.
+- 2026-10-15: Reapplied the all-years score reset; archive images and records remain available for review.
 - 2026-10-13: Automatic user plans default to configurable Premium for development; set `CRICKETCLUBAPP_DEFAULT_PLAN=free` at launch, which also switches accounts still on the automatic default.
 
 - 2026-09-22: Navbar More menu, public Clubs page, header/menu/profile alignment, search and dark mode, Cricinfo-style phone layout.

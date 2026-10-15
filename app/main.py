@@ -852,7 +852,7 @@ def _clubs_page_html(request: Request, search: str = "", focus_club_id: str = ""
         <meta charset="UTF-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1.0" />
         <title>Select Club · CricketClubApp</title>
-        <link rel="stylesheet" href="/assets/styles.css?v=20260509e" />
+        <link rel="stylesheet" href="/assets/styles.css?v=20261015c" />
         <link rel="stylesheet" href="/assets/app_polish.css?v=20260924b" />
         <link rel="stylesheet" href="/assets/sports-system.css?v=20260926a" />
       </head>
@@ -4197,7 +4197,31 @@ def _scorecard_photo_url(archive: dict[str, Any]) -> str:
     name = preview[len("/uploads/"):]
     if "/" in name or "\\" in name or ".." in name:
         return ""
-    return preview if (UPLOAD_DIR / name).is_file() else ""
+    image_path = UPLOAD_DIR / name
+    if not image_path.is_file():
+        return ""
+    if image_path.suffix.lower() not in {".heic", ".heif"}:
+        return preview
+
+    browser_preview_dir = UPLOAD_DIR / ".previews"
+    preview_name = f"{hashlib.sha256(name.encode('utf-8')).hexdigest()[:24]}.jpg"
+    browser_preview_path = browser_preview_dir / preview_name
+    try:
+        if not browser_preview_path.is_file() or browser_preview_path.stat().st_mtime_ns < image_path.stat().st_mtime_ns:
+            from PIL import Image, ImageOps
+
+            browser_preview_dir.mkdir(parents=True, exist_ok=True)
+            temporary_path = browser_preview_dir / f"{name}.{uuid.uuid4().hex}.tmp.jpg"
+            try:
+                with Image.open(image_path) as source:
+                    ImageOps.exif_transpose(source).convert("RGB").save(temporary_path, format="JPEG", quality=92)
+                temporary_path.replace(browser_preview_path)
+            finally:
+                temporary_path.unlink(missing_ok=True)
+        return f"/uploads/.previews/{preview_name}"
+    except (OSError, ValueError):
+        logger.exception("Unable to create browser-compatible scorecard image preview. file=%s", name)
+        return ""
 
 
 def _scorecard_from_archive(archive: dict[str, Any]) -> dict[str, Any]:
@@ -4841,6 +4865,9 @@ def _admin_center_html(request: Request) -> HTMLResponse:
                               <button class="primary-button" type="submit" data-action="approve" formaction="/api/admin/archive/{html.escape(str(upload.get('id') or ''))}/approve-form">Approve</button>
                             </div>
                           </form>
+                          <section class="admin-original-scorecard-image" data-scorecard-original="{html.escape(str(upload.get('id') or ''))}">
+                            <p class="empty-state">Loading original image…</p>
+                          </section>
                         </div>
                         <div class="inline-actions">
                           <button class="secondary-button" type="button" data-action="extract">Re-extract</button>
@@ -4874,10 +4901,10 @@ def _admin_center_html(request: Request) -> HTMLResponse:
         <meta charset="UTF-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1.0" />
         <title>Admin center · CricketClubApp</title>
-        <link rel="stylesheet" href="/assets/styles.css?v=20260509e" />
+        <link rel="stylesheet" href="/assets/styles.css?v=20261015c" />
         <link rel="stylesheet" href="/assets/app_polish.css?v=20260924b" />
         <link rel="stylesheet" href="/assets/sports-system.css?v=20260926a" />
-        <link rel="stylesheet" href="/assets/scorecards.css?v=20261015a" />
+        <link rel="stylesheet" href="/assets/scorecards.css?v=20261015b" />
       </head>
       <body>
         <div class="page-shell">
@@ -4960,8 +4987,8 @@ def _admin_center_html(request: Request) -> HTMLResponse:
           </section>
         </div>
         <script src="/assets/multipage.js?v=20260509c"></script>
-        <script src="/assets/scorecard.js?v=20261015a"></script>
-        <script src="/assets/admin_center.js?v=20261015a"></script>
+        <script src="/assets/scorecard.js?v=20261015c"></script>
+        <script src="/assets/admin_center.js?v=20261015b"></script>
       </body>
     </html>
     """
