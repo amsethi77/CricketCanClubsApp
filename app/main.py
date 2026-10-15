@@ -4824,16 +4824,24 @@ def _admin_center_html(request: Request) -> HTMLResponse:
                         {f'<div class="audit-chip-row">{llm_chip_html}</div>' if llm_chip_html else ''}
                         {f'<p class="audit-details">{html.escape(llm_details)}</p>' if llm_details else ''}
                         {raw_output_html}
-                        <form class="admin-review-form" method="post" action="/api/admin/archive/{html.escape(str(upload.get('id') or ''))}/review-form">
-                          <label class="stack-label">
-                            Reviewed extraction JSON
-                            <textarea class="admin-review-text" name="text" rows="10" spellcheck="false">{html.escape(template_text)}</textarea>
-                          </label>
-                          <div class="inline-actions">
-                            <button class="secondary-button" type="submit" data-action="save">Save review</button>
-                            <button class="primary-button" type="submit" data-action="approve" formaction="/api/admin/archive/{html.escape(str(upload.get('id') or ''))}/approve-form">Approve</button>
-                          </div>
-                        </form>
+                        <div class="admin-review-workspace">
+                          <section class="admin-scorecard-snapshot-panel">
+                            <h4>Scorecard snapshot · Scorecards view</h4>
+                            <div class="admin-scorecard-preview" data-scorecard-preview="{html.escape(str(upload.get('id') or ''))}">
+                              <p class="empty-state">Loading scorecard snapshot…</p>
+                            </div>
+                          </section>
+                          <form class="admin-review-form" method="post" action="/api/admin/archive/{html.escape(str(upload.get('id') or ''))}/review-form">
+                            <label class="stack-label">
+                              Reviewed extraction JSON
+                              <textarea class="admin-review-text" name="text" rows="10" spellcheck="false">{html.escape(template_text)}</textarea>
+                            </label>
+                            <div class="inline-actions">
+                              <button class="secondary-button" type="submit" data-action="save">Save review</button>
+                              <button class="primary-button" type="submit" data-action="approve" formaction="/api/admin/archive/{html.escape(str(upload.get('id') or ''))}/approve-form">Approve</button>
+                            </div>
+                          </form>
+                        </div>
                         <div class="inline-actions">
                           <button class="secondary-button" type="button" data-action="extract">Re-extract</button>
                           <button class="secondary-button" type="button" data-action="delete">Delete</button>
@@ -4869,6 +4877,7 @@ def _admin_center_html(request: Request) -> HTMLResponse:
         <link rel="stylesheet" href="/assets/styles.css?v=20260509e" />
         <link rel="stylesheet" href="/assets/app_polish.css?v=20260924b" />
         <link rel="stylesheet" href="/assets/sports-system.css?v=20260926a" />
+        <link rel="stylesheet" href="/assets/scorecards.css?v=20261015a" />
       </head>
       <body>
         <div class="page-shell">
@@ -4951,7 +4960,8 @@ def _admin_center_html(request: Request) -> HTMLResponse:
           </section>
         </div>
         <script src="/assets/multipage.js?v=20260509c"></script>
-        <script src="/assets/admin_center.js?v=20260429m"></script>
+        <script src="/assets/scorecard.js?v=20261015a"></script>
+        <script src="/assets/admin_center.js?v=20261015a"></script>
       </body>
     </html>
     """
@@ -9404,6 +9414,7 @@ def admin_review_queue(x_auth_token: str | None = Header(default=None)) -> dict[
                 "resolved_club_name": " / ".join(club_names) if club_names else str(upload.get("club_name") or (inferred_club.get("name") if inferred_club else "") or "Unassigned").strip() or "Unassigned",
                 "resolved_club_ids": club_ids,
                 "resolved_club_names": club_names,
+                "scorecard_preview": _scorecard_from_archive(upload),
             }
         )
     return {

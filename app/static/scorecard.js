@@ -24,18 +24,7 @@
     return value === null || value === undefined || value === "" ? DASH : escapeHtml(value);
   }
 
-  function showTab(name) {
-    tabs.forEach((tab) => {
-      const on = tab.dataset.tab === name;
-      tab.classList.toggle("is-active", on);
-      tab.setAttribute("aria-selected", on ? "true" : "false");
-    });
-    cardPanel.hidden = name !== "card";
-    photoPanel.hidden = name !== "photo";
-    history.replaceState(null, "", name === "photo" ? "#photo" : location.pathname);
-  }
-
-  function renderHeader(sc) {
+  function headerMarkup(sc) {
     const facts = [sc.match_type, sc.overs_limit ? `${sc.overs_limit} overs` : "", sc.venue, sc.date_label].filter(Boolean);
     const [first, second] = sc.innings;
     const winner = (sc.result || "").toLowerCase();
@@ -50,12 +39,27 @@
           </span>
         </div>`;
     };
-    headerEl.innerHTML = `
+    return `
       <p class="sc-meta">${facts.map(escapeHtml).join(" · ")}</p>
       <h1 class="sc-title">${escapeHtml(sc.title)}</h1>
       <div class="sc-hero-teams">${teamLine(first)}${teamLine(second)}</div>
       <p class="sc-hero-result">${escapeHtml(sc.result || "Result not recorded")}</p>
     `;
+  }
+
+  function showTab(name) {
+    tabs.forEach((tab) => {
+      const on = tab.dataset.tab === name;
+      tab.classList.toggle("is-active", on);
+      tab.setAttribute("aria-selected", on ? "true" : "false");
+    });
+    cardPanel.hidden = name !== "card";
+    photoPanel.hidden = name !== "photo";
+    history.replaceState(null, "", name === "photo" ? "#photo" : location.pathname);
+  }
+
+  function renderHeader(sc) {
+    headerEl.innerHTML = headerMarkup(sc);
     document.title = `${sc.title} · ${sc.date_label} · Scorecard`;
   }
 
@@ -174,10 +178,9 @@
       </div>`;
   }
 
-  function render(sc) {
-    renderHeader(sc);
+  function scorecardMarkup(sc) {
     const blocks = sc.innings.filter((inn) => inn.has_data);
-    cardPanel.innerHTML = `
+    return `
       ${
         sc.has_details
           ? ""
@@ -186,7 +189,10 @@
       ${(blocks.length ? blocks : sc.innings).map((inn, index) => inningsBlock(inn, index === 0 || sc.innings.length <= 2)).join("")}
       ${matchInfo(sc)}
     `;
-    photoPanel.innerHTML = sc.photo_url
+  }
+
+  function photoMarkup(sc) {
+    return sc.photo_url
       ? `
         <figure class="sc-photo">
           <a href="${escapeHtml(sc.photo_url)}" target="_blank" rel="noopener">
@@ -195,33 +201,82 @@
           <figcaption>Uploaded scorecard photo · tap to open full size</figcaption>
         </figure>`
       : `<div class="live-empty">The original scorecard photo isn't available for this match.</div>`;
+  }
+
+  function render(sc) {
+    renderHeader(sc);
+    cardPanel.innerHTML = scorecardMarkup(sc);
+    photoPanel.innerHTML = photoMarkup(sc);
     if (location.hash === "#photo") showTab("photo");
   }
 
-  tabs.forEach((tab) => tab.addEventListener("click", () => showTab(tab.dataset.tab)));
-  cardPanel.addEventListener("click", (event) => {
-    if (event.target.closest("[data-go-photo]")) showTab("photo");
-  });
-
-  // "All scorecards" keeps the date the visitor came from.
-  try {
-    const ref = document.referrer ? new URL(document.referrer) : null;
-    if (ref && ref.origin === location.origin && ref.pathname === "/scorecards") backEl.href = `/scorecards${ref.search}`;
-  } catch (error) {
-    /* ignore */
+  function renderSnapshot(sc, root) {
+    root.innerHTML = `
+      <div class="scorecards-page admin-scorecard-view">
+        <section class="panel onboarding-panel fixtures-hero-panel">
+          <div class="stack-card sc-header">${headerMarkup(sc)}</div>
+        </section>
+        <section class="panel onboarding-panel fixtures-list-panel">
+          <div class="stack-card">
+            <div class="sc-tabs" role="tablist" aria-label="Scorecard snapshot views">
+              <button class="sc-tab is-active" type="button" role="tab" aria-selected="true" data-preview-tab="card">Scorecard</button>
+              <button class="sc-tab" type="button" role="tab" aria-selected="false" data-preview-tab="photo">Original scorecard</button>
+            </div>
+            <div class="sc-panel" role="tabpanel" data-preview-panel="card">${scorecardMarkup(sc)}</div>
+            <div class="sc-panel" role="tabpanel" data-preview-panel="photo" hidden>${photoMarkup(sc)}</div>
+          </div>
+        </section>
+      </div>
+    `;
+    if (root.dataset.previewBound === "true") return;
+    root.dataset.previewBound = "true";
+    root.addEventListener("click", (event) => {
+      const tab = event.target.closest("[data-preview-tab]");
+      if (tab) {
+        const name = tab.dataset.previewTab;
+        root.querySelectorAll("[data-preview-tab]").forEach((item) => {
+          const selected = item === tab;
+          item.classList.toggle("is-active", selected);
+          item.setAttribute("aria-selected", selected ? "true" : "false");
+        });
+        root.querySelectorAll("[data-preview-panel]").forEach((panel) => {
+          panel.hidden = panel.dataset.previewPanel !== name;
+        });
+      } else if (event.target.closest("[data-go-photo]")) {
+        const photoTab = root.querySelector('[data-preview-tab="photo"]');
+        if (photoTab) photoTab.click();
+      }
+    });
   }
 
-  (async () => {
+  window.CricketClubAppScorecardRenderer = { renderSnapshot };
+
+  if (headerEl && cardPanel && photoPanel && backEl) {
+    tabs.forEach((tab) => tab.addEventListener("click", () => showTab(tab.dataset.tab)));
+    cardPanel.addEventListener("click", (event) => {
+      if (event.target.closest("[data-go-photo]")) showTab("photo");
+    });
+
+    // "All scorecards" keeps the date the visitor came from.
     try {
-      const response = await fetch(`/api/public/scorecards/${encodeURIComponent(id)}`, { headers: { Accept: "application/json" } });
-      if (response.status === 404) throw new Error("This scorecard isn't available. It may not be approved yet.");
-      if (!response.ok) throw new Error("Unable to load this scorecard.");
-      const data = await response.json();
-      render(data.scorecard);
+      const ref = document.referrer ? new URL(document.referrer) : null;
+      if (ref && ref.origin === location.origin && ref.pathname === "/scorecards") backEl.href = `/scorecards${ref.search}`;
     } catch (error) {
-      headerEl.innerHTML = `<p class="sc-meta">Scorecard</p><h1 class="sc-title">Not found</h1>`;
-      cardPanel.innerHTML = `<div class="live-empty">${escapeHtml(error.message)}</div>`;
-      photoPanel.innerHTML = "";
+      /* ignore */
     }
-  })();
+
+    (async () => {
+      try {
+        const response = await fetch(`/api/public/scorecards/${encodeURIComponent(id)}`, { headers: { Accept: "application/json" } });
+        if (response.status === 404) throw new Error("This scorecard isn't available. It may not be approved yet.");
+        if (!response.ok) throw new Error("Unable to load this scorecard.");
+        const data = await response.json();
+        render(data.scorecard);
+      } catch (error) {
+        headerEl.innerHTML = `<p class="sc-meta">Scorecard</p><h1 class="sc-title">Not found</h1>`;
+        cardPanel.innerHTML = `<div class="live-empty">${escapeHtml(error.message)}</div>`;
+        photoPanel.innerHTML = "";
+      }
+    })();
+  }
 })();

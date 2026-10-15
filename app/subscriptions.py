@@ -167,6 +167,13 @@ def setting(name: str, default: str = "") -> str:
     return str(os.environ.get(name) or _env_file_values().get(name) or default).strip()
 
 
+def configured_default_plan() -> str:
+    plan = setting("CRICKETCLUBAPP_DEFAULT_PLAN", "premium").lower()
+    if plan not in PLAN_ORDER:
+        raise ValueError("CRICKETCLUBAPP_DEFAULT_PLAN must be one of: free, super, premium.")
+    return plan
+
+
 def stripe_config() -> dict[str, str]:
     return {
         "secret_key": setting("STRIPE_SECRET_KEY"),
@@ -256,7 +263,7 @@ def _subscription_row(connection: sqlite3.Connection, user_id: int) -> sqlite3.R
 
 
 def _ensure_row(connection: sqlite3.Connection, user_row: Any) -> sqlite3.Row:
-    """Create the user's subscription row the first time we see them (trial for existing users)."""
+    """Create the user's subscription row the first time we see them."""
     user_id = int(user_row["id"])
     row = _subscription_row(connection, user_id)
     if row:
@@ -272,10 +279,11 @@ def _ensure_row(connection: sqlite3.Connection, user_row: Any) -> sqlite3.Row:
             (user_id, _iso(launched), _iso(trial_end), f"{TRIAL_DAYS}-day Premium trial for existing members", now),
         )
     else:
+        plan = configured_default_plan()
         connection.execute(
             """INSERT OR IGNORE INTO app_subscriptions (user_id, plan, status, source, started_at, updated_at)
-               VALUES (?, 'free', 'active', 'free', ?, ?)""",
-            (user_id, now, now),
+               VALUES (?, ?, 'active', 'default', ?, ?)""",
+            (user_id, plan, now, now),
         )
     return _subscription_row(connection, user_id)
 
@@ -295,6 +303,9 @@ def effective_plan(connection: sqlite3.Connection, user_row: Any, role_names: li
     plan = str(row["plan"] or "free")
     status = str(row["status"] or "active")
     source = str(row["source"] or "free")
+    if source in {"default", "free"}:
+        plan = configured_default_plan()
+        source = "default"
     period_end = _parse(row["current_period_end"])
     now = _now()
     active = status in {"active", "trialing", "past_due"}

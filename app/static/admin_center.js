@@ -832,16 +832,24 @@ function renderArchives(dashboard) {
                         <pre class="audit-details">${escapeHtml(reviewRaw)}</pre>
                       </details>
                     ` : ""}
-                    <form class="admin-review-form" method="post" action="/api/admin/archive/${upload.id}/review-form">
-                      <label class="stack-label">
-                        Reviewed extraction JSON
-                        <textarea class="admin-review-text" name="text" rows="10" spellcheck="false">${escapeHtml(reviewText)}</textarea>
-                      </label>
-                      <div class="inline-actions">
-                        <button class="secondary-button" type="submit" data-action="save">Save review</button>
-                        <button class="primary-button" type="submit" data-action="approve" formaction="/api/admin/archive/${upload.id}/approve-form">Approve</button>
-                      </div>
-                    </form>
+                    <div class="admin-review-workspace">
+                      <section class="admin-scorecard-snapshot-panel">
+                        <h4>Scorecard snapshot · Scorecards view</h4>
+                        <div class="admin-scorecard-preview" data-scorecard-preview="${escapeHtml(upload.id)}">
+                          <p class="empty-state">Loading scorecard snapshot…</p>
+                        </div>
+                      </section>
+                      <form class="admin-review-form" method="post" action="/api/admin/archive/${upload.id}/review-form">
+                        <label class="stack-label">
+                          Reviewed extraction JSON
+                          <textarea class="admin-review-text" name="text" rows="10" spellcheck="false">${escapeHtml(reviewText)}</textarea>
+                        </label>
+                        <div class="inline-actions">
+                          <button class="secondary-button" type="submit" data-action="save">Save review</button>
+                          <button class="primary-button" type="submit" data-action="approve" formaction="/api/admin/archive/${upload.id}/approve-form">Approve</button>
+                        </div>
+                      </form>
+                    </div>
                     <div class="inline-actions">
                       <button class="secondary-button" type="button" data-action="extract" onclick="return window.CricketClubAppAdminCenterArchiveAction(this, 'extract');">Re-extract</button>
                       <button class="secondary-button" type="button" data-action="delete" onclick="return window.CricketClubAppAdminCenterArchiveAction(this, 'delete');">Delete</button>
@@ -855,6 +863,26 @@ function renderArchives(dashboard) {
       `
     )
     .join("");
+
+  renderArchiveScorecardPreviews(uploads);
+}
+
+function renderArchiveScorecardPreviews(uploads) {
+  const renderer = window.CricketClubAppScorecardRenderer;
+  if (!renderer || typeof renderer.renderSnapshot !== "function") {
+    adminError("Scorecard snapshot renderer is unavailable.");
+    return;
+  }
+  for (const upload of uploads) {
+    const root = archiveQueue?.querySelector(`[data-scorecard-preview="${upload.id}"]`);
+    if (!root) continue;
+    if (!upload.scorecard_preview) {
+      root.innerHTML = `<p class="empty-state">Scorecard snapshot is unavailable. Refresh the review queue.</p>`;
+      adminError("Archive review item has no scorecard snapshot.", upload.id);
+      continue;
+    }
+    renderer.renderSnapshot(upload.scorecard_preview, root);
+  }
 }
 
 function renderAuditLog(entries = []) {
