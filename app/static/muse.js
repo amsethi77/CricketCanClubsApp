@@ -1,5 +1,5 @@
 /*
- * AI Muse: floating chat agent + notifications bell for signed-in pages.
+ * AI Assistant: floating chat agent + notifications bell for signed-in pages.
  * Loaded by multipage.js on every signed-in page.
  *
  *  - Chat (POST /api/muse): an agent that carries out tasks you ask for (availability for you or
@@ -11,7 +11,7 @@
  *  - Alerts tab + 🔔 bell (GET /api/notifications, polled every 30 s) with optional browser pop-ups.
  *
  * Other pages can open it with window.CCMuse.open("chat" | "alerts", "optional message").
- * Documented in README.md -> "AI Muse and notifications".
+ * Documented in README.md -> "AI Assistant and notifications".
  */
 (() => {
   if (window.CCMuse) return;
@@ -84,17 +84,17 @@
   const fab = document.createElement("button");
   fab.type = "button";
   fab.className = "muse-fab";
-  fab.setAttribute("aria-label", "Open the AI assistant (AI Muse)");
+  fab.setAttribute("aria-label", "Open AI Assistant");
   fab.innerHTML = `<span class="muse-fab-icon" aria-hidden="true">✨</span><strong>AI Assistant</strong><span class="muse-badge" hidden></span>`;
   document.body.appendChild(fab);
 
   const panel = document.createElement("aside");
   panel.className = "muse-panel";
   panel.hidden = true;
-  panel.setAttribute("aria-label", "AI Muse");
+  panel.setAttribute("aria-label", "AI Assistant");
   panel.innerHTML = `
     <header class="muse-head">
-      <div class="muse-title"><span aria-hidden="true">✨</span><div><strong>AI Muse · Assistant</strong><small class="muse-llm">Ask me anything, or tell me what to do</small></div></div>
+      <div class="muse-title"><span aria-hidden="true">✨</span><div><strong>AI Assistant</strong><small class="muse-llm">Ask me anything, or tell me what to do</small></div></div>
       <div class="muse-tabs" role="tablist">
         <button type="button" role="tab" data-tab="chat" class="is-active">Chat</button>
         <button type="button" role="tab" data-tab="alerts">Alerts <span class="muse-tab-count" hidden></span></button>
@@ -133,7 +133,7 @@
   const input = panel.querySelector(".muse-input");
   const fileInput = panel.querySelector(".muse-file");
 
-  // The old "Assistant" button is hidden by muse.css: AI Muse replaces it.
+  // The old "Assistant" button is hidden by muse.css: this chat replaces it.
 
   // ---------- Bell in the laptop header ----------
   function ensureBell() {
@@ -162,7 +162,7 @@
 
   function renderMessages() {
     if (!history.length) {
-      messagesEl.innerHTML = `<div class="muse-msg muse-bot"><div class="muse-text">Hi! I'm AI Muse, your cricket assistant ✨ Ask me anything about players, clubs and matches, or tell me what to do and I'll do it for you:
+      messagesEl.innerHTML = `<div class="muse-msg muse-bot"><div class="muse-text">Hi! I'm your AI Assistant for cricket ✨ Ask me anything about players, clubs and matches, or tell me what to do and I'll do it for you:
 • “Mark me available for Saturday”
 • “Rahul and Nick are out for the next match”
 • “Ask everyone for availability” / “Remind the players who haven't replied”
@@ -224,7 +224,7 @@ I always show you the plan first, and nothing changes until you tap Confirm.</di
         history: history.slice(-8).map((m) => ({ role: m.role === "user" ? "user" : "assistant", text: m.text })),
       });
       addMessage("bot", res.reply || "…", {
-        source: res.source_label || "AI Muse",
+        source: res.source_label || "AI Assistant",
         links: res.links || [],
         action: res.action && typeof res.action === "object" ? res.action : null,
       });
@@ -247,7 +247,7 @@ I always show you the plan first, and nothing changes until you tap Confirm.</di
       const res = await api("POST", "/api/muse/execute", { tool: m.action.tool, args: m.action.args || {}, focus_club_id: clubId() });
       m.state = "done";
       write(sessionStorage, HISTORY_KEY, history);
-      addMessage("bot", res.reply || "Done ✓", { source: "AI Muse", links: res.links || [] });
+      addMessage("bot", res.reply || "Done ✓", { source: "AI Assistant", links: res.links || [] });
       pollNotifications();
     } catch (e) {
       m.state = "";

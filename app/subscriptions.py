@@ -4,7 +4,7 @@ Subscription plans, feature limits and Stripe billing for CricketCanClubs.
 Model (from "Cricket App Subscription & Feature Model", Sept 2026):
   Free     $0            live scoring, player/club stats, scorecards, 2 scorecard image uploads a month
   Super    $4.99/month   + 5 uploads a month, multi-club, rosters, availability, Playing XI,
-                           alerts, live score updates, AI Muse assistant, analysis
+                           alerts, live score updates, AI Assistant, analysis
   Premium  $100/year     + unlimited uploads, AI Live Scorer, match intelligence,
                            cross-club stats, advanced analysis, priority support
 
@@ -49,7 +49,7 @@ FEATURES: dict[str, dict[str, str]] = {
     "playing_xi": {"label": "Playing XI / team management", "plan": "super"},
     "alerts": {"label": "Alerts and player notifications", "plan": "super"},
     "score_updates": {"label": "Live score updates to players", "plan": "super"},
-    "ai_assistant": {"label": "AI Muse assistant", "plan": "super"},
+    "ai_assistant": {"label": "AI Assistant", "plan": "super"},
     "analysis": {"label": "Historical, player and club analysis", "plan": "super"},
     "ai_extraction": {"label": "AI scorecard extraction", "plan": "super"},
     "retro_help": {"label": "Help with old score uploads", "plan": "super"},
@@ -93,7 +93,7 @@ PLANS: dict[str, dict[str, Any]] = {
             "Multi-club support",
             "Rosters, availability and Playing XI",
             "Player alerts and live score updates",
-            "AI Muse assistant",
+            "AI Assistant",
             "Historical and player analysis",
         ],
     },

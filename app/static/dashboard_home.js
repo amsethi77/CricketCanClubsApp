@@ -211,18 +211,18 @@
       </a>`;
   }
 
-  // ---------- 4. AI Muse card at the bottom of Home ----------
+  // ---------- 4. AI Assistant card at the bottom of Home ----------
   const museCard = document.createElement("section");
   museCard.className = "muse-home";
   museCard.innerHTML = `
     <div>
-      <p class="home-kicker">AI Muse</p>
-      <h2>Ask, score or send alerts with AI Muse</h2>
+      <p class="home-kicker">AI Assistant</p>
+      <h2>Ask, score or send alerts with AI Assistant</h2>
       <p>Ask about players and clubs, type or say a match score, upload a scorecard photo, or ask the squad for availability.</p>
     </div>
     <form class="muse-home-form">
-      <input placeholder="e.g. How can Amit S improve?  or  Heartlake 145/6, Imran XI 120/9…" aria-label="Message AI Muse" />
-      <button type="submit">Ask Muse</button>
+      <input placeholder="e.g. How can Amit S improve?  or  Heartlake 145/6, Imran XI 120/9…" aria-label="Message AI Assistant" />
+      <button type="submit">Ask AI Assistant</button>
     </form>
     <div class="muse-home-chips">
       <button type="button" data-muse="Who is available for the next match?">✅ Who's available?</button>

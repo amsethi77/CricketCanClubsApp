@@ -449,7 +449,7 @@
   function render() {
     if (!data.open) {
       app.innerHTML = `<section class="qs-card"><p class="qs-kicker">Quick Score</p><h1>Scoring is closed</h1>
-        <p class="qs-muted">Ball-by-ball scoring opens on the match day. For past matches, use AI Muse (“Heartlake 145/6, Imran XI 120/9…”) or upload a scorecard photo in Archives.</p>
+        <p class="qs-muted">Ball-by-ball scoring opens on the match day. For past matches, use AI Assistant (“Heartlake 145/6, Imran XI 120/9…”) or upload a scorecard photo in Archives.</p>
         <a class="qs-btn primary" href="/score">Back to matches</a></section>`;
       return;
     }

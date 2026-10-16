@@ -34,7 +34,7 @@ The same rules are in `AGENTS.md` and `CLAUDE.md` so every tool picks them up. I
 - Cricinfo-style digital scorecards browsable by game date (`/scorecards`)
 - Redesigned public home (`/live`) and signed-in Home (`/dashboard`)
 - Quick Score (`/score`): phone-first ball-by-ball scoring with big buttons, voice and shorthand
-- AI Muse: chat agent that answers questions, saves scores typed or spoken, uploads scorecard photos and sends availability requests
+- AI Assistant: chat agent that answers questions, saves scores typed or spoken, uploads scorecard photos and sends availability requests
 - In-app notifications (bell icon): availability requests, live score alerts and results
 - Player/club insights: form, predictions, improvement tips, suggested playing XI and season outlook
 - Plans (`/pricing`): Free, Super ($4.99/month) and Premium ($100/year) with feature limits, monthly upload quotas, a 60-day Premium trial for existing members, Stripe Checkout (off until keys are added) and admin plan management
@@ -75,6 +75,9 @@ This section captures the user requirements in the order they were given and ref
 - (Oct 2026) The AI assistant should also be available before sign-in.
 - (Oct 2026) Default all users to Premium for now, make the default configurable, and switch it to Free at launch.
 - (Oct 2026) In Admin Center scorecard review, show the same digital scorecard snapshot as the Scorecards section, retain the editable JSON, and display the original uploaded image at the same time.
+- (Oct 2026) Rename AI Muse to AI Assistant throughout the app.
+- (Oct 2026) Improve Admin Center scorecard extraction with computer vision/Ollama and populate the full review JSON from scorecard images.
+- (Oct 2026) Run Ollama locally for AI Assistant replies and scorecard image extraction; keep the app on the local Ollama endpoint and use local chat and vision models.
 - (Oct 2026) Show the uploaded scorecard image itself in Admin Center review instead of exposing its URL.
 - (Oct 2026) Reset scorecard and player-performance data across all years, including live fixtures, then restart image-based scorecard processing with 2024 only.
 - (Oct 2026) Reset all score data again across every year.
@@ -454,11 +457,12 @@ This section documents the work done in September 2026. See "Change log" at the 
 - `GET /api/public/scorecards?date=&club_id=&year=` lists **approved** archive scorecards, newest first; `GET /api/public/scorecards/{id}` returns one Cricinfo-style card (batting, bowling, extras, did-not-bat, match details, original photo URL).
 - Pages: `static/scorecards.html/js` (list grouped by month, date picker with "closest dates", club and season filters) and `static/scorecard.html/js` (innings tables + "Original scorecard" photo tab). Styles: `static/scorecards.css`.
 - Archive review uses the same shared `scorecard.js` renderer and `scorecards.css` for a digital snapshot beside the editable extraction JSON; the uploaded original image is rendered directly in the review panel, without displaying its URL. HEIC/HEIF originals are converted to browser-compatible JPEG previews while preserving the original upload; an original-photo tab remains included in the snapshot. The three panels sit side by side on wide screens and stack on phones. Pending previews are returned only from the superadmin-protected Admin Center queue.
+- Scorecard image extraction uses local Ollama vision when a supported model is installed. It submits the full page plus enhanced header, batting-table, and bowling-table crops and writes the model's innings, batting, bowling, dismissal, extras, and match fields into the review JSON. Vision models are auto-detected (including tagged Ollama names); `ARCHIVE_VISION_MODEL` can select one explicitly. On Windows, install Ollama, pull `qwen3-vl:8b`, verify it appears in `http://127.0.0.1:11434/api/tags`, then use **Re-extract** on a pending archive. Re-extraction clears stale extraction JSON before regenerating it. If no local vision model or OCR tool can read the image, the review summary says so and keeps the item pending; all AI-generated figures still require admin verification.
 - Data comes from the best available copy of each archive's extraction (reviewed JSON, template, imported performances, draft scorecard). Missing figures show as "–".
 
 ### Home pages
 - **Public home** `/live` (`static/home.js`, `static/home.css`): match strip (Live / Results / Upcoming), off-white banner with featured match, latest scorecards, recent results, coming up, join banner.
-- **Signed-in Home** `/dashboard` (`static/dashboard_home.js/css`, only on the overview): welcome card with quick actions, match strip, latest scorecards, and an **AI Muse** card at the bottom. Panels that duplicated the navbar (scoring keypad, main menu, registration form) are hidden on Home.
+- **Signed-in Home** `/dashboard` (`static/dashboard_home.js/css`, only on the overview): welcome card with quick actions, match strip, latest scorecards, and an **AI Assistant** card at the bottom. Panels that duplicated the navbar (scoring keypad, main menu, registration form) are hidden on Home.
 - **Matchday tile**: if there is no upcoming fixture it shows the **last match that has a score** (both totals + result) instead of an old date (`renderLastMatchHero` in `app.js`).
 
 ### Quick Score (`/score`)
@@ -466,7 +470,7 @@ This section documents the work done in September 2026. See "Change log" at the 
 - Flow: pick today's match (or "Start a match now") → choose batting side, openers and bowler → score with big buttons `0 1 2 3 4 6 / Wd Nb Bye LB / W / Undo`.
 - Strike rotates automatically on odd runs and at the end of each over; after 6 legal balls it asks for the next bowler; W opens a pop-up for how out, fielder and the new batter; 2nd innings shows the target and required rate.
 - **Voice scoring** (Chrome/Edge): "dot", "single", "two", "four", "six", "wide", "no ball", "bye", "leg bye", "bowled", "caught", "LBW", "run out", "undo". **Shorthand**: type `1 4 0 wd 6 w`.
-- Taps are queued and saved in order ("Saving 2 balls…"), so fast scoring never loses a ball. Scoring is open only on the match day (rule in `_scorebook_is_open`); past games go through AI Muse or Archives.
+- Taps are queued and saved in order ("Saving 2 balls…"), so fast scoring never loses a ball. Scoring is open only on the match day (rule in `_scorebook_is_open`); past games go through AI Assistant or Archives.
 - Performance: `canonical_archive_uploads` now returns a marked list that isn't re-processed, which cut each save from ~8–19 s to ~2 s.
 
 ### Insights and predictions (`app/cricket_insights.py`)
@@ -477,8 +481,8 @@ This section documents the work done in September 2026. See "Change log" at the 
 - Nothing is "trained": numbers are recomputed from stored matches and approved scorecards, so they improve automatically as more data is added.
 - Strike rate only counts runs from innings where balls faced were recorded (`sr_runs` in `cricket_store.py`); saved stats are rebuilt once on first start after this change (`app/data/.stats_version`).
 
-### AI Muse and notifications
-- **AI Muse** (`app/muse.py`, `static/muse.js/css`, loaded on every signed-in page by `multipage.js`): floating "✨ AI Muse" button (bottom right) that opens a chat panel with Chat and Alerts tabs, 🎙️ voice input and 📎 photo upload. The old Assistant button is replaced by it; the Home page also has an AI Muse card.
+### AI Assistant and notifications
+- **AI Assistant** (`app/muse.py`, `static/muse.js/css`, loaded on every signed-in page by `multipage.js`): floating "✨ AI Assistant" button (bottom right) that opens a chat panel with Chat and Alerts tabs, 🎙️ voice input and 📎 photo upload. The old Assistant button is replaced by it; the Home page also has an AI Assistant card.
 - `POST /api/muse` handles actions before falling back to the normal assistant (`answer_question`):
   - **Score entry by text/voice**, e.g. `Heartlake 145/6 in 20 overs, Imran XI 120/9. Heartlake won by 25 runs. Amit S 45 off 30, Nick 3 wickets, John 2 catches` → shows a draft; **Confirm** calls `POST /api/muse/confirm-score` (needs `manage_scorecards`), which saves the scorecard + performances and sends a result alert.
   - **Availability request**: "Ask everyone for availability for the next match" (needs `manage_fixtures` or `manage_players`) → notification to every club member with a link to `/player-availability?fixture_id=…`.
@@ -486,13 +490,14 @@ This section documents the work done in September 2026. See "Change log" at the 
   - **Photo upload**: 📎 posts the image to `POST /api/scorecards/upload` (goes to Archives for review).
   - Help replies for live scoring and alerts.
 - **Notifications** are stored in SQLite tables `app_notifications` and `app_notification_reads` (created automatically). APIs: `GET /api/notifications`, `POST /api/notifications/read` (`{ids:[…]}` or `{all:true}`). The 🔔 bell (laptop header) and the Alerts tab poll every 30 s; "Turn on browser alerts" enables pop-up notifications while a tab is open.
-- **Live score alerts** are created automatically after each ball (`muse.live_score_events`): match started, second innings started, wicket, 50/100 for a batter, innings over. Results saved through AI Muse also send an alert.
-- **Public AI Muse (signed-out visitors, read-only)**: `static/muse_public.js` is loaded by `public_header.js` on public pages (Live, Fixtures, Rankings, Scorecards, Clubs, match pages; not Sign In/Register). It calls `POST /api/public/muse` (no login), which answers only from public data: live scores, latest results, scorecards by date ("Scorecard for 19 Oct 2024"), club list, how to register, player stats/form/predictions, club rankings and match-up win chances. Anything that needs an account (saving scores, photo upload, availability requests or replies, alerts, team selection) replies "You need to sign in…" with Sign in / Register buttons. It never returns contact details, availability or pending-review information.
+- **Live score alerts** are created automatically after each ball (`muse.live_score_events`): match started, second innings started, wicket, 50/100 for a batter, innings over. Results saved through AI Assistant also send an alert.
+- **Public AI Assistant (signed-out visitors, read-only)**: `static/muse_public.js` is loaded by `public_header.js` on public pages (Live, Fixtures, Rankings, Scorecards, Clubs, match pages; not Sign In/Register). It calls `POST /api/public/muse` (no login), which answers only from public data: live scores, latest results, scorecards by date ("Scorecard for 19 Oct 2024"), club list, how to register, player stats/form/predictions, club rankings and match-up win chances. Anything that needs an account (saving scores, photo upload, availability requests or replies, alerts, team selection) replies "You need to sign in…" with Sign in / Register buttons. It never returns contact details, availability or pending-review information.
 - Email / WhatsApp / SMS are not connected yet (in-app only, by choice). A provider such as SendGrid or Twilio can be added later in `_notify()` in `main.py`.
 
-### AI Muse as an agent (Oct 2026)
-- The floating button is labelled **✨ AI Assistant** and opens AI Muse. Questions go to the same LLM assistant as the Assistant page (`cricket_brain.answer_question`: Ollama when it is running, otherwise the built-in data assistant). The panel header shows the model ("Powered by llama3…" or "AI model offline · answering from club data"), from `GET /api/llm/status`.
-- AI Muse **carries out tasks** you ask for (`app/muse_agent.py`):
+### AI Assistant as an agent (Oct 2026)
+- The floating button and chat panel are labelled **✨ AI Assistant**. Questions go to the same LLM assistant as the Assistant page (`cricket_brain.answer_question`: Ollama when it is running, otherwise the built-in data assistant). The panel header shows the model ("Powered by llama3…" or "AI model offline · answering from club data"), from `GET /api/llm/status`.
+- **Local Ollama setup (Windows):** install Ollama (for example, `winget install --id Ollama.Ollama --exact`), start the Ollama service, then pull `llama3.2:latest` for chat and `qwen3-vl:8b` for scorecard vision. Ollama listens at `http://127.0.0.1:11434` by default; the app reads `OLLAMA_BASE_URL`, `OLLAMA_MODEL`, and `ARCHIVE_VISION_MODEL` if overrides are needed. Check `http://127.0.0.1:11434/api/tags`, then `/api/health` or `/api/llm/status` and confirm the provider is `ollama`. Without a responding local service and model, the app falls back to its built-in data assistant and image extraction cannot use vision.
+- AI Assistant **carries out tasks** you ask for (`app/muse_agent.py`):
 
 | Say | Task (tool) | Who can |
 |---|---|---|
@@ -508,7 +513,7 @@ This section documents the work done in September 2026. See "Change log" at the 
 
 - **Plan → Confirm → Done.** `POST /api/muse` returns the plan with an `action` (`{tool, args, confirm_label}`); the chat shows **Confirm** and **Cancel**. Nothing changes until Confirm calls `POST /api/muse/execute`, which checks the person's role, their plan and the past-match lock again before doing anything, and writes an audit row (`muse.execute`).
 - Commands are recognised by rules first (`muse_agent.parse_command`, dates like "Saturday", "next Sunday", "Oct 12", times like "10am"). If the rules don't recognise something that looks like a command ("please…", "can you…", "set…") and Ollama is running, the LLM is asked to pick the tool (`muse_agent.llm_plan`, JSON output). Anything else is answered by the LLM assistant.
-- Running tasks through AI Muse is part of the **Super** plan (`ai_assistant`); "who is available?" and questions work on every plan.
+- Running tasks through AI Assistant is part of the **Super** plan (`ai_assistant`); "who is available?" and questions work on every plan.
 - **Prompt file fix:** `READMELLM.md` (the LLM prompts) moved to `MD/READMELLM.md`; `app/llm_registry.py` now looks in `MD/` first and then the repo root, and no longer crashes if the file is missing. Before this fix, adding a fixture or asking the assistant could fail with "No such file … READMELLM.md".
 
 ### AI Assistant before sign-in (Oct 2026)
@@ -518,7 +523,7 @@ This section documents the work done in September 2026. See "Change log" at the 
 - The assistant's "next match" answers now only use today's or future fixtures (`_next_upcoming_fixture` in `cricket_brain.py`), so a past game is never called the next match.
 
 ### Past matches are locked (Oct 2026)
-- A match whose date is before today (Toronto time, `_current_local_date`) is read-only for everyone: scores (`/scorecard`, `/performances`, `/commentary`, ball-by-ball), availability (`/api/matches/{id}/availability`, `/api/player/availability`), the playing XI (`/lineup`) and AI Muse score/availability tasks all answer **403 "This match was on … Past matches are locked"** (`_require_not_past` in `main.py`). Old scores are added by uploading the scorecard photo to Archives for admin review.
+- A match whose date is before today (Toronto time, `_current_local_date`) is read-only for everyone: scores (`/scorecard`, `/performances`, `/commentary`, ball-by-ball), availability (`/api/matches/{id}/availability`, `/api/player/availability`), the playing XI (`/lineup`) and AI Assistant score/availability tasks all answer **403 "This match was on … Past matches are locked"** (`_require_not_past` in `main.py`). Old scores are added by uploading the scorecard photo to Archives for admin review.
 - The match centre disables the score, performance and commentary forms for a past match and shows a note (`applyPastMatchLock` in `app.js`).
 - Past games are no longer shown as upcoming: the Availability page and `/api/player/availability-data` list only today's and future fixtures; the Fixtures widget shows upcoming fixtures only (past ones are folded under "Past fixtures" in the fixture manager); the public and signed-in Fixtures pages hide past games that were never played or scored (played games stay as results); Home strips never show an earlier day's game as Live or Upcoming, and the public live list skips games from earlier days.
 - Admins can still edit or delete a past fixture's details (date, opponent) from the fixture manager.
@@ -532,10 +537,10 @@ This section documents the work done in September 2026. See "Change log" at the 
 ### How to test (September 2026 features)
 1. Restart the app: `python app\main.py` (stop any old copy first: `netstat -ano | findstr :8090`, then `taskkill /PID <id> /F`).
 2. `/scorecards` → pick 10/19/2024 → open the card → check both tabs.
-3. `/live` (signed out) and `/dashboard` (signed in) → check the match strip, latest scorecards and the AI Muse card.
+3. `/live` (signed out) and `/dashboard` (signed in) → check the match strip, latest scorecards and the AI Assistant card.
 4. `/score` → "Start a match now" (2 overs) → set openers/bowler → tap balls, try 🎙️ Voice and `1 4 0 wd 6` → check the 🔔 bell for "Live now" and wicket alerts → Undo.
-5. AI Muse → "Who is available for the next match?", "Ask everyone for availability for the next match", paste a score message → Confirm.
-6. Signed out on `/live`: tap "Ask AI Muse" → "What's the live score?", "Scorecard for 19 Oct 2024", then try a score message and check it asks you to sign in.
+5. AI Assistant → "Who is available for the next match?", "Ask everyone for availability for the next match", paste a score message → Confirm.
+6. Signed out on `/live`: tap "AI Assistant" → "What's the live score?", "Scorecard for 19 Oct 2024", then try a score message and check it asks you to sign in.
 7. Assistant page → Insights panel; chat: "How can Amit G improve?", "Suggest the best playing XI", "Season outlook".
 8. Plans: open `/pricing` signed out and signed in (see "Subscriptions and plans" → "How to test").
 
@@ -549,7 +554,7 @@ Model: keep the core cricket experience free; charge for managing more cricket, 
 | Scorecard image uploads | 2 / month | 5 / month | Unlimited |
 | Multi-club selection, match roster, availability, Playing XI | – | ✓ | ✓ |
 | Alerts and live score updates to players | – | ✓ | ✓ |
-| AI Muse assistant (actions), analysis (predictions, tips, best XI, season outlook) | Stats answers only | ✓ | ✓ |
+| AI Assistant (actions), analysis (predictions, tips, best XI, season outlook) | Stats answers only | ✓ | ✓ |
 | AI Live Scorer, match intelligence, cross-club stats, advanced analysis, priority support | – | – | ✓ |
 
 ### How plans work
@@ -563,12 +568,12 @@ Model: keep the core cricket experience free; charge for managing more cricket, 
   - `POST /api/auth/select-club` and `/clubs/select` → switching away from your home club needs Super (`multi_club`).
   - `POST /api/player/availability`, `/api/player/season-availability`, `/api/matches/{id}/availability` → `availability` (you or your club paid); changing someone else's → `match_roster`.
   - `POST /api/matches/{id}/lineup` → `playing_xi`.
-  - `POST /api/muse` → on Free, AI Muse answers stats questions only (like the public Muse); score entry, availability requests/summaries and alerts reply with a "See plans" link. `POST /api/muse/confirm-score` → `ai_assistant`.
+  - `POST /api/muse` → on Free, AI Assistant answers stats questions only; score entry, availability requests/summaries and alerts reply with a "See plans" link. `POST /api/muse/confirm-score` → `ai_assistant`.
   - `POST /api/chat` (Assistant page) → predictions, tips, best XI and outlook questions need Super.
   - Live score alerts after each ball are only sent when the scorer or the club is on a paid plan.
   - `GET /api/insights/me` → Free gets form and club record; Super adds prediction, tips, best XI, season outlook; Premium adds `match_intelligence` (win chance, head to head, opponent key players, key points) and `cross_club` (your stats for every club). Locked parts come back in `locked` and the Assistant page shows "Unlock" cards.
   - `POST /api/matches/{id}/ai-scorer` → Premium `ai_live_scorer`.
-- **Never locked:** live scoring (Quick Score buttons, basic voice and shorthand), stats, rankings, scorecards, public pages and the public AI Muse.
+- **Never locked:** live scoring (Quick Score buttons, basic voice and shorthand), stats, rankings, scorecards, public pages and the public AI Assistant.
 
 ### Plans page (`/pricing`)
 - Files: `static/pricing.html` (signed in), `static/pricing_public.html` (signed out), `static/pricing.js`, `static/pricing.css`. "Plans" is in the More menu (signed in and public).
@@ -597,7 +602,7 @@ Model: keep the core cricket experience free; charge for managing more cricket, 
 2. In "Manage plans" set a club admin (e.g. `clubadmin1`) to **Free**. Sign in as them:
    - `/pricing` shows Free and "0 of 2 uploads used".
    - Assistant page shows form + club record and "Unlock more insights" cards.
-   - AI Muse: "Who is the top run scorer?" answers; "Ask everyone for availability" shows "See plans".
+   - AI Assistant: "Who is the top run scorer?" answers; "Ask everyone for availability" shows "See plans".
    - Selecting the Playing XI or switching to another club shows the Upgrade pop-up.
    - Upload 3 scorecard photos: the third is refused with "You've used all 2 … uploads".
 3. Set the same user to **Super** for 30 days: the XI, availability requests, predictions and season outlook work; a Free player in that club can now mark availability.
@@ -606,6 +611,9 @@ Model: keep the core cricket experience free; charge for managing more cricket, 
 
 ## Change log
 
+- 2026-10-15: Documented Windows local Ollama installation, chat/vision model setup, and health checks for AI Assistant and scorecard extraction.
+- 2026-10-15: Improved local scorecard extraction with full-page and table-crop Ollama vision inputs, full innings/batting/bowling/extras JSON output, tagged-model discovery, portable HEIC conversion, and stale-JSON clearing on re-extract.
+- 2026-10-15: Renamed the AI Muse interface and user-facing references to AI Assistant across signed-in, public, Home, Quick Score, and plan surfaces.
 - 2026-10-15: Kept the uploaded original scorecard image visible beside the Admin Center snapshot and review JSON.
 - 2026-10-15: Rendered the original upload directly in Admin Center review without displaying its URL.
 - 2026-10-15: Arranged the Admin Center snapshot, JSON editor, and original image responsively, stacking the review panels on phones.

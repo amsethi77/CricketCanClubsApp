@@ -939,7 +939,7 @@ def _clubs_page_html(request: Request, search: str = "", focus_club_id: str = ""
             </div>
           </section>
         </div>
-        <script src="/assets/multipage.js?v=20260509c"></script>
+        <script src="/assets/multipage.js?v=20261015a"></script>
         <script src="/assets/clubs.js?v=20260509c"></script>
       </body>
     </html>
@@ -4986,7 +4986,7 @@ def _admin_center_html(request: Request) -> HTMLResponse:
             </div>
           </section>
         </div>
-        <script src="/assets/multipage.js?v=20260509c"></script>
+        <script src="/assets/multipage.js?v=20261015a"></script>
         <script src="/assets/scorecard.js?v=20261015c"></script>
         <script src="/assets/admin_center.js?v=20261015b"></script>
       </body>
@@ -7573,7 +7573,7 @@ def delete_scorebook_ball(match_id: str, x_auth_token: str | None = Header(defau
 
 
 # ---------------------------------------------------------------------------
-# AI Muse, notifications and quick scoring (see README.md -> "AI Muse and notifications")
+# AI Assistant, notifications and quick scoring (see README.md -> "AI Assistant and notifications")
 # ---------------------------------------------------------------------------
 class MuseRequest(BaseModel):
     message: str
@@ -7651,9 +7651,9 @@ def notifications_read(request: NotificationReadRequest, x_auth_token: str | Non
 
 @app.post("/api/muse")
 def muse_chat(request: MuseRequest, x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
-    """AI Muse: carries out commands (with a Confirm step) and answers everything else with the LLM assistant.
+    """AI Assistant: carries out commands (with a Confirm step) and answers everything else with the LLM assistant.
 
-    README: MD/README.md -> "AI Muse and notifications" -> "AI Muse as an agent".
+    README: MD/README.md -> "AI Assistant and notifications" -> "AI Assistant as an agent".
     """
     user_row, current_club_id = _auth_user_from_token(x_auth_token)
     store = load_store()
@@ -7684,7 +7684,7 @@ def muse_chat(request: MuseRequest, x_auth_token: str | None = Header(default=No
     return {
         "reply": str(answer.get("answer") or "I couldn't find an answer to that."),
         "intent": "chat",
-        "source_label": answer.get("source_label") or "AI Muse",
+        "source_label": answer.get("source_label") or "AI Assistant",
         "llm": (answer.get("llm") or {}).get("model") or "",
     }
 
@@ -7697,7 +7697,7 @@ class MuseExecuteRequest(BaseModel):
 
 @app.post("/api/muse/execute")
 def muse_execute(request: MuseExecuteRequest, x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
-    """Carry out a task AI Muse planned, after the person tapped Confirm. Everything is checked again here."""
+    """Carry out a task the AI Assistant planned, after the person tapped Confirm. Everything is checked again here."""
     user_row, current_club_id = _auth_user_from_token(x_auth_token)
     store = load_store()
     club = _selected_club(store, request.focus_club_id or current_club_id)
@@ -7712,10 +7712,10 @@ def muse_execute(request: MuseExecuteRequest, x_auth_token: str | None = Header(
 
 
 # ---------------------------------------------------------------------------
-# AI Muse agent helpers
+# AI Assistant agent helpers
 # ---------------------------------------------------------------------------
 def _muse_reply(text: str, **extra: Any) -> dict[str, Any]:
-    return {"reply": text, "intent": extra.pop("intent", "agent"), "source_label": extra.pop("source_label", "AI Muse"), **extra}
+    return {"reply": text, "intent": extra.pop("intent", "agent"), "source_label": extra.pop("source_label", "AI Assistant"), **extra}
 
 
 def _muse_context(user_row: sqlite3.Row, current_club_id: str, store: dict[str, Any], club: dict[str, Any], token: str | None) -> dict[str, Any]:
@@ -7731,7 +7731,7 @@ def _muse_context(user_row: sqlite3.Row, current_club_id: str, store: dict[str, 
         "club_name": str(club.get("name") or "your club"),
         "fixtures": _club_fixtures(store, club_id),
         "token": token,
-        "actor": str(user_row["display_name"] or user_row["mobile"] or "AI Muse"),
+        "actor": str(user_row["display_name"] or user_row["mobile"] or "AI Assistant"),
     }
 
 
@@ -7774,13 +7774,13 @@ _MUSE_TOOL_LABELS = {
 
 
 def _muse_require_plan(ctx: dict[str, Any], tool: str) -> None:
-    """AI Muse tasks are part of Super (the assistant). Reading availability stays free."""
+    """AI Assistant tasks are part of Super. Reading availability stays free."""
     if tool == "availability_summary":
         return
     if not _has_feature(ctx["user"], ctx["current_club_id"], "ai_assistant"):
         raise HTTPException(
             status_code=402,
-            detail=f"{_MUSE_TOOL_LABELS.get(tool, 'This task')} through AI Muse is part of the Super plan ($4.99 per month). See /pricing to upgrade.",
+            detail=f"{_MUSE_TOOL_LABELS.get(tool, 'This task')} through AI Assistant is part of the Super plan ($4.99 per month). See /pricing to upgrade.",
         )
 
 
@@ -8304,9 +8304,9 @@ def quick_score_page(request: Request) -> Response:
 
 
 # ---------------------------------------------------------------------------
-# Public (signed-out) AI Muse: read-only answers from public data only.
+# Public (signed-out) AI Assistant: read-only answers from public data only.
 # Actions (saving scores, uploads, availability, alerts, team selection) ask the visitor to sign in.
-# See README.md -> "AI Muse and notifications" -> "Public AI Muse".
+# See README.md -> "AI Assistant and notifications" -> "Public AI Assistant".
 # ---------------------------------------------------------------------------
 class PublicMuseRequest(BaseModel):
     message: str
@@ -8346,7 +8346,7 @@ def public_muse(request: PublicMuseRequest) -> dict[str, Any]:
     store = load_store()
 
     def reply(text: str, links: list[dict[str, str]] | None = None, intent: str = "public") -> dict[str, Any]:
-        return {"reply": text, "links": links or [], "intent": intent, "source_label": "AI Muse"}
+        return {"reply": text, "links": links or [], "intent": intent, "source_label": "AI Assistant"}
 
     if not message:
         return reply("Ask me about live scores, results, scorecards, players or clubs.")
@@ -8393,7 +8393,7 @@ def public_muse(request: PublicMuseRequest) -> dict[str, Any]:
             "scoring_help": "score a match live",
         }.get(action, "use team selection and personal stats")
         return reply(
-            f"You need to sign in to {what}. Club members can do this with AI Muse after signing in. It's free to register your club.",
+            f"You need to sign in to {what}. Club members can do this with AI Assistant after signing in. It's free to register your club.",
             _PUBLIC_SIGNIN_LINKS,
             "signin_required",
         )
@@ -8479,7 +8479,7 @@ def public_muse(request: PublicMuseRequest) -> dict[str, Any]:
         answer = answer_question(message, _public_chat_store(store, str((named[0] if named else {}).get("id") or "")), history=[], session_id=None)
         text = _public_scrub(str(answer.get("answer") or ""))
         if text and not re.search(r"\b(i (don'?t|do not) (know|have)|couldn'?t find|no (data|information))\b", text.lower()):
-            return {**reply(text, [{"label": "Sign in for more", "href": "/signin"}], "chat"), "source_label": answer.get("source_label") or "AI Muse"}
+            return {**reply(text, [{"label": "Sign in for more", "href": "/signin"}], "chat"), "source_label": answer.get("source_label") or "AI Assistant"}
     except Exception:
         logger.exception("Public Muse LLM answer failed")
 
@@ -8598,7 +8598,7 @@ _MUSE_PAID_ACTIONS = {"score_entry", "availability_request", "availability_summa
 
 
 def _muse_free_reply(message: str, intent: str) -> dict[str, Any]:
-    """Free plan: AI Muse answers stats questions (like the public Muse); actions need Super."""
+    """Free plan: AI Assistant answers stats questions; actions need Super."""
     plans_link = [{"label": "See plans", "href": "/pricing"}]
     if intent in _MUSE_PAID_ACTIONS:
         what = {
@@ -8608,9 +8608,9 @@ def _muse_free_reply(message: str, intent: str) -> dict[str, Any]:
             "alerts_help": "Player alerts",
         }.get(intent, "This")
         return {
-            "reply": f"{what} is part of AI Muse on the Super plan ($4.99/month). On Free you can still score matches yourself with Quick Score and ask me about stats, results and scorecards.",
+            "reply": f"{what} is part of AI Assistant on the Super plan ($4.99/month). On Free you can still score matches yourself with Quick Score and ask me about stats, results and scorecards.",
             "intent": intent,
-            "source_label": "AI Muse",
+            "source_label": "AI Assistant",
             "links": plans_link + ([{"label": "Quick Score", "href": "/score"}] if intent == "score_entry" else []),
             "upgrade": "super",
         }
@@ -8618,21 +8618,21 @@ def _muse_free_reply(message: str, intent: str) -> dict[str, Any]:
         return {
             "reply": "Open Quick Score, pick today's match and tap the big buttons: 0–6, Wd, Nb, Bye, LB and W. Live scoring is free on every plan.",
             "intent": intent,
-            "source_label": "AI Muse",
+            "source_label": "AI Assistant",
             "links": [{"label": "Quick Score", "href": "/score"}],
         }
     if intent == "upload_help":
         return {
             "reply": "Tap 📎 to upload a scorecard photo. The Free plan includes 2 scorecard image uploads a month, Super 5 and Premium unlimited.",
             "intent": intent,
-            "source_label": "AI Muse",
+            "source_label": "AI Assistant",
             "links": plans_link,
         }
     result = public_muse(PublicMuseRequest(message=message))
     links = [link for link in result.get("links") or [] if link.get("href") not in {"/signin", "/register"}]
     reply_text = str(result.get("reply") or "")
     if "sign in" in reply_text.lower():
-        reply_text = "That's part of AI Muse on the Super plan. On Free I can answer questions about live scores, results, scorecards, players and clubs."
+        reply_text = "That's part of AI Assistant on the Super plan. On Free I can answer questions about live scores, results, scorecards, players and clubs."
         links = plans_link
     return {**result, "reply": reply_text, "links": links, "plan_note": "Free plan: stats answers only"}
 
@@ -9303,7 +9303,9 @@ async def upload_scorecard(
     record["status"] = "Pending review"
     store["archive_uploads"].append(record)
     record = extract_archive_by_id(store, record["id"])
-    record["extraction_template"] = scorecard_template_from_archive(record)
+    if not _is_scorecard_template_payload(record.get("extraction_template")):
+        record["extraction_template"] = scorecard_template_from_archive(record)
+    record["review_template_json"] = json.dumps(record["extraction_template"], indent=2)
     save_store(store)
     logger.debug("Scorecard upload saved. archive_id=%s club_id=%s file=%s", record.get("id", ""), record.get("club_id", ""), record.get("file_name", ""))
     _audit_event(

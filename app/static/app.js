@@ -3450,7 +3450,7 @@ function renderScheduleFixtureEditor(fixtures) {
   };
   const upcomingHtml = sortedFixtures.length
     ? sortedFixtures.map(fixtureCard).join("")
-    : `<p class="empty-state">No upcoming fixtures. Add one above${pastFixtures.length ? " or ask AI Muse: “Add a match vs … on Saturday at 10am”" : ""}.</p>`;
+    : `<p class="empty-state">No upcoming fixtures. Add one above${pastFixtures.length ? " or ask AI Assistant: “Add a match vs … on Saturday at 10am”" : ""}.</p>`;
   const pastHtml = pastFixtures.length
     ? `<details class="past-fixtures-fold"><summary>Past fixtures (${pastFixtures.length}) · scores and availability are locked</summary>${pastFixtures.map(fixtureCard).join("")}</details>`
     : "";

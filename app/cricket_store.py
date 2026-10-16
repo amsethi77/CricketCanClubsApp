@@ -2026,19 +2026,44 @@ def available_ollama_models() -> list[str]:
     try:
         response = httpx.get(f"{_ollama_base_url()}/api/tags", timeout=4.0)
         response.raise_for_status()
-        return [item.get("name", "").strip() for item in response.json().get("models", []) if item.get("name")]
-    except Exception:
+        models = response.json().get("models", [])
+        return [item.get("name", "").strip() for item in models if item.get("name")]
+    except httpx.HTTPError:
+        logger.info("Ollama model discovery failed at %s.", _ollama_base_url(), exc_info=True)
+        return []
+    except (ValueError, TypeError, AttributeError):
+        logger.exception("Ollama returned an invalid model list.")
         return []
 
 
 def preferred_vision_llm_model() -> str:
     configured = os.environ.get("ARCHIVE_VISION_MODEL", "").strip()
     models = available_ollama_models()
-    if configured and configured in models:
-        return configured
+    if configured:
+        configured_match = next(
+            (
+                model
+                for model in models
+                if model.lower() == configured.lower()
+                or model.lower().startswith(f"{configured.lower().rstrip(':')}:")
+            ),
+            None,
+        )
+        if configured_match:
+            return configured_match
     for candidate in VISION_LLM_MODEL_PREFERENCES:
-        if candidate in models:
-            return candidate
+        candidate_match = next(
+            (
+                model
+                for model in models
+                if model.lower() == candidate.lower()
+                or model.lower().startswith(f"{candidate.lower().rstrip(':')}-")
+                or model.lower().startswith(f"{candidate.lower().rstrip(':')}:")
+            ),
+            None,
+        )
+        if candidate_match:
+            return candidate_match
     return ""
 
 
@@ -2308,16 +2333,11 @@ def _safe_float(value: Any) -> float | None:
 
 
 def _image_path_for_llm(path: Path, temp_dir: Path) -> Path:
-    if path.suffix.lower() in {".png", ".jpg", ".jpeg"}:
-        return path
-    converted = temp_dir / f"{path.stem}.png"
-    subprocess.run(
-        ["sips", "-s", "format", "png", str(path), "--out", str(converted)],
-        check=True,
-        capture_output=True,
-        text=True,
-        timeout=12,
-    )
+    from PIL import Image, ImageOps
+
+    converted = temp_dir / f"{path.stem}.jpg"
+    with Image.open(path) as source:
+        ImageOps.exif_transpose(source).convert("RGB").save(converted, format="JPEG", quality=94)
     return converted
 
 
@@ -2333,87 +2353,149 @@ def _vision_prompt(members: list[dict[str, Any]], ocr_hint: str) -> str:
             label += f" aliases: {aliases}"
         roster_labels.append(label)
     roster_text = "; ".join(roster_labels[:40])
-    trimmed_hint = ocr_hint[:4000] if ocr_hint else "No OCR hint available."
+    trimmed_hint = ocr_hint[:6000] if ocr_hint else "No OCR text is available; read the supplied images directly."
     return (
-        "Extract the visible batting innings from this cricket scorecard image.\n"
-        "Use the image as primary evidence. The OCR hint may be noisy.\n"
-        "Rules:\n"
-        "- Return JSON only.\n"
-        "- Do not guess.\n"
-        "- If a value is unreadable, use null.\n"
-        "- Keep batting rows separate.\n"
-        "- Normalize player names to the closest exact roster name or saved alias only when the match is clear.\n"
-        "Schema:\n"
-        '{"batting_team": string | null, "bowling_team": string | null, "total_runs": number | null, "wickets": number | null, "overs": number | null, "extras_total": number | null, "batting": [{"name": string, "runs": number | null, "balls": number | null}]}\n'
+        "Transcribe this cricket scorecard into the JSON schema below. The images are: "
+        "1) full page, 2) match header, 3) batting table, 4) lower score/bowling table. "
+        "Use the focused crops to read handwriting and small table cells; the full page provides context.\n"
+        "Return only valid JSON. Do not invent or infer unreadable values. Use null for unknown figures, "
+        "and omit player rows whose names cannot be read. Transcribe every visible innings, batter, bowler, "
+        "dismissal, fielder, extras figure, and match detail. Keep each player in its own row. "
+        "A scorebook may show ball-by-ball symbols; do not mistake those symbols for the player's total. "
+        "Use the explicit total-runs, balls-faced, bowling, and extras columns when present. "
+        "Preserve over notation such as 18.4 exactly as a number. Normalize a player name to a roster name "
+        "or alias only when the match is clear. If the page contains only one innings, return one innings.\n"
+        "JSON schema (all object keys shown are required; values may be null):\n"
+        '{"match":{"date":string|null,"venue":string|null,"teams":{"team_1":string|null,"team_2":string|null},"overs_limit":number|null},'
+        '"innings":[{"inning_number":number,"batting_team":string|null,"bowling_team":string|null,'
+        '"summary":{"runs":number|null,"wickets":number|null,"overs":number|null,"balls":number|null},'
+        '"batting":[{"player":{"name":string|null},"runs":number|null,"balls":number|null,"fours":number|null,'
+        '"sixes":number|null,"strike_rate":number|null,"dismissal":{"type":string|null,"fielder":string|null,"bowler":string|null}}],'
+        '"bowling":[{"player":{"name":string|null},"overs":number|null,"runs_conceded":number|null,'
+        '"wickets":number|null,"economy":number|null}],'
+        '"extras":{"wides":number|null,"no_balls":number|null,"byes":number|null,"leg_byes":number|null,'
+        '"penalties":number|null,"total":number|null}}]}\n'
+        "Use the roster only to disambiguate visible names, not to add players who are not shown.\n"
         f"Roster hints: {roster_text}\n"
         f"OCR hint:\n{trimmed_hint}\n"
     )
 
 
 def _vision_payload_is_usable(payload: dict[str, Any], members: list[dict[str, Any]], ocr_hint: str) -> bool:
-    total_runs = _safe_int(payload.get("total_runs"))
-    wickets = _safe_int(payload.get("wickets"))
-    overs = _safe_float(payload.get("overs"))
-    batting_rows = payload.get("batting", []) if isinstance(payload.get("batting"), list) else []
-
-    if wickets is not None and wickets > 10:
-        return False
-    if overs is not None and overs > 50:
-        return False
-    if total_runs is None and not batting_rows:
+    match = payload.get("match") if isinstance(payload.get("match"), dict) else {}
+    innings_list = payload.get("innings")
+    if not isinstance(innings_list, list):
+        innings_list = match.get("innings") if isinstance(match.get("innings"), list) else []
+    if not innings_list and (payload.get("batting") or payload.get("total_runs") is not None):
+        innings_list = [payload]
+    if not innings_list:
         return False
 
-    runs_sum = 0
-    matched_names = 0
-    hint_text = _normalized_phrase(ocr_hint)
-    for row in batting_rows:
-        if not isinstance(row, dict):
+    usable_innings = 0
+    for inning in innings_list:
+        if not isinstance(inning, dict):
             continue
-        name = str(row.get("name") or "").strip()
-        if not name:
-            continue
-        row_runs = _safe_int(row.get("runs"))
-        if row_runs is not None:
-            runs_sum += row_runs
-        normalized_name = _normalized_phrase(name)
-        if normalized_name and normalized_name in hint_text:
-            matched_names += 1
-            continue
-        canonical = _canonical_member_name(members, name)
-        if canonical != name or normalized_name in {_normalized_phrase(canonical)}:
-            matched_names += 1
+        summary = inning.get("summary") if isinstance(inning.get("summary"), dict) else inning
+        batting_rows = inning.get("batting", []) if isinstance(inning.get("batting"), list) else []
+        total_runs = _safe_int(summary.get("runs", summary.get("total_runs")))
+        wickets = _safe_int(summary.get("wickets"))
+        overs = _safe_float(summary.get("overs"))
+        if wickets is not None and not 0 <= wickets <= 10:
+            return False
+        if overs is not None and not 0 <= overs <= 50:
+            return False
+        if total_runs is not None and not 0 <= total_runs <= 1000:
+            return False
 
-    if total_runs is not None and runs_sum and runs_sum > total_runs + 40:
-        return False
-    if batting_rows and matched_names < max(1, len(batting_rows) // 2):
+        named_rows = []
+        runs_sum = 0
+        for row in batting_rows:
+            if not isinstance(row, dict):
+                continue
+            player = row.get("player") if isinstance(row.get("player"), dict) else {}
+            name = str(player.get("name") or row.get("name") or "").strip()
+            if name:
+                named_rows.append(name)
+            row_runs = _safe_int(row.get("runs"))
+            if row_runs is not None:
+                if not 0 <= row_runs <= 400:
+                    return False
+                runs_sum += row_runs
+
+        if total_runs is not None and runs_sum and runs_sum > total_runs + 40:
+            return False
+        if len(batting_rows) > 11 or len(inning.get("bowling", []) or []) > 11:
+            return False
+        if total_runs is not None or named_rows:
+            usable_innings += 1
+    if not usable_innings:
         return False
     return True
 
 
+def _scorecard_vision_image_paths(path: Path, temp_dir: Path) -> list[Path]:
+    from PIL import Image, ImageEnhance, ImageFilter, ImageOps
+
+    image_source = _image_path_for_llm(path, temp_dir)
+    with Image.open(image_source) as source:
+        page = ImageOps.exif_transpose(source).convert("RGB")
+    page.thumbnail((3200, 3200), Image.Resampling.LANCZOS)
+    page = ImageOps.autocontrast(page, cutoff=1)
+    page = ImageEnhance.Sharpness(page).enhance(1.5)
+
+    width, height = page.size
+    regions = [
+        ("full", page),
+        ("header", page.crop((0, 0, width, max(1, int(height * 0.28))))),
+        ("batting", page.crop((0, int(height * 0.14), width, max(1, int(height * 0.62))))),
+        ("bowling", page.crop((0, int(height * 0.40), width, max(1, int(height * 0.98))))),
+    ]
+    paths: list[Path] = []
+    for label, region in regions:
+        if label != "full":
+            region = ImageOps.autocontrast(region, cutoff=1)
+            region = region.filter(ImageFilter.UnsharpMask(radius=1.2, percent=130, threshold=2))
+        region.thumbnail((2000, 1800), Image.Resampling.LANCZOS)
+        image_path = temp_dir / f"scorecard-{label}.jpg"
+        region.save(image_path, format="JPEG", quality=92, optimize=True)
+        paths.append(image_path)
+    return paths
+
+
 def extract_scorecard_with_vision_llm(path: Path, members: list[dict[str, Any]]) -> dict[str, Any] | None:
     model = preferred_vision_llm_model()
-    if not model or not path.is_file():
+    if not model:
+        logger.warning(
+            "No supported Ollama vision model is installed at %s. Install qwen3-vl:8b or set ARCHIVE_VISION_MODEL.",
+            _ollama_base_url(),
+        )
+        return None
+    if not path.is_file():
         return None
     ocr_hint = extract_text_from_image(path)
     with TemporaryDirectory() as temp_dir_name:
         temp_dir = Path(temp_dir_name)
         try:
-            llm_image = _image_path_for_llm(path, temp_dir)
-        except Exception:
+            image_paths = _scorecard_vision_image_paths(path, temp_dir)
+        except (OSError, ValueError):
+            logger.exception("Unable to prepare scorecard image for Ollama vision. file=%s", path.name)
             return None
-        image_b64 = base64.b64encode(llm_image.read_bytes()).decode("ascii")
         try:
             response = httpx.post(
                 f"{_ollama_base_url()}/api/chat",
                 json={
                     "model": model,
                     "stream": False,
-                    "options": {"temperature": 0},
+                    "format": "json",
+                    "options": {"temperature": 0, "num_ctx": 8192, "num_predict": 6000},
                     "messages": [
                         {
                             "role": "user",
                             "content": _vision_prompt(members, ocr_hint),
-                            "images": [image_b64],
+                            "images": [
+                                base64.b64encode(image_path.read_bytes()).decode("ascii")
+                                for image_path in image_paths
+                            ],
                         }
                     ],
                 },
@@ -2421,13 +2503,19 @@ def extract_scorecard_with_vision_llm(path: Path, members: list[dict[str, Any]])
             )
             response.raise_for_status()
             payload = response.json()
-        except Exception:
+        except httpx.HTTPError:
+            logger.exception("Ollama vision extraction request failed. model=%s file=%s", model, path.name)
             return None
-    content = payload.get("message", {}).get("content", "")
+        except (ValueError, KeyError, TypeError):
+            logger.exception("Ollama returned an invalid scorecard vision response. model=%s file=%s", model, path.name)
+            return None
+    content = str((payload.get("message") or {}).get("content") or "")
     parsed = _extract_json_payload(content)
     if not parsed:
+        logger.warning("Ollama vision response did not contain JSON. model=%s file=%s", model, path.name)
         return None
     if not _vision_payload_is_usable(parsed, members, ocr_hint):
+        logger.warning("Ollama vision response failed scorecard validation. model=%s file=%s", model, path.name)
         return None
     return {
         "model": model,
@@ -2441,22 +2529,30 @@ def draft_from_llm_extraction(extracted: dict[str, Any], members: list[dict[str,
     payload = extracted.get("payload", {})
     match = payload.get("match", {}) if isinstance(payload, dict) else {}
     innings_list = match.get("innings", []) if isinstance(match, dict) else []
+    if not innings_list and isinstance(payload, dict):
+        innings_list = payload.get("innings", []) if isinstance(payload.get("innings"), list) else []
     innings = innings_list[0] if innings_list and isinstance(innings_list[0], dict) else {}
     teams = match.get("teams", {}) if isinstance(match, dict) else {}
     if innings:
         batting_team = str(
             innings.get("batting_team")
+            or teams.get("team_1")
             or teams.get("batting")
             or ""
         ).strip()
-        bowling_team = str(teams.get("bowling") or "").strip()
-        total_runs = _safe_int(innings.get("total_runs"))
-        wickets = _safe_int(innings.get("wickets"))
-        overs = _safe_float(innings.get("overs"))
+        bowling_team = str(
+            innings.get("bowling_team")
+            or teams.get("team_2")
+            or teams.get("bowling")
+            or ""
+        ).strip()
+        summary = innings.get("summary") if isinstance(innings.get("summary"), dict) else innings
+        total_runs = _safe_int(summary.get("runs", summary.get("total_runs")))
+        wickets = _safe_int(summary.get("wickets"))
+        overs = _safe_float(summary.get("overs"))
         extras = innings.get("extras", {}) if isinstance(innings.get("extras"), dict) else {}
         extras_total = _safe_int(extras.get("total"))
         batting_rows = innings.get("batting", []) if isinstance(innings.get("batting"), list) else []
-        did_not_bat = [str(name).strip() for name in innings.get("did_not_bat", []) if str(name).strip()]
     else:
         batting_team = str(payload.get("batting_team") or "").strip()
         bowling_team = str(payload.get("bowling_team") or "").strip()
@@ -2465,7 +2561,6 @@ def draft_from_llm_extraction(extracted: dict[str, Any], members: list[dict[str,
         overs = _safe_float(payload.get("overs"))
         extras_total = _safe_int(payload.get("extras_total"))
         batting_rows = payload.get("batting", []) if isinstance(payload.get("batting"), list) else []
-        did_not_bat = []
 
     draft = default_scorecard("Recovered from local vision model review")
     if batting_team.lower().startswith("heartlake") or bowling_team:
@@ -2491,15 +2586,14 @@ def draft_from_llm_extraction(extracted: dict[str, Any], members: list[dict[str,
         summary_parts.append(f"Bowling team: {bowling_team}")
     if extras_total is not None:
         summary_parts.append(f"Extras: {extras_total}")
-    if did_not_bat:
-        summary_parts.append(f"Did not bat: {', '.join(did_not_bat)}")
     draft["live_summary"] = " | ".join(summary_parts)
 
     suggestions: list[dict[str, Any]] = []
     for entry in batting_rows:
         if not isinstance(entry, dict):
             continue
-        raw_name = str(entry.get("name") or "").strip()
+        player = entry.get("player") if isinstance(entry.get("player"), dict) else {}
+        raw_name = str(player.get("name") or entry.get("name") or "").strip()
         runs = _safe_int(entry.get("runs"))
         if not raw_name or runs is None:
             continue
@@ -2525,6 +2619,179 @@ def draft_from_llm_extraction(extracted: dict[str, Any], members: list[dict[str,
         f"OCR hint:\n{extracted.get('ocr_hint', '')}"
     )
     return draft, suggestions, raw_debug
+
+
+def scorecard_template_from_vision_payload(
+    payload: dict[str, Any],
+    archive: dict[str, Any],
+    model: str,
+    members: list[dict[str, Any]],
+) -> dict[str, Any]:
+    match_data = payload.get("match") if isinstance(payload.get("match"), dict) else {}
+    teams_data = match_data.get("teams") if isinstance(match_data.get("teams"), dict) else {}
+    innings_data = payload.get("innings") if isinstance(payload.get("innings"), list) else []
+    if not innings_data:
+        innings_data = match_data.get("innings") if isinstance(match_data.get("innings"), list) else []
+    if not innings_data and (payload.get("batting") or payload.get("total_runs") is not None):
+        innings_data = [
+            {
+                "inning_number": 1,
+                "batting_team": payload.get("batting_team"),
+                "bowling_team": payload.get("bowling_team"),
+                "summary": {
+                    "runs": payload.get("total_runs"),
+                    "wickets": payload.get("wickets"),
+                    "overs": payload.get("overs"),
+                },
+                "extras": {"total": payload.get("extras_total")},
+                "batting": payload.get("batting", []),
+            }
+        ]
+
+    first_innings = next((item for item in innings_data if isinstance(item, dict)), {})
+    team_1 = str(
+        teams_data.get("team_1")
+        or teams_data.get("batting")
+        or first_innings.get("batting_team")
+        or ""
+    ).strip() or None
+    team_2 = str(
+        teams_data.get("team_2")
+        or teams_data.get("bowling")
+        or first_innings.get("bowling_team")
+        or ""
+    ).strip() or None
+    archive_draft = archive.get("draft_scorecard") if isinstance(archive.get("draft_scorecard"), dict) else {}
+    match = {
+        "match_id": match_data.get("match_id") or archive.get("match_id") or None,
+        "match_type": match_data.get("match_type") or "club",
+        "format": match_data.get("format") or archive.get("match_format") or None,
+        "date": match_data.get("date") or archive.get("archive_date") or archive.get("scorecard_date") or archive.get("photo_taken_at") or None,
+        "venue": match_data.get("venue") or archive.get("venue") or None,
+        "teams": {"team_1": team_1, "team_2": team_2},
+        "overs_limit": _safe_int(match_data.get("overs_limit", archive.get("overs_limit"))),
+    }
+
+    template_innings: list[dict[str, Any]] = []
+    total_runs: list[int | None] = []
+    for index, raw_innings in enumerate(innings_data[:4]):
+        if not isinstance(raw_innings, dict):
+            continue
+        raw_summary = raw_innings.get("summary") if isinstance(raw_innings.get("summary"), dict) else raw_innings
+        batting: list[dict[str, Any]] = []
+        raw_batting = raw_innings.get("batting") if isinstance(raw_innings.get("batting"), list) else []
+        for row in raw_batting[:11]:
+            if not isinstance(row, dict):
+                continue
+            raw_player = row.get("player") if isinstance(row.get("player"), dict) else {}
+            raw_name = str(raw_player.get("name") or row.get("name") or "").strip()
+            name = _canonical_member_name(members, raw_name) if raw_name else ""
+            member = next(
+                (item for item in members if normalize_name(item.get("name")) == normalize_name(name)),
+                {},
+            )
+            dismissal_value = row.get("dismissal")
+            dismissal = dismissal_value if isinstance(dismissal_value, dict) else {}
+            dismissal_type = dismissal.get("type")
+            if isinstance(dismissal_value, str):
+                dismissal_type = dismissal_value
+            batting.append(
+                _scorecard_template_player_entry(
+                    name,
+                    str(raw_player.get("member_id") or member.get("id") or "").strip(),
+                    runs=_safe_int(row.get("runs")),
+                    balls=_safe_int(row.get("balls")),
+                    fours=_safe_int(row.get("fours")),
+                    sixes=_safe_int(row.get("sixes")),
+                    strike_rate=_safe_float(row.get("strike_rate")),
+                    dismissal_type=str(dismissal_type or "").strip() or None,
+                    fielder=str(dismissal.get("fielder") or row.get("fielder") or "").strip() or None,
+                    bowler=str(dismissal.get("bowler") or row.get("bowler") or "").strip() or None,
+                )
+            )
+
+        bowling: list[dict[str, Any]] = []
+        raw_bowling = raw_innings.get("bowling") if isinstance(raw_innings.get("bowling"), list) else []
+        for row in raw_bowling[:11]:
+            if not isinstance(row, dict):
+                continue
+            raw_player = row.get("player") if isinstance(row.get("player"), dict) else {}
+            name = str(raw_player.get("name") or row.get("name") or "").strip()
+            if not name:
+                continue
+            bowling.append(
+                {
+                    "player": {
+                        "name": name,
+                        "normalized_name": normalize_name(name),
+                    },
+                    "overs": _safe_float(row.get("overs")),
+                    "runs_conceded": _safe_int(row.get("runs_conceded")),
+                    "wickets": _safe_int(row.get("wickets")),
+                    "economy": _safe_float(row.get("economy")),
+                }
+            )
+
+        raw_extras = raw_innings.get("extras") if isinstance(raw_innings.get("extras"), dict) else {}
+        extras = {
+            key: _safe_int(raw_extras.get(key))
+            for key in ("wides", "no_balls", "byes", "leg_byes", "penalties", "total")
+        }
+        runs = _safe_int(raw_summary.get("runs", raw_summary.get("total_runs")))
+        total_runs.append(runs)
+        template_innings.append(
+            {
+                "inning_number": _safe_int(raw_innings.get("inning_number")) or index + 1,
+                "batting_team": str(raw_innings.get("batting_team") or (team_1 if index == 0 else team_2) or "").strip() or None,
+                "bowling_team": str(raw_innings.get("bowling_team") or (team_2 if index == 0 else team_1) or "").strip() or None,
+                "summary": {
+                    "runs": runs,
+                    "wickets": _safe_int(raw_summary.get("wickets")),
+                    "overs": _safe_float(raw_summary.get("overs")),
+                    "balls": _safe_int(raw_summary.get("balls")),
+                },
+                "batting": batting,
+                "bowling": bowling,
+                "extras": extras,
+            }
+        )
+
+    is_consistent: bool | None = None
+    notes: list[str] = []
+    for inning in template_innings:
+        summary = inning["summary"]
+        batting_rows = inning["batting"]
+        extras = inning["extras"]
+        if summary["runs"] is not None and batting_rows and extras["total"] is not None:
+            if all(row["runs"] is not None for row in batting_rows):
+                consistent = sum(row["runs"] or 0 for row in batting_rows) + extras["total"] == summary["runs"]
+                is_consistent = consistent if is_consistent is None else is_consistent and consistent
+                if not consistent:
+                    notes.append(f"Innings {inning['inning_number']} batting and extras do not equal the total.")
+    if is_consistent is None:
+        notes.append("Figures were transcribed from the image; verify all values against the original.")
+    elif is_consistent:
+        notes.append("Batting and extras totals match the innings total.")
+
+    return {
+        "meta": {
+            "source": f"Ollama vision · {model}",
+            "processed_by": "Local Ollama vision model with full-page and focused scorecard crops",
+            "confidence": "AI vision draft; verify against the original image",
+            "status": "draft",
+            "created_at": archive.get("created_at") or None,
+            "updated_at": now_iso(),
+        },
+        "match": match,
+        "innings": template_innings,
+        "validation": {
+            "inning_1_total": total_runs[0] if total_runs else None,
+            "inning_2_total": total_runs[1] if len(total_runs) > 1 else None,
+            "expected_result": archive_draft.get("result") or None,
+            "is_consistent": is_consistent,
+            "notes": " ".join(notes),
+        },
+    }
 
 
 def score_ocr_candidate(text: str) -> int:
@@ -2768,12 +3035,21 @@ def enrich_archive_record(item: dict[str, Any], members: list[dict[str, Any]]) -
         normalized["raw_extracted_text"] = raw_debug[:12000]
         normalized["ocr_engine"] = llm_extraction.get("model", "vision-llm")
         normalized["ocr_pipeline"] = (
-            "Local vision-language extraction with Ollama image input, roster-aware JSON prompt, and OCR hint fallback"
+            "Local Ollama vision extraction using the full image, focused table crops, roster hints, and structured scorecard JSON"
         )
-        normalized["confidence"] = "Vision LLM draft"
+        normalized["extraction_template"] = scorecard_template_from_vision_payload(
+            llm_extraction["payload"],
+            normalized,
+            str(llm_extraction.get("model") or "Ollama vision"),
+            members,
+        )
+        normalized["review_template_json"] = json.dumps(normalized["extraction_template"], indent=2)
+        normalized["confidence"] = "AI vision draft; verify against the original image"
         normalized["extracted_summary"] = (
-            f"Local vision model generated a reviewable scorecard draft and "
-            f"{len(suggestions)} player batting lines."
+            f"Local vision model extracted {len(normalized['extraction_template']['innings'])} innings, "
+            f"{sum(len(inning['batting']) for inning in normalized['extraction_template']['innings'])} batting rows, "
+            f"and {sum(len(inning['bowling']) for inning in normalized['extraction_template']['innings'])} bowling rows. "
+            "Verify all figures against the original image before approval."
         )
         return refresh_archive_dates(normalized, normalized["raw_extracted_text"])
 
@@ -2792,9 +3068,9 @@ def enrich_archive_record(item: dict[str, Any], members: list[dict[str, Any]]) -
         normalized["raw_extracted_text"] = text[:12000]
         normalized["ocr_engine"] = "vision+tesseract" if vision_ocr_available() else "tesseract"
         normalized["ocr_pipeline"] = (
-            "Apple Vision OCR first, then converted PNG/JPG OCR fallback with best candidate selection"
+            "Apple Vision OCR first, then Pillow-normalized image OCR with best candidate selection"
             if vision_ocr_available()
-            else "converted to PNG/JPG via sips, then best OCR candidate selected"
+            else "Pillow-normalized image converted to PNG/JPG, then best OCR candidate selected"
         )
         normalized["confidence"] = "OCR draft"
         normalized["extracted_summary"] = (
@@ -2807,10 +3083,14 @@ def enrich_archive_record(item: dict[str, Any], members: list[dict[str, Any]]) -
             normalized.get("match_id", ""),
         )
         normalized["ocr_engine"] = "filename-fallback"
-        normalized["ocr_pipeline"] = "converted image OCR failed, filename fallback only"
         normalized["confidence"] = "Filename draft"
+        normalized["ocr_pipeline"] = (
+            "Ollama vision and local OCR did not produce readable text. Check that Ollama is running and a supported "
+            "vision model (for example qwen3-vl:8b) is installed."
+        )
         normalized["extracted_summary"] = (
-            "Image was converted for OCR first, but OCR could not confidently read it, so a filename-based draft was stored for manual review."
+            "Local vision/OCR extraction was unavailable or could not read the image. A filename-based draft was stored; "
+            "check the local Ollama vision model and use Re-extract to try again."
         )
     return refresh_archive_dates(normalized, normalized.get("raw_extracted_text", ""))
 
@@ -2822,6 +3102,12 @@ def reset_archive_extraction(item: dict[str, Any]) -> dict[str, Any]:
     normalized["ocr_processed_at"] = ""
     normalized["ocr_pipeline"] = ""
     normalized["suggested_performances"] = []
+    normalized["extraction_template"] = {}
+    normalized["review_template_json"] = ""
+    normalized["review_source_json"] = ""
+    normalized["review_llm_model"] = ""
+    normalized["review_llm_notes"] = ""
+    normalized["review_llm_assessment"] = {}
     normalized["draft_scorecard"] = parse_scorecard_draft_from_name(
         normalized.get("file_name", ""),
         normalized.get("match_id", ""),
@@ -2860,7 +3146,9 @@ def extract_archive_by_id(store: dict[str, Any], upload_id: str) -> dict[str, An
         else:
             scoped_members = all_members
         extracted = enrich_archive_record(reset_archive_extraction(item), scoped_members)
-        extracted["extraction_template"] = scorecard_template_from_archive(extracted)
+        if not _is_scorecard_template_payload(extracted.get("extraction_template")):
+            extracted["extraction_template"] = scorecard_template_from_archive(extracted)
+        extracted["review_template_json"] = json.dumps(extracted["extraction_template"], indent=2)
         store["archive_uploads"][index] = extracted
         logger.debug(
             "Extract archive complete → upload_id=%s file=%s club_id=%s suggested=%s",

@@ -1,6 +1,6 @@
-"""AI Muse: the club's chat agent.
+"""AI Assistant: the club's chat agent.
 
-AI Muse understands a few "actions" on top of the normal assistant chat:
+The assistant understands a few "actions" on top of normal chat:
 
 * Score entry by text or voice, e.g.
   "Heartlake 145/6 in 20 overs, Imran XI 120/9. Heartlake won by 25 runs. Amit S 45 off 30, Nick 3 wickets"
@@ -13,7 +13,7 @@ AI Muse understands a few "actions" on top of the normal assistant chat:
 It also owns the in-app notifications (bell icon) and the live score alerts
 (match started, wickets, fifties/hundreds, innings finished).
 
-See README.md -> "AI Muse and notifications" for how it all fits together.
+See README.md -> "AI Assistant and notifications" for how it all fits together.
 """
 
 from __future__ import annotations

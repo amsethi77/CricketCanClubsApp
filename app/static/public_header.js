@@ -3,10 +3,10 @@
   try {
     if (localStorage.getItem("cricketClubAppTheme") === "dark") document.documentElement.setAttribute("data-theme", "dark");
   } catch (e) { /* ignore */ }
-  // Public AI Muse (read-only chat for signed-out visitors). See README.md -> "Public AI Muse".
+  // Public AI Assistant (read-only chat for signed-out visitors). See README.md -> "Public AI Assistant".
   if (!document.querySelector('script[src^="/assets/muse_public.js"]')) {
     const muse = document.createElement("script");
-    muse.src = "/assets/muse_public.js?v=20261005a";
+    muse.src = "/assets/muse_public.js?v=20261015a";
     muse.defer = true;
     document.head.appendChild(muse);
   }
