@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, viewport-fit=cover" />
+    <script src="/assets/zoom_lock.js?v=20261014a"></script>
+    <title>Upload a scorecard · CricketClubApp</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Sora:wght@400;600;700;800&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/assets/tailwind.css" />
+    <link rel="stylesheet" href="/assets/styles.css?v=20261016g" />
+    <link rel="stylesheet" href="/assets/live.css" />
+    <link rel="stylesheet" href="/assets/scorecards.css?v=20261012b" />
+    <link rel="stylesheet" href="/assets/sports-system.css?v=20260926a" />
+  </head>
+  <body class="public-fixtures-page scorecards-page scorecard-upload-page">
+    <!-- Captains and club admins upload a scorecard photo. README: "Scorecard uploads: checks, review and duplicates". -->
+    <main class="page-shell fixtures-shell">
+      <div data-public-header></div>
+      <a class="sc-back" href="/scorecards">&lsaquo; All scorecards</a>
+      <section class="panel onboarding-panel fixtures-hero-panel">
+        <div class="stack-card">
+          <p class="section-kicker">Scorecards</p>
+          <h1 class="fixtures-title">Upload a scorecard</h1>
+          <p class="lede">Take a clear photo of the paper scorecard. We read it, check it for mistakes and duplicates, and show you the digital scorecard before it goes live.</p>
+        </div>
+      </section>
+      <section class="panel onboarding-panel fixtures-list-panel">
+        <div class="stack-card">
+          <div id="scuGate" class="live-empty" hidden></div>
+          <form id="scuForm" class="scu-form" hidden>
+            <label>Club
+              <select id="scuClub"></select>
+            </label>
+            <label class="scu-drop" for="scuFile">
+              <span id="scuDropText">📷 Tap to take or choose a photo</span>
+              <img id="scuPreview" alt="" hidden />
+              <input id="scuFile" type="file" accept="image/*,.jpg,.jpeg,.png,.webp,.heic,.heif" capture="environment" required />
+            </label>
+            <label>Season <small>(optional)</small>
+              <input id="scuSeason" type="text" placeholder="e.g. 2026 Season" autocomplete="off" />
+            </label>
+            <button class="sc-btn primary" type="submit">Upload and check</button>
+            <p id="scuMsg" class="scu-msg" role="status"></p>
+          </form>
+        </div>
+      </section>
+    </main>
+    <script src="/assets/public_header.js?v=20261016f"></script>
+    <script src="/assets/scorecard_upload.js?v=20261016a"></script>
+  </body>
+</html>

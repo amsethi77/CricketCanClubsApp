@@ -509,7 +509,7 @@ body.quick-score-page .muse-fab {
   display: none;
 }
 
-/* ---------- AI Live Scorer (Premium) ---------- */
+/* ---------- AI Live Scorer (Pro) ---------- */
 .qs-tools {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
@@ -591,4 +591,133 @@ body.quick-score-page .muse-fab {
 
 .qs-ai-locked .qs-btn {
   justify-self: start;
+}
+
+/* ---------- Line-ups and guest matches (Oct 2026) ---------- */
+.quick-score-guest .qs-app {
+  padding: 16px 0 110px;
+}
+
+.qs-row2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+@media (max-width: 420px) {
+  .qs-row2 {
+    grid-template-columns: 1fr;
+  }
+}
+
+.quick-score-page .qs-app textarea {
+  width: 100%;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1.5px solid #e2e8f0;
+  background: #fff;
+  font: inherit;
+  font-size: 1rem;
+  color: #0f172a;
+  resize: vertical;
+}
+
+.qs-lineup {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding: 14px;
+  border-radius: 16px;
+  border: 1px solid #e2e8f0;
+  background: #f8fafc;
+}
+
+.qs-lineup legend {
+  padding: 0 6px;
+  font-weight: 800;
+}
+
+.qs-picks {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 6px;
+}
+
+.qs-pick {
+  display: flex !important;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: #fff;
+  border: 1px solid #eef2f7;
+  font-weight: 600 !important;
+}
+
+.qs-pick input {
+  width: 18px !important;
+  height: 18px !important;
+}
+
+.qs-count {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: #fee2e2;
+  color: #b91c1c;
+  font-size: 0.75rem;
+  font-weight: 800;
+}
+
+.qs-count.ok {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.qs-resume {
+  margin-top: 16px;
+}
+
+.qs-guest-banner {
+  max-width: 640px;
+  margin: 0 auto 10px;
+  padding: 10px 14px;
+  border-radius: 14px;
+  background: #fef3c7;
+  color: #92400e;
+  font-size: 0.9rem;
+}
+
+.qs-guest-banner strong {
+  letter-spacing: 0.12em;
+}
+
+.qs-guest-banner span {
+  display: block;
+  font-size: 0.8rem;
+}
+
+.quick-score-guest .qs-card h1 {
+  font-family: "Sora", "Inter", sans-serif;
+  font-size: 1.6rem;
+  font-weight: 800;
+  line-height: 1.2;
+}
+
+.qs-form label > .qs-count,
+.qs-lineup legend .qs-count {
+  justify-self: start;
+  width: auto;
+}
+
+/* Free plan: one free AI match note (README: "One free AI match") */
+.qs-ai-trial {
+  margin: 0 0 8px;
+  padding: 8px 12px;
+  border-radius: 12px;
+  background: #fef3c7;
+  color: #92400e;
+  font-size: 0.85rem;
+  font-weight: 600;
 }

@@ -13,10 +13,14 @@
  * plus GET /api/quick-score/fixtures, GET /api/quick-score/{id}, POST /api/quick-score/start.
  * Every ball also triggers live alerts (bell icon) on the server.
  *
- * Premium: AI Live Scorer (🤖 button). Say or type what happened ("wide, then two runs",
+ * Pro (or a Free user's one free AI match): AI Live Scorer (🤖 button). Say or type what happened ("wide, then two runs",
  * "caught by Sam"); POST /api/matches/{id}/ai-scorer turns it into ball events and each
  * event is saved through the same scorebook/ball API, so the scoring engine does the maths.
  * Documented in README.md -> "Quick Score" and "Subscriptions and plans".
+ *
+ * Oct 2026: both line-ups (2-11 players each) must be set before scoring starts, and people who
+ * aren't signed in can score a guest match (body data-mode="guest", /api/guest/... APIs, match code
+ * sent as X-Guest-Code). README: "Line-ups and guest matches".
  */
 (() => {
   const app = document.getElementById("qsApp");
@@ -25,6 +29,27 @@
   const modalBody = document.getElementById("qsModalBody");
   const params = new URLSearchParams(location.search);
   const matchId = params.get("match") || "";
+  const guest = document.body.dataset.mode === "guest";
+  const guestKey = (id) => `qsGuestCode:${id}`;
+  if (guest && matchId && params.get("code")) {
+    try {
+      localStorage.setItem(guestKey(matchId), params.get("code").trim().toUpperCase());
+    } catch (e) {
+      /* ignore */
+    }
+  }
+  const guestCode = () => {
+    try {
+      return localStorage.getItem(guestKey(matchId)) || "";
+    } catch (e) {
+      return "";
+    }
+  };
+  // API addresses: signed-in club matches vs guest matches
+  const enc = encodeURIComponent;
+  const URLS = guest
+    ? { state: () => `/api/guest/matches/${enc(matchId)}`, setup: () => `/api/guest/matches/${enc(matchId)}/setup`, ball: () => `/api/guest/matches/${enc(matchId)}/ball` }
+    : { state: () => `/api/quick-score/${enc(matchId)}`, setup: () => `/api/matches/${enc(matchId)}/scorebook/setup`, ball: () => `/api/matches/${enc(matchId)}/scorebook/ball` };
   const TOKEN_KEY = "cricketClubAppAuthToken";
 
   let data = null; // /api/quick-score/{id}
@@ -54,7 +79,9 @@
   async function api(method, url, body) {
     const response = await fetch(url, {
       method,
-      headers: { "Content-Type": "application/json", Accept: "application/json", "X-Auth-Token": token() },
+      headers: guest
+        ? { "Content-Type": "application/json", Accept: "application/json", "X-Guest-Code": guestCode() }
+        : { "Content-Type": "application/json", Accept: "application/json", "X-Auth-Token": token() },
       body: body ? JSON.stringify(body) : undefined,
     });
     let payload = null;
@@ -123,6 +150,8 @@
     return String(inn.batting_team || "").toLowerCase() === club || (!inn.batting_team && inn.inning_number === 1);
   }
   function rosterFor(side) {
+    const lineups = data.lineups || {};
+    if ((lineups.club || []).length) return side === "club" ? lineups.club : lineups.opponent || [];
     return side === "club" ? data.roster || [] : [];
   }
 
@@ -178,7 +207,7 @@
                 .join("")}</div>`
             : ""
         }
-        <p class="qs-foot"><a href="/dashboard/widgets/scoring">Advanced scoring</a> · <a href="/dashboard/widgets/archive">Upload a scorecard photo</a></p>
+        <p class="qs-foot"><a href="/dashboard/widgets/scoring">Advanced scoring</a> · <a href="/scorecards/upload">Upload a scorecard photo</a></p>
       </section>`;
     const form = document.getElementById("qsStart");
     if (form) {
@@ -244,7 +273,7 @@
       const bowler = document.getElementById("qsBowler").value.trim();
       if (striker && striker === nonStriker) return toast("Striker and non-striker must be different.", "error");
       try {
-        await api("POST", `/api/matches/${encodeURIComponent(matchId)}/scorebook/setup`, {
+        await api("POST", URLS.setup(), {
           innings_number: inn.inning_number,
           batting_team: battingTeam,
           bowling_team: bowlingTeam,
@@ -336,7 +365,7 @@
               <button class="qs-btn ghost" data-act="swap">⇄ Swap strike</button>
               <button class="qs-btn ghost" data-act="bowler">🎯 Change bowler</button>
               <button class="qs-btn ${recognition ? "primary" : "ghost"}" data-act="voice" aria-pressed="${recognition ? "true" : "false"}">🎙️ ${recognition ? "Listening…" : "Voice"}</button>
-              <button class="qs-btn ${aiMode ? "primary" : "ghost"} qs-ai-btn" data-act="ai" aria-pressed="${aiMode ? "true" : "false"}">🤖 AI Scorer${hasAi() ? "" : " 🔒"}</button>
+              ${guest ? "" : `<button class="qs-btn ${aiMode ? "primary" : "ghost"} qs-ai-btn" data-act="ai" aria-pressed="${aiMode ? "true" : "false"}">🤖 AI Scorer${hasAi() ? "" : " 🔒"}</button>`}
             </section>
             ${aiMode ? aiPanel() : ""}
             <form id="qsShort" class="qs-short">
@@ -347,18 +376,31 @@
       }`;
   }
 
-  // ---------- AI Live Scorer (Premium) ----------
+  // ---------- AI Live Scorer (Pro; Free users get one free AI match) ----------
+  function aiTrialHere() {
+    const trial = plan && plan.ai_trial;
+    return Boolean(trial && (!trial.used || trial.match_id === matchId));
+  }
+
   function hasAi() {
-    return Boolean(plan && (plan.features || []).includes("ai_live_scorer"));
+    return Boolean(plan && ((plan.features || []).includes("ai_live_scorer") || aiTrialHere()));
+  }
+
+  function aiTrialNote() {
+    const trial = plan && plan.ai_trial;
+    if (!trial || (plan.features || []).includes("ai_live_scorer")) return "";
+    return trial.used
+      ? `<p class="qs-ai-trial">🎁 This is your free AI match. Other matches need Pro.</p>`
+      : `<p class="qs-ai-trial">🎁 Free plan: try AI on one match for free. Using it here makes this your free AI match.</p>`;
   }
 
   function aiPanel() {
     if (!hasAi()) {
       return `<section class="qs-ai qs-ai-locked">
-        <p class="qs-kicker">Premium</p>
+        <p class="qs-kicker">Pro</p>
         <h2>AI Live Scorer</h2>
-        <p class="qs-muted">Keep your eyes on the game. Say “four”, “wide, then two runs” or “caught by Sam” and the scorecard updates by itself. Live scoring with the buttons stays free.</p>
-        <a class="qs-btn primary" href="/pricing?feature=ai_live_scorer">See Premium ($100/year)</a>
+        <p class="qs-muted">You've used your free AI match. Say “four”, “wide, then two runs” or “caught by Sam” and the scorecard updates by itself. Live scoring with the buttons stays free.</p>
+        <a class="qs-btn primary" href="/pricing?feature=ai_live_scorer">See Pro ($9/month)</a>
       </section>`;
     }
     const last = aiLast
@@ -373,6 +415,7 @@
         </div>`
       : `<p class="qs-muted">Say what happened on each ball, or type it below. Examples: “four”, “dot”, “wide, then two runs”, “no ball and a six”, “two leg byes”, “bowled”, “caught by Sam”, “undo”.</p>`;
     return `<section class="qs-ai">
+      ${aiTrialNote()}
       <div class="qs-ai-head">
         <span class="qs-ai-status ${aiRecognition ? "on" : ""}">${aiRecognition ? "🎙️ Listening" : "⏸ Mic off"}</span>
         <button type="button" class="qs-btn ghost" data-act="ai-mic">${aiRecognition ? "Pause mic" : "Start mic"}</button>
@@ -458,17 +501,173 @@
         <a class="qs-btn primary" href="/live/${encodeURIComponent(matchId)}">Follow live</a></section>`;
       return;
     }
+    if (!data.lineups_ready) return renderLineups();
     const inn = currentInnings();
     const local = loadLocal(inn.inning_number);
     const hasBalls = (inn.balls || []).length > 0;
     if (!hasBalls && !local.setup) return renderSetup(inn);
     renderScoring(inn);
+    if (guest) showGuestBanner();
+  }
+
+  // ---------- line-ups (both teams, 2-11 players, before scoring) ----------
+  function lineupCount(text) {
+    return String(text || "")
+      .split(/[\n,;]+/)
+      .map((n) => n.trim())
+      .filter(Boolean).length;
+  }
+
+  function renderLineups() {
+    const m = data.match;
+    const clubName = data.club?.name || m.club_name;
+    const roster = data.roster || [];
+    const saved = data.lineups || {};
+    const chosen = new Set(saved.club || []);
+    app.innerHTML = `
+      <section class="qs-card">
+        <p class="qs-kicker">Before the first ball · ${esc(clubName)} vs ${esc(m.opponent)}</p>
+        <h1>Team line-ups</h1>
+        <p class="qs-muted">Pick the players for both teams (2 to 11 each). Scoring starts once both line-ups are in.</p>
+        <form id="qsLineups" class="qs-form">
+          <fieldset class="qs-lineup">
+            <legend>${esc(clubName)} <span class="qs-count" data-count="club">0</span></legend>
+            ${
+              roster.length
+                ? `<div class="qs-picks">${roster
+                    .map((n) => `<label class="qs-pick"><input type="checkbox" name="club" value="${esc(n)}"${chosen.has(n) ? " checked" : ""} /> <span>${esc(n)}</span></label>`)
+                    .join("")}</div>`
+                : ""
+            }
+            <label>${roster.length ? "Other players (one per line)" : "Players (one per line)"}<textarea id="qsClubExtra" rows="${roster.length ? 2 : 6}" placeholder="Name\nName"></textarea></label>
+          </fieldset>
+          <fieldset class="qs-lineup">
+            <legend>${esc(m.opponent)} <span class="qs-count" data-count="opp">0</span></legend>
+            <label>Players (one per line)<textarea id="qsOppList" rows="6" placeholder="Name\nName">${esc((saved.opponent || []).join("\n"))}</textarea></label>
+          </fieldset>
+          <button class="qs-btn primary wide" type="submit">Save line-ups</button>
+        </form>
+      </section>`;
+    const form = document.getElementById("qsLineups");
+    const clubNames = () => [
+      ...Array.from(form.querySelectorAll('input[name="club"]:checked')).map((i) => i.value),
+      ...document.getElementById("qsClubExtra").value.split(/[\n,;]+/).map((n) => n.trim()).filter(Boolean),
+    ];
+    const oppNames = () => document.getElementById("qsOppList").value.split(/[\n,;]+/).map((n) => n.trim()).filter(Boolean);
+    const updateCounts = () => {
+      const c = clubNames().length;
+      const o = oppNames().length;
+      form.querySelector('[data-count="club"]').textContent = `${c}/11`;
+      form.querySelector('[data-count="opp"]').textContent = `${o}/11`;
+      form.querySelector('[data-count="club"]').classList.toggle("ok", c >= 2 && c <= 11);
+      form.querySelector('[data-count="opp"]').classList.toggle("ok", o >= 2 && o <= 11);
+    };
+    form.addEventListener("input", updateCounts);
+    form.addEventListener("change", updateCounts);
+    updateCounts();
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      try {
+        await api("POST", `/api/matches/${enc(matchId)}/lineups`, { club: clubNames(), opponent: oppNames() });
+        toast("Line-ups saved ✓");
+        await load();
+      } catch (e) {
+        toast(e.message, "error");
+      }
+    });
+  }
+
+  // ---------- guest matches (no sign-in) ----------
+  function showGuestBanner() {
+    if (document.querySelector(".qs-guest-banner")) return;
+    const code = guestCode();
+    const banner = document.createElement("div");
+    banner.className = "qs-guest-banner";
+    banner.innerHTML = `Guest match · code <strong>${esc(code)}</strong> <span>Use it to keep scoring on another phone. Followers watch at <a href="/live/${enc(matchId)}">/live</a>.</span>`;
+    app.insertAdjacentElement("beforebegin", banner);
+  }
+
+  function renderGuestStart() {
+    app.innerHTML = `
+      <section class="qs-card">
+        <p class="qs-kicker">Score a match · no sign-in needed</p>
+        <h1>Start a new match</h1>
+        <p class="qs-muted">Enter both teams and their line-ups (2 to 11 players each), then score ball by ball. You'll get a match code to keep scoring on another phone. The match shows on the Live page while you play.</p>
+        <form id="qsGuest" class="qs-form">
+          <div class="qs-row2">
+            <label>Team 1<input id="qsTeamA" required maxlength="40" placeholder="e.g. Sunday Strikers" /></label>
+            <label>Team 2<input id="qsTeamB" required maxlength="40" placeholder="e.g. Park Royals" /></label>
+          </div>
+          <div class="qs-row2">
+            <label>Overs<input id="qsGuestOvers" type="number" min="1" max="50" value="20" /></label>
+            <label>Ground (optional)<input id="qsGuestVenue" maxlength="60" placeholder="e.g. Heart Lake Park" /></label>
+          </div>
+          <label>Team 1 line-up <span class="qs-count" data-count="a">0/11</span><textarea id="qsLineupA" rows="6" placeholder="One player per line"></textarea></label>
+          <label>Team 2 line-up <span class="qs-count" data-count="b">0/11</span><textarea id="qsLineupB" rows="6" placeholder="One player per line"></textarea></label>
+          <button class="qs-btn primary wide" type="submit">Create match and start scoring</button>
+        </form>
+        <form id="qsResume" class="qs-short qs-resume">
+          <input id="qsResumeCode" maxlength="6" placeholder="Have a match code? e.g. K7P2QX" autocomplete="off" />
+          <button class="qs-btn ghost" type="submit">Continue</button>
+        </form>
+        <p class="qs-foot">Scoring for your club? <a href="/signin">Sign in</a> to use your club's fixtures, player stats and alerts.</p>
+      </section>`;
+    const form = document.getElementById("qsGuest");
+    const counts = () => {
+      const a = lineupCount(document.getElementById("qsLineupA").value);
+      const b = lineupCount(document.getElementById("qsLineupB").value);
+      form.querySelector('[data-count="a"]').textContent = `${a}/11`;
+      form.querySelector('[data-count="b"]').textContent = `${b}/11`;
+      form.querySelector('[data-count="a"]').classList.toggle("ok", a >= 2 && a <= 11);
+      form.querySelector('[data-count="b"]').classList.toggle("ok", b >= 2 && b <= 11);
+    };
+    form.addEventListener("input", counts);
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      try {
+        const res = await fetch("/api/guest/matches", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Accept: "application/json" },
+          body: JSON.stringify({
+            team_a: document.getElementById("qsTeamA").value,
+            team_b: document.getElementById("qsTeamB").value,
+            overs: Number(document.getElementById("qsGuestOvers").value || 20),
+            venue: document.getElementById("qsGuestVenue").value,
+            lineup_a: document.getElementById("qsLineupA").value,
+            lineup_b: document.getElementById("qsLineupB").value,
+          }),
+        });
+        const payload = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(payload.detail || "Couldn't create the match");
+        try {
+          localStorage.setItem(guestKey(payload.match_id), payload.code);
+        } catch (e) {
+          /* ignore */
+        }
+        location.href = `/score?match=${enc(payload.match_id)}`;
+      } catch (e) {
+        toast(e.message, "error");
+      }
+    });
+    document.getElementById("qsResume").addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const code = document.getElementById("qsResumeCode").value.trim().toUpperCase();
+      if (!code) return;
+      try {
+        const res = await fetch(`/api/guest/resume?code=${enc(code)}`, { headers: { Accept: "application/json" } });
+        const payload = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(payload.detail || "Code not found");
+        location.href = `/score?match=${enc(payload.match_id)}&code=${enc(code)}`;
+      } catch (e) {
+        toast(e.message, "error");
+      }
+    });
   }
 
   async function load() {
     const [match, me] = await Promise.all([
-      api("GET", `/api/quick-score/${encodeURIComponent(matchId)}`),
-      plan ? Promise.resolve(null) : api("GET", "/api/subscription/me").catch(() => null),
+      api("GET", URLS.state()),
+      plan || guest ? Promise.resolve(null) : api("GET", "/api/subscription/me").catch(() => null),
     ]);
     data = match;
     if (me) plan = me.subscription;
@@ -504,7 +703,7 @@
       while (queue.length) {
         const item = queue[0];
         try {
-          await api("POST", `/api/matches/${encodeURIComponent(matchId)}/scorebook/ball`, item.payload);
+          await api("POST", URLS.ball(), item.payload);
         } catch (e) {
           toast(`A ball wasn't saved: ${e.message}`, "error");
         }
@@ -596,7 +795,7 @@
     try {
       const inn = currentInnings();
       const removed = (inn.balls || [])[(inn.balls || []).length - 1];
-      await api("DELETE", `/api/matches/${encodeURIComponent(matchId)}/scorebook/ball`);
+      await api("DELETE", URLS.ball());
       await load();
       const now = currentInnings();
       if (removed) {
@@ -644,10 +843,10 @@
   }
 
   function bowlingRoster(inn) {
-    return battingIsClub(inn) ? [] : data.roster || [];
+    return rosterFor(battingIsClub(inn) ? "opp" : "club");
   }
   function battingRoster(inn) {
-    return battingIsClub(inn) ? data.roster || [] : [];
+    return rosterFor(battingIsClub(inn) ? "club" : "opp");
   }
 
   function askBowler() {
@@ -860,7 +1059,17 @@
   // ---------- start ----------
   (async () => {
     try {
-      if (!matchId) {
+      if (!matchId && guest) {
+        renderGuestStart();
+      } else if (guest && !guestCode()) {
+        app.innerHTML = `<section class="qs-card"><h1>Enter the match code</h1><p class="qs-muted">This guest match needs its 6-character code to score. You can still follow it live.</p>
+          <form id="qsCodeForm" class="qs-short"><input id="qsCodeInput" maxlength="6" placeholder="e.g. K7P2QX" /><button class="qs-btn primary" type="submit">Continue</button></form>
+          <p class="qs-foot"><a href="/live/${enc(matchId)}">Follow live</a></p></section>`;
+        document.getElementById("qsCodeForm").addEventListener("submit", (event) => {
+          event.preventDefault();
+          location.href = `/score?match=${enc(matchId)}&code=${enc(document.getElementById("qsCodeInput").value.trim().toUpperCase())}`;
+        });
+      } else if (!matchId) {
         renderFixtureList(await api("GET", "/api/quick-score/fixtures"));
       } else {
         await load();

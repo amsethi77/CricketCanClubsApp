@@ -2,8 +2,8 @@
  * Insights panel on the Assistant page: your form, a next-innings prediction,
  * your club's outlook, improvement tips, and one-tap questions for the chat.
  * Data: GET /api/insights/me (computed from the club's own stored stats).
- * Plans: Free shows form and club record; Super adds predictions, tips, best XI and season
- * outlook; Premium adds match intelligence and cross-club stats. Locked parts show an
+ * Plans: Free shows form and club record; Pro adds predictions, tips, best XI and season
+ * outlook, match intelligence and cross-club stats. Locked parts show an
  * "Unlock" card linking to /pricing (README.md -> "Subscriptions and plans").
  */
 (() => {

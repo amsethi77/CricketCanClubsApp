@@ -21,3 +21,6 @@ app/data/.stats_version
 
 # Secrets (Stripe keys) - see .env.example
 .env
+
+# Scorecard photos / typed-in files kept for importing (not part of the app)
+scorecard_imports/

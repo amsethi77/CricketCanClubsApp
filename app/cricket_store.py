@@ -1,4 +1,5 @@
 import base64
+import difflib
 import hashlib
 import json
 import logging
@@ -1930,11 +1931,41 @@ class _CanonicalArchiveList(list):
     """
 
 
+HIDDEN_ARCHIVE_STATUSES = {"duplicate", "rejected"}
+
+# Upload details kept in archives.extra_json (scorecard upload checks, Oct 2026).
+# README: "Scorecard uploads: checks, review and duplicates".
+ARCHIVE_EXTRA_KEYS = (
+    "original_file_name",
+    "image_fingerprint",
+    "uploaded_by_user_id",
+    "uploaded_by",
+    "review_flags",
+    "review_problems",
+    "possible_duplicates",
+    "status_before_duplicate",
+    "review_note",
+    "ai_flags",
+    "reviewed_by",
+    "reviewed_at",
+)
+
+
+def _archive_extra(raw: Any) -> dict[str, Any]:
+    try:
+        data = json.loads(raw) if raw else {}
+    except (TypeError, ValueError):
+        return {}
+    return {key: data[key] for key in ARCHIVE_EXTRA_KEYS if key in data} if isinstance(data, dict) else {}
+
+
 def canonical_archive_uploads(archive_uploads: list[dict[str, Any]]) -> list[dict[str, Any]]:
     if isinstance(archive_uploads, _CanonicalArchiveList):
         return archive_uploads
     grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for item in archive_uploads:
+        if str((item or {}).get("status") or "").strip().lower() in HIDDEN_ARCHIVE_STATUSES:
+            continue  # hidden duplicates and rejected uploads never count in stats, lists or queues
         normalized = normalize_archive(item)
         grouped[normalized["family_key"]].append(normalized)
 
@@ -2186,24 +2217,29 @@ def extract_text_from_image(path: Path) -> str:
             tesseract_candidates: list[str] = []
             for source_path in [png_path, jpg_path]:
                 for psm in ["6", "11"]:
-                    result = subprocess.run(
-                        [
-                            "tesseract",
-                            str(source_path),
-                            "stdout",
-                            "--psm",
-                            psm,
-                            "-c",
-                            "preserve_interword_spaces=1",
-                            "tsv",
-                        ],
-                        check=True,
-                        capture_output=True,
-                        text=True,
-                        encoding="utf-8",
-                        errors="replace",
-                        timeout=12,
-                    )
+                    # A large phone photo can take 20+ seconds per pass; one slow or failed pass
+                    # must not throw away the others (Oct 2026 fix, README "Scorecard uploads").
+                    try:
+                        result = subprocess.run(
+                            [
+                                "tesseract",
+                                str(source_path),
+                                "stdout",
+                                "--psm",
+                                psm,
+                                "-c",
+                                "preserve_interword_spaces=1",
+                                "tsv",
+                            ],
+                            check=True,
+                            capture_output=True,
+                            text=True,
+                            encoding="utf-8",
+                            errors="replace",
+                            timeout=60,
+                        )
+                    except (subprocess.SubprocessError, OSError):
+                        continue
                     text = _reconstruct_lines_from_tesseract_tsv(result.stdout)
                     if text:
                         tesseract_candidates.append(text)
@@ -2744,6 +2780,51 @@ def extract_player_suggestions(text: str, members: list[dict[str, Any]]) -> list
     return suggestions
 
 
+_OCR_HEADING_WORDS = {
+    "batsman", "batting", "bowler", "bowling", "score", "total", "extras", "wides", "byes", "match",
+    "over", "overs", "time", "innings", "wkt", "wickets", "fall", "partnership", "analysis", "summary",
+    "umpires", "scorers", "result", "points", "notes", "remarks", "date", "venue", "club", "toss",
+    "retired", "outgoing", "batsman", "balls", "against", "for", "general", "action", "time",
+}
+
+
+def ocr_rows_look_real(rows: list[dict[str, Any]], members: list[dict[str, Any]]) -> bool:
+    """True when most OCR "player" rows look like real players (Oct 2026, README "Scorecard uploads").
+
+    A row counts when its name is close to a club member's name, or looks like a written name:
+    1-3 words, each Capitalised or ALL CAPS with a vowel (a one-letter initial is fine), and not a
+    scorecard heading. Handwritten cards read by Tesseract fail this test."""
+    if not rows:
+        return True
+    names = [str(member.get("name") or "").strip().lower() for member in members if member.get("name")]
+    first_names = {name.split()[0] for name in names if name.split()}
+
+    def real(row: dict[str, Any]) -> bool:
+        raw = str(row.get("player_name") or "").strip()
+        lowered = raw.lower()
+        words = re.findall(r"[a-z]+", lowered)
+        if not words or len(words) > 3 or any(word in _OCR_HEADING_WORDS for word in words):
+            return False
+        if int(row.get("runs") or 0) > 250:
+            return False
+        if lowered in names or words[0] in first_names:
+            return True
+        if names and difflib.get_close_matches(lowered, names, n=1, cutoff=0.82):
+            return True
+        tokens = raw.split()
+        for index, token in enumerate(tokens):
+            if len(token) == 1 and token.isalpha() and token.isupper() and index > 0:
+                continue  # initial, e.g. "Amit S"
+            if not token.isalpha() or len(token) < 3 or not re.search(r"[aeiouyAEIOUY]", token):
+                return False
+            if not (token.isupper() or (token[0].isupper() and token[1:].islower())):
+                return False
+        return True
+
+    good = sum(1 for row in rows if real(row))
+    return good >= 3 and good >= len(rows) * 0.6
+
+
 def enrich_archive_record(item: dict[str, Any], members: list[dict[str, Any]]) -> dict[str, Any]:
     normalized = normalize_archive(item)
     file_path = Path(normalized.get("file_path") or "")
@@ -2790,6 +2871,19 @@ def enrich_archive_record(item: dict[str, Any], members: list[dict[str, Any]]) -
         normalized["draft_scorecard"] = draft
         normalized["suggested_performances"] = extract_player_suggestions(text, members)
         normalized["raw_extracted_text"] = text[:12000]
+        if not ocr_rows_look_real(normalized["suggested_performances"], members):
+            # Handwritten cards: Tesseract reads printed headings and stray marks as "players".
+            # Don't show that as a scorecard; ask for a typed-in one (or a vision model) instead.
+            normalized["suggested_performances"] = []
+            normalized["draft_scorecard"] = default_scorecard("Couldn't read the handwriting")
+            normalized["ocr_engine"] = "tesseract-unreadable"
+            normalized["ocr_pipeline"] = "OCR text did not look like a scorecard (handwriting); type it in or use a vision model"
+            normalized["confidence"] = "Unreadable"
+            normalized["extracted_summary"] = (
+                "The photo couldn't be read reliably (handwriting). Type the scorecard in with "
+                "'Type in the scorecard', or install an Ollama vision model for automatic reading."
+            )
+            return refresh_archive_dates(normalized, normalized.get("raw_extracted_text", ""))
         normalized["ocr_engine"] = "vision+tesseract" if vision_ocr_available() else "tesseract"
         normalized["ocr_pipeline"] = (
             "Apple Vision OCR first, then converted PNG/JPG OCR fallback with best candidate selection"
@@ -2833,7 +2927,7 @@ def reset_archive_extraction(item: dict[str, Any]) -> dict[str, Any]:
 
 def archive_status_is_pending_review(item: dict[str, Any]) -> bool:
     status = str(item.get("status") or "").strip().lower()
-    return status in {"pending review", "ready for review", "historical archive review"} or status.startswith("pending")
+    return status in {"pending review", "ready for review", "historical archive review", "needs admin review"} or status.startswith("pending")
 
 def extract_archive_by_id(store: dict[str, Any], upload_id: str) -> dict[str, Any]:
     logger.debug("Extract archive requested â†’ upload_id=%s", upload_id)
@@ -3102,7 +3196,16 @@ def normalize_store(store: dict[str, Any]) -> dict[str, Any]:
     normalized["fixtures"] = deduped_fixtures
     normalized["archive_uploads"] = [normalize_archive(item) for item in normalized.get("archive_uploads", [])]
     for archive in normalized["archive_uploads"]:
-        if archive_has_persisted_json(archive) and str(archive.get("status") or "").strip().lower() not in {"approved", "applied to match", "deleted"}:
+        # Uploads a site admin has to check, rejected uploads and hidden duplicates keep their status
+        # (README: "Scorecard uploads: checks, review and duplicates").
+        # AI-read and typed-in scorecards wait for the scorer's "Publish" (or the site admin) instead.
+        engine = str(archive.get("ocr_engine") or "")
+        if (
+            archive_has_persisted_json(archive)
+            and str(archive.get("status") or "").strip().lower() not in {"approved", "applied to match", "deleted", "duplicate", "rejected", "needs admin review"}
+            and not engine.startswith(("ai:", "claude:"))
+            and engine != "manual-entry"
+        ):
             archive["status"] = "Approved"
             archive["confidence"] = archive.get("confidence") or "Persisted JSON"
     normalized["duplicate_uploads"] = [normalize_duplicate(item) for item in normalized.get("duplicate_uploads", [])]
@@ -3672,6 +3775,7 @@ def _schema_tables() -> str:
       review_llm_model TEXT,
       review_llm_notes TEXT,
       review_llm_assessment TEXT,
+      extra_json TEXT,
       FOREIGN KEY (club_id) REFERENCES clubs(id) ON DELETE SET NULL
     );
 
@@ -4406,8 +4510,8 @@ def _write_relational_state(connection: sqlite3.Connection, store: dict[str, Any
                   preview_url, file_name, file_path, file_hash, file_size, source, scorecard_date,
                   photo_taken_at, photo_date_source, archive_date, archive_year, archive_date_source,
                   raw_extracted_text, ocr_engine, ocr_processed_at, ocr_pipeline, extracted_summary,
-                  review_template_json, review_source_json, review_llm_model, review_llm_notes, review_llm_assessment
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                  review_template_json, review_source_json, review_llm_model, review_llm_notes, review_llm_assessment, extra_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     archive.get("id", ""),
@@ -4442,6 +4546,7 @@ def _write_relational_state(connection: sqlite3.Connection, store: dict[str, Any
                     archive.get("review_llm_model", ""),
                     archive.get("review_llm_notes", ""),
                     json.dumps(archive.get("review_llm_assessment") or {}, indent=2) if isinstance(archive.get("review_llm_assessment"), dict) else str(archive.get("review_llm_assessment") or ""),
+                    json.dumps({key: archive[key] for key in ARCHIVE_EXTRA_KEYS if key in archive}),
                 ),
             )
             draft = archive.get("draft_scorecard", {})
@@ -5112,6 +5217,7 @@ def _read_relational_state(connection: sqlite3.Connection) -> dict[str, Any]:
                 "review_llm_model": row["review_llm_model"] or "",
                 "review_llm_notes": row["review_llm_notes"] or "",
                 "review_llm_assessment": json.loads(row["review_llm_assessment"]) if row["review_llm_assessment"] else {},
+                **_archive_extra(row["extra_json"] if "extra_json" in row_keys else ""),
             }
         )
     for archive in archive_uploads:
@@ -5442,6 +5548,7 @@ def ensure_database() -> None:
             ("review_llm_model", "ALTER TABLE archives ADD COLUMN review_llm_model TEXT"),
             ("review_llm_notes", "ALTER TABLE archives ADD COLUMN review_llm_notes TEXT"),
             ("review_llm_assessment", "ALTER TABLE archives ADD COLUMN review_llm_assessment TEXT"),
+            ("extra_json", "ALTER TABLE archives ADD COLUMN extra_json TEXT"),
         ]:
             if column_name not in existing_archive_columns:
                 try:
@@ -5934,7 +6041,7 @@ def build_player_pending_stats(archive_uploads: list[dict[str, Any]], members: l
     played_tracker: dict[str, set[str]] = defaultdict(set)
     for upload in canonical_uploads:
         status = str(upload.get("status") or "").strip().lower()
-        if status.startswith("pending") or status == "applied to match":
+        if status.startswith(("pending", "needs")) or status == "applied to match":
             continue
         archive_key = upload.get("id") or upload.get("file_name", "")
         for performance in _archive_player_performances(upload, members):

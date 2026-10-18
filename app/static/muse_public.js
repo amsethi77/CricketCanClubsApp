@@ -37,15 +37,25 @@ function startPublicMuse() {
 
   const css = document.createElement("link");
   css.rel = "stylesheet";
-  css.href = "/assets/muse.css?v=20261005a";
+  css.href = "/assets/muse.css?v=20261016b";
   document.head.appendChild(css);
 
   const fab = document.createElement("button");
   fab.type = "button";
   fab.className = `muse-fab muse-fab-public${onAuthPage ? " muse-fab-auth" : ""}`;
-  fab.setAttribute("aria-label", "Ask the AI assistant");
-  fab.innerHTML = `<span class="muse-fab-icon" aria-hidden="true">✨</span><strong>AI Assistant</strong>`;
-  document.body.appendChild(fab);
+  // Plans (README "Plans: what each group can use"): signed-out visitors can't use the AI Assistant;
+  // the button takes them to Sign in. No button at all on the sign-in / register pages.
+  let token = "";
+  try {
+    token = localStorage.getItem("cricketClubAppAuthToken") || "";
+  } catch (e) {
+    token = "";
+  }
+  fab.setAttribute("aria-label", token ? "Ask the AI assistant" : "AI Assistant: sign in to use it");
+  fab.innerHTML = token
+    ? `<span class="muse-fab-icon" aria-hidden="true">✨</span><strong>AI Assistant</strong>`
+    : `<span class="muse-fab-icon" aria-hidden="true">🔒</span><strong>AI Assistant · Sign in</strong>`;
+  if (!onAuthPage) document.body.appendChild(fab);
 
   const panel = document.createElement("aside");
   panel.className = "muse-panel";
@@ -53,7 +63,7 @@ function startPublicMuse() {
   panel.setAttribute("aria-label", "AI Muse");
   panel.innerHTML = `
     <header class="muse-head">
-      <div class="muse-title"><span aria-hidden="true">✨</span><div><strong>AI Muse · Assistant</strong><small>Ask about scores, results, players and clubs</small></div></div>
+      <div class="muse-title"><span aria-hidden="true">✨</span><div><strong>AI Muse · Assistant</strong><small>Ask me anything about cricket, your club or the app</small></div></div>
       <button type="button" class="muse-close" aria-label="Close">✕</button>
     </header>
     <div class="muse-body" data-view="chat">
@@ -67,11 +77,11 @@ function startPublicMuse() {
         <button type="button" data-chip="How do I register my club?">✨ Join</button>
       </div>
       <form class="muse-form muse-form-public">
-        <input class="muse-input" placeholder="Ask about scores, players, clubs…" autocomplete="off" maxlength="300" />
+        <input class="muse-input" placeholder="Ask me anything…" autocomplete="off" maxlength="300" />
         <button type="button" class="muse-icon" data-act="mic" aria-label="Speak">🎙️</button>
         <button type="submit" class="muse-send" aria-label="Send">➤</button>
       </form>
-      <p class="muse-signin-note"><a href="/signin">Sign in</a> to score matches, upload scorecards and get alerts.</p>
+      ${token ? "" : '<p class="muse-signin-note"><a href="/signin">Sign in</a> to score matches, upload scorecards and get alerts.</p>'}
     </div>`;
   document.body.appendChild(panel);
 
@@ -90,12 +100,44 @@ function startPublicMuse() {
         const links = (m.links || [])
           .map((l) => `<a class="muse-link${/sign in|register/i.test(l.label) ? " muse-cta" : ""}" href="${esc(l.href)}">${esc(l.label)}${/sign in|register/i.test(l.label) ? "" : " ›"}</a>`)
           .join("");
-        return `<div class="muse-msg ${m.role === "user" ? "muse-user" : "muse-bot"}"><div class="muse-text">${esc(m.text)}</div>${
+        return `<div class="muse-msg ${m.role === "user" ? "muse-user" : "muse-bot"}"><div class="muse-text">${esc(m.text).replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")}</div>${
           links ? `<div class="muse-actions">${links}</div>` : ""
         }</div>`;
       })
       .join("");
     messagesEl.scrollTop = messagesEl.scrollHeight;
+  }
+
+  // Thinking dots for a moment, then the reply types out (README "AI Assistant answers (Gemini)").
+  const TYPING_HTML = `<div class="muse-msg muse-bot muse-typing"><div class="muse-text"><span class="muse-dots" aria-label="Thinking"><i></i><i></i><i></i></span></div></div>`;
+  const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  async function thinkAtLeast(startedAt) {
+    const elapsed = Date.now() - startedAt;
+    if (elapsed < 1200) await wait(1200 - elapsed);
+  }
+  function typeOutLast(container) {
+    const bubbles = container.querySelectorAll(".muse-msg.muse-bot .muse-text");
+    const el = bubbles[bubbles.length - 1];
+    if (!el) return;
+    const finalHtml = el.innerHTML;
+    const full = el.textContent || "";
+    const actions = el.parentElement.querySelector(".muse-actions");
+    if (actions) actions.style.visibility = "hidden";
+    let shown = 0;
+    const step = Math.max(1, Math.ceil(full.length / 90)); // about 1.5 seconds for any length
+    el.textContent = "";
+    const timer = setInterval(() => {
+      if (!el.isConnected) return clearInterval(timer);
+      shown = Math.min(full.length, shown + step);
+      el.textContent = full.slice(0, shown);
+      container.scrollTop = container.scrollHeight;
+      if (shown >= full.length) {
+        clearInterval(timer);
+        el.innerHTML = finalHtml;
+        if (actions) actions.style.visibility = "";
+        container.scrollTop = container.scrollHeight;
+      }
+    }, 16);
   }
 
   async function send(text) {
@@ -104,22 +146,35 @@ function startPublicMuse() {
     history.push({ role: "user", text: message });
     render();
     sending = true;
-    messagesEl.insertAdjacentHTML("beforeend", `<div class="muse-msg muse-bot muse-typing"><div class="muse-text">…</div></div>`);
+    messagesEl.insertAdjacentHTML("beforeend", TYPING_HTML);
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+    const startedAt = Date.now();
+    let answered = false;
     try {
-      const response = await fetch("/api/public/muse", {
+      // Signed in: the full AI Assistant (POST /api/muse), same as on the dashboard. README "AI Assistant answers (Gemini)".
+      const earlier = history.slice(0, -1).slice(-8).map((m) => ({ role: m.role === "user" ? "user" : "assistant", text: m.text }));
+      const response = await fetch(token ? "/api/muse" : "/api/public/muse", {
         method: "POST",
-        headers: { "Content-Type": "application/json", Accept: "application/json" },
-        body: JSON.stringify({ message }),
+        headers: { "Content-Type": "application/json", Accept: "application/json", ...(token ? { "X-Auth-Token": token } : {}) },
+        body: JSON.stringify(token ? { message, history: earlier } : { message }),
       });
       const data = await response.json().catch(() => ({}));
+      if (response.status === 401 && token) throw new Error("please sign in again");
       if (!response.ok) throw new Error(data.detail || "Something went wrong");
-      history.push({ role: "bot", text: data.reply || "…", links: data.links || [] });
+      const links = (data.links || []).filter((link) => !(token && /^\/(signin|register)/.test(String(link.href || ""))));
+      // Tasks that need a Confirm step are done on the dashboard's assistant.
+      if (token && data.action && typeof data.action === "object") links.push({ label: "Confirm on my dashboard", href: "/dashboard" });
+      await thinkAtLeast(startedAt);
+      history.push({ role: "bot", text: data.reply || "…", links });
+      answered = true;
     } catch (e) {
+      await thinkAtLeast(startedAt);
       history.push({ role: "bot", text: `Sorry, I couldn't answer that right now (${e.message}).` });
     } finally {
       sending = false;
       save();
       render();
+      if (answered) typeOutLast(messagesEl);
     }
   }
 
@@ -162,7 +217,13 @@ function startPublicMuse() {
     recognition.start();
   }
 
-  fab.addEventListener("click", () => (panel.hidden ? open() : close()));
+  fab.addEventListener("click", () => {
+    if (!token) {
+      window.location.href = `/signin?next=${encodeURIComponent(window.location.pathname + window.location.search)}`;
+      return;
+    }
+    panel.hidden ? open() : close();
+  });
   panel.querySelector(".muse-close").addEventListener("click", close);
   panel.querySelector(".muse-form").addEventListener("submit", (event) => {
     event.preventDefault();

@@ -1,6 +1,7 @@
 import base64
 import html as html_lib
 import importlib
+import io
 import os
 import re
 import shutil
@@ -157,6 +158,21 @@ class LocalQATestCase(unittest.TestCase):
 
 
 class UnitQATests(LocalQATestCase):
+    def test_u00_heic_scorecard_preview_is_browser_compatible(self) -> None:
+        from PIL import Image
+
+        image_path = self.main.UPLOAD_DIR / "qa-scorecard.heic"
+        Image.new("RGB", (3, 2), (220, 40, 40)).save(image_path, format="PNG")
+
+        preview_url = self.main._scorecard_photo_url({"preview_url": "/uploads/qa-scorecard.heic"})
+        self.assertRegex(preview_url, r"^/uploads/\.previews/[0-9a-f]{24}\.jpg$")
+
+        response = self.client.get(preview_url)
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.headers["content-type"], "image/jpeg")
+        with Image.open(io.BytesIO(response.content)) as preview:
+            self.assertEqual(preview.size, (3, 2))
+
     def test_u01_auth_scoping_player1(self) -> None:
         auth = self.signin("1111111111")
         visible_clubs = auth.get("visible_clubs") or []
@@ -266,10 +282,30 @@ class UnitQATests(LocalQATestCase):
         captain_auth = self.signin("2222222222")
         captain_response = self.client.get("/admin-center", headers=self.auth_headers(captain_auth["token"]))
         self.assertEqual(captain_response.status_code, 403, captain_response.text)
+        captain_queue_response = self.client.get(
+            "/api/admin/review-queue",
+            headers=self.auth_headers(captain_auth["token"]),
+        )
+        self.assertEqual(captain_queue_response.status_code, 403, captain_queue_response.text)
         superadmin_auth = self.signin("14164508695")
         superadmin_response = self.client.get("/admin-center", headers=self.auth_headers(superadmin_auth["token"]))
         self.assertEqual(superadmin_response.status_code, 200, superadmin_response.text)
         self.assertIn("Admin center", superadmin_response.text)
+        self.assertIn('data-scorecard-original="', superadmin_response.text)
+        self.assertIn("admin-original-scorecard-image", superadmin_response.text)
+        queue_response = self.client.get(
+            "/api/admin/review-queue",
+            headers=self.auth_headers(superadmin_auth["token"]),
+        )
+        self.assertEqual(queue_response.status_code, 200, queue_response.text)
+        queue = queue_response.json()["queue"]
+        self.assertTrue(queue, "the fixture archive should be available to the superadmin review queue")
+        preview = queue[0]["scorecard_preview"]
+        self.assertEqual(preview["id"], f"a-{queue[0]['id']}")
+        self.assertEqual(len(preview["innings"]), 2)
+        self.assertIn("photo_url", preview)
+        public_response = self.client.get(f"/api/public/scorecards/{preview['id']}")
+        self.assertEqual(public_response.status_code, 404, public_response.text)
 
 
 class FunctionalQATests(LocalQATestCase):

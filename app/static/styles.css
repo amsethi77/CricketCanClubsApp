@@ -4331,6 +4331,88 @@ button:hover,
   background: rgba(255, 255, 255, 0.96);
 }
 
+.admin-review-workspace {
+  display: grid;
+  grid-template-columns: minmax(0, 1.25fr) minmax(320px, 0.9fr) minmax(260px, 0.75fr);
+  align-items: start;
+  gap: 18px;
+}
+
+.admin-scorecard-snapshot-panel {
+  min-width: 0;
+}
+
+.admin-scorecard-snapshot-panel > h4 {
+  margin: 0 0 10px;
+  color: #40536b;
+  font-size: 0.88rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.admin-scorecard-view .panel {
+  min-width: 0;
+  margin: 0 0 10px;
+  padding: 12px;
+}
+
+.admin-scorecard-view .stack-card {
+  min-width: 0;
+  padding: 14px;
+}
+
+.admin-scorecard-view .sc-tabs,
+.admin-scorecard-view .sc-panel {
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+
+.admin-scorecard-view .sc-header .sc-title {
+  overflow-wrap: anywhere;
+}
+
+.admin-scorecard-view .sc-header > * {
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+
+.admin-scorecard-view .sc-info dl > div {
+  grid-template-columns: 80px minmax(0, 1fr);
+}
+
+.admin-original-scorecard-image {
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid rgba(90, 167, 255, 0.16);
+  border-radius: 14px;
+  background: #fff;
+}
+
+.admin-original-scorecard-image > h3 {
+  margin: 0 0 10px;
+  color: #40536b;
+  font-size: 0.85rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.admin-original-scorecard-image .sc-photo img {
+  max-height: 460px;
+  object-fit: contain;
+}
+
+.admin-review-workspace .admin-review-form {
+  min-width: 0;
+}
+
+.admin-review-workspace .admin-review-text {
+  min-height: 420px;
+}
+
 .audit-entry {
   border-radius: 18px;
   border-color: rgba(90, 167, 255, 0.12);
@@ -6996,6 +7078,30 @@ html body .assistant-fab[hidden] {
   display: none !important;
 }
 
+@media (max-width: 760px) {
+  .admin-review-workspace {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .admin-original-scorecard-image {
+    grid-column: auto;
+  }
+
+  .admin-review-workspace .admin-review-text {
+    min-height: 300px;
+  }
+}
+
+@media (min-width: 761px) and (max-width: 1150px) {
+  .admin-review-workspace {
+    grid-template-columns: minmax(0, 1.15fr) minmax(300px, 0.85fr);
+  }
+
+  .admin-original-scorecard-image {
+    grid-column: 1 / -1;
+  }
+}
+
 @media (max-width: 640px) {
   html body .assistant-fab {
     right: 14px;
@@ -7007,3 +7113,10 @@ html body .assistant-fab[hidden] {
     display: none !important;
   }
 }
+
+/* Screen size lock (Oct 2026, README "Screen size and zoom"): the page is never wider than the screen,
+   so phones cannot be pinched/zoomed out sideways, and double-tap does not zoom. */
+html, body { max-width: 100%; overflow-x: hidden; }
+@supports (overflow-x: clip) { html, body { overflow-x: clip; } }
+html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+body { touch-action: manipulation; }

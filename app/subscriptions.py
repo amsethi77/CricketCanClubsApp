@@ -1,22 +1,26 @@
 """
 Subscription plans, feature limits and Stripe billing for CricketCanClubs.
 
-Model (from "Cricket App Subscription & Feature Model", Sept 2026):
-  Free     $0            live scoring, player/club stats, scorecards, 2 scorecard image uploads a month
-  Super    $4.99/month   + 5 uploads a month, multi-club, rosters, availability, Playing XI,
-                           alerts, live score updates, AI Muse assistant, analysis
-  Premium  $100/year     + unlimited uploads, AI Live Scorer, match intelligence,
-                           cross-club stats, advanced analysis, priority support
+Model (soft launch, Oct 2026 - agreed with Amit Sethi):
+  Free  $0                    the default for every new account. Live scoring, guest matches,
+                              player/club stats, scorecards, 2 scorecard image uploads a month,
+                              and ONE free AI match (AI Assistant tasks + AI Scorer on one match).
+  Pro   $9/month or $90/year  everything: rosters, availability, Playing XI, alerts, live score
+                              updates, AI Assistant, AI Live Scorer, analysis, unlimited uploads.
+                              Yearly is 2 months free ($18 a year cheaper). Monthly is pre-selected.
+
+  The earlier Super ($4.99/month) and Premium ($100/year) plans were folded into Pro:
+  any stored 'super' / 'premium' row (including the 60-day launch trial) now reads as Pro.
 
 Rules:
   * Plans belong to a user. A club counts as "paid" when one of its captains or club admins
-    is on Super or Premium; its players then get availability marking and alerts too.
-  * Site admins (superadmin) always have Premium.
-  * Users who existed when plans were switched on get a 60-day Premium trial.
-  * Stripe is OFF until STRIPE_SECRET_KEY and the two price ids are set (environment or .env).
-    Until then a site admin changes plans by hand on /pricing (Admin: set a user's plan).
+    is on Pro; its players then get availability marking and alerts too.
+  * Site admins (superadmin) always have Pro.
+  * Users who existed when plans were switched on get a 60-day Pro trial.
+  * Stripe is OFF until STRIPE_SECRET_KEY, STRIPE_PRICE_PRO_MONTHLY and STRIPE_PRICE_PRO_YEARLY
+    are set (environment or .env). Until then a site admin changes plans by hand on /pricing.
 
-Documented in README.md -> "Subscriptions and plans".
+Documented in MD/README.md -> "Subscriptions and plans".
 """
 
 from __future__ import annotations
@@ -35,7 +39,13 @@ from pathlib import Path
 from typing import Any
 
 TRIAL_DAYS = 60
-PLAN_ORDER = ["free", "super", "premium"]
+PLAN_ORDER = ["free", "pro"]
+# Old plan ids still stored in some rows -> the plan they mean now.
+LEGACY_PLANS = {"super": "pro", "premium": "pro"}
+INTERVALS = ("month", "year")
+# AI features a Free user may try on ONE match (see claim_ai_trial).
+# One free AI try for Free users: one match (AI Assistant / AI Scorer) or one scorecard photo read by AI.
+AI_TRIAL_FEATURES = {"ai_assistant", "ai_live_scorer", "ai_extraction"}
 
 FEATURES: dict[str, dict[str, str]] = {
     # key: label, minimum plan
@@ -43,21 +53,21 @@ FEATURES: dict[str, dict[str, str]] = {
     "stats": {"label": "Player and club statistics", "plan": "free"},
     "scorecards": {"label": "View scorecards", "plan": "free"},
     "basic_insights": {"label": "Basic player and club analysis", "plan": "free"},
-    "multi_club": {"label": "Multi-club selection", "plan": "super"},
-    "match_roster": {"label": "Match roster management", "plan": "super"},
-    "availability": {"label": "Player availability marking", "plan": "super"},
-    "playing_xi": {"label": "Playing XI / team management", "plan": "super"},
-    "alerts": {"label": "Alerts and player notifications", "plan": "super"},
-    "score_updates": {"label": "Live score updates to players", "plan": "super"},
-    "ai_assistant": {"label": "AI Muse assistant", "plan": "super"},
-    "analysis": {"label": "Historical, player and club analysis", "plan": "super"},
-    "ai_extraction": {"label": "AI scorecard extraction", "plan": "super"},
-    "retro_help": {"label": "Help with old score uploads", "plan": "super"},
-    "ai_live_scorer": {"label": "AI Live Scorer (hands-free)", "plan": "premium"},
-    "match_intelligence": {"label": "Match intelligence", "plan": "premium"},
-    "cross_club_stats": {"label": "Cross-club statistics", "plan": "premium"},
-    "advanced_analysis": {"label": "Advanced analysis", "plan": "premium"},
-    "priority_support": {"label": "Priority support", "plan": "premium"},
+    "multi_club": {"label": "Multi-club selection", "plan": "pro"},
+    "match_roster": {"label": "Match roster management", "plan": "pro"},
+    "availability": {"label": "Player availability marking", "plan": "pro"},
+    "playing_xi": {"label": "Playing XI / team management", "plan": "pro"},
+    "alerts": {"label": "Alerts and player notifications", "plan": "pro"},
+    "score_updates": {"label": "Live score updates to players", "plan": "pro"},
+    "ai_assistant": {"label": "AI Assistant (does tasks for you)", "plan": "pro"},
+    "ai_live_scorer": {"label": "AI Live Scorer (hands-free)", "plan": "pro"},
+    "analysis": {"label": "Historical, player and club analysis", "plan": "pro"},
+    "ai_extraction": {"label": "AI reading of scorecard photos", "plan": "pro"},
+    "retro_help": {"label": "Help with old score uploads", "plan": "pro"},
+    "match_intelligence": {"label": "Match intelligence", "plan": "pro"},
+    "cross_club_stats": {"label": "Cross-club statistics", "plan": "pro"},
+    "advanced_analysis": {"label": "Advanced analysis", "plan": "pro"},
+    "priority_support": {"label": "Priority support", "plan": "pro"},
 }
 
 PLANS: dict[str, dict[str, Any]] = {
@@ -72,51 +82,47 @@ PLANS: dict[str, dict[str, Any]] = {
         "upload_limit": 2,
         "highlights": [
             "Unlimited live scoring",
-            "Player statistics",
-            "Club statistics",
+            "Score a match without an account (guest code)",
+            "Player and club statistics",
             "Scorecard history",
-            "2 historical scorecard uploads/month",
+            "2 scorecard photo uploads a month",
+            "1 free AI try: one match with the AI Assistant / AI Scorer, or one scorecard photo read by AI",
         ],
     },
-    "super": {
-        "id": "super",
-        "name": "Super",
-        "price": "$4.99",
+    "pro": {
+        "id": "pro",
+        "name": "Pro",
+        "price": "$9",
         "price_note": "per month",
-        "amount_cents": 499,
+        "amount_cents": 900,
         "interval": "month",
-        "tagline": "For active players & teams",
-        "upload_limit": 5,
-        "highlights": [
-            "Everything in Free, plus:",
-            "5 historical scorecard uploads/month",
-            "Multi-club support",
-            "Rosters, availability and Playing XI",
-            "Player alerts and live score updates",
-            "AI Muse assistant",
-            "Historical and player analysis",
-        ],
-    },
-    "premium": {
-        "id": "premium",
-        "name": "Premium",
-        "price": "$100",
-        "price_note": "per year (about $8.33/month)",
-        "amount_cents": 10000,
-        "interval": "year",
-        "tagline": "For serious players, captains & clubs",
+        "yearly": {
+            "price": "$90",
+            "price_note": "per year",
+            "amount_cents": 9000,
+            "monthly_equivalent": "$7.50",
+            "saving": "Save $18 a year (2 months free)",
+        },
+        "tagline": "For players, captains and clubs",
         "upload_limit": None,
         "highlights": [
-            "Everything in Super, plus:",
-            "Unlimited historical uploads",
+            "Everything in Free, plus:",
+            "Upcoming matches, availability and Playing XI",
+            "Player alerts and live score updates",
+            "AI Assistant: \"mark me available Saturday\", \"send reminders\"",
             "AI Live Scorer: say \"four\" and the scorecard updates",
-            "Match intelligence",
-            "Cross-club statistics",
-            "Advanced analysis",
-            "Retro-score assistance and priority support",
+            "Unlimited scorecard uploads, read by AI",
+            "Analysis, match intelligence and cross-club stats",
         ],
     },
 }
+
+
+def normalize_plan(plan: Any) -> str:
+    """Plan id as used today ('super'/'premium' -> 'pro'; unknown -> 'free')."""
+    value = str(plan or "free").strip().lower()
+    value = LEGACY_PLANS.get(value, value)
+    return value if value in PLANS else "free"
 
 
 def plan_rank(plan: str) -> int:
@@ -129,13 +135,15 @@ def plan_features(plan: str) -> list[str]:
 
 
 def feature_min_plan(feature: str) -> str:
-    return FEATURES.get(feature, {}).get("plan", "premium")
+    return FEATURES.get(feature, {}).get("plan", "pro")
 
 
 def upgrade_message(feature: str) -> str:
     plan = PLANS[feature_min_plan(feature)]
     label = FEATURES.get(feature, {}).get("label", "This feature")
-    return f"{label} is part of the {plan['name']} plan ({plan['price']} {plan['price_note']}). See /pricing to upgrade."
+    price = f"{plan['price']} a month or {plan['yearly']['price']} a year" if plan.get("yearly") else f"{plan['price']} {plan['price_note']}"
+    extra = " Your free AI try has been used." if feature in AI_TRIAL_FEATURES else ""
+    return f"{label} is part of the {plan['name']} plan ({price}).{extra} See /pricing to upgrade."
 
 
 # ---------------------------------------------------------------------------
@@ -167,19 +175,29 @@ def setting(name: str, default: str = "") -> str:
     return str(os.environ.get(name) or _env_file_values().get(name) or default).strip()
 
 
+def configured_default_plan() -> str:
+    """Plan for users with no admin / Stripe plan (Amit, Oct 15). Pro while developing; set
+    CRICKETCLUBAPP_DEFAULT_PLAN=free before launch. "premium" / "super" (old names) mean Pro."""
+    raw = setting("CRICKETCLUBAPP_DEFAULT_PLAN", "pro").lower()
+    plan = LEGACY_PLANS.get(raw, raw)
+    if plan not in PLAN_ORDER:
+        raise ValueError("CRICKETCLUBAPP_DEFAULT_PLAN must be one of: free, pro.")
+    return plan
+
+
 def stripe_config() -> dict[str, str]:
     return {
         "secret_key": setting("STRIPE_SECRET_KEY"),
         "webhook_secret": setting("STRIPE_WEBHOOK_SECRET"),
-        "price_super": setting("STRIPE_PRICE_SUPER"),
-        "price_premium": setting("STRIPE_PRICE_PREMIUM"),
+        "price_pro_month": setting("STRIPE_PRICE_PRO_MONTHLY"),
+        "price_pro_year": setting("STRIPE_PRICE_PRO_YEARLY"),
         "base_url": setting("APP_BASE_URL").rstrip("/"),
     }
 
 
 def stripe_enabled() -> bool:
     config = stripe_config()
-    return bool(config["secret_key"] and config["price_super"] and config["price_premium"])
+    return bool(config["secret_key"] and config["price_pro_month"] and config["price_pro_year"])
 
 
 def stripe_test_mode() -> bool:
@@ -231,6 +249,11 @@ def ensure_schema(connection: sqlite3.Connection) -> None:
           key TEXT PRIMARY KEY,
           value TEXT
         );
+        CREATE TABLE IF NOT EXISTS app_ai_trial (
+          user_id INTEGER PRIMARY KEY,
+          match_id TEXT NOT NULL,
+          used_at TEXT NOT NULL
+        );
         CREATE TABLE IF NOT EXISTS app_payment_events (
           id TEXT PRIMARY KEY,
           type TEXT,
@@ -256,7 +279,7 @@ def _subscription_row(connection: sqlite3.Connection, user_id: int) -> sqlite3.R
 
 
 def _ensure_row(connection: sqlite3.Connection, user_row: Any) -> sqlite3.Row:
-    """Create the user's subscription row the first time we see them (trial for existing users)."""
+    """Create the user's subscription row the first time we see them."""
     user_id = int(user_row["id"])
     row = _subscription_row(connection, user_id)
     if row:
@@ -268,14 +291,15 @@ def _ensure_row(connection: sqlite3.Connection, user_row: Any) -> sqlite3.Row:
         trial_end = launched + timedelta(days=TRIAL_DAYS)
         connection.execute(
             """INSERT OR IGNORE INTO app_subscriptions (user_id, plan, status, source, started_at, current_period_end, note, updated_at)
-               VALUES (?, 'premium', 'trialing', 'trial', ?, ?, ?, ?)""",
-            (user_id, _iso(launched), _iso(trial_end), f"{TRIAL_DAYS}-day Premium trial for existing members", now),
+               VALUES (?, 'pro', 'trialing', 'trial', ?, ?, ?, ?)""",
+            (user_id, _iso(launched), _iso(trial_end), f"{TRIAL_DAYS}-day Pro trial for existing members", now),
         )
     else:
+        plan = configured_default_plan()
         connection.execute(
             """INSERT OR IGNORE INTO app_subscriptions (user_id, plan, status, source, started_at, updated_at)
-               VALUES (?, 'free', 'active', 'free', ?, ?)""",
-            (user_id, now, now),
+               VALUES (?, ?, 'active', 'default', ?, ?)""",
+            (user_id, plan, now, now),
         )
     return _subscription_row(connection, user_id)
 
@@ -292,20 +316,23 @@ def uploads_this_month(connection: sqlite3.Connection, user_id: int) -> int:
 def effective_plan(connection: sqlite3.Connection, user_row: Any, role_names: list[str] | None = None) -> dict[str, Any]:
     """The plan the user has right now, with features and quota."""
     row = _ensure_row(connection, user_row)
-    plan = str(row["plan"] or "free")
+    plan = normalize_plan(row["plan"])
     status = str(row["status"] or "active")
     source = str(row["source"] or "free")
+    if source in {"default", "free"}:
+        plan = configured_default_plan()
+        source = "default"
     period_end = _parse(row["current_period_end"])
     now = _now()
     active = status in {"active", "trialing", "past_due"}
     if period_end and period_end < now and source in {"trial", "admin"}:
         active = False
     if plan != "free" and not active:
-        plan, expired_from = "free", str(row["plan"])
+        plan, expired_from = "free", PLANS[plan]["name"]
     else:
         expired_from = ""
     if "superadmin" in (role_names or []):
-        plan, source, status = "premium", "site_admin", "active"
+        plan, source, status = "pro", "site_admin", "active"
     info = PLANS[plan]
     used = uploads_this_month(connection, int(user_row["id"]))
     limit = info["upload_limit"]
@@ -329,7 +356,38 @@ def effective_plan(connection: sqlite3.Connection, user_row: Any, role_names: li
         "upload_limit": limit,
         "uploads_used": used,
         "uploads_left": None if limit is None else max(0, limit - used),
+        "ai_trial": ai_trial_status(connection, int(user_row["id"])) if plan == "free" else None,
     }
+
+
+def ai_trial_match(connection: sqlite3.Connection, user_id: int) -> str:
+    """The match a Free user spent their one free AI match on ('' = not used yet)."""
+    row = connection.execute("SELECT match_id FROM app_ai_trial WHERE user_id = ?", (int(user_id),)).fetchone()
+    return str(row[0]) if row else ""
+
+
+def ai_trial_status(connection: sqlite3.Connection, user_id: int) -> dict[str, Any]:
+    match_id = ai_trial_match(connection, user_id)
+    return {"used": bool(match_id), "match_id": match_id}
+
+
+def claim_ai_trial(connection: sqlite3.Connection, user_id: int, match_id: str, *, claim: bool = True) -> bool:
+    """True when AI may be used on this match under the free trial.
+
+    The first match a Free user uses AI on becomes their free AI match; they can keep using AI on
+    that match. Any other match needs Pro. match_id '' (no match yet) is allowed only while unused
+    and never claims. claim=False only checks."""
+    used = ai_trial_match(connection, user_id)
+    match_id = str(match_id or "").strip()
+    if used:
+        return bool(match_id) and match_id == used
+    if match_id and claim:
+        connection.execute(
+            "INSERT OR IGNORE INTO app_ai_trial (user_id, match_id, used_at) VALUES (?, ?, ?)",
+            (int(user_id), match_id, _iso(_now())),
+        )
+        return ai_trial_match(connection, user_id) == match_id
+    return True
 
 
 def has_feature(connection: sqlite3.Connection, user_row: Any, feature: str, role_names: list[str] | None = None) -> bool:
@@ -349,6 +407,7 @@ def set_plan(
     stripe_subscription_id: str | None = None,
     cancel_at_period_end: bool | None = None,
 ) -> None:
+    plan = LEGACY_PLANS.get(str(plan or "").lower(), str(plan or "").lower())
     if plan not in PLANS:
         raise ValueError(f"Unknown plan '{plan}'.")
     _ensure_row(connection, user_row)
@@ -371,7 +430,7 @@ def set_plan(
 
 
 def paid_manager_count(connection: sqlite3.Connection, club_id: str) -> int:
-    """Captains / club admins of this club who are on Super or Premium right now."""
+    """Captains / club admins of this club who are on Pro right now."""
     if not club_id:
         return 0
     connection.row_factory = sqlite3.Row
@@ -420,22 +479,29 @@ def _stripe_request(method: str, path: str, params: dict[str, Any] | None = None
         raise StripeError(f"Could not reach Stripe: {exc.reason}") from exc
 
 
-def price_for_plan(plan: str) -> str:
-    config = stripe_config()
-    return config["price_super"] if plan == "super" else config["price_premium"] if plan == "premium" else ""
+def normalize_interval(interval: Any) -> str:
+    value = str(interval or "month").strip().lower()
+    value = {"monthly": "month", "yearly": "year", "annual": "year"}.get(value, value)
+    return value if value in INTERVALS else "month"
+
+
+def price_for_plan(plan: str, interval: str = "month") -> str:
+    if normalize_plan(plan) != "pro":
+        return ""
+    return stripe_config()[f"price_pro_{normalize_interval(interval)}"]
 
 
 def plan_for_price(price_id: str) -> str:
     config = stripe_config()
-    if price_id and price_id == config["price_premium"]:
-        return "premium"
-    if price_id and price_id == config["price_super"]:
-        return "super"
+    if price_id and price_id in {config["price_pro_month"], config["price_pro_year"]}:
+        return "pro"
     return ""
 
 
-def create_checkout_session(user_row: Any, plan: str, base_url: str, customer_id: str = "") -> str:
-    price = price_for_plan(plan)
+def create_checkout_session(user_row: Any, plan: str, base_url: str, customer_id: str = "", interval: str = "month") -> str:
+    plan = normalize_plan(plan)
+    interval = normalize_interval(interval)
+    price = price_for_plan(plan, interval)
     if not price:
         raise StripeError("This plan has no Stripe price set.")
     base = stripe_config()["base_url"] or base_url.rstrip("/")
@@ -448,8 +514,10 @@ def create_checkout_session(user_row: Any, plan: str, base_url: str, customer_id
         "client_reference_id": str(int(user_row["id"])),
         "metadata[user_id]": str(int(user_row["id"])),
         "metadata[plan]": plan,
+        "metadata[interval]": interval,
         "subscription_data[metadata][user_id]": str(int(user_row["id"])),
         "subscription_data[metadata][plan]": plan,
+        "subscription_data[metadata][interval]": interval,
         "allow_promotion_codes": "true",
     }
     if customer_id:
@@ -525,8 +593,8 @@ def handle_stripe_event(connection: sqlite3.Connection, event: dict[str, Any]) -
     if event_type == "checkout.session.completed":
         metadata = obj.get("metadata") or {}
         user_row = _user_by_id(connection, obj.get("client_reference_id") or metadata.get("user_id"))
-        plan = str(metadata.get("plan") or "")
-        if user_row and plan in {"super", "premium"}:
+        plan = normalize_plan(metadata.get("plan"))
+        if user_row and plan != "free":
             set_plan(
                 connection,
                 user_row,
@@ -546,14 +614,14 @@ def handle_stripe_event(connection: sqlite3.Connection, event: dict[str, Any]) -
         user_row = _user_by_id(connection, metadata.get("user_id")) or _user_by_customer(connection, customer_id)
         items = ((obj.get("items") or {}).get("data") or [])
         price_id = str(((items[0] if items else {}).get("price") or {}).get("id") or "")
-        plan = plan_for_price(price_id) or str(metadata.get("plan") or "")
+        plan = plan_for_price(price_id) or normalize_plan(metadata.get("plan"))
         status = str(obj.get("status") or "")
         period_end = _from_unix(obj.get("current_period_end") or ((items[0] if items else {}).get("current_period_end")))
         if user_row:
             if event_type == "customer.subscription.deleted" or status in {"canceled", "unpaid", "incomplete_expired"}:
                 set_plan(connection, user_row, "free", source="stripe", status="canceled", note="Stripe subscription ended", stripe_customer_id=customer_id, cancel_at_period_end=False)
                 result["plan"] = "free"
-            elif plan in {"super", "premium"}:
+            elif plan != "free":
                 set_plan(
                     connection,
                     user_row,
@@ -585,4 +653,6 @@ def public_catalog() -> dict[str, Any]:
         "stripe_enabled": stripe_enabled(),
         "stripe_test_mode": stripe_enabled() and stripe_test_mode(),
         "trial_days": TRIAL_DAYS,
+        "default_plan": "free",
+        "default_interval": "month",
     }
