@@ -3,15 +3,15 @@
   try {
     if (localStorage.getItem("cricketClubAppTheme") === "dark") document.documentElement.setAttribute("data-theme", "dark");
   } catch (e) { /* ignore */ }
-  // AI Muse (floating chat + notifications bell) on signed-in pages. See README.md -> "AI Muse and notifications".
+  // AI Assistant (floating chat + notifications bell) on signed-in pages. See README.md -> "AI Assistant and notifications".
   const loadMuse = () => {
     if (!document.querySelector(".page-topbar") || document.querySelector('script[src^="/assets/muse.js"]')) return;
     const museCss = document.createElement("link");
     museCss.rel = "stylesheet";
-    museCss.href = "/assets/muse.css?v=20261016b";
+    museCss.href = "/assets/muse.css?v=20261018a";
     document.head.appendChild(museCss);
     const museJs = document.createElement("script");
-    museJs.src = "/assets/muse.js?v=20261016b";
+    museJs.src = "/assets/muse.js?v=20261018a";
     document.head.appendChild(museJs);
     // Plans: shows an "Upgrade" pop-up when a paid feature is used. See README.md -> "Subscriptions and plans".
     const gate = document.createElement("script");

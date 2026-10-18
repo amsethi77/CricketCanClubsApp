@@ -1,5 +1,5 @@
 """
-AI Muse agent: turns what people say into tasks the app can carry out.
+AI Assistant agent: turns what people say into tasks the app can carry out.
 
 Works like an assistant that "does it for you":
 
@@ -21,7 +21,7 @@ Commands are understood by fast rules first. When the rules don't recognise a co
 the local LLM (Ollama) is running, the LLM is asked to pick the tool (llm_plan). Everything
 else is answered by the normal LLM assistant (cricket_brain.answer_question).
 
-Documented in MD/README.md -> "AI Muse and notifications" -> "AI Muse as an agent".
+Documented in MD/README.md -> "AI Assistant and notifications" -> "AI Assistant as an agent".
 """
 
 from __future__ import annotations
@@ -230,7 +230,7 @@ def llm_plan(message: str, context: str, call_llm: Callable[[str, str], str]) ->
     """Ask the LLM to choose one tool and fill its arguments. Returns None if it can't."""
     tool_lines = "\n".join(f"- {name}: {desc}" for name, desc in TOOLS.items())
     system = (
-        "You are AI Muse, the assistant inside a cricket club app. Decide which ONE tool carries out the user's request. "
+        "You are AI Assistant, the assistant inside a cricket club app. Decide which ONE tool carries out the user's request. "
         "Reply with JSON only, like {\"tool\": \"mark_availability\", \"args\": {...}}. Use \"chat\" if it is a question "
         "or no tool fits. Never invent player names or scores that the user did not say.\n\nTools:\n" + tool_lines
     )

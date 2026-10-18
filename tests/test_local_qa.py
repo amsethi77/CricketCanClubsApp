@@ -173,6 +173,136 @@ class UnitQATests(LocalQATestCase):
         with Image.open(io.BytesIO(response.content)) as preview:
             self.assertEqual(preview.size, (3, 2))
 
+    def test_scorecard_vision_selects_tagged_ollama_model(self) -> None:
+        store_module = importlib.import_module(self.main.extract_archive_by_id.__module__)
+        with patch.object(store_module, "available_ollama_models", return_value=["llama3.2:latest", "qwen3-vl:8b-q4_K_M"]):
+            self.assertEqual(store_module.preferred_vision_llm_model(), "qwen3-vl:8b-q4_K_M")
+
+    def test_scorecard_vision_preprocessing_converts_phone_image_without_sips(self) -> None:
+        from PIL import Image
+
+        store_module = importlib.import_module(self.main.extract_archive_by_id.__module__)
+        source_path = self.main.UPLOAD_DIR / "qa-phone-scorecard.heic"
+        Image.new("RGB", (24, 36), (30, 80, 140)).save(source_path, format="PNG")
+        converted_path = store_module._image_path_for_llm(source_path, self._tempdir_path())
+
+        with Image.open(converted_path) as converted:
+            self.assertEqual(converted.format, "JPEG")
+            self.assertEqual(converted.size, (24, 36))
+
+    def test_scorecard_vision_extractor_sends_focused_images_and_json_prompt(self) -> None:
+        from PIL import Image
+        from unittest.mock import Mock
+
+        store_module = importlib.import_module(self.main.extract_archive_by_id.__module__)
+        image_path = self.main.UPLOAD_DIR / "qa-vision-scorecard.png"
+        Image.new("RGB", (320, 480), (235, 238, 240)).save(image_path)
+        model_response = {
+            "message": {
+                "content": (
+                    '{"match":{"date":null,"venue":"QA Ground","teams":{"team_1":"TestClub","team_2":"Opposition"},'
+                    '"overs_limit":20},"innings":[{"inning_number":1,"batting_team":"TestClub",'
+                    '"bowling_team":"Opposition","summary":{"runs":145,"wickets":6,"overs":20,"balls":120},'
+                    '"batting":[{"player":{"name":"player1"},"runs":45,"balls":30,"fours":4,"sixes":1,'
+                    '"strike_rate":150,"dismissal":{"type":"caught","fielder":"Nick","bowler":"Sam"}}],'
+                    '"bowling":[{"player":{"name":"Sam"},"overs":4,"runs_conceded":25,"wickets":2,"economy":6.25}],'
+                    '"extras":{"wides":3,"no_balls":0,"byes":1,"leg_byes":0,"penalties":0,"total":4}}]}'
+                )
+            }
+        }
+        response = Mock()
+        response.json.return_value = model_response
+        with (
+            patch.object(store_module, "preferred_vision_llm_model", return_value="qwen3-vl:8b"),
+            patch.object(store_module, "extract_text_from_image", return_value="TestClub 145/6"),
+            patch.object(store_module.httpx, "post", return_value=response) as post,
+        ):
+            result = store_module.extract_scorecard_with_vision_llm(image_path, [{"name": "player1"}])
+
+        self.assertIsNotNone(result)
+        request = post.call_args.kwargs["json"]
+        self.assertEqual(request["format"], "json")
+        self.assertEqual(request["options"]["num_ctx"], 8192)
+        self.assertEqual(len(request["messages"][0]["images"]), 4)
+        self.assertIn('"bowling"', request["messages"][0]["content"])
+        self.assertIn("focused crops", request["messages"][0]["content"])
+
+    def test_scorecard_vision_populates_full_review_json_and_reextract_replaces_old_json(self) -> None:
+        import json
+        from PIL import Image
+
+        store_module = importlib.import_module(self.main.extract_archive_by_id.__module__)
+        image_path = self.main.UPLOAD_DIR / "qa-reextract-scorecard.png"
+        Image.new("RGB", (40, 60), (255, 255, 255)).save(image_path)
+        payload = {
+            "match": {
+                "date": "2024-06-01",
+                "venue": "QA Ground",
+                "teams": {"team_1": "TestClub", "team_2": "Opposition"},
+                "overs_limit": 20,
+            },
+            "innings": [
+                {
+                    "inning_number": 1,
+                    "batting_team": "TestClub",
+                    "bowling_team": "Opposition",
+                    "summary": {"runs": 145, "wickets": 6, "overs": 20, "balls": 120},
+                    "batting": [
+                        {
+                            "player": {"name": "player1"},
+                            "runs": 45,
+                            "balls": 30,
+                            "fours": 4,
+                            "sixes": 1,
+                            "strike_rate": 150,
+                            "dismissal": {"type": "caught", "fielder": "Nick", "bowler": "Sam"},
+                        }
+                    ],
+                    "bowling": [
+                        {"player": {"name": "Sam"}, "overs": 4, "runs_conceded": 25, "wickets": 2, "economy": 6.25}
+                    ],
+                    "extras": {"wides": 3, "no_balls": 0, "byes": 1, "leg_byes": 0, "penalties": 0, "total": 4},
+                }
+            ],
+        }
+        archive = {
+            "id": "qa-reextract",
+            "file_name": image_path.name,
+            "original_file_name": image_path.name,
+            "file_path": str(image_path),
+            "status": "Pending review",
+            "club_id": "club-testclub",
+            "club_name": "TestClub",
+            "draft_scorecard": {"result": "Old extraction"},
+            "extraction_template": {"meta": {}, "match": {}, "innings": [], "validation": {}},
+            "review_template_json": '{"old": true}',
+            "review_source_json": '{"old review": true}',
+            "suggested_performances": [],
+        }
+        store = {"members": [{"id": "member-1", "name": "player1", "club_memberships": [{"club_id": "club-testclub"}]}], "archive_uploads": [archive]}
+        with patch.object(
+            store_module,
+            "extract_scorecard_with_vision_llm",
+            return_value={"model": "qwen3-vl:8b", "content": json.dumps(payload), "payload": payload, "ocr_hint": ""},
+        ):
+            extracted = store_module.extract_archive_by_id(store, "qa-reextract")
+
+        template = extracted["extraction_template"]
+        self.assertEqual(template["match"]["teams"]["team_1"], "TestClub")
+        self.assertEqual(template["innings"][0]["summary"]["runs"], 145)
+        self.assertEqual(template["innings"][0]["batting"][0]["player"]["member_id"], "member-1")
+        self.assertEqual(template["innings"][0]["batting"][0]["dismissal"]["fielder"], "Nick")
+        self.assertEqual(template["innings"][0]["bowling"][0]["wickets"], 2)
+        self.assertEqual(template["innings"][0]["extras"]["total"], 4)
+        self.assertEqual(json.loads(extracted["review_template_json"]), template)
+        self.assertNotIn('"old": true', extracted["review_template_json"])
+        self.assertIn("1 innings", extracted["extracted_summary"])
+
+    def _tempdir_path(self) -> Path:
+        directory = Path(self._tempdir.name) / "vision-temp"
+        directory.mkdir(exist_ok=True)
+        return directory
+
     def test_u01_auth_scoping_player1(self) -> None:
         auth = self.signin("1111111111")
         visible_clubs = auth.get("visible_clubs") or []

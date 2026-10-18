@@ -1,14 +1,14 @@
 /*
- * Public AI Muse for signed-out visitors (read-only).
+ * Public AI Assistant for signed-out visitors (read-only).
  * Loaded by public_header.js on every public page, including Sign In and Register (Oct 2026).
  * Questions the built-in rules can't answer go to the LLM assistant on public data only.
  * Talks to POST /api/public/muse. Actions (saving scores, uploads, availability, alerts)
  * reply with Sign in / Register buttons.
- * Documented in README.md -> "AI Muse and notifications" -> "Public AI Muse".
+ * Documented in README.md -> "AI Assistant and notifications" -> "Public AI Assistant".
  */
 function startPublicMuse() {
   if (window.CCMusePublic) return;
-  // Signed-in pages use the full AI Muse (muse.js) instead.
+  // Signed-in pages use the full AI Assistant (muse.js) instead.
   if (document.querySelector(".page-topbar")) return;
   const path = location.pathname.replace(/\/+$/, "") || "/";
   const onAuthPage = path === "/signin" || path === "/register";
@@ -37,7 +37,7 @@ function startPublicMuse() {
 
   const css = document.createElement("link");
   css.rel = "stylesheet";
-  css.href = "/assets/muse.css?v=20261016b";
+  css.href = "/assets/muse.css?v=20261018a";
   document.head.appendChild(css);
 
   const fab = document.createElement("button");
@@ -60,10 +60,10 @@ function startPublicMuse() {
   const panel = document.createElement("aside");
   panel.className = "muse-panel";
   panel.hidden = true;
-  panel.setAttribute("aria-label", "AI Muse");
+  panel.setAttribute("aria-label", "AI Assistant");
   panel.innerHTML = `
     <header class="muse-head">
-      <div class="muse-title"><span aria-hidden="true">✨</span><div><strong>AI Muse · Assistant</strong><small>Ask me anything about cricket, your club or the app</small></div></div>
+      <div class="muse-title"><span aria-hidden="true">✨</span><div><strong>AI Assistant</strong><small>Ask me anything about cricket, your club or the app</small></div></div>
       <button type="button" class="muse-close" aria-label="Close">✕</button>
     </header>
     <div class="muse-body" data-view="chat">
@@ -92,7 +92,7 @@ function startPublicMuse() {
 
   function render() {
     if (!history.length) {
-      messagesEl.innerHTML = `<div class="muse-msg muse-bot"><div class="muse-text">Hi! I'm AI Muse, the Cricket Canada Clubs assistant ✨ Ask me about live scores, results, scorecards by date, club rankings, how a player is doing, or how to join. Sign in and I can also mark your availability, update scores and more.</div></div>`;
+      messagesEl.innerHTML = `<div class="muse-msg muse-bot"><div class="muse-text">Hi! I'm your AI Assistant for Cricket Canada Clubs ✨ Ask me about live scores, results, scorecards by date, club rankings, how a player is doing, or how to join. Sign in and I can also mark your availability, update scores and more.</div></div>`;
       return;
     }
     messagesEl.innerHTML = history

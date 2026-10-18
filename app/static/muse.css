@@ -1,4 +1,4 @@
-/* AI Muse floating chat + notifications (muse.js) */
+/* AI Assistant floating chat + notifications (muse.js) */
 
 .muse-fab {
   position: fixed;
@@ -493,13 +493,13 @@ html body .shared-topbar-host .header-right > .muse-bell {
   cursor: pointer;
 }
 
-/* AI Muse replaces the old floating Assistant button */
+/* AI Assistant replaces the old floating Assistant button */
 #assistantFloatingButton,
 .assistant-fab {
   display: none !important;
 }
 
-/* ---------- Public (signed-out) AI Muse ---------- */
+/* ---------- Public (signed-out) AI Assistant ---------- */
 .muse-form-public {
   grid-template-columns: minmax(0, 1fr) auto auto;
 }
@@ -536,7 +536,7 @@ html body .shared-topbar-host .header-right > .muse-bell {
   }
 }
 
-/* AI Muse agent: Confirm / Cancel on planned tasks (muse.js confirmAction) */
+/* AI Assistant agent: Confirm / Cancel on planned tasks (muse.js confirmAction) */
 .muse-cancel {
   padding: 8px 14px !important;
   border-radius: 10px !important;

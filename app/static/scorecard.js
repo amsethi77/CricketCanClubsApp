@@ -702,15 +702,24 @@
       return;
     }
     try {
-      const response = await fetch(`/api/public/scorecards/${encodeURIComponent(id)}`, { headers: { Accept: "application/json" } });
-      if (response.status === 404) throw new Error("This scorecard isn't available. It may not be approved yet.");
-      if (!response.ok) throw new Error("Unable to load this scorecard.");
-      const data = await response.json();
-      render(data.scorecard);
+      const ref = document.referrer ? new URL(document.referrer) : null;
+      if (ref && ref.origin === location.origin && ref.pathname === "/scorecards") backEl.href = `/scorecards${ref.search}`;
     } catch (error) {
-      headerEl.innerHTML = `<p class="sc-meta">Scorecard</p><h1 class="sc-title">Not found</h1>`;
-      cardPanel.innerHTML = `<div class="live-empty">${escapeHtml(error.message)}</div>`;
-      photoPanel.innerHTML = "";
+      /* ignore */
     }
-  })();
+
+    (async () => {
+      try {
+        const response = await fetch(`/api/public/scorecards/${encodeURIComponent(id)}`, { headers: { Accept: "application/json" } });
+        if (response.status === 404) throw new Error("This scorecard isn't available. It may not be approved yet.");
+        if (!response.ok) throw new Error("Unable to load this scorecard.");
+        const data = await response.json();
+        render(data.scorecard);
+      } catch (error) {
+        headerEl.innerHTML = `<p class="sc-meta">Scorecard</p><h1 class="sc-title">Not found</h1>`;
+        cardPanel.innerHTML = `<div class="live-empty">${escapeHtml(error.message)}</div>`;
+        photoPanel.innerHTML = "";
+      }
+    })();
+  }
 })();
