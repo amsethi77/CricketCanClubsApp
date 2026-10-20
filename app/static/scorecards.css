@@ -695,3 +695,80 @@ html[data-theme="dark"] .sc-photo img {
 .sc-innings-score {
   margin-left: auto;
 }
+
+/* ---------- Upload preview checks + upload page (README: "Scorecard uploads: checks, review and duplicates") ---------- */
+.sc-check { display: grid; gap: 10px; border-left: 5px solid #2563eb; }
+.sc-check-good { border-left-color: #16a34a; }
+.sc-check-warn { border-left-color: #f59e0b; background: #fffbeb; }
+.sc-check h2 { margin: 0; font-size: 1.2rem; }
+.sc-check-lede { margin: 0; color: var(--sc-muted); }
+.sc-check-list { margin: 0; padding-left: 20px; display: grid; gap: 4px; color: #92400e; }
+.sc-check-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.sc-btn { min-height: 44px; padding: 0 16px; border-radius: 12px; border: 1.5px solid #cbd5e1; background: #fff; color: #0f172a; font-weight: 800; display: inline-flex; align-items: center; justify-content: center; cursor: pointer; text-decoration: none; }
+.sc-btn.primary { background: #0f172a; border-color: #0f172a; color: #fff; }
+.sc-btn.ghost { border-color: transparent; color: #2563eb; }
+.sc-btn[disabled] { opacity: 0.6; cursor: default; }
+.sc-report { display: grid; gap: 8px; }
+.sc-report textarea, .scu-form select, .scu-form input[type="text"] { width: 100%; padding: 10px 12px; border-radius: 12px; border: 1.5px solid #cbd5e1; font: inherit; background: #fff; }
+.sc-check-msg { margin: 0; font-weight: 700; color: #0f172a; }
+.sc-check-msg:empty { display: none; }
+.sc-upload-cta { display: inline-flex; margin-top: 12px; }
+.scu-form { display: grid; gap: 14px; max-width: 560px; }
+.scu-form label { display: grid; gap: 6px; font-weight: 700; }
+.scu-form small { color: var(--sc-muted); font-weight: 500; }
+.scu-drop { display: grid; place-items: center; gap: 6px; min-height: 150px; padding: 18px; border: 2px dashed #94a3b8; border-radius: 16px; background: var(--sc-soft); text-align: center; cursor: pointer; }
+.scu-drop img { max-width: 100%; max-height: 260px; border-radius: 10px; }
+.scu-drop input { position: absolute; width: 1px; height: 1px; opacity: 0; }
+.scu-msg { margin: 0; font-weight: 700; }
+.scu-msg.bad { color: #b91c1c; }
+.sca-item { display: grid; grid-template-columns: 88px 1fr; gap: 12px; padding: 12px 0; border-top: 1px solid var(--sc-line); }
+.sca-item img { width: 88px; height: 88px; object-fit: cover; border-radius: 10px; background: var(--sc-soft); }
+.sca-item h3 { margin: 0 0 4px; font-size: 1rem; }
+.sca-item p { margin: 0; color: var(--sc-muted); font-size: 0.88rem; overflow-wrap: anywhere; }
+.sca-item .sc-check-actions { margin-top: 8px; }
+.sca-group { padding: 12px 0; border-top: 1px solid var(--sc-line); display: grid; gap: 8px; }
+.sca-group label { display: flex; gap: 8px; align-items: flex-start; overflow-wrap: anywhere; }
+.sca-reasons { display: flex; flex-wrap: wrap; gap: 6px; }
+@media (max-width: 480px) {
+  .sca-item { grid-template-columns: 64px 1fr; }
+  .sca-item img { width: 64px; height: 64px; }
+  .sc-check-actions .sc-btn { flex: 1 1 100%; }
+}
+
+/* ---------- "Type in the scorecard" editor (README: "Scorecard uploads: checks, review and duplicates") ---------- */
+.sce { display: grid; gap: 14px; }
+.sce h2 { margin: 0; font-size: 1.2rem; }
+.sce h4 { margin: 6px 0 0; font-size: 0.95rem; }
+.sce h4 small { color: var(--sc-muted); font-weight: 500; }
+.sce input, .sce select { width: 100%; min-width: 0; min-height: 40px; padding: 6px 8px; border-radius: 10px; border: 1.5px solid #cbd5e1; font: inherit; background: #fff; color: #0f172a; }
+.sce label { display: grid; gap: 4px; font-weight: 700; font-size: 0.85rem; }
+.sce-match { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px; }
+.sce-innings { display: grid; gap: 8px; margin: 0; padding: 14px; border: 1.5px solid var(--sc-line); border-radius: 14px; min-width: 0; }
+.sce-innings legend { padding: 0 6px; font-weight: 800; }
+.sce-totals { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+.sce-row, .sce-head { display: grid; gap: 6px; align-items: center; }
+.sce-bat { grid-template-columns: minmax(0, 2fr) minmax(0, 1.4fr) minmax(0, 1.4fr) repeat(4, minmax(0, 0.6fr)) 36px; }
+.sce-bowl { grid-template-columns: minmax(0, 2.5fr) repeat(4, minmax(0, 0.8fr)) 36px; }
+.sce-head span { font-size: 0.72rem; font-weight: 800; color: var(--sc-muted); text-transform: uppercase; }
+.sce-x { min-height: 36px; border: 0; border-radius: 10px; background: #f1f5f9; color: #64748b; cursor: pointer; }
+.sce-sum { margin: 0; font-weight: 700; font-size: 0.88rem; }
+.sce-sum.ok { color: #15803d; }
+.sce-sum.bad { color: #b91c1c; }
+@media (max-width: 640px) {
+  .sce-totals { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .sce-head { display: none; }
+  .sce-bat { grid-template-columns: repeat(4, minmax(0, 1fr)); padding: 8px 0; border-bottom: 1px solid var(--sc-line); }
+  .sce-bat [data-f="name"] { grid-column: 1 / 4; }
+  .sce-bat .sce-x { grid-column: 4; }
+  .sce-bat [data-f="how"], .sce-bat [data-f="bowler"] { grid-column: span 2; }
+  .sce-bowl { grid-template-columns: repeat(4, minmax(0, 1fr)); padding: 8px 0; border-bottom: 1px solid var(--sc-line); }
+  .sce-bowl [data-f="name"] { grid-column: 1 / 4; }
+}
+
+/* Phone: long team names must not push the scorecard wider than the screen. */
+.sc-panel, .sc-innings { min-width: 0; max-width: 100%; }
+.sc-innings-team { flex: 1 1 0; }
+.sc-table-wrap { max-width: 100%; overflow-x: auto; }
+.sc-report[hidden] { display: none; }
+.sc-btn.sc-danger { border-color: #fecaca; color: #b91c1c; }
+.scu-reader { margin: 0; font-size: 0.85rem; color: var(--sc-muted); }

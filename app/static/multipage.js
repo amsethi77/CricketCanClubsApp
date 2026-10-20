@@ -8,18 +8,31 @@
     if (!document.querySelector(".page-topbar") || document.querySelector('script[src^="/assets/muse.js"]')) return;
     const museCss = document.createElement("link");
     museCss.rel = "stylesheet";
-    museCss.href = "/assets/muse.css?v=20261004a";
+    museCss.href = "/assets/muse.css?v=20261018a";
     document.head.appendChild(museCss);
     const museJs = document.createElement("script");
-    museJs.src = "/assets/muse.js?v=20261015a";
+    museJs.src = "/assets/muse.js?v=20261018a";
     document.head.appendChild(museJs);
     // Plans: shows an "Upgrade" pop-up when a paid feature is used. See README.md -> "Subscriptions and plans".
     const gate = document.createElement("script");
-    gate.src = "/assets/plan_gate.js?v=20260929a";
+    gate.src = "/assets/plan_gate.js?v=20261011a";
     document.head.appendChild(gate);
   };
-  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", loadMuse);
-  else loadMuse();
+  // App tour once per account after the first sign-in (README: "Simple menu and app tour").
+  const loadTour = () => {
+    if (document.querySelector('script[src^="/assets/app_tour.js"]')) return;
+    if (!document.querySelector(".page-topbar")) return;
+    const tour = document.createElement("script");
+    tour.src = "/assets/app_tour.js?v=20261016c";
+    document.head.appendChild(tour);
+  };
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", loadMuse);
+    document.addEventListener("DOMContentLoaded", loadTour);
+  } else {
+    loadMuse();
+    loadTour();
+  }
   if (document.querySelector('script[src^="/assets/site_tools.js"]')) return;
   const script = document.createElement("script");
   script.src = "/assets/site_tools.js";
@@ -34,22 +47,25 @@ const USER_BADGE_ID = "userIdentityBadge";
 const CLUB_BADGE_ID = "currentClubBadge";
 const BOTTOM_NAV_ID = "bottomAppNav";
 const ASSISTANT_FAB_ID = "assistantFloatingButton";
-const SHARED_HEADER_URL = "/assets/shared_header.html?v=20260929a";
+const SHARED_HEADER_URL = "/assets/shared_header.html?v=20261020a";
 const SESSION_ACTIVITY_DEBOUNCE_MS = 1200;
 const SESSION_TOUCH_INTERVAL_MS = 60000;
+// Soft-launch menu (README: "Simple menu and app tour"). Matches = upcoming games + availability,
+// Scorecards = view + upload (Archives merged in). Clubs (pick / switch club) and Stats are in the top menu again (Amit, Oct 19). Profile / Admin live in the account menu.
 const SHARED_NAV_ITEMS = [
   { href: "/dashboard", label: "Home" },
   { href: "/clubs", label: "Clubs" },
-  { href: "/score", label: "Scoring" },
-  { href: "/dashboard/widgets/schedule", label: "Fixtures" },
-  { href: "/player-availability", label: "Availability" },
-  { href: "/dashboard/widgets/archive", label: "Archives" },
-  { href: "/dashboard/widgets/performance", label: "Performances" },
-  { href: "/profile", label: "Profile" },
-  { href: "/dashboard/widgets/assistant", label: "Assistant" },
+  { href: "/matches", label: "Matches" },
+  { href: "/score", label: "Score" },
+  { href: "/scorecards", label: "Scorecards" },
+  { href: "/dashboard/widgets/performance", label: "Stats" },
   { href: "/pricing", label: "Plans" },
-  { href: "/admin-center", label: "Admin", adminOnly: true },
 ];
+// Pages that light up a menu item other than their own address.
+const NAV_ALSO = {
+  "/matches": ["/player-availability", "/fixtures", "/dashboard/widgets/schedule", "/season-setup"],
+  "/scorecards": ["/dashboard/widgets/archive"],
+};
 
 let sessionTouchTimer = null;
 let sessionTouchInFlight = false;
@@ -305,7 +321,7 @@ function syncActiveNavState() {
     const href = String(link.getAttribute("href") || "").replace(/\/+$/, "") || "/";
     const isCurrent = href === "/dashboard"
       ? currentPath === href
-      : currentPath === href || currentPath.startsWith(`${href}/`);
+      : currentPath === href || currentPath.startsWith(`${href}/`) || (NAV_ALSO[href] || []).some((also) => currentPath === also);
     if (isCurrent) {
       link.setAttribute("aria-current", "page");
       if (link.classList.contains("bottom-app-nav-item")) {
@@ -381,20 +397,16 @@ function renderSharedBottomNav(user = null) {
   }
   const items = [
     { href: "/dashboard", label: "Home", icon: "🏠" },
-    { href: "/clubs", label: "Clubs", icon: "🏏" },
-    { href: "/score", label: "Scoring", icon: "🏏" },
-    { href: "/dashboard/widgets/schedule", label: "Fixtures", icon: "📅" },
-    { href: "/player-availability", label: "Availability", icon: "✅" },
-    { href: "/dashboard/widgets/archive", label: "Archives", icon: "🗂️" },
-    { href: "/dashboard/widgets/performance", label: "Performances", icon: "📊" },
-    { href: "/profile", label: "Profile", icon: "👤" },
-    { href: "/dashboard/widgets/assistant", label: "Assistant", icon: "🤖" },
+    { href: "/matches", label: "Matches", icon: "📅" },
+    { href: "/score", label: "Score", icon: "🎯" },
+    { href: "/scorecards", label: "Scorecards", icon: "📋" },
     { href: "/pricing", label: "Plans", icon: "⭐" },
-    { href: "/admin-center", label: "Admin", icon: "⚙️", adminOnly: true },
-  ].filter((item) => !item.adminOnly || isAdmin);
+  ].filter((item) => (!item.adminOnly || isAdmin) && navAllowed(user, item.href));
   nav.innerHTML = items
     .map((item) => {
-      const isCurrent = currentPath === item.href || currentPath.startsWith(`${item.href}/`);
+      const isCurrent = item.href === "/dashboard"
+        ? currentPath === item.href
+        : currentPath === item.href || currentPath.startsWith(`${item.href}/`) || (NAV_ALSO[item.href] || []).some((also) => currentPath === also);
       const activeClass = isCurrent ? " is-active" : "";
       const currentAttr = isCurrent ? ' aria-current="page"' : "";
       return `
@@ -424,6 +436,41 @@ function renderSharedBottomNav(user = null) {
 let signedInMenuUser = null;
 let signedInMoreMenuReady = false;
 
+// Plan-based menu (README: "Plan-based menu"): everyone sees Home, Matches, Score, Scorecards and Plans
+// (README: "Simple menu and app tour"); Matches opens availability for Pro, the fixture list for Free.
+// Pro members (and site admins) see everything. Free users see the AI Assistant while their
+// one free AI match is still open (README: "One free AI match").
+const PAID_NAV = {
+  "/dashboard/widgets/schedule": "fixtures",
+  "/season-setup": "fixtures",
+  "/player-availability": "availability",
+  "/dashboard/widgets/assistant": "assistant",
+};
+
+function isPaidMember(user) {
+  const role = String(user?.effective_role || user?.role || "").trim();
+  return role === "superadmin" || (Boolean(user?.plan) && user.plan !== "free");
+}
+
+function navAllowed(user, href) {
+  const key = PAID_NAV[String(href || "").replace(/\/+$/, "")];
+  if (!key || !user || isPaidMember(user)) return true;
+  if (key === "availability" && user.club_paid) return true;
+  if (key === "assistant" && user.ai_trial_open) return true;
+  return false;
+}
+
+function syncPlanNav(user) {
+  if (!user) return;
+  document.querySelectorAll(".shared-topbar-host a[href]").forEach((link) => {
+    const href = link.getAttribute("href");
+    if (!(href in PAID_NAV)) return;
+    const allowed = navAllowed(user, href);
+    link.hidden = !allowed;
+    link.classList.toggle("plan-hidden", !allowed);
+  });
+}
+
 // Show the Admin link only to the superadmin (the header loads after the page's
 // own admin check, so it needs its own pass).
 function syncHeaderAdminLinks(user) {
@@ -432,6 +479,7 @@ function syncHeaderAdminLinks(user) {
   document.querySelectorAll(".shared-topbar-host [data-admin-only]").forEach((node) => {
     node.hidden = !isAdmin;
   });
+  syncPlanNav(user);
   scheduleSignedInNavFit();
 }
 
@@ -687,7 +735,11 @@ function setupAccountMenu() {
       <div class="menu-divider" role="separator"></div>
       <a href="/profile" role="menuitem"${current("/profile")}><span class="menu-icon" aria-hidden="true">👤</span><span>My profile</span></a>
       <a href="/clubs" role="menuitem"${current("/clubs")}><span class="menu-icon" aria-hidden="true">🏏</span><span>My clubs / switch club</span></a>
-      ${isAdminUser() ? `<a href="/admin-center" role="menuitem"${current("/admin-center")}><span class="menu-icon" aria-hidden="true">⚙️</span><span>Admin center</span></a>` : ""}
+      <a href="/pricing" role="menuitem"${current("/pricing")}><span class="menu-icon" aria-hidden="true">⭐</span><span>${
+        signedInMenuUser && !isPaidMember(signedInMenuUser) ? "Free plan · Upgrade" : `My plan · ${escapeHtml(signedInMenuUser?.plan_name || "Plans")}`
+      }</span></a>
+      ${isAdminUser() ? `<a href="/admin-center" role="menuitem"${current("/admin-center")}><span class="menu-icon" aria-hidden="true">⚙️</span><span>Admin center</span></a>
+      <a href="/admin/scorecards" role="menuitem"${current("/admin/scorecards")}><span class="menu-icon" aria-hidden="true">🔎</span><span>Scorecard checks</span></a>` : ""}
       <div class="menu-divider" role="separator"></div>
       <a href="/signout" role="menuitem" data-account-signout><span class="menu-icon" aria-hidden="true">🚪</span><span>Sign out</span></a>`;
     document.body.appendChild(menu);
@@ -712,6 +764,13 @@ function setupAccountMenu() {
         event.preventDefault();
         close();
         signOut();
+        return;
+      }
+      if (menu && event.target.closest("[data-start-tour]")) {
+        event.preventDefault();
+        close();
+        if (window.CCAppTour) window.CCAppTour.start();
+        else window.location.href = "/dashboard?tour=1";
         return;
       }
       if (menu && !menu.contains(event.target)) close();

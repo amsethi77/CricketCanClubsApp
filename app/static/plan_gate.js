@@ -1,5 +1,5 @@
 /*
- * Plan gate: when the server answers 402 (a Super or Premium feature, or the monthly
+ * Plan gate: when the server answers 402 (a Pro feature, a used-up free AI match, or the monthly
  * upload limit), show a friendly "Upgrade" pop-up instead of a raw error.
  * Loaded on signed-in pages by multipage.js. Server side: _require_feature() in app/main.py.
  * Documented in README.md -> "Subscriptions and plans".
@@ -45,7 +45,8 @@
     mount();
     const text = String(message || "This feature is part of a paid plan.").replace(/\s*See \/pricing to upgrade\.?/i, "");
     const isUploads = /upload/i.test(text);
-    backdrop.querySelector("#planGateTitle").textContent = isUploads ? "Monthly upload limit reached" : "This is a paid feature";
+    const isAiTrial = /free AI match/i.test(text);
+    backdrop.querySelector("#planGateTitle").textContent = isUploads ? "Monthly upload limit reached" : isAiTrial ? "Your free AI match is used" : "This is a Pro feature";
     backdrop.querySelector("#planGateText").textContent = text;
     backdrop.hidden = false;
     lastShown = Date.now();

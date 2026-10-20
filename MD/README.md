@@ -37,8 +37,8 @@ The same rules are in `AGENTS.md` and `CLAUDE.md` so every tool picks them up. I
 - AI Assistant: chat agent that answers questions, saves scores typed or spoken, uploads scorecard photos and sends availability requests
 - In-app notifications (bell icon): availability requests, live score alerts and results
 - Player/club insights: form, predictions, improvement tips, suggested playing XI and season outlook
-- Plans (`/pricing`): Free, Super ($4.99/month) and Premium ($100/year) with feature limits, monthly upload quotas, a 60-day Premium trial for existing members, Stripe Checkout (off until keys are added) and admin plan management
-- AI Live Scorer (Premium): say or type "wide, then two runs" in Quick Score and the balls are added for you
+- Plans (`/pricing`): Free (default) and Pro ($9/month or $90/year) with feature limits, monthly upload quotas, one free AI match on Free, a 60-day trial for existing members, Stripe Checkout (off until keys are added) and admin plan management
+- AI Live Scorer (Pro, or the free AI match): say or type "wide, then two runs" in Quick Score and the balls are added for you
 
 ## Canonical Product Rules
 
@@ -73,6 +73,13 @@ This section captures the user requirements in the order they were given and ref
 - (Oct 2026) The AI assistant must be back and answer through the LLM model the app already had (it had been renamed to AI Muse).
 - (Oct 2026) AI Muse should act like an assistant that carries out tasks on command (score updates, availability, etc.), like Meta's Muse.
 - (Oct 2026) The AI assistant should also be available before sign-in.
+- (Oct 2026, feedback) Show the full menu only to signed-in members on a paid plan (Super or Premium); Free members can score new matches and view, and see the other features by choosing a plan.
+- (Oct 2026, feedback) Clean up the UI so it is easy to navigate and understand.
+- (Oct 2026, feedback) Allow new matches without sign-in or a team schedule, but both teams' line-ups must be done before scoring starts.
+- (Oct 2026, feedback) The Home page should show live and past matches, not just matches and latest scorecards.
+- (Oct 2026, call with Amit Sethi, soft launch for Diwali) Registered users use scoring and AI according to their plan. Very easy navigation; remove features people don't need. Scorecard upload by the captain or club admin. "Upcoming matches" shows everything upcoming plus player availability. Free is the default plan. Monthly $9; yearly cheaper ($90, 2 months free); monthly is pre-selected. Not registered: no sign-in, manual scoring still allowed. Insert clean data for the soft launch. Fix duplicate scorecards with smart detection (AI/Ollama). After a scorecard upload: if it isn't proper, send it to the site admin; if it has errors, alert the players; show the complete digital scorecard after upload. App tour.
+- (Oct 2026, decisions) One paid plan **Pro: $9/month or $90/year** replaces Super and Premium. Free users get **one free AI match**. Menu: merge Fixtures + Availability into **Matches**, hide Performances, move Clubs + Profile into the account menu, merge Archives into **Scorecards**.
+- Subscription model (#7, from "Cricket App Subscription & Feature Model"): keep live scoring, player/club stats and scorecard viewing free; Free 2 scorecard image uploads a month; Super $4.99/month (5 uploads, multi-club, rosters, availability, Playing XI, alerts, live score updates, AI assistant, analysis); Premium $100/year (unlimited uploads, advanced AI, AI Live Scorer that turns spoken ball-by-ball events into structured events for the scoring engine, match intelligence, cross-club stats, advanced analysis, retro-score help, priority support). Decisions: pay with Stripe (switched off until keys are added; site admins set plans by hand until then); existing users get 60 days of Premium free, new users start on Free.
 - (Oct 2026) Default all users to Premium for now, make the default configurable, and switch it to Free at launch.
 - (Oct 2026) In Admin Center scorecard review, show the same digital scorecard snapshot as the Scorecards section, retain the editable JSON, and display the original uploaded image at the same time.
 - (Oct 2026) Rename AI Muse to AI Assistant throughout the app.
@@ -81,7 +88,6 @@ This section captures the user requirements in the order they were given and ref
 - (Oct 2026) Show the uploaded scorecard image itself in Admin Center review instead of exposing its URL.
 - (Oct 2026) Reset scorecard and player-performance data across all years, including live fixtures, then restart image-based scorecard processing with 2024 only.
 - (Oct 2026) Reset all score data again across every year.
-- Subscription model (#7, from "Cricket App Subscription & Feature Model"): keep live scoring, player/club stats and scorecard viewing free; Free 2 scorecard image uploads a month; Super $4.99/month (5 uploads, multi-club, rosters, availability, Playing XI, alerts, live score updates, AI assistant, analysis); Premium $100/year (unlimited uploads, advanced AI, AI Live Scorer that turns spoken ball-by-ball events into structured events for the scoring engine, match intelligence, cross-club stats, advanced analysis, retro-score help, priority support). Decisions: pay with Stripe (switched off until keys are added; site admins set plans by hand until then); existing users get 60 days of Premium free; automatic default plan is configurable, Premium during development and Free at launch.
 
 ### Original feature scope
 
@@ -224,6 +230,19 @@ This section captures the user requirements in the order they were given and ref
 122. Resolve the clubs-page Player Snapshot strictly from the authenticated `member_id`, and prefer no snapshot over the wrong player.
 123. Deduplicate club memberships in the profile view so the same club cannot appear multiple times when multiple membership paths overlap.
 124. Allow Season Fixtures editing only for future fixtures; past fixtures must be locked in both the UI and API.
+125. Keep every page fixed to the screen width: no pinch/double-tap zoom on phones and no sideways scrolling; also block laptop zoom (Ctrl +/−, Ctrl + wheel), keeping Ctrl + 0 to reset.
+126. On our paper scorecards "RO" means Retired Out, not Run out; read and show it that way (with a setting in case a club uses RO for run out).
+127. Keep the sign-in page simple (just the sign-in form). Show the app tour only after the first sign-in of each account, as a list of the things to do first.
+128. New users: show Live scores before sign-in, then Home right after sign-in (Clubs only if they still need to pick a club), followed by the first-time tour.
+129. Before sign-in show a short menu (Live, Fixtures, Scorecards, Rankings, Sign In); keep Score, Clubs, Plans and Register available under More.
+130. Keep More at the right without Dark mode, put Sign out on its own, explain the CC logo with the app name, and keep the Live page to the essentials (welcome, featured match, results, coming up).
+131. Restrict features before sign-in (view and manual scoring only, no AI) and for Free users (one free AI try covering AI Assistant, AI Scorer or one AI-read scorecard photo; everything else AI is Pro).
+132. The AI Assistant must answer basic questions (greetings, cricket rules, how to use the app) as well as club questions, never ask a signed-in person to sign in, and open as a full-height panel on the right.
+133. The assistant should look like it is thinking ("…" for a few seconds) and then type its answer; the app tour is only for first-time sign-ins, not an account-menu item.
+134. Re-processing scorecard images in the Admin Center must extract the handwritten scorecard (AI reader), as scorecard extraction is the main feature.
+135. Train the AI to read scorecards properly: learn names people correct (e.g. Meshad → Heshad), read RUNS(BALLS) like 4(17) as 4 runs off 17 balls, and never misread the year (2026 read as 2020).
+136. (Amit, Oct 19) Sign-in must show the player name field, sign-in must go to club selection, and club data must be easy to find: put back the name field, send people to /clubs after sign-in, and add Clubs and Stats to the top menu. Don't revert the other work.
+131. Find duplicate scorecards smartly with AI (Gemini, or Ollama offline), not only exact matches.
 
 ## Current behavior summary
 
@@ -513,7 +532,7 @@ This section documents the work done in September 2026. See "Change log" at the 
 
 - **Plan → Confirm → Done.** `POST /api/muse` returns the plan with an `action` (`{tool, args, confirm_label}`); the chat shows **Confirm** and **Cancel**. Nothing changes until Confirm calls `POST /api/muse/execute`, which checks the person's role, their plan and the past-match lock again before doing anything, and writes an audit row (`muse.execute`).
 - Commands are recognised by rules first (`muse_agent.parse_command`, dates like "Saturday", "next Sunday", "Oct 12", times like "10am"). If the rules don't recognise something that looks like a command ("please…", "can you…", "set…") and Ollama is running, the LLM is asked to pick the tool (`muse_agent.llm_plan`, JSON output). Anything else is answered by the LLM assistant.
-- Running tasks through AI Assistant is part of the **Super** plan (`ai_assistant`); "who is available?" and questions work on every plan.
+- Running tasks through AI Muse is part of **Pro** (`ai_assistant`; Free users get one free AI match); "who is available?" and questions work on every plan.
 - **Prompt file fix:** `READMELLM.md` (the LLM prompts) moved to `MD/READMELLM.md`; `app/llm_registry.py` now looks in `MD/` first and then the repo root, and no longer crashes if the file is missing. Before this fix, adding a fixture or asking the assistant could fail with "No such file … READMELLM.md".
 
 ### AI Assistant before sign-in (Oct 2026)
@@ -521,6 +540,151 @@ This section documents the work done in September 2026. See "Change log" at the 
 - `POST /api/public/muse` still answers live scores, results, scorecards by date, clubs, rankings, player stats and how to join from its own rules. Anything else now goes to the **LLM assistant** (`answer_question`) on a public-only copy of the data (`_public_chat_store`: no phone, email, age, notes, availability, playing XI or scorecards waiting for review), scoped to the club named in the question, and the reply is scrubbed for anything that looks like an email or phone number (`_public_scrub`).
 - Tasks ("mark me available", "update the score", "add a match"…) reply with Sign in / Register buttons.
 - The assistant's "next match" answers now only use today's or future fixtures (`_next_upcoming_fixture` in `cricket_brain.py`), so a past game is never called the next match.
+
+### Plan-based menu (Oct 2026)
+- Since the soft-launch clean-up everyone sees the same five items (see "Simple menu and app tour"); the plan decides what **Matches** opens and whether the Assistant is shown. The account menu shows "Free plan · Upgrade" or "My plan · Pro".
+- **Pro** members and site admins get everything: availability, the fixture manager, the Assistant page and (site admins) Admin. Free members see the Assistant while their one free AI match is still open (`ai_trial_open` in the user payload).
+- Players of a club whose captain or club admin is on a paid plan also see **Availability** (`club_paid` in the user payload).
+- `multipage.js` (`PAID_NAV`, `navAllowed`, `syncPlanNav`) hides the links in the top menu, the More menu and the phone tab bar; Home's quick actions follow the same rule (`dashboard_home.js`).
+- The server also guards the pages: a Free member opening `/dashboard/widgets/schedule`, `/player-availability`, `/dashboard/widgets/assistant` or `/season-setup` is sent to `/pricing?feature=…` (`_paid_page_redirect` in `main.py`).
+
+### Line-ups and guest matches (Oct 2026)
+- **Line-ups first:** a match can't start scoring until both teams have a line-up of **2 to 11 players** (no player in both). Quick Score shows a "Team line-ups" step (tick club players, type the other team) before "Who's batting?". API: `POST /api/matches/{id}/lineups {club, opponent}` (scorers), stored in the `app_match_lineups` table; `GET /api/quick-score/{id}` returns `lineups` and `lineups_ready`. `POST /scorebook/setup` refuses to start without them (the older match-centre form still works when it lists at least 2 batters and 2 bowlers; those become the line-ups). Matches already being scored carry on.
+- **All out** now means one fewer wicket than the batting line-up (e.g. 7 players → all out at 6 wickets; a full XI is still 10).
+- **Guest matches (no sign-in):** `/score` for a signed-out visitor opens `static/quick_score_guest.html` ("Score" is in the public menu). Enter both team names, overs, ground and both line-ups → `POST /api/guest/matches` creates the match and returns a **6-character match code**. Scoring uses `/api/guest/matches/{id}` (state), `/setup`, `/ball` (POST and DELETE for undo) with the code in the `X-Guest-Code` header. "Have a match code?" (`GET /api/guest/resume?code=`) continues scoring on another phone.
+- Guest matches are stored separately (`app_guest_matches`, JSON), so they never change club stats or member lists. They are scored on the day they are created only, show on the public Live page and at `/live/{id}` while being played (no code or private data is exposed), and the result is worked out automatically when the second innings ends.
+
+### Simple menu and app tour (Oct 2026, soft launch)
+- **Menu** (top bar on laptop, tab bar on phone): **Home · Matches · Score · Scorecards · Plans**. Files: `static/shared_header.html`, `SHARED_NAV_ITEMS` / `NAV_ALSO` / `renderSharedBottomNav` in `static/multipage.js` (the phone tab bar in `site_tools.js` copies the first five).
+  - **Matches** = `/matches` (`matches_page` in `main.py`): Pro members, and players whose captain or club admin is on Pro, go to `/player-availability` (every upcoming game + Available / Maybe / Not available); everyone else goes to the public `/fixtures` list. The item stays highlighted on `/player-availability`, `/fixtures`, `/dashboard/widgets/schedule` and `/season-setup`.
+  - **Scorecards** = `/scorecards` (Archives merged in): captains, club admins and site admins also see "📷 Upload a scorecard".
+  - **Performances** is no longer in the menu (the page still works). **Profile, Clubs, Plans, the app tour and Admin** are in the account (initials) menu. The AI Assistant is the floating button.
+- **App tour** (`static/app_tour.js`, loaded by `multipage.js`): 8 short steps that point at each menu item, the AI Assistant button and the account menu. It starts the first time a signed-in person opens Home (remembered in `localStorage` key `cricketClubAppTourSeen`), and again from the account menu "Take the app tour" or `/dashboard?tour=1`. Skip / Back / Next, arrow keys and Esc work.
+- Sign-in now returns to the page you came from when the link has `?next=/path` (same site only); otherwise it opens `/clubs` as before.
+- **First sign-in tour (Oct 16):** shown **once per account** (not per browser), on the first signed-in page after someone signs in for the first time. Saved in table `app_tour_seen` via `GET /api/tour` (`seen`, `can_score`, `name`) and `POST /api/tour/seen` (on Skip or "Let's go"). Steps say what to do: Welcome → Step 1 Pick your club (points at "Select club") → Step 2 Mark your availability → Step 3 Score a match / Step 4 Upload a paper scorecard (captains, club admins, site admins) or Step 3 Follow the live score / Step 4 See your scorecards (players) → AI Assistant → "You're all set ✅". Progress bar on every card. Only for first-time users: there is no "Take the app tour" item in the account menu any more (removed Oct 16); `?tour=1` still shows it for support. No tour on the sign-in page.
+
+### AI Assistant answers (Gemini) (Oct 16 2026)
+- Request: "train the AI so it can answer at least the basic questions, not only the related ones; why does it ask me to sign in when I am already signed in; display it completely on the right side".
+- New `app/ai_chat.py`: sends the question to the free **Google Gemini** key already used for scorecard photos (`GEMINI_API_KEY`; optional `GEMINI_CHAT_MODEL`), or Claude (`ANTHROPIC_API_KEY`). The system prompt `APP_GUIDE` teaches it how the app works (menu, plans and prices, availability, scoring, uploads, RO = retired out, sign-in) and the answer rules: greetings and small talk, general cricket questions from its own knowledge, club questions **only** from the club data the app looked up (never invented numbers), no phone / email / age.
+- `POST /api/muse` (`muse_chat` in `main.py`): tasks still go through the Confirm flow; questions are first looked up by the built-in data assistant (`answer_question`), then that result is passed to `ai_chat.answer()` as "Club data" together with today's date, club, speaker and next fixtures (`_muse_llm_context`) and the last 8 messages. If Gemini is busy or not set up, the built-in answer is shown as before. Ollama answers are kept as they are.
+- `_muse_llm_call` (AI planning of tasks like "mark me available Saturday") also uses Gemini (JSON mode) when Ollama isn't running.
+- Signed-in people on public pages (Live, Scorecards, Fixtures…) now talk to the full assistant (`muse_public.js` posts to `/api/muse` with the sign-in token): no more "Sign in for more" / "Sign in to score matches" while signed in; tasks needing Confirm show "Confirm on my dashboard".
+- The assistant panel opens full height on the right side of the screen (440px wide, top to bottom); on phones it fills the screen (`static/muse.css`, end of file).
+- **Built-in basic answers** (`basic_reply` in `app/ai_chat.py`, no AI needed): greetings ("hi", "hello", "how are you"), thanks / bye, "help" / "what can you do" (answered at once, with the person's first name); app how-tos (availability, scoring, scorecard upload, plans and prices, switch club, sign out, app tour) and common cricket terms (no ball, wide, LBW, retired out / RO, run out, strike rate, economy, maiden, duck, hat-trick, free hit, over, byes / leg byes) are tried with Gemini first and fall back to these answers when Gemini is busy or not set up. Add more by appending to `_BASIC`.
+- The panel header says "Powered by Google Gemini" when the key is set (`chat_provider` in `GET /api/llm/status`), otherwise "Ask me anything or tell me what to do" (no more "AI model offline"); answers are labelled "AI Assistant" instead of "Heuristic fallback"; **bold** in answers is shown bold.
+- **Typing feel (Oct 16):** after you send a message the assistant shows animated thinking dots for at least 1.2 seconds, then the reply types out (about 1.5 seconds, any length); links / Confirm buttons appear when the text is finished (`thinkAtLeast` / `typeOutLast` in `static/muse.js` and `static/muse_public.js`, `.muse-dots` in `muse.css`). Respects "reduce motion".
+
+### How the AI reader learns (Oct 19 2026)
+- Request: "train AI to read properly", after the Heartlake vs Afghans card was read with Meshad instead of Heshad, Keshav 4(17) as 12 balls, and the year 2026 as 2020.
+- Better instructions (`app/ai_vision.py` PROMPT): the TOTAL column is RUNS(BALLS), so "4(17)" = 4 runs off 17 balls; the AI also counts the balls in each batter's ball-by-ball scribbles (`ball_count`); the year is read digit by digit.
+- Extra help for each club (`_prompt`): the photo date (the match is on or before it, usually the same year), names this club corrected before, and other players seen on the club's published scorecards (`_ai_known_names`: roster, aliases, approved cards).
+- Learns from fixes: when someone saves a card with **Edit** / "Type in the scorecard" (`POST /api/scorecards/{id}/manual`) or the Admin Center JSON box (`POST /api/admin/archive/{id}/review`), names the AI misread and the person changed (same innings and row, similar spelling) are saved per club in the `app_ai_corrections` table (`_learn_ai_corrections`). The save message says "The AI will remember: Heshad".
+- After every read (`_apply_learning`): corrected names are swapped in automatically; names very close to a known player (80% match) are changed to that player; a year far from the photo's year is fixed when the same day/month is just before the photo date; a date after the photo is flagged. Each change is listed in the review notes so it can be checked.
+- No typing needed (Oct 19, request: "I don't want to edit manually, train the model to run it properly"): the AI is told to read names letter by letter (H/M, K/R, U/V look alike in capitals), and to work out bowling overs / runs / wickets from the BOWLING ANALYSIS boxes when the BOWLING SUMMARY is empty. After the read, each bowler's wickets are filled from the batting card's BOWLER column, a batter with no balls gets the ball-by-ball count, and the date read sets the season (2026 Season).
+- Photo date (`_photo_date`): a date in the phone's file name ("WhatsApp Image 2026-10-18 …", "IMG_20261018"), else the camera date, else the upload time for photos uploaded in the app. A computer's file-modified time is not used, so old photos copied later keep their real year.
+- Balls check: if a batter's balls and the ball-by-ball count differ by more than 2, the AI reads the photo a second time, and a note "Check Keshav's balls…" stays if it still differs.
+
+### Re-extract uses the AI reader (Oct 16 2026)
+- Request (Amit, Oct 15): "Updated the admin center to re-process the images. Please check as the scorecards are not getting extracted. This needs to be fixed as this is the main feature."
+- Cause: **Re-extract** in the Admin Center (`POST /api/archive/{id}/extract`) only ran the basic Tesseract reader, which can't read handwriting, so the review JSON came back empty (`null` runs, `did_not_bat`). The AI reader was only used on new uploads and the "Read with AI" button.
+- Now Re-extract reads the photo with the AI vision model first (Gemini / Claude / Ollama, `_scorecard_ai_read`, HEIC photos converted to JPEG), runs the smart checks, and only falls back to Tesseract when AI is off or fails; the message says which reader was used and why.
+- `_scorecard_ai_read` now also stores the AI result as `review_source_json` / `review_template_json` / `extraction_template`, so the Admin Center JSON box, the snapshot and the public card all show the AI reading instead of an older OCR template.
+- Card builder fix (`_scorecard_from_archive`): when the template lists batters for both innings, untagged imported player rows are no longer added to the 1st innings (the other team's batters used to show up twice).
+- Admin Center feedback (`admin_center.js`, Oct 17): while it works the card shows "⏳ Reading the photo with AI…" and the button says "Reading…"; afterwards the server message ("Read by AI (gemini)…" or why it fell back) appears at the top of that card. The button used to fire twice (inline `onclick` + list click listener) and only showed its message in the banner at the very top of the page; it now runs once per card.
+- Needs a free `GEMINI_API_KEY` in `.env` on each computer that runs the app (see "Reading handwritten scorecards automatically").
+- Old photos: Amit's database refers to photos by file name; copy them from `img/` into `app/uploads/` (same names) so Re-extract can find them.
+
+### Plans: what each group can use (Oct 16 2026)
+- Request (sticky notes: "registered can use AI / score according to the subscription", "AI for paid or AI for 1 match", "not regular: no login but can still use scoring manually"): "restrict the features before sign in and also for less paid plan users".
+
+| | Not signed in | Free | Pro |
+|---|---|---|---|
+| Live scores, fixtures, scorecards, rankings, clubs | ✅ | ✅ | ✅ |
+| Score a match by hand (big buttons, local voice shorthand) | ✅ guest match with code | ✅ | ✅ |
+| AI Assistant | ❌ button says "AI Assistant · Sign in" and opens /signin | 1 free AI try | ✅ |
+| AI Scorer | ❌ not shown on guest matches | 1 free AI try | ✅ |
+| Upload a scorecard photo | ❌ (captains / club admins only) | 2 a month | Unlimited |
+| AI reading of the photo | ❌ | 1 free AI try, then basic reader + type in | ✅ every upload |
+| Availability, Playing XI, alerts, analysis, more than one club | ❌ | ❌ (players in a Pro club get availability) | ✅ |
+
+- **One free AI try** (`AI_TRIAL_FEATURES` in `app/subscriptions.py` now includes `ai_extraction`): a Free user's first use of AI, either on a match (AI Assistant / AI Scorer) or reading one scorecard photo (`scorecard:<upload id>`), becomes their free AI try; after that, AI on anything else needs Pro.
+- **Server checks** (`app/main.py`): `POST /api/public/muse` answers only signed-in people (others get "The AI Assistant is for members. Sign in…"); the upload runs AI reading only when `_ai_allowed(..., "ai_extraction", ...)`; `POST /api/scorecards/{id}/ai-read` returns 402 with the upgrade message; the preview returns `ai_available` / `ai_locked`; `GET /api/scorecards/reader` tells the upload page which reader this person gets.
+- **Screens:** `muse_public.js` (🔒 "AI Assistant · Sign in", no button on sign-in/register pages), `quick_score.js` (no 🤖 AI Scorer on guest matches), `scorecard.js` ("🤖 Read with AI 🔒 Pro" links to /pricing), `scorecard_upload.js` (sends the sign-in token so the note is right). Site admins keep everything.
+
+### Public menu (Oct 16 2026)
+- Request: "right now everything is shown before sign in, do you think all of this should be shown" → keep it short, but Score, Clubs etc. must still be reachable before sign-in.
+- `static/public_header.html` (signed-out header on Live, Fixtures, Scorecards, Rankings, Score, Clubs, Plans, Sign in, Register): the row shows **LIVE · Fixtures · Scorecards · Rankings · Sign In** and a **More ▾** button on every screen size. More holds **Score · Clubs · Plans · Register · Dark mode** (links marked `nav-always-more`, opened by `setupMoreMenu` in `public_header.js`). All those pages still work without signing in.
+- Phones: the ☰ drawer lists every link; the bottom tab bar (`renderTabbar` in `site_tools.js`, first 5 non-account links) is LIVE · Fixtures · Scorecards · Rankings · Score.
+- CSS: end of `static/live.css` ("Public menu"). Signed-in visitors on these pages still see "My dashboard" in place of Sign In and "Sign out" (in More) in place of Register.
+- Oct 16 follow-up: the bar shows **CC CricketCanClubs** (name next to the logo from 1180px wide); the first tab is **🔴 Live scores** (was "LIVE"); **More** sits at the right end next to search / dark mode and no longer repeats Dark mode; when signed in, **Sign out** is its own button at the far right (and in the phone ☰ menu), not inside More.
+
+### Simple Live page (Oct 16 2026)
+- Request: "on the home page remove not needed things, make it simple".
+- `/live` (`static/live.html`, `static/home.js`) now has just: the welcome banner (Sign in · Register your club, or "Go to my dashboard" when signed in, plus "Or score a quick match without signing in →") with the featured live / latest match, then **Recent results** and **Coming up**.
+- Removed: the scrolling score strip (All / Live / Results / Upcoming), the Clubs / Fixtures / Scorecards counters, the Latest scorecards grid (on /scorecards) and the "Run your club" banner. `home.js` skips the strip and scorecards code when those elements are missing.
+
+### First page (Oct 16 2026)
+- Request: "when a new user logs in, what page should be shown first".
+- **Opening the app** (`/`, `root` in `main.py`): signed out → `/live` (live scores anyone can see, with Sign in in the menu); signed in → `/dashboard` (Home).
+- **After signing in** (`signin.js`): `?next=` page if given; otherwise **Home** when the account already has a club (`current_club_id` / `primary_club_id`), or **Clubs** to pick one when it has none.
+- **First sign-in tour** follows: the "Pick your club" step is only shown on `/clubs` or when the account has no club (`has_club` from `GET /api/tour`); the remaining to-do steps are numbered automatically.
+
+### Simple sign-in page (Oct 16 2026)
+- Request: "make the sign-in page more simple, remove unnecessary stuff". Then: "give app tour after sign in only for the first time, like showing the thing to be done".
+- `/signin` is now one centred card: **Sign in** · Mobile or email · Password (placeholder "No password? Leave empty") · Sign in · Create an account. The League leaders panel (top batters / bowlers / clubs) was removed from the page and from `signin.js` (`GET /api/public/signin-stats` still exists, unused). Leaders are still on `/rankings`.
+- The **Player name** box is hidden. It only appears when sign-in without a password can't find the person by mobile/email alone ("We couldn't find you yet. Add your name as your club saved it…"), or when the browser fills it in.
+- Files: `static/signin.html`, `static/signin.js`, `static/signin.css` (`.signin-simple`, `.si-field[hidden]`).
+
+### Scorecard uploads: checks, review and duplicates (Oct 2026)
+- **Who uploads:** captains, club admins and site admins (new permission `score_matches`, also used for live scoring, line-ups and the AI Scorer; captains and club admins only for their own club's matches, `_require_match_scorer` in `main.py`). Players can't upload; they're asked to send the photo to their captain. Approving other people's uploads stays with the site admin (`manage_scorecards`).
+- **Upload page** `/scorecards/upload` (`static/scorecard_upload.html` / `.js`): take or choose a photo → `POST /api/scorecards/upload` → the page opens the **complete digital scorecard** at `/scorecards/{id}?preview=1` with the check results.
+- **Smart checks** (`app/scorecard_checks.py`, run by `_scorecard_upload_checks`):
+  - same photo file (exact hash) → refused;
+  - same photo saved again, resized or re-compressed (8×8 "average hash" fingerprint, ≤ 5 bits different) → refused, naming the earlier upload;
+  - same date, same two teams and same two scores as another upload → flagged as a possible duplicate;
+  - **AI duplicate check (Oct 16):** when an AI is set up (Gemini key in `.env`, else Claude, else Ollama) and the simple checks found nothing, the AI is asked "same match?" about up to 4 other uploads from the same day, or with a shared team and a total within 10 runs (`scorecard_checks.ai_candidates` + `card_summary`, `ai_vision.same_match`) → flagged "AI thinks it's the same match (…)" for the site admin;
+  - "not proper": photo couldn't be read, no date, both teams or both totals missing, more than 10 wickets, more overs than the limit, batters' runs + extras ≠ total, more batters out than wickets.
+- **What happens next:**
+  - No problems → status `Pending review`; the scorer checks the digital scorecard and taps **"✓ Looks right, publish"** (`POST /api/scorecards/{id}/publish`) → `Approved`, shown on Scorecards, club notified. (Uploads whose extraction already has both innings are approved automatically, as before.)
+  - Problems → status **`Needs admin review`**, every site admin gets a notification ("Scorecard needs review"), and if the scorecard has errors the club's players get "Scorecard being checked".
+  - **"Something's wrong"** on the preview (`POST /api/scorecards/{id}/report {note}`) sends it back to the site admins with the note, hides it until checked and tells the players.
+  - `GET /api/scorecards/{id}/preview` (uploader, own club's scorers, site admins) returns the digital scorecard, status, flags and possible duplicates.
+- **Typing it in:** handwritten photos usually can't be read without a vision model. Then the preview shows **"✏️ Type in the scorecard"**: a form for the teams, date, totals, batters and bowlers (the photo opens in a new tab beside it). Saving runs the same checks. With an Ollama vision model installed (`ollama pull qwen2.5vl:7b`) the photo is read automatically and the form is only needed for corrections.
+- **Site admin page `/admin/scorecards`** (`static/scorecard_admin.html` / `.js`, also in the account menu as "Scorecard checks"): uploads waiting for review with their reasons, **Approve / Reject** (`POST /api/admin/scorecards/{id}/decision {decision, note}`; the uploader is told), and the **duplicate report** (`GET /api/admin/scorecards/checks`) grouping uploads by same file, same photo, same phone file name (`IMG_3261.heic` / `.png` / `.jpg`) or same date + teams + scores. "Hide ticked duplicates" (`POST /api/admin/scorecards/duplicates/hide {ids}`) sets them to `Duplicate`: nothing is deleted, but `Duplicate` and `Rejected` uploads drop out of scorecards, stats, lists and queues (`HIDDEN_ARCHIVE_STATUSES` in `cricket_store.py`). Older uploads get their photo fingerprint the first time the page is opened.
+- Upload details (`original_file_name`, `image_fingerprint`, uploader, flags, possible duplicates, review note) are stored in the new `archives.extra_json` column (added automatically). `Needs admin review`, `Duplicate` and `Rejected` are no longer turned into `Approved` when the store loads.
+- On the user's current database the report finds 8 groups / 13 duplicate uploads (the same phone photos saved as .heic, .png and .jpg).
+
+- **🤖 Ask AI to find more duplicates** (site admin, `/admin/scorecards`, `POST /api/admin/scorecards/duplicates/ai-scan`): asks the AI about up to 25 likely pairs the simple checks missed (same game read slightly differently) and adds them to the duplicate list, already ticked; then "Hide ticked duplicates" as before. Request: sticky note "fix the duplicate SC, use smart detection through AI or Ollama".
+
+### How to test (Oct 2026, soft launch)
+1. Restart the app (new permission and table are added on start).
+2. **Plans:** `/pricing` shows Free and Pro. Pro shows **$9 per month** with Monthly selected; tap **Yearly** → **$90 per year**, "That's $7.50 a month. Save $18 a year (2 months free)". Site admin "Manage plans" offers Pro / Free; old Super/Premium/trial users show as Pro.
+3. **One free AI match:** set a captain to Free. In Quick Score on today's match, the 🤖 AI Scorer says "try AI on one match for free"; use it → that match becomes the free AI match. On a second match the AI Scorer and AI Assistant tasks show "Your free AI match is used" with a link to Pro; the first match still works.
+4. **Menu + tour:** sign in on a phone (390 px) and on a laptop: the menu is Home · Matches · Score · Scorecards · Plans, the tour starts once on Home, and "Take the app tour" in the account menu replays it. Matches opens availability for Pro, `/fixtures` for Free.
+5. **Upload:** as a captain open Scorecards → "📷 Upload a scorecard" → choose a photo → the digital scorecard opens with the checks. Upload the same photo again (or a resized copy) → refused. Tap "Something's wrong" → site admins get a notification and players see "Scorecard being checked".
+6. **Admin:** as the site admin open account menu → Scorecard checks → Approve / Reject an upload; tick duplicates and "Hide ticked duplicates" → the duplicate groups go and stats count each match once.
+7. A player (no captain role) opening `/scorecards/upload` is told to ask their captain; scoring another club's match as a captain is refused.
+
+### Reading handwritten scorecards automatically (Oct 2026)
+- Paper scorecards are handwritten, and the free local reader (Tesseract) can't read handwriting. The app reads them with an AI vision model instead (`app/ai_vision.py`). The first one configured is used:
+  1. **Google Gemini, free** (recommended): get a key at https://aistudio.google.com/apikey (Google account, no card) and put `GEMINI_API_KEY=...` in `.env`. Free tier has a daily limit (plenty for club use); when it's reached the app says so and the scorecard can be read the next day or typed in. Note: Google may use free-tier requests to improve its products. Optional `GEMINI_VISION_MODEL` (default `gemini-3.8-flash`, falls back to other free Flash models).
+  2. **Anthropic Claude, paid** (a few cents a photo): `ANTHROPIC_API_KEY=...`, optional `ANTHROPIC_VISION_MODEL` (default `claude-sonnet-5-5`).
+  3. **Ollama on this computer, free and offline (the club's choice, Oct 2026):** install Ollama (0.12.7 or newer) from https://ollama.com/download, then run `ollama pull qwen3-vl:8b` (6.1 GB; on a PC with less than 16 GB memory use `qwen3-vl:4b`, 3.3 GB). Keep the Ollama app running; the app finds the model by itself (`ai_vision.ollama_model()`, optional `OLLAMA_VISION_MODEL`, `OLLAMA_BASE_URL`, `OLLAMA_VISION_TIMEOUT` seconds, default 600). Without a graphics card a photo takes a few minutes. Same prompt and checks as the online readers; less accurate on messy handwriting, so always compare with the photo.
+  4. Otherwise: Tesseract plus the **Type in the scorecard** form.
+- `.env` lives in the project folder next to `app` (copy `.env.example`), is in `.gitignore`, and is read when the app starts (restart after editing).
+- **What happens:** every new upload is sent to the model with the club's player list; it returns the scorecard as the app's template JSON (teams, date, each batter's runs and how out, extras, total, bowlers), which goes through the normal import and checks. The scorer compares it with the photo and taps Publish; anything that doesn't add up goes to the site admin. AI-read and typed-in scorecards are never published automatically.
+- **Older uploads:** open the upload (Scorecard checks → Open digital scorecard) and tap **🤖 Read with AI** (`POST /api/scorecards/{id}/ai-read`).
+
+### Home: live and past matches (Oct 2026)
+- The signed-in Home "Matches" section opens on **Overview** with three clear rows: **🔴 Live now** (with "Score a match"), **🏁 Recent results** (with "All scorecards") and **📅 Coming up**. The Live / Results / Upcoming tabs still filter. Played games without a written result show "Full time" instead of "Result not recorded".
+- Home quick actions start with **🎯 Score a match**; "Update availability" shows only when the member can use it, and Free members get "⭐ See plans". The AI assistant card lists the tasks it can do.
+- Phone fix: wide tables and toolbar forms on Clubs and Admin center no longer push the page sideways (`app_polish.css`).
+
+### How to test (Oct 2026, round 2)
+1. Free member: set a user to Free on `/pricing` (Manage plans), sign in as them: the menu shows Home, Scoring, Archives, Scorecards, Clubs, Performances, Profile, Plans; opening `/player-availability` goes to Plans. A paid member sees the full menu.
+2. Signed in, Quick Score → start a match → the Team line-ups step appears; saving with 1 player shows "needs at least 2 players"; with 2–11 per side it moves to "Who's batting?".
+3. Signed out, open `/score` → fill both teams and line-ups → Create → note the code banner → score a few balls → open `/live` in another browser: the guest match is listed.
+4. Home (signed in): check Live now / Recent results / Coming up.
 
 ### Past matches are locked (Oct 2026)
 - A match whose date is before today (Toronto time, `_current_local_date`) is read-only for everyone: scores (`/scorecard`, `/performances`, `/commentary`, ball-by-ball), availability (`/api/matches/{id}/availability`, `/api/player/availability`), the playing XI (`/lineup`) and AI Assistant score/availability tasks all answer **403 "This match was on … Past matches are locked"** (`_require_not_past` in `main.py`). Old scores are added by uploading the scorecard photo to Archives for admin review.
@@ -544,70 +708,88 @@ This section documents the work done in September 2026. See "Change log" at the 
 7. Assistant page → Insights panel; chat: "How can Amit G improve?", "Suggest the best playing XI", "Season outlook".
 8. Plans: open `/pricing` signed out and signed in (see "Subscriptions and plans" → "How to test").
 
+## Retired out (RO) on paper scorecards
+
+Request (Oct 2026): on our scorecards "RO" means Retired Out, not Run out (most batters retire).
+
+- `app/ai_vision.py`: `ro_meaning()` reads `SCORECARD_RO_MEANS` from `.env` (`retired out` by default, or `run out`). The AI prompt tells the model what "RO" means and asks it to copy the HOW OUT text into `dismissal.written_as`.
+- `_normalise` turns any batter whose HOW OUT is written "RO" / "R.O." / "R/O" into the club meaning, and `review_notes` adds "Ben: 'RO' on the card was read as retired out…" so the scorer can change one with Edit if needed.
+- `app/main.py` `_scorecard_dismissal` shows a bare "RO" the same way on every scorecard page. Retired out counts as a wicket; retired hurt / retired not out does not.
+- Scorecards read before this change keep what was saved: open the card → ✏️ Edit → set How out to "retired out" → Save (or press 🤖 Read with AI again).
+
+## Screen size and zoom
+
+Request (Oct 2026): "the screen should not zoom in and out".
+
+- Every page (all `app/static/*.html` and the inline pages in `app/main.py`) uses `<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, viewport-fit=cover" />`.
+- `app/static/styles.css` (end of file) sets `overflow-x: hidden` / `clip` on `html, body` so nothing makes the page wider than the screen, stops phones enlarging text on rotate (`text-size-adjust: 100%`) and uses `touch-action: manipulation` so double-tap does not zoom.
+- Result: on phones and tablets the page is fixed to the screen width (no pinch or double-tap zoom, no sideways scroll).
+- Laptop/desktop: `app/static/zoom_lock.js` (loaded in the `<head>` of every page, right after the viewport meta) blocks Ctrl/Cmd + "+" / "-", Ctrl + mouse wheel and trackpad pinch. Ctrl + 0 (back to 100%) still works. Chrome remembers an earlier zoom per site, so if the page is already zoomed out the script shows a note "Press Ctrl + 0"; the browser's own menu zoom cannot be blocked by a web page.
+- When adding a new page, copy the same viewport meta, the `zoom_lock.js` script tag and link `/assets/styles.css`.
+- How to test: restart the app, press Ctrl + F5, then in Chrome DevTools (F12 → phone icon) pick a phone and check you cannot pinch-zoom or scroll sideways on Home, Matches, Score and Scorecards.
+
 ## Subscriptions and plans
 
-Model: keep the core cricket experience free; charge for managing more cricket, importing more history, automation, communication and intelligence.
+Model (soft launch, Oct 2026): keep the core cricket experience free; one paid plan, **Pro**, for managing a team, automation, AI and unlimited history. Free is the default for every new account.
 
-| | Free ($0) | Super ($4.99/month) | Premium ($100/year ≈ $8.33/month) |
-|---|---|---|---|
-| Live scoring, player/club stats, view scorecards | ✓ | ✓ | ✓ |
-| Scorecard image uploads | 2 / month | 5 / month | Unlimited |
-| Multi-club selection, match roster, availability, Playing XI | – | ✓ | ✓ |
-| Alerts and live score updates to players | – | ✓ | ✓ |
-| AI Assistant (actions), analysis (predictions, tips, best XI, season outlook) | Stats answers only | ✓ | ✓ |
-| AI Live Scorer, match intelligence, cross-club stats, advanced analysis, priority support | – | – | ✓ |
+| | Free ($0, default) | Pro ($9/month or $90/year) |
+|---|---|---|
+| Live scoring, guest matches, player/club stats, view scorecards | ✓ | ✓ |
+| Scorecard photo uploads (captains / club admins) | 2 / month | Unlimited |
+| AI Assistant tasks and AI Live Scorer | **1 free AI match** | ✓ |
+| Upcoming matches with availability, rosters, Playing XI, multi-club | – (players of a Pro club can mark availability) | ✓ |
+| Alerts and live score updates to players | – | ✓ |
+| Analysis (predictions, tips, best XI, outlook), match intelligence, cross-club stats, priority support | – | ✓ |
+
+- Yearly is **2 months free** ($90 instead of $108, i.e. $7.50 a month). **Monthly is pre-selected** on `/pricing`; `?billing=yearly` opens it on Yearly.
+- The earlier **Super ($4.99/month)** and **Premium ($100/year)** plans were folded into Pro. Stored `super` / `premium` rows (including the 60-day launch trial) now read as Pro (`LEGACY_PLANS`, `normalize_plan` in `subscriptions.py`); nothing in the database needed changing.
 
 ### How plans work
-- **Code:** `app/subscriptions.py` (plans, features, trial, Stripe), `app/ai_scorer.py` (AI Live Scorer), helpers `_plan_for`, `_has_feature`, `_require_feature`, `_club_is_paid` in `app/main.py`. Each feature has a minimum plan in `subscriptions.FEATURES`; change prices, limits or features there.
-- **Plans belong to a user.** Site admins (superadmin) always get Premium. A club counts as **paid** when one of its captains or club admins is on Super or Premium; then every player in that club can mark availability and gets match and live score alerts without paying.
-- **Trial and default plan:** the first time the app starts with plans it records the launch date (`app_subscription_meta.launch_at`). Users created before that get **60 days of Premium** (`source = trial`); after it ends they drop to Free automatically. Other users receive the configurable `CRICKETCLUBAPP_DEFAULT_PLAN`, which defaults to Premium for development. Set it to `free` in the production environment before launch. The setting also updates users whose plans still come from the automatic default, without changing explicit admin or Stripe plans.
+- **Code:** `app/subscriptions.py` (plans, features, trial, free AI match, Stripe), `app/ai_scorer.py` (AI Live Scorer), helpers `_plan_for`, `_has_feature`, `_require_feature`, `_ai_allowed`, `_club_is_paid` in `app/main.py`. Each feature has a minimum plan in `subscriptions.FEATURES`; change prices, limits or features there.
+- **Plans belong to a user.** Site admins (superadmin) always get Pro. A club counts as **paid** when one of its captains or club admins is on Pro; then every player in that club can mark availability and gets match and live score alerts without paying.
+- **Trial:** users created before plans were switched on got **60 days of Pro** (`source = trial`); after it ends they drop to Free automatically. New users start on Free.
+- **One free AI match:** a Free user may use the AI Assistant tasks and the AI Live Scorer on one match. The first match they use AI on becomes their free AI match (table `app_ai_trial`, `claim_ai_trial`); AI keeps working on that match, any other match answers 402 "Your free AI match has been used". `/api/subscription/me` returns `ai_trial {used, match_id}`; the user payload has `ai_trial_open`.
+- **Default plan (Amit, Oct 15):** users without an explicit admin or Stripe plan get `CRICKETCLUBAPP_DEFAULT_PLAN` (`app/subscriptions.py` `configured_default_plan`; `premium` / `super` mean Pro). It defaults to **pro** while developing; set `CRICKETCLUBAPP_DEFAULT_PLAN=free` before launch. It also updates users whose plan still comes from the automatic default, never explicit admin or Stripe plans.
 - **Upload quota:** counted from `archive.upload` rows in `app_audit_log` for the current calendar month (resets on the 1st).
-- **Tables** (created automatically): `app_subscriptions` (plan, status, source, period end, Stripe ids), `app_subscription_meta`, `app_payment_events` (Stripe webhook log, prevents double processing).
-- **What is locked** (server answers HTTP 402 with an upgrade message; `static/plan_gate.js` shows an "Upgrade" pop-up on every signed-in page):
+- **Tables** (created automatically): `app_subscriptions`, `app_subscription_meta`, `app_payment_events` (Stripe webhook log), `app_ai_trial`.
+- **What is locked** (HTTP 402 with an upgrade message; `static/plan_gate.js` shows an "Upgrade" pop-up on every signed-in page):
   - `POST /api/scorecards/upload` → monthly quota.
-  - `POST /api/auth/select-club` and `/clubs/select` → switching away from your home club needs Super (`multi_club`).
-  - `POST /api/player/availability`, `/api/player/season-availability`, `/api/matches/{id}/availability` → `availability` (you or your club paid); changing someone else's → `match_roster`.
+  - `POST /api/auth/select-club` and `/clubs/select` → switching away from your home club needs Pro (`multi_club`).
+  - `POST /api/player/availability`, `/api/player/season-availability`, `/api/matches/{id}/availability` → `availability` (you or your club on Pro); changing someone else's → `match_roster`.
   - `POST /api/matches/{id}/lineup` → `playing_xi`.
-  - `POST /api/muse` → on Free, AI Assistant answers stats questions only; score entry, availability requests/summaries and alerts reply with a "See plans" link. `POST /api/muse/confirm-score` → `ai_assistant`.
-  - `POST /api/chat` (Assistant page) → predictions, tips, best XI and outlook questions need Super.
-  - Live score alerts after each ball are only sent when the scorer or the club is on a paid plan.
-  - `GET /api/insights/me` → Free gets form and club record; Super adds prediction, tips, best XI, season outlook; Premium adds `match_intelligence` (win chance, head to head, opponent key players, key points) and `cross_club` (your stats for every club). Locked parts come back in `locked` and the Assistant page shows "Unlock" cards.
-  - `POST /api/matches/{id}/ai-scorer` → Premium `ai_live_scorer`.
-- **Never locked:** live scoring (Quick Score buttons, basic voice and shorthand), stats, rankings, scorecards, public pages and the public AI Assistant.
+  - `POST /api/muse/execute`, `POST /api/muse/confirm-score`, `POST /api/matches/{id}/ai-scorer` → Pro, or the free AI match.
+  - `POST /api/chat` (Assistant page) → predictions, tips, best XI and outlook questions need Pro.
+  - Live score alerts after each ball are only sent when the scorer or the club is on Pro.
+  - `GET /api/insights/me` → Free gets form and club record; Pro adds the rest. Locked parts come back in `locked`.
+- **Never locked:** live scoring (Quick Score buttons, basic voice and shorthand), guest matches, stats, rankings, scorecards, public pages and the public AI Assistant.
 
 ### Plans page (`/pricing`)
-- Files: `static/pricing.html` (signed in), `static/pricing_public.html` (signed out), `static/pricing.js`, `static/pricing.css`. "Plans" is in the More menu (signed in and public).
-- Shows the three plan cards, a comparison table and FAQ. Signed in, "Your plan" shows the plan, trial days left or renewal date, and uploads used this month.
-- **Site admins** also see "Manage plans": counts per plan, a form to set any user's plan (name, mobile, email or id; plan; number of days, 0 = no end; note) and a list of every user's plan. Use this for cash payments, club deals or while Stripe is off.
-- APIs: `GET /api/plans` (public), `GET /api/subscription/me`, `POST /api/subscription/checkout {plan}`, `POST /api/subscription/portal`, `POST /api/stripe/webhook`, `GET /api/admin/subscriptions`, `POST /api/admin/subscriptions/set {user, plan, days, note}` (superadmin).
-- The signed-in user payload (`/api/auth/me` etc.) now includes `plan`, `plan_name` and `plan_features`.
+- Files: `static/pricing.html` (signed in), `static/pricing_public.html` (signed out), `static/pricing.js`, `static/pricing.css`.
+- Shows the Free and Pro cards with a **Monthly / Yearly** switch (Monthly selected), a comparison table and FAQ. Signed in, "Your plan" shows the plan, trial days left or renewal date, uploads used this month and the free AI match.
+- **Site admins** also see "Manage plans": counts per plan, a form to set any user's plan (Pro / Free, number of days, 0 = no end, note) and a list of every user's plan. Use this for cash payments, club deals or while Stripe is off.
+- APIs: `GET /api/plans` (public, includes `default_plan` and `default_interval`), `GET /api/subscription/me`, `POST /api/subscription/checkout {plan: "pro", interval: "month"|"year"}`, `POST /api/subscription/portal`, `POST /api/stripe/webhook`, `GET /api/admin/subscriptions`, `POST /api/admin/subscriptions/set {user, plan, days, note}` (superadmin).
 
 ### Switching on Stripe payments
-1. In the Stripe dashboard create two recurring prices: Super **$4.99 every month** and Premium **$100 every year**. Copy their price ids (`price_…`).
-2. Copy `.env.example` to `.env` next to this README and fill in `STRIPE_SECRET_KEY` (start with a `sk_test_…` key), `STRIPE_PRICE_SUPER`, `STRIPE_PRICE_PREMIUM` and `APP_BASE_URL` (the address people use to open the app).
-   - Keep `CRICKETCLUBAPP_DEFAULT_PLAN=premium` while developing; set `CRICKETCLUBAPP_DEFAULT_PLAN=free` in the production environment before going live.
-3. Add a webhook endpoint in Stripe pointing to `https://<your site>/api/stripe/webhook` with the events `checkout.session.completed`, `customer.subscription.created`, `customer.subscription.updated` and `customer.subscription.deleted`. Put its signing secret in `STRIPE_WEBHOOK_SECRET`. For local testing use the Stripe CLI: `stripe listen --forward-to localhost:8090/api/stripe/webhook`.
+1. In the Stripe dashboard create one product "Pro" with two recurring prices: **$9 every month** and **$90 every year**. Copy their price ids (`price_…`).
+2. Create a `.env` file next to the `app` folder and fill in `STRIPE_SECRET_KEY` (start with a `sk_test_…` key), `STRIPE_PRICE_PRO_MONTHLY`, `STRIPE_PRICE_PRO_YEARLY`, `STRIPE_WEBHOOK_SECRET` and `APP_BASE_URL` (the address people use to open the app). The old `STRIPE_PRICE_SUPER` / `STRIPE_PRICE_PREMIUM` are no longer used.
+   - Keep `CRICKETCLUBAPP_DEFAULT_PLAN=pro` while developing; set `CRICKETCLUBAPP_DEFAULT_PLAN=free` in the production environment before going live.
+3. Add a webhook endpoint in Stripe pointing to `https://<your site>/api/stripe/webhook` with the events `checkout.session.completed`, `customer.subscription.created`, `customer.subscription.updated` and `customer.subscription.deleted`. For local testing use the Stripe CLI: `stripe listen --forward-to localhost:8090/api/stripe/webhook`.
 4. Turn on the Customer Portal in Stripe (for "Manage billing").
-5. Restart the app. `/pricing` then shows "Choose Super / Premium" buttons that open Stripe Checkout. After payment the webhook switches the plan on; cancelling in the portal moves the user back to Free at the end of the period.
+5. Restart the app. `/pricing` then shows "Choose Pro monthly / yearly" buttons that open Stripe Checkout. After payment the webhook switches the plan on; cancelling in the portal moves the user back to Free at the end of the period.
 - No extra Python package is needed (Stripe is called with `urllib`). `.env` is in `.gitignore`: never commit real keys.
 
-### AI Live Scorer (Premium)
+### AI Live Scorer (Pro, or the free AI match)
 - In Quick Score tap **🤖 AI Scorer**. The microphone keeps listening (Chrome/Edge); you can also type. Say what happened: "four", "dot", "wide, then two runs", "no ball and a six", "two leg byes", "three dots", "bowled", "caught by Sam", "undo".
-- `POST /api/matches/{id}/ai-scorer {text, innings_number}` → `ai_scorer.interpret()` splits the phrase into ball events (RUNS, WIDE, NO_BALL, BYE, LEG_BYE, WICKET, UNDO), `ai_scorer.validate()` checks them against the innings (innings over, 10 wickets, overs used) and returns the projected score ("0/0 (0.0) → 3/0 (0.1)").
-- The page then saves each event through the normal `POST /api/matches/{id}/scorebook/ball`, so the scoring engine still does all the cricket maths (totals, overs, strike, bowler changes). Wickets open the usual wicket pop-up pre-filled (how out, fielder) so the scorer confirms who is out and the new batter. At the end of an over it stops and asks for the next bowler.
-- Free and Super users see the button with a 🔒 and a short explanation linking to Premium.
+- `POST /api/matches/{id}/ai-scorer {text, innings_number}` → `ai_scorer.interpret()` splits the phrase into ball events, `ai_scorer.validate()` checks them against the innings and returns the projected score.
+- The page then saves each event through the normal `POST /api/matches/{id}/scorebook/ball`, so the scoring engine still does all the cricket maths. Wickets open the usual wicket pop-up pre-filled.
+- Free users see a "🎁 try AI on one match for free" note; after their free AI match the button shows a 🔒 and a link to Pro.
 
 ### How to test (plans)
-1. Restart the app. Sign in as the site admin and open `/pricing`: you should see Premium ("Site admins always have every feature") and the "Manage plans" panel. Existing users show Premium with source `trial`.
-2. In "Manage plans" set a club admin (e.g. `clubadmin1`) to **Free**. Sign in as them:
-   - `/pricing` shows Free and "0 of 2 uploads used".
-   - Assistant page shows form + club record and "Unlock more insights" cards.
-   - AI Assistant: "Who is the top run scorer?" answers; "Ask everyone for availability" shows "See plans".
-   - Selecting the Playing XI or switching to another club shows the Upgrade pop-up.
-   - Upload 3 scorecard photos: the third is refused with "You've used all 2 … uploads".
-3. Set the same user to **Super** for 30 days: the XI, availability requests, predictions and season outlook work; a Free player in that club can now mark availability.
-4. As the site admin (Premium) open Quick Score on today's match → 🤖 AI Scorer → type "wide, then two runs" → the score goes 0/0 → 3/0 and the over shows `wd 2`; type "caught by Nick" → the wicket pop-up opens with Caught and Nick filled in.
-5. Stripe (optional, test mode): fill `.env`, restart, run `stripe listen`, choose Super on `/pricing` and pay with card `4242 4242 4242 4242`; the plan changes to Super.
+1. Restart the app. Sign in as the site admin and open `/pricing`: you should see Pro ("Site admins always have every feature") and the "Manage plans" panel.
+2. In "Manage plans" set a club admin (e.g. `clubadmin1`) to **Free**. Sign in as them: `/pricing` shows Free, "0 of 2 uploads used" and "You have 1 free AI match"; the third scorecard upload in a month is refused.
+3. Use the AI Scorer or an AI Assistant task on one match (works), then on another match (Upgrade pop-up "Your free AI match is used").
+4. Set the same user to **Pro** for 30 days: availability, Playing XI, predictions and AI work on every match; a Free player in that club can now mark availability.
+5. Stripe (optional, test mode): fill `.env`, restart, run `stripe listen`, choose Pro monthly on `/pricing` and pay with card `4242 4242 4242 4242`; the plan changes to Pro.
 
 ## Change log
 
@@ -632,11 +814,46 @@ Model: keep the core cricket experience free; charge for managing more cricket, 
 - 2026-09-29: Merged the GitHub changes (README moved to `MD/README.md`, new `sports-system.css` look) with the plans work.
 - 2026-10-04: Past matches locked (scores, availability, XI) and hidden from upcoming lists; AI Muse renamed back to "AI Assistant" on the button, answers through the LLM, and carries out tasks with Confirm/Cancel (`app/muse_agent.py`, `POST /api/muse/execute`); `READMELLM.md` is found in `MD/`.
 - 2026-10-05: AI Assistant button on all public pages including Sign In/Register; public questions fall back to the LLM on public-only data; "next match" answers skip past games.
+- 2026-10-11: Soft launch round 1 (call with Amit Sethi): plans are now Free (default) + **Pro $9/month or $90/year** (Monthly pre-selected; Super/Premium folded into Pro); **one free AI match** for Free users; captains and club admins can score and upload scorecards (`score_matches`, own club only); scorecard upload page with smart checks (same photo, resized photo, same match, Ollama check, mistakes), full digital scorecard preview with Publish / Something's wrong, site-admin review queue and duplicate clean-up (`/admin/scorecards`), alerts to site admins and players; simple menu Home · Matches · Score · Scorecards · Plans; app tour; sign-in `?next=`.
+- 2026-10-11: OCR fix: a slow Tesseract pass (big phone photos take ~20 s) no longer throws away every OCR result (timeout 12 s → 60 s, each pass tried on its own). Tested with a real handwritten Heartlake scorecard: Tesseract alone can't read handwriting, so the upload is correctly sent to admin review; for real extraction install an Ollama vision model (`ollama pull qwen2.5vl:7b`).
+- 2026-10-11: Typing in a scorecard by hand (Admin Center → Archives → "Import pasted extraction", JSON template like `heartlake_scorecard.json`) now runs the same upload checks and replaces old OCR flags; a batter whose card spelling differs from the roster ("Vinay" / "Vinny") is no longer counted twice; "retired out" counts as a wicket (plain "retired" stays not out).
+- 2026-10-11: Handwritten scorecards: when the photo reading gives junk (Tesseract on handwriting), it is no longer shown as a scorecard (`ocr_rows_look_real` in `cricket_store.py`, status "Unreadable"); the preview page opens a **"Type in the scorecard"** form instead (teams, date, venue, overs, result, each innings' total/wickets/overs/extras, batters with how out/bowler/R/B/4s/6s, bowlers with O/M/R/W, live "batters + extras = total" check) saved through `POST /api/scorecards/{id}/manual` (uploader, own club's scorers, site admins), then the usual checks run. "Edit scorecard" corrects any upload the same way. Phone fix: long team names no longer make the scorecard wider than the screen.
+- 2026-10-11: Handwritten scorecards read automatically by Claude's vision model when `ANTHROPIC_API_KEY` is set (`app/ai_vision.py`, upload flow + "🤖 Read with AI" button); AI-read and typed-in scorecards wait for Publish instead of being auto-approved; published-scorecard links fixed (`/scorecards/a-<id>`); the preview page also opens from a public scorecard address.
+- 2026-10-11: AI scorecard reading can use Google Gemini's free tier (`GEMINI_API_KEY`), so reading handwritten scorecards costs nothing; Claude stays optional.
+- 2026-10-12: The 🔔 bell opens a notifications list right under it (click again or Esc to close; tap an item to open it and mark it read; "Mark all read"; "Open all in the Assistant"); alert rows no longer get squashed.
+- 2026-10-12: A batter with nothing written next to their name is shown under "Did not bat" (not as 0 with "imported from chatgpt/manual extraction").
+- 2026-10-12: AI reading cross-checks each batter's runs column against their own ball-by-ball runs and copies the extras exactly as written; any mismatch or hard-to-read number is listed for the scorer ("Check Ben: the runs column reads 30, but the ball-by-ball adds up to 38"), stored in `ai_flags`.
+- 2026-10-12: The upload page says which reader is used ("Photos are read by: Google Gemini (free AI)"), `GET /api/scorecards/reader`.
+- 2026-10-12: AI reading no longer stretches extras to make the total fit (it re-reads the batters instead), flags "extras boxes add up to 52 but extras says 61", and writes the club's own name (not "HEART LAKE" vs "Heartlake Cricket Club" as two teams).
+- 2026-10-12: Site admins can delete an upload (and its photo) from its scorecard page with "🗑 Delete this upload", e.g. to upload the same photo again; the site admin may delete any club's upload.
+- 2026-10-12: AI reading double-checks itself: when batters + extras don't make the total, the model is shown the mismatch and reads the photo again (`sum_problems`, second pass); clearer check messages (match date / other team / second innings missing, with what to do).
+- 2026-10-12: Public pages (Scorecards, Fixtures, Live…) show "My dashboard" and "Sign out" when you are signed in, instead of "Sign In" / "Register" (it looked like the app had signed you out); site admins get a "Scorecard checks" button on /scorecards.
+- 2026-10-12: Gemini reading retries when Google says it is busy (503) and moves on to the next free Flash model; clear messages for busy / daily limit.
+- 2026-10-12: Free offline scorecard reading with an Ollama vision model (`qwen3-vl:8b` / `:4b`) through the same AI reader (`_read_with_ollama` in `app/ai_vision.py`); used automatically when no Gemini/Claude key is set.
+- 2026-10-14: Screen size lock: pages no longer pinch/double-tap zoom on phones (`maximum-scale=1.0` in every viewport meta, `touch-action: manipulation`) and never scroll sideways (`overflow-x: clip` on html/body); styles.css bumped to `?v=20261014a`. See "Screen size and zoom".
+- 2026-10-14: Laptop zoom lock (`app/static/zoom_lock.js` on every page): Ctrl +/−, Ctrl + wheel and trackpad pinch no longer zoom; Ctrl + 0 still resets; note shown when the browser is already zoomed out.
+- 2026-10-14: "RO" in HOW OUT is read as Retired Out (club rule, `SCORECARD_RO_MEANS` in `.env`, default retired out) by the AI reader and on scorecard pages; review note for every RO batter.
+- 2026-10-16: Simple sign-in page (one card, no League leaders, player name only when needed). App tour now shows once per account after the first sign-in, with "what to do" steps that depend on the role (`app_tour_seen`, `/api/tour`). See "Simple sign-in page" and "Simple menu and app tour".
+- 2026-10-16: First page: `/` opens Home when signed in (Live when signed out); sign-in goes to Home when the account has a club (Clubs only when it has none); tour skips "Pick your club" when not needed. See "First page".
+- 2026-10-16: Shorter public menu: LIVE · Fixtures · Scorecards · Rankings · Sign In + More (Score, Clubs, Plans, Register). See "Public menu".
+- 2026-10-16: Public bar: CricketCanClubs name by the logo, "Live scores" tab, More on the right without Dark mode, separate Sign out button; simpler /live page. See "Public menu" and "Simple Live page".
+- 2026-10-16: Plan restrictions: no AI before sign-in (public assistant and guest AI Scorer); AI reading of scorecard photos is Pro, or the Free plan's one free AI try. See "Plans: what each group can use".
+- 2026-10-16: AI Assistant answers greetings, cricket and app questions with Gemini (`app/ai_chat.py`), uses club data for club questions; no sign-in prompts when signed in on public pages; full-height right-side panel. See "AI Assistant answers (Gemini)".
+- 2026-10-16: AI Assistant shows thinking dots, then types its reply; "Take the app tour" removed from the account menu (tour is only shown once to first-time users).
+- 2026-10-20: Amit's feedback: Player name field always shown on /signin again (for sign-in without a password); after sign-in everyone goes to /clubs to pick their club; Clubs and Stats (/dashboard/widgets/performance) are back in the top menu (`shared_header.html`, `multipage.js`).
+- 2026-10-19: AI reader reads without manual edits: name letter-by-letter rule, bowling figures from the analysis boxes, bowlers' wickets from the batting card, photo date from the WhatsApp/IMG file name, season follows the date read.
+- 2026-10-19: AI reader learns: RUNS(BALLS) rule, ball-by-ball count check, photo date for the year, known names, and name fixes saved per club (`app_ai_corrections`) and used on the next read. See "How the AI reader learns".
+- 2026-10-19: Fixed "Upload failed." on /scorecards/upload when AI reading is on (the plan check used an undefined `current_club_id`; now `upload_club_id`).
+- 2026-10-18: Merged Amit's Oct 16 commit (local Ollama vision reader with focused crops in `cricket_store.py`, "AI Muse" renamed "AI Assistant" across the app, tests). Upload/Re-extract order kept: Gemini AI reader first, then Amit's local reader; the local reader now also fills `review_template_json`.
+- 2026-10-17: Admin Center Re-extract shows progress and the result on the scorecard card and no longer runs twice; Scorecard checks also lists "Ready for review" uploads.
+- 2026-10-16: Merged Amit's Oct 15 Admin Center review (snapshot + JSON + original image, HEIC previews, configurable default plan, now `pro` / `free`) with the soft-launch work; Re-extract now uses the AI reader; AI result kept as the reviewed copy; 2-innings card fix. See "Re-extract uses the AI reader".
+- 2026-10-16: AI duplicate check now uses the configured AI (Gemini first) instead of only Ollama, on upload and with "🤖 Ask AI to find more duplicates" on /admin/scorecards.
+- 2026-10-06: Plan-based menu (Free: scoring + viewing; paid: everything) with page guards; line-ups (2–11 per side) required before scoring; guest matches without sign-in (match code); Home overview with Live now / Recent results / Coming up; phone overflow fix on Clubs and Admin.
 
 ## New UI Look and Feel
 
 ## 1. Typography & Global Layout Foundation
-
+Prompt for Copilot Chat / Panel:
 
 > Write a clean, modular CSS layout configuration for a premium light-themed sports website canvas. Import "Anton", "Inter", and "Space Mono" from Google Fonts. Set the global background canvas color to an off-white `#F8F9FA` and default text to `#1A1A1A`. Create two primary structural heading classes:
 > 
@@ -648,7 +865,7 @@ Model: keep the core cricket experience free; charge for managing more cricket, 
 ---
 
 ## 2. High-Performance Sports Table Grid
-
+Prompt for Copilot Chat / Panel:
 
 > Design a clean HTML/CSS data table layout engineered for a sports statistics leaderboard. Structure a table layout named `.custom-table` that removes harsh internal grid borders. Give table headers (`th`) a muted gray color (`#6C757D`), uppercase transformations, and generous layout padding. Table cells (`td`) must feature comfortable spacing, a thin baseline row divider, and use the 'Inter' font. Create two helper styling badge classes:
 > 
@@ -659,7 +876,7 @@ Model: keep the core cricket experience free; charge for managing more cricket, 
 ---
 
 ## 3. Integrated Charting Configuration (Plotly/Matplotlib)
-
+Prompt for Copilot Chat / Panel:
 
 > Generate a programmatic bar chart configuration function using Plotly Graph Objects that seamlessly binds into a light-themed user interface canvas. The chart needs to process individual player label arrays on the X-axis against their total scoring numbers on the Y-axis. Style the chart elements according to these visual constraints:
 > 

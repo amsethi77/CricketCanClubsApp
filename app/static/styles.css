@@ -7113,3 +7113,10 @@ html body .assistant-fab[hidden] {
     display: none !important;
   }
 }
+
+/* Screen size lock (Oct 2026, README "Screen size and zoom"): the page is never wider than the screen,
+   so phones cannot be pinched/zoomed out sideways, and double-tap does not zoom. */
+html, body { max-width: 100%; overflow-x: hidden; }
+@supports (overflow-x: clip) { html, body { overflow-x: clip; } }
+html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+body { touch-action: manipulation; }

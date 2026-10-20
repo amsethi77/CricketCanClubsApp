@@ -2,7 +2,8 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, viewport-fit=cover" />
+    <script src="/assets/zoom_lock.js?v=20261014a"></script>
     <title>Cricket Canada Clubs · Live scores, scorecards and fixtures</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -11,8 +12,8 @@
       rel="stylesheet"
     />
     <link rel="stylesheet" href="/assets/tailwind.css?v=20260430b" />
-    <link rel="stylesheet" href="/assets/styles.css?v=20260511l" />
-    <link rel="stylesheet" href="/assets/live.css?v=20260923d" />
+    <link rel="stylesheet" href="/assets/styles.css?v=20261016g" />
+    <link rel="stylesheet" href="/assets/live.css?v=20261016b" />
     <link rel="stylesheet" href="/assets/home.css?v=20260924a" />
     <link rel="stylesheet" href="/assets/sports-system.css?v=20260926a" />
   </head>
@@ -20,52 +21,21 @@
     <main class="live-shell home-shell">
       <div data-public-header></div>
 
-      <!-- Score strip: live, results, upcoming (like Cricinfo's top bar) -->
-      <section class="home-strip" aria-label="Matches">
-        <div class="home-strip-tabs" role="tablist">
-          <button type="button" class="home-strip-tab is-active" data-strip="all" role="tab" aria-selected="true">All</button>
-          <button type="button" class="home-strip-tab" data-strip="live" role="tab" aria-selected="false">Live</button>
-          <button type="button" class="home-strip-tab" data-strip="result" role="tab" aria-selected="false">Results</button>
-          <button type="button" class="home-strip-tab" data-strip="upcoming" role="tab" aria-selected="false">Upcoming</button>
-        </div>
-        <div class="home-strip-wrap">
-          <button type="button" class="home-strip-nav prev" aria-label="Scroll left">‹</button>
-          <div id="homeStrip" class="home-strip-row"><div class="home-strip-empty">Loading matches…</div></div>
-          <button type="button" class="home-strip-nav next" aria-label="Scroll right">›</button>
-        </div>
-      </section>
-
       <!-- Hero banner + featured match -->
       <section class="home-hero">
         <div class="home-hero-copy">
           <span class="home-eyebrow"><span class="home-dot"></span> Local club cricket, live</span>
           <h1>Every ball. Every club.<br />Across Canada.</h1>
-          <p>Live scores, digital scorecards, fixtures and player stats for community cricket clubs, all in one place.</p>
-          <div class="home-hero-actions">
-            <a class="home-btn primary" href="/register">Register your club</a>
-            <a class="home-btn ghost" href="/signin">Sign in</a>
+          <p>Live scores, results and fixtures for community cricket clubs.</p>
+          <div class="home-hero-actions" id="homeHeroActions">
+            <a class="home-btn primary" href="/signin">Sign in</a>
+            <a class="home-btn ghost" href="/register">Register your club</a>
           </div>
-          <div class="home-stats">
-            <div><strong id="homeStatClubs">–</strong><span>Clubs</span></div>
-            <div><strong id="homeStatFixtures">–</strong><span>Fixtures</span></div>
-            <div><strong id="homeStatScorecards">–</strong><span>Scorecards</span></div>
-          </div>
+          <a class="home-link home-quick-score" href="/score">Or score a quick match without signing in →</a>
         </div>
         <div id="homeFeature" class="home-feature">
           <div class="home-feature-loading">Loading featured match…</div>
         </div>
-      </section>
-
-      <!-- Latest scorecards -->
-      <section class="home-section">
-        <div class="home-section-head">
-          <div>
-            <p class="home-kicker">Scorecard archive</p>
-            <h2>Latest scorecards</h2>
-          </div>
-          <a class="home-link" href="/scorecards">View all scorecards →</a>
-        </div>
-        <div id="homeScorecards" class="home-card-grid"></div>
       </section>
 
       <!-- Results + upcoming -->
@@ -92,19 +62,8 @@
         </div>
       </section>
 
-      <!-- Join banner -->
-      <section class="home-join">
-        <div>
-          <h2>Run your club on Cricket Canada Clubs</h2>
-          <p>Score matches ball by ball, track availability, upload old scorecards and see every player's stats.</p>
-        </div>
-        <div class="home-hero-actions">
-          <a class="home-btn light" href="/register">Register your club</a>
-          <a class="home-btn outline-light" href="/clubs">Browse clubs</a>
-        </div>
-      </section>
     </main>
-    <script src="/assets/public_header.js?v=20261015a"></script>
-    <script src="/assets/home.js?v=20261004a"></script>
+    <script src="/assets/public_header.js?v=20261018a"></script>
+    <script src="/assets/home.js?v=20261016a"></script>
   </body>
 </html>

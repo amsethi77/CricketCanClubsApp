@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, viewport-fit=cover" />
+    <script src="/assets/zoom_lock.js?v=20261014a"></script>
+    <title>Score a match · CricketClubApp</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Sora:wght@400;600;700;800&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/assets/tailwind.css" />
+    <link rel="stylesheet" href="/assets/styles.css?v=20261016g" />
+    <link rel="stylesheet" href="/assets/live.css" />
+    <link rel="stylesheet" href="/assets/quick_score.css?v=20261011a" />
+  </head>
+  <!-- Guest scoring (no sign-in). README: MD/README.md -> "Line-ups and guest matches". -->
+  <body class="quick-score-page quick-score-guest" data-mode="guest">
+    <main class="page-shell">
+      <div data-public-header></div>
+      <div id="qsApp" class="qs-app" aria-live="polite">
+        <div class="qs-loading">Loading…</div>
+      </div>
+    </main>
+
+    <div id="qsModal" class="qs-modal" hidden>
+      <div class="qs-modal-card" role="dialog" aria-modal="true" aria-labelledby="qsModalTitle">
+        <h2 id="qsModalTitle"></h2>
+        <div id="qsModalBody"></div>
+        <div class="qs-modal-actions">
+          <button type="button" class="qs-btn ghost" data-modal-cancel>Cancel</button>
+          <button type="button" class="qs-btn primary" data-modal-ok>Save</button>
+        </div>
+      </div>
+    </div>
+
+    <script src="/assets/public_header.js?v=20261018a"></script>
+    <script src="/assets/quick_score.js?v=20261016a"></script>
+  </body>
+</html>

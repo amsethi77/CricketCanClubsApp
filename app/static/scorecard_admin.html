@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, viewport-fit=cover" />
+    <script src="/assets/zoom_lock.js?v=20261014a"></script>
+    <title>Scorecard checks · CricketClubApp</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Sora:wght@400;600;700;800&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/assets/tailwind.css" />
+    <link rel="stylesheet" href="/assets/styles.css?v=20261016g" />
+    <link rel="stylesheet" href="/assets/live.css" />
+    <link rel="stylesheet" href="/assets/scorecards.css?v=20261011b" />
+    <link rel="stylesheet" href="/assets/sports-system.css?v=20260926a" />
+  </head>
+  <body class="public-fixtures-page scorecards-page scorecard-admin-page">
+    <!-- Site admin: uploads that need checking + duplicate clean-up. README: "Scorecard uploads: checks, review and duplicates". -->
+    <main class="page-shell fixtures-shell">
+      <div data-public-header></div>
+      <section class="panel onboarding-panel fixtures-hero-panel">
+        <div class="stack-card">
+          <p class="section-kicker">Site admin</p>
+          <h1 class="fixtures-title">Scorecard checks</h1>
+          <p class="lede">Uploads that need a second look, and uploads that are the same scorecard more than once. Nothing is deleted: duplicates are hidden from scorecards and stats.</p>
+          <p id="scaMsg" class="sc-check-msg" role="status"></p>
+        </div>
+      </section>
+      <section class="panel onboarding-panel fixtures-list-panel">
+        <div class="stack-card">
+          <div class="panel-head compact-head"><div><p class="section-kicker">Review</p><h2>Waiting for review</h2></div><span id="scaWaitBadge" class="signin-widget-pill">…</span></div>
+          <div id="scaWaiting"></div>
+        </div>
+      </section>
+      <section class="panel onboarding-panel fixtures-list-panel">
+        <div class="stack-card">
+          <div class="panel-head compact-head"><div><p class="section-kicker">Clean-up</p><h2>Duplicate scorecards</h2></div><span id="scaDupBadge" class="signin-widget-pill">…</span></div>
+          <p class="sc-check-lede">Matched by the same photo file, the same photo saved again, the same file name, or the same date, teams and scores. Ticked uploads are hidden; the one marked Keep stays.</p>
+          <div id="scaDups"></div>
+        </div>
+      </section>
+    </main>
+    <script src="/assets/public_header.js?v=20261018a"></script>
+    <script src="/assets/scorecard_admin.js?v=20261016a"></script>
+  </body>
+</html>

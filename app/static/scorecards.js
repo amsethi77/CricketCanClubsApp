@@ -186,4 +186,24 @@
   });
 
   load();
+  // Captains, club admins and site admins see "Upload a scorecard" (README: "Scorecard uploads: checks, review and duplicates").
+  (async () => {
+    let token = "";
+    try {
+      token = localStorage.getItem("cricketClubAppAuthToken") || "";
+    } catch (error) {
+      token = "";
+    }
+    if (!token) return;
+    try {
+      const response = await fetch("/api/auth/me", { headers: { "X-Auth-Token": token } });
+      if (!response.ok) return;
+      const data = await response.json();
+      if ((data.user?.permissions || []).includes("score_matches")) document.getElementById("scUploadCta").hidden = false;
+      const role = String(data.user?.effective_role || data.user?.role || "");
+      if (role === "superadmin") document.getElementById("scChecksCta").hidden = false;
+    } catch (error) {
+      /* signed out or offline: no upload button */
+    }
+  })();
 })();
