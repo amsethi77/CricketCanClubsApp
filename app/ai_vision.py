@@ -26,6 +26,9 @@ model if installed, else Tesseract) and the "Type in the scorecard" form.
 from __future__ import annotations
 
 import base64
+import contextvars
+import datetime as _dt
+import difflib
 import io
 import json
 import logging
@@ -154,6 +157,8 @@ How a paper scorecard is laid out:
 - "PLAYED BETWEEN ... AND ..." gives the two teams; "DAY & DATE" the date; "VENUE"; "INNINGS OF" says who batted.
 - Each batting row: batter name, the ball-by-ball scribbles (1 4 . 2 6 ...), then HOW OUT, BOWLER and the TOTAL column.
   Use the TOTAL column for runs. Only if TOTAL is empty, add up that batter's ball-by-ball runs.
+  The TOTAL column is often written as RUNS(BALLS): "34(42)" = 34 runs off 42 balls, "4(17)" = 4 runs off 17 balls.
+  Put the number in brackets in "balls". Read bracket digits as carefully as the runs (1 and 7, 2 and 7 look alike).
 - HOW OUT words: caught / c, bowled / b, LBW, run out, stumped / st, not out / NO, retired out, retired hurt,
   did not bat (a name with nothing written). Put the dismissal type in "type" and the bowler's name in "bowler".
 - In HOW OUT, "RO" (or "R.O.", "R/O") on this club's cards means "{ro}" - write "{ro}" for it.
@@ -165,18 +170,27 @@ How a paper scorecard is laid out:
   extras don't equal the grand total, one of the batters' TOTAL numbers is probably misread - look again
   (3 and 8, 1 and 7, 0 and 6 are easily confused). Only if no extras boxes are filled in at all may you use
   extras = grand total minus the batters' runs.
-- The bowling analysis lists the other team's bowlers. Copy names; copy overs / maidens / runs / wickets only when
-  the BOWLING SUMMARY columns are filled in, otherwise leave them null.
+- The bowling analysis lists the other team's bowlers. If the BOWLING SUMMARY columns (overs / maidens / runs /
+  wickets) are filled in, copy them. If they are empty, work them out from the BOWLING ANALYSIS boxes: each box with
+  marks in it is one over; runs = every digit in the box plus 1 for each wide (wd / w+) and no ball (nb), dots = 0;
+  W in a box = a wicket; a box with only dots is a maiden. Also count each bowler's wickets in the batting BOWLER
+  column (caught, bowled, LBW, stumped - not run out or retired) and make the two agree.
 - A page usually holds ONE innings. Only add a second innings if it is really on the photo.
 
 Double-checking (important):
 - For every batter also add up the runs in their ball-by-ball scribbles (dots = 0, | = 1) and put it in
   "ball_runs_sum" (null if you can't read them). It should match the TOTAL column; if it doesn't, look at both again.
+- Also count that batter's deliveries in the scribbles (every dot, digit and W is one ball; ignore crossed-out lines)
+  and put it in "ball_count". It should match the balls in brackets; if not, look at the brackets again.
+- Dates: read the year digit by digit (0 and 6, 1 and 7 look alike). Write the date as YYYY-MM-DD.
 - Set "unsure": true on any batter (or on extras) where a digit is hard to read, so a person checks it.
 
 Rules:
 - Never invent names or numbers. If you can't read something, use null. Spell names as written (fix obvious
   letter mix-ups only, e.g. "SARABJEET").
+- Read each name letter by letter, especially the first letter. In handwritten capitals H and M, K and R, U and V,
+  I and L, S and 5, O and D look alike: H has two straight sides and one bar, M has a pointed middle. Prefer the
+  spelling that is a common first name or surname (e.g. "HESHAD", not "MESHAD").
 - Known players of this club (use these spellings when a written name clearly matches one): {roster}
 - Club that uploaded the photo: {club}. When the card names this club in any spelling (e.g. "HEART LAKE"), write
   it exactly as "{club}". If the other team's name isn't written, use null for it - never put this club twice.
@@ -190,13 +204,150 @@ Reply with ONLY this JSON, no other text:
       "inning_number": 1,
       "batting_team": "...", "bowling_team": "...",
       "summary": {{"runs": 0, "wickets": 0, "overs": null, "balls": null}},
-      "batting": [{{"player": {{"name": "..."}}, "runs": 0, "balls": null, "fours": null, "sixes": null, "dismissal": {{"type": "caught", "fielder": null, "bowler": "...", "written_as": "CAUGHT"}}, "ball_runs_sum": null, "unsure": false}}],
+      "batting": [{{"player": {{"name": "..."}}, "runs": 0, "balls": null, "fours": null, "sixes": null, "dismissal": {{"type": "caught", "fielder": null, "bowler": "...", "written_as": "CAUGHT"}}, "ball_runs_sum": null, "ball_count": null, "unsure": false}}],
       "bowling": [{{"player": {{"name": "..."}}, "overs": null, "maidens": null, "runs_conceded": null, "wickets": null}}],
       "extras": {{"wides": null, "no_balls": null, "byes": null, "leg_byes": null, "penalties": null, "total": 0, "written_as": "exactly what is written in the extras boxes, e.g. 'W 52'", "unsure": false}}
     }}
   ],
   "validation": {{"inning_1_total": 0, "inning_2_total": null, "expected_result": "", "notes": "anything you were unsure about"}}
 }}"""
+
+
+# ---------------------------------------------------------------------------
+# "Training" from the club's own data (README "How the AI reader learns"):
+#   - known names: roster + aliases + players on the club's earlier scorecards + names corrected before,
+#   - corrections: wrong -> right names the club fixed with Edit (learned in app/main.py),
+#   - photo date: when the photo was taken / uploaded, so the year isn't misread.
+# Passed by read_scorecard(); the read_* functions build the prompt with _prompt().
+# ---------------------------------------------------------------------------
+_HINTS: contextvars.ContextVar[dict[str, Any]] = contextvars.ContextVar("scorecard_hints", default={})
+
+
+def _prompt(roster: list[str] | None, club_name: str) -> str:
+    hints = _HINTS.get() or {}
+    text = PROMPT.format(roster=", ".join((roster or [])[:120]) or "(none)", club=club_name or "(unknown)", ro=ro_meaning())
+    extra: list[str] = []
+    photo_date = str(hints.get("photo_date") or "")[:10]
+    if photo_date:
+        extra.append(
+            f"- The photo was taken/uploaded on {photo_date}. The match was played on or before that day, usually within "
+            f"a few days. If a digit of the year is hard to read it is most likely {photo_date[:4]}. Never give a date after {photo_date}."
+        )
+    corrections = hints.get("corrections") or {}
+    if corrections:
+        pairs = "; ".join(f'"{wrong}" is really "{right}"' for wrong, right in list(corrections.items())[:60])
+        extra.append(f"- Names this club corrected on earlier cards (use the corrected spelling): {pairs}.")
+    known = [name for name in hints.get("known_names") or [] if name not in (roster or [])]
+    if known:
+        extra.append("- Other players seen on this club's scorecards (opponents too): " + ", ".join(known[:150]) + ".")
+    if not extra:
+        return text
+    return text + "\n\nExtra help for this club:\n" + "\n".join(extra)
+
+
+def _all_known_names(roster: list[str] | None) -> list[str]:
+    hints = _HINTS.get() or {}
+    names = list(roster or []) + list(hints.get("known_names") or []) + list((hints.get("corrections") or {}).values())
+    seen: dict[str, str] = {}
+    for name in names:
+        clean = " ".join(str(name or "").split())
+        if len(clean) >= 3 and clean.lower() not in seen:
+            seen[clean.lower()] = clean
+    return list(seen.values())
+
+
+def _apply_learning(template: dict[str, Any], roster: list[str] | None) -> list[str]:
+    """Fix names with the club's earlier corrections and near-miss known names; check the date against the
+    photo date and balls against the ball-by-ball count. Returns notes for the person checking."""
+    hints = _HINTS.get() or {}
+    notes: list[str] = []
+    corrections = {str(k).strip().lower(): str(v).strip() for k, v in (hints.get("corrections") or {}).items() if str(v).strip()}
+    known = _all_known_names(roster)
+    known_lower = {name.lower(): name for name in known}
+
+    def fix(name: Any) -> Any:
+        text = " ".join(str(name or "").split())
+        if not text:
+            return name
+        low = text.lower()
+        if low in corrections:
+            if corrections[low] != text:
+                notes.append(f"'{text}' was changed to '{corrections[low]}' (corrected on an earlier card).")
+            return corrections[low]
+        if low in known_lower or len(low) < 4:
+            return text
+        match = difflib.get_close_matches(low, list(known_lower), n=1, cutoff=0.8)
+        if match:
+            notes.append(f"'{text}' was read; changed to the known player '{known_lower[match[0]]}'. Check it against the photo.")
+            return known_lower[match[0]]
+        return text
+
+    for inn in template.get("innings") or []:
+        if not isinstance(inn, dict):
+            continue
+        for row in (inn.get("batting") or []) + (inn.get("bowling") or []):
+            if isinstance(row, dict) and isinstance(row.get("player"), dict) and row["player"].get("name"):
+                fixed = fix(row["player"]["name"])
+                if fixed != row["player"]["name"]:
+                    row["player"]["name"] = fixed
+                    row["player"]["normalized_name"] = str(fixed).lower()
+        for row in inn.get("batting") or []:
+            dismissal = row.get("dismissal") if isinstance(row, dict) and isinstance(row.get("dismissal"), dict) else None
+            if dismissal:
+                for key in ("bowler", "fielder"):
+                    if dismissal.get(key):
+                        dismissal[key] = fix(dismissal[key])
+
+    # Balls and bowlers' wickets from what is already on the card (no guessing):
+    #  - a batter with no balls in brackets gets the ball-by-ball count,
+    #  - a bowler with no wickets gets the dismissals credited to them in the batting BOWLER column.
+    credited = ("caught", "bowled", "lbw", "stumped", "hit wicket", "c ", "b ", "st ")
+    for inn in template.get("innings") or []:
+        if not isinstance(inn, dict):
+            continue
+        wickets: dict[str, int] = {}
+        for row in inn.get("batting") or []:
+            if not isinstance(row, dict):
+                continue
+            count = row.get("ball_count")
+            if row.get("balls") in (None, "", 0) and isinstance(count, int) and count > 0:
+                row["balls"] = count
+            dismissal = row.get("dismissal") if isinstance(row.get("dismissal"), dict) else {}
+            kind = str(dismissal.get("type") or "").strip().lower()
+            bowler = " ".join(str(dismissal.get("bowler") or "").split()).lower()
+            if bowler and (kind.startswith(credited) or kind in {"c", "b", "st"}) and "run" not in kind and "retired" not in kind:
+                wickets[bowler] = wickets.get(bowler, 0) + 1
+        for row in inn.get("bowling") or []:
+            if not isinstance(row, dict) or not isinstance(row.get("player"), dict):
+                continue
+            name = " ".join(str(row["player"].get("name") or "").split()).lower()
+            found = wickets.get(name)
+            if found is None:
+                continue
+            if row.get("wickets") in (None, ""):
+                row["wickets"] = found
+            elif isinstance(row.get("wickets"), int) and row["wickets"] != found:
+                notes.append(f"Check {row['player'].get('name')}'s wickets: the bowling figures say {row['wickets']}, the batting card credits {found}.")
+
+    # Date: never after the photo; a year far from the photo's year with a day/month just before it was misread.
+    photo_text = str(hints.get("photo_date") or "")[:10]
+    match_info = template.get("match") if isinstance(template.get("match"), dict) else {}
+    try:
+        photo_day = _dt.date.fromisoformat(photo_text) if photo_text else None
+        card_day = _dt.date.fromisoformat(str(match_info.get("date") or "")[:10]) if match_info.get("date") else None
+    except ValueError:
+        photo_day = card_day = None
+    if photo_day and card_day and card_day.year != photo_day.year:
+        try:
+            same_year = card_day.replace(year=photo_day.year)
+        except ValueError:
+            same_year = None
+        if same_year and 0 <= (photo_day - same_year).days <= 45:
+            notes.append(f"The year was read as {card_day.year}, but the photo is from {photo_day:%d %b %Y}; changed the date to {same_year:%d %b %Y}. Check it.")
+            match_info["date"] = same_year.isoformat()
+        elif card_day > photo_day:
+            notes.append(f"Check the date: {card_day:%d %b %Y} is after the photo was taken ({photo_day:%d %b %Y}).")
+    return notes
 
 
 def _parse_json(text: str) -> dict[str, Any] | None:
@@ -263,11 +414,34 @@ def _normalise(template: dict[str, Any], model: str) -> dict[str, Any] | None:
     return template
 
 
-def read_scorecard(path: Path, *, roster: list[str] | None = None, club_name: str = "", timeout: float = 120.0) -> dict[str, Any]:
+def read_scorecard(
+    path: Path,
+    *,
+    roster: list[str] | None = None,
+    club_name: str = "",
+    timeout: float = 120.0,
+    known_names: list[str] | None = None,
+    corrections: dict[str, str] | None = None,
+    photo_date: str = "",
+) -> dict[str, Any]:
     """{"template": {...}, "model": ...} on success, {"error": "..."} otherwise. Never raises.
 
+    known_names / corrections / photo_date are what the app learned about this club (see _prompt).
     If the batters' runs + extras don't add up to the total, the model is asked once more to look at
     the photo again, told exactly which numbers don't add up (a second "checking" pass)."""
+    token = _HINTS.set({"known_names": list(known_names or []), "corrections": dict(corrections or {}), "photo_date": photo_date or ""})
+    try:
+        result = _read_scorecard(path, roster=roster, club_name=club_name, timeout=timeout)
+        template = result.get("template")
+        if template:
+            learned = _apply_learning(template, roster)
+            result["notes"] = learned + [note for note in result.get("notes") or [] if note not in learned]
+        return result
+    finally:
+        _HINTS.reset(token)
+
+
+def _read_scorecard(path: Path, *, roster: list[str] | None, club_name: str, timeout: float) -> dict[str, Any]:
     first = _read_once(Path(path), roster=roster, club_name=club_name, timeout=timeout)
     template = first.get("template")
     if not template:
@@ -354,6 +528,11 @@ def review_notes(template: dict[str, Any]) -> list[str]:
             runs, ball_sum = row.get("runs"), row.get("ball_runs_sum")
             if isinstance(runs, int) and isinstance(ball_sum, int) and abs(runs - ball_sum) > 2:
                 notes.append(f"Check {name}: the runs column reads {runs}, but the ball-by-ball adds up to {ball_sum}.")
+            balls, ball_count = row.get("balls"), row.get("ball_count")
+            if isinstance(balls, int) and isinstance(ball_count, int) and ball_count > 0 and abs(balls - ball_count) > 2:
+                notes.append(f"Check {name}'s balls: the card was read as {balls} balls, but the ball-by-ball count is {ball_count}.")
+            if isinstance(runs, int) and isinstance(ball_sum, int) and abs(runs - ball_sum) > 2:
+                pass
             elif row.get("unsure") is True:
                 notes.append(f"Check {name}'s runs ({runs}) against the photo: the handwriting was hard to read.")
             dismissal = row.get("dismissal") if isinstance(row.get("dismissal"), dict) else {}
@@ -404,7 +583,7 @@ def _read_with_ollama(path: Path, *, roster: list[str] | None, club_name: str, e
         _, data = _image_payload(path)
     except Exception as exc:
         return {"error": f"Couldn't open the photo: {exc}"}
-    prompt = PROMPT.format(roster=", ".join((roster or [])[:120]) or "(none)", club=club_name or "(unknown)", ro=ro_meaning()) + extra
+    prompt = _prompt(roster, club_name) + extra
     body = {
         "model": model,
         "messages": [{"role": "user", "content": prompt, "images": [data]}],
@@ -436,7 +615,7 @@ def _read_with_gemini(path: Path, *, roster: list[str] | None, club_name: str, t
         media_type, data = _image_payload(path)
     except Exception as exc:
         return {"error": f"Couldn't open the photo: {exc}"}
-    prompt = PROMPT.format(roster=", ".join((roster or [])[:120]) or "(none)", club=club_name or "(unknown)", ro=ro_meaning()) + extra
+    prompt = _prompt(roster, club_name) + extra
     body = {
         "contents": [{"role": "user", "parts": [{"inline_data": {"mime_type": media_type, "data": data}}, {"text": prompt}]}],
         "generationConfig": {"temperature": 0, "responseMimeType": "application/json"},
@@ -511,7 +690,7 @@ def _read_with_claude(path: Path, *, roster: list[str] | None, club_name: str, t
         media_type, data = _image_payload(Path(path))
     except Exception as exc:
         return {"error": f"Couldn't open the photo: {exc}"}
-    prompt = PROMPT.format(roster=", ".join((roster or [])[:120]) or "(none)", club=club_name or "(unknown)", ro=ro_meaning()) + extra
+    prompt = _prompt(roster, club_name) + extra
     body = {
         "model": model,
         "max_tokens": 4096,

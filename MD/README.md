@@ -240,6 +240,7 @@ This section captures the user requirements in the order they were given and ref
 132. The AI Assistant must answer basic questions (greetings, cricket rules, how to use the app) as well as club questions, never ask a signed-in person to sign in, and open as a full-height panel on the right.
 133. The assistant should look like it is thinking ("…" for a few seconds) and then type its answer; the app tour is only for first-time sign-ins, not an account-menu item.
 134. Re-processing scorecard images in the Admin Center must extract the handwritten scorecard (AI reader), as scorecard extraction is the main feature.
+135. Train the AI to read scorecards properly: learn names people correct (e.g. Meshad → Heshad), read RUNS(BALLS) like 4(17) as 4 runs off 17 balls, and never misread the year (2026 read as 2020).
 131. Find duplicate scorecards smartly with AI (Gemini, or Ollama offline), not only exact matches.
 
 ## Current behavior summary
@@ -572,6 +573,16 @@ This section documents the work done in September 2026. See "Change log" at the 
 - The panel header says "Powered by Google Gemini" when the key is set (`chat_provider` in `GET /api/llm/status`), otherwise "Ask me anything or tell me what to do" (no more "AI model offline"); answers are labelled "AI Assistant" instead of "Heuristic fallback"; **bold** in answers is shown bold.
 - **Typing feel (Oct 16):** after you send a message the assistant shows animated thinking dots for at least 1.2 seconds, then the reply types out (about 1.5 seconds, any length); links / Confirm buttons appear when the text is finished (`thinkAtLeast` / `typeOutLast` in `static/muse.js` and `static/muse_public.js`, `.muse-dots` in `muse.css`). Respects "reduce motion".
 
+### How the AI reader learns (Oct 19 2026)
+- Request: "train AI to read properly", after the Heartlake vs Afghans card was read with Meshad instead of Heshad, Keshav 4(17) as 12 balls, and the year 2026 as 2020.
+- Better instructions (`app/ai_vision.py` PROMPT): the TOTAL column is RUNS(BALLS), so "4(17)" = 4 runs off 17 balls; the AI also counts the balls in each batter's ball-by-ball scribbles (`ball_count`); the year is read digit by digit.
+- Extra help for each club (`_prompt`): the photo date (the match is on or before it, usually the same year), names this club corrected before, and other players seen on the club's published scorecards (`_ai_known_names`: roster, aliases, approved cards).
+- Learns from fixes: when someone saves a card with **Edit** / "Type in the scorecard" (`POST /api/scorecards/{id}/manual`) or the Admin Center JSON box (`POST /api/admin/archive/{id}/review`), names the AI misread and the person changed (same innings and row, similar spelling) are saved per club in the `app_ai_corrections` table (`_learn_ai_corrections`). The save message says "The AI will remember: Heshad".
+- After every read (`_apply_learning`): corrected names are swapped in automatically; names very close to a known player (80% match) are changed to that player; a year far from the photo's year is fixed when the same day/month is just before the photo date; a date after the photo is flagged. Each change is listed in the review notes so it can be checked.
+- No typing needed (Oct 19, request: "I don't want to edit manually, train the model to run it properly"): the AI is told to read names letter by letter (H/M, K/R, U/V look alike in capitals), and to work out bowling overs / runs / wickets from the BOWLING ANALYSIS boxes when the BOWLING SUMMARY is empty. After the read, each bowler's wickets are filled from the batting card's BOWLER column, a batter with no balls gets the ball-by-ball count, and the date read sets the season (2026 Season).
+- Photo date (`_photo_date`): a date in the phone's file name ("WhatsApp Image 2026-10-18 …", "IMG_20261018"), else the camera date, else the upload time for photos uploaded in the app. A computer's file-modified time is not used, so old photos copied later keep their real year.
+- Balls check: if a batter's balls and the ball-by-ball count differ by more than 2, the AI reads the photo a second time, and a note "Check Keshav's balls…" stays if it still differs.
+
 ### Re-extract uses the AI reader (Oct 16 2026)
 - Request (Amit, Oct 15): "Updated the admin center to re-process the images. Please check as the scorecards are not getting extracted. This needs to be fixed as this is the main feature."
 - Cause: **Re-extract** in the Admin Center (`POST /api/archive/{id}/extract`) only ran the basic Tesseract reader, which can't read handwriting, so the review JSON came back empty (`null` runs, `did_not_bat`). The AI reader was only used on new uploads and the "Read with AI" button.
@@ -828,6 +839,9 @@ Model (soft launch, Oct 2026): keep the core cricket experience free; one paid p
 - 2026-10-16: Plan restrictions: no AI before sign-in (public assistant and guest AI Scorer); AI reading of scorecard photos is Pro, or the Free plan's one free AI try. See "Plans: what each group can use".
 - 2026-10-16: AI Assistant answers greetings, cricket and app questions with Gemini (`app/ai_chat.py`), uses club data for club questions; no sign-in prompts when signed in on public pages; full-height right-side panel. See "AI Assistant answers (Gemini)".
 - 2026-10-16: AI Assistant shows thinking dots, then types its reply; "Take the app tour" removed from the account menu (tour is only shown once to first-time users).
+- 2026-10-19: AI reader reads without manual edits: name letter-by-letter rule, bowling figures from the analysis boxes, bowlers' wickets from the batting card, photo date from the WhatsApp/IMG file name, season follows the date read.
+- 2026-10-19: AI reader learns: RUNS(BALLS) rule, ball-by-ball count check, photo date for the year, known names, and name fixes saved per club (`app_ai_corrections`) and used on the next read. See "How the AI reader learns".
+- 2026-10-19: Fixed "Upload failed." on /scorecards/upload when AI reading is on (the plan check used an undefined `current_club_id`; now `upload_club_id`).
 - 2026-10-18: Merged Amit's Oct 16 commit (local Ollama vision reader with focused crops in `cricket_store.py`, "AI Muse" renamed "AI Assistant" across the app, tests). Upload/Re-extract order kept: Gemini AI reader first, then Amit's local reader; the local reader now also fills `review_template_json`.
 - 2026-10-17: Admin Center Re-extract shows progress and the result on the scorecard card and no longer runs twice; Scorecard checks also lists "Ready for review" uploads.
 - 2026-10-16: Merged Amit's Oct 15 Admin Center review (snapshot + JSON + original image, HEIC previews, configurable default plan, now `pro` / `free`) with the soft-launch work; Re-extract now uses the AI reader; AI result kept as the reviewed copy; 2-innings card fix. See "Re-extract uses the AI reader".

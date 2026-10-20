@@ -5125,7 +5125,7 @@ def _admin_center_html(request: Request) -> HTMLResponse:
           </section>
         </div>
         <script src="/assets/multipage.js?v=20261018a"></script>
-        <script src="/assets/scorecard.js?v=20261016g"></script>
+        <script src="/assets/scorecard.js?v=20261019a"></script>
         <script src="/assets/admin_center.js?v=20261017a"></script>
       </body>
     </html>
@@ -9885,7 +9885,12 @@ def save_archive_review(upload_id: str, request: ArchiveReviewRequest, x_auth_to
     club = _selected_club(store, current_club_id)
     upload["club_id"] = upload.get("club_id") or club.get("id", "")
     upload["club_name"] = upload.get("club_name") or club.get("name", "")
+    ai_read = _scorecard_json(upload.get("review_source_json")) if upload.get("review_source_json") else None
     _apply_archive_review_text(store, upload, request.text, user_row=user_row)
+    try:
+        _learn_ai_corrections(str(upload.get("club_id") or ""), ai_read, json.loads(request.text or "{}"))
+    except (ValueError, TypeError):
+        pass
     save_store(store)
     refreshed = load_store()
     updated = get_archive_or_404(refreshed, upload_id)
@@ -10014,7 +10019,7 @@ async def upload_scorecard(
     # first AI reading uses their one free AI try. Otherwise the photo is saved and they type it in.
     ai_note = ""
     if ai_vision.enabled():
-        if _ai_allowed(user_row, current_club_id, "ai_extraction", f"scorecard:{record['id']}"):
+        if _ai_allowed(user_row, upload_club_id, "ai_extraction", f"scorecard:{record['id']}"):
             ai_note = _scorecard_ai_read(store, record, destination, selected_club)
         else:
             ai_note = "AI reading of photos is a Pro feature (your free AI try is used)."
@@ -10058,10 +10063,136 @@ async def upload_scorecard(
             }
 
 
+# ---------------------------------------------------------------------------
+# How the AI reader learns (README "How the AI reader learns", Oct 2026)
+# When someone fixes a name the AI misread (Edit / "Type in the scorecard"), the wrong -> right pair is
+# saved for that club in app_ai_corrections. The next photo read for the club gets those corrections,
+# every known player name and the photo date, so the same mistake is fixed automatically.
+# ---------------------------------------------------------------------------
+def _ai_corrections_table(connection: sqlite3.Connection) -> None:
+    connection.execute(
+        """CREATE TABLE IF NOT EXISTS app_ai_corrections (
+            club_id TEXT NOT NULL,
+            kind TEXT NOT NULL DEFAULT 'name',
+            wrong TEXT NOT NULL,
+            right_value TEXT NOT NULL,
+            times INTEGER NOT NULL DEFAULT 1,
+            updated_at TEXT NOT NULL,
+            PRIMARY KEY (club_id, kind, wrong)
+        )"""
+    )
+
+
+def _ai_corrections(club_id: str) -> dict[str, str]:
+    try:
+        with _auth_connection() as connection:
+            _ai_corrections_table(connection)
+            rows = connection.execute(
+                "SELECT wrong, right_value FROM app_ai_corrections WHERE club_id = ? AND kind = 'name' ORDER BY times DESC",
+                (str(club_id or ""),),
+            ).fetchall()
+        return {str(row["wrong"]): str(row["right_value"]) for row in rows}
+    except Exception:
+        logger.exception("Could not read AI corrections")
+        return {}
+
+
+def _template_names(template: Any) -> list[list[tuple[str, int, str]]]:
+    """Per innings: (section, row number, name) for every batting and bowling row."""
+    out: list[list[tuple[str, int, str]]] = []
+    if not isinstance(template, dict):
+        return out
+    for inn in template.get("innings") or []:
+        rows: list[tuple[str, int, str]] = []
+        if isinstance(inn, dict):
+            for section in ("batting", "bowling"):
+                for number, row in enumerate(inn.get(section) or []):
+                    player = row.get("player") if isinstance(row, dict) else None
+                    name = (player.get("name") if isinstance(player, dict) else None) or (row.get("name") if isinstance(row, dict) else None)
+                    if name:
+                        rows.append((section, number, " ".join(str(name).split())))
+        out.append(rows)
+    return out
+
+
+def _learn_ai_corrections(club_id: str, old_template: Any, new_template: Any) -> list[tuple[str, str]]:
+    """Compare what the AI read with what a person saved; remember names that were fixed (same innings,
+    same row, similar spelling). Returns the (wrong, right) pairs saved."""
+    if not club_id or not isinstance(old_template, dict) or not isinstance(new_template, dict):
+        return []
+    import difflib
+
+    pairs: dict[str, str] = {}
+    for old_rows, new_rows in zip(_template_names(old_template), _template_names(new_template)):
+        new_by_slot = {(section, number): name for section, number, name in new_rows}
+        for section, number, wrong in old_rows:
+            right = new_by_slot.get((section, number))
+            if not right or right.lower() == wrong.lower():
+                continue
+            if difflib.SequenceMatcher(None, wrong.lower(), right.lower()).ratio() >= 0.5:
+                pairs[wrong.lower()] = right
+    if not pairs:
+        return []
+    try:
+        with _auth_connection() as connection:
+            _ai_corrections_table(connection)
+            for wrong, right in pairs.items():
+                connection.execute(
+                    """INSERT INTO app_ai_corrections (club_id, kind, wrong, right_value, times, updated_at)
+                       VALUES (?, 'name', ?, ?, 1, ?)
+                       ON CONFLICT(club_id, kind, wrong) DO UPDATE SET right_value = excluded.right_value,
+                       times = app_ai_corrections.times + 1, updated_at = excluded.updated_at""",
+                    (club_id, wrong, right, now_iso()),
+                )
+        logger.info("AI reader learned %s name fix(es) for club %s: %s", len(pairs), club_id, pairs)
+    except Exception:
+        logger.exception("Could not save AI corrections")
+        return []
+    return list(pairs.items())
+
+
+def _ai_known_names(store: dict[str, Any], club: dict[str, Any]) -> list[str]:
+    """Roster names + their aliases + names on this club's published scorecards (players from other teams too)."""
+    club_id = str((club or {}).get("id") or "")
+    names: set[str] = set()
+    for member in store.get("members", []) or []:
+        ids = {str(item.get("club_id") or "") for item in member.get("club_memberships") or [] if isinstance(item, dict)}
+        ids.add(str(member.get("primary_club_id") or ""))
+        if club_id in ids:
+            aliases = member.get("aliases") or []
+            if isinstance(aliases, str):
+                aliases = aliases.split(",")
+            names.update(str(alias).strip() for alias in aliases if str(alias).strip())
+    for upload in store.get("archive_uploads", []) or []:
+        if str(upload.get("club_id") or "") != club_id or str(upload.get("status") or "").lower() not in {"approved", "published"}:
+            continue
+        template = upload.get("extraction_template")
+        if not isinstance(template, dict):
+            template = _scorecard_json(upload.get("review_template_json")) if upload.get("review_template_json") else None
+        for rows in _template_names(template):
+            names.update(name for _, _, name in rows)
+    return sorted(names, key=str.lower)[:400]
+
+
+def _photo_date(record: dict[str, Any]) -> str:
+    for key in ("photo_taken_at", "created_at", "uploaded_at"):
+        value = str(record.get(key) or "")[:10]
+        if re.match(r"^\d{4}-\d{2}-\d{2}$", value):
+            return value
+    return ""
+
+
 def _scorecard_ai_read(store: dict[str, Any], record: dict[str, Any], path: Path, club: dict[str, Any]) -> str:
     """Fill `record` from the AI vision model. Returns "" on success, else the reason it didn't work."""
     roster = _club_member_names(store, club) if club else []
-    result = ai_vision.read_scorecard(Path(path), roster=roster, club_name=str((club or {}).get("name") or ""))
+    result = ai_vision.read_scorecard(
+        Path(path),
+        roster=roster,
+        club_name=str((club or {}).get("name") or ""),
+        known_names=_ai_known_names(store, club) if club else [],
+        corrections=_ai_corrections(str((club or {}).get("id") or record.get("club_id") or "")),
+        photo_date=_photo_date(record),
+    )
     template = result.get("template")
     if not template:
         logger.warning("AI scorecard read skipped for %s: %s", record.get("id"), result.get("error"))
@@ -10367,6 +10498,8 @@ def scorecard_upload_manual(upload_id: str, request: ScorecardManualRequest, x_a
     template["meta"].update({"source": "manual-entry", "processed_by": f"Typed in by {user_row['display_name'] or 'a scorer'}", "confidence": "Typed in", "status": "template"})
     if not isinstance(template.get("innings"), list) or not template["innings"]:
         raise HTTPException(status_code=400, detail="Add at least one innings.")
+    # Learn from the fix: names the AI misread and the person corrected (README "How the AI reader learns").
+    learned = _learn_ai_corrections(str(upload.get("club_id") or ""), _scorecard_json(upload.get("review_source_json")) if upload.get("review_source_json") else None, template)
     imported = parse_imported_extraction(store, json.dumps(template))
     upload.update(imported)
     upload["ocr_processed_at"] = now_iso()
@@ -10380,8 +10513,10 @@ def scorecard_upload_manual(upload_id: str, request: ScorecardManualRequest, x_a
     if checks["needs_review"]:
         _scorecard_check_alerts(get_archive_or_404(refreshed, str(upload.get("id"))), checks, user_row)
     return {
-        "message": "Saved. A site admin will check the points listed." if checks["needs_review"] else "Saved. Everything checks out: tap Publish if it matches the photo.",
+        "message": ("Saved. A site admin will check the points listed." if checks["needs_review"] else "Saved. Everything checks out: tap Publish if it matches the photo.")
+        + (f" The AI will remember: {', '.join(right for _, right in learned)}." if learned else ""),
         "checks": {key: value for key, value in checks.items() if key != "scorecard"},
+        "learned": [{"wrong": wrong, "right": right} for wrong, right in learned],
     }
 
 
