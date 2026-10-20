@@ -52,7 +52,7 @@ class DefaultPlanTests(unittest.TestCase):
 
         self.assertEqual(
             subscriptions.effective_plan(self.connection, user)["plan"],
-            "pro",
+            "premium",
         )
 
         os.environ["CRICKETCLUBAPP_DEFAULT_PLAN"] = "free"
@@ -80,7 +80,7 @@ class DefaultPlanTests(unittest.TestCase):
 
         self.assertEqual(
             subscriptions.effective_plan(self.connection, user)["plan"],
-            "pro",
+            "premium",
         )
 
     def test_invalid_default_plan_is_rejected(self) -> None:

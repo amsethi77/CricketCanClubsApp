@@ -6,7 +6,7 @@
   // Public AI Assistant (read-only chat for signed-out visitors). See README.md -> "Public AI Assistant".
   if (!document.querySelector('script[src^="/assets/muse_public.js"]')) {
     const muse = document.createElement("script");
-    muse.src = "/assets/muse_public.js?v=20261018a";
+    muse.src = "/assets/muse_public.js?v=20261015a";
     muse.defer = true;
     document.head.appendChild(muse);
   }
@@ -21,12 +21,11 @@
   if (!mount) return;
 
   try {
-    const response = await fetch('/assets/public_header.html?v=20261016b', {
+    const response = await fetch('/assets/public_header.html?v=20260929a', {
       cache: 'no-store',
     });
     if (!response.ok) return;
     mount.innerHTML = await response.text();
-    showSignedInLinks(mount);
 
     const path = (window.location.pathname || '/').replace(/\/+$/, '') || '/';
     const activeKey =
@@ -46,9 +45,7 @@
                   ? 'register'
                   : path === '/pricing'
                     ? 'pricing'
-                    : path === '/score'
-                      ? 'score'
-                      : null;
+                    : null;
 
     mount.querySelectorAll('[data-public-nav]').forEach((link) => {
       const isActive = activeKey && link.dataset.publicNav === activeKey;
@@ -124,7 +121,7 @@ function setupMoreMenu(mount) {
       menu.appendChild(item);
     });
 
-    // Dark mode is the moon button next to search, so it isn't repeated here.
+    appendThemeMenuItem(menu, 'nav-more-menu-item', 'nav-more-menu-icon', closeMenu);
     document.body.appendChild(menu); // on <body> so nothing can clip it
     moreButton.setAttribute('aria-expanded', 'true');
     positionMenu();
@@ -168,55 +165,3 @@ function appendThemeMenuItem(menu, itemClass, iconClass, closeMenu) {
   });
   menu.appendChild(item);
 }
-
-// Signed-in visitors on public pages (Scorecards, Fixtures, Live...) are still signed in: show
-// "My dashboard" and "Sign out" instead of "Sign In" / "Register" so it doesn't look like a sign-out.
-async function showSignedInLinks(mount) {
-  let token = '';
-  try {
-    token = localStorage.getItem('cricketClubAppAuthToken') || '';
-  } catch (e) {
-    token = '';
-  }
-  if (!token) return;
-  try {
-    const response = await fetch('/api/auth/me', { headers: { 'X-Auth-Token': token } });
-    if (!response.ok) return;
-    const data = await response.json();
-    const user = data.user || {};
-    const signin = mount.querySelector('[data-public-nav="signin"]');
-    const register = mount.querySelector('[data-public-nav="register"]');
-    if (signin) {
-      signin.href = '/dashboard';
-      signin.dataset.publicNav = 'dashboard';
-      signin.innerHTML = '<span class="nav-icon" aria-hidden="true">🏠</span><span class="nav-text">My dashboard</span>';
-      signin.title = `Signed in as ${user.display_name || ''}`.trim();
-    }
-    if (register) {
-      // Sign out is not in More: it gets its own button at the right end of the bar (laptop),
-      // and stays in the phone ☰ menu (this link, hidden from the row and from More).
-      register.href = '/signout';
-      register.dataset.publicNav = 'signout';
-      register.classList.remove('nav-overflow-item');
-      register.innerHTML = '<span class="nav-icon" aria-hidden="true">🚪</span><span class="nav-text">Sign out</span>';
-    }
-    const header = mount.querySelector('.app-header');
-    if (header && !header.querySelector('.public-signout')) {
-      const out = document.createElement('a');
-      out.className = 'public-signout';
-      out.href = '/signout';
-      out.textContent = 'Sign out';
-      out.title = `Signed in as ${user.display_name || ''}`.trim();
-      header.appendChild(out);
-    }
-    const heroActions = document.getElementById('homeHeroActions');
-    if (heroActions) {
-      heroActions.innerHTML = '<a class="home-btn primary" href="/dashboard">Go to my dashboard</a>';
-    }
-    document.body.dataset.signedIn = 'true';
-    document.dispatchEvent(new CustomEvent('cc:signed-in', { detail: user }));
-  } catch (e) {
-    /* offline: leave the public links */
-  }
-}
-

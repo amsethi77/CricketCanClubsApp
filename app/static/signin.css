@@ -557,34 +557,3 @@ html body.signin-v2 .signin-widget-head {
   flex-direction: row !important;
   flex-wrap: nowrap !important;
 }
-
-/* Simple sign-in (Oct 2026, README "Simple sign-in page"): one centred card, no league leaders. */
-html body.signin-v2 .signin-page-grid.signin-simple {
-  grid-template-columns: minmax(0, 440px) !important;
-  justify-content: center !important;
-}
-html body.signin-v2 .signin-page-grid.signin-simple > .signin-layout {
-  position: static;
-}
-html body.signin-v2 .signin-simple .page-shell,
-html body.signin-v2 .signin-simple {
-  margin-top: 4vh;
-}
-html body.signin-v2 .si-tour-link {
-  margin-top: 6px;
-  width: 100%;
-  min-height: 44px;
-  border: 0;
-  background: transparent;
-  color: #be123c;
-  font: 700 0.95rem/1.3 "Inter", system-ui, sans-serif;
-  cursor: pointer;
-  border-radius: 12px;
-}
-html body.signin-v2 .si-tour-link:hover,
-html body.signin-v2 .si-tour-link:focus-visible {
-  background: rgba(225, 29, 72, 0.08);
-}
-html body.signin-v2 .si-field[hidden] {
-  display: none !important;
-}

@@ -273,49 +273,7 @@ function confirmTypedDelete(message, expectedValue, button = null) {
   return false;
 }
 
-// Progress and result shown ON the scorecard card (the page-top banner is out of sight while you are
-// scrolled down to a card). README "Re-extract uses the AI reader".
-const archiveBusy = new Set();
-
-function archiveCardNote(uploadId, message, tone = "info", atTop = false) {
-  const card = archiveQueue?.querySelector(`[data-admin-upload="${uploadId}"]`);
-  if (!card) return;
-  let note = card.querySelector(".admin-card-note");
-  if (!message) {
-    note?.remove();
-    return;
-  }
-  if (note && atTop) {
-    note.remove();
-    note = null;
-  }
-  if (!note) {
-    note = document.createElement("p");
-    note.className = "admin-card-note";
-    note.setAttribute("role", "status");
-    const row = card.querySelector('[data-action="extract"]')?.parentElement;
-    if (row && !atTop) row.before(note);
-    else card.prepend(note);
-  }
-  const colours = { warning: ["#fff7ed", "#9a3412"], success: ["#ecfdf5", "#065f46"], error: ["#fef2f2", "#991b1b"], info: ["#eff6ff", "#1e3a8a"] };
-  const [bg, fg] = colours[tone] || colours.info;
-  note.style.cssText = `margin:12px 0;padding:12px 14px;border-radius:12px;font-weight:700;line-height:1.4;background:${bg};color:${fg}`;
-  note.textContent = message;
-}
-
 async function runArchiveAction(action, uploadId, button = null, reviewText = "") {
-  // The button has both an onclick and the list's click listener: run each action only once at a time.
-  const busyKey = `${uploadId}:${action}`;
-  if (archiveBusy.has(busyKey)) return false;
-  archiveBusy.add(busyKey);
-  try {
-    return await runArchiveActionOnce(action, uploadId, button, reviewText);
-  } finally {
-    archiveBusy.delete(busyKey);
-  }
-}
-
-async function runArchiveActionOnce(action, uploadId, button = null, reviewText = "") {
   const card = archiveQueue?.querySelector(`[data-admin-upload="${uploadId}"]`);
   if (!card) {
     const error = new Error("Archive card not found.");
@@ -324,19 +282,11 @@ async function runArchiveActionOnce(action, uploadId, button = null, reviewText 
     return false;
   }
   const textarea = card.querySelector(".admin-review-text");
-  let resultNote = "";
-  const buttonLabel = button ? button.textContent : "";
   try {
     if (action === "extract") {
       adminDebug("Review started for archive image.", { uploadId });
       setActionStatus("Re-extracting archive...", "warning");
-      if (button) {
-        button.disabled = true;
-        button.textContent = "Reading…";
-      }
-      archiveCardNote(uploadId, "⏳ Reading the photo with AI… this can take up to a minute. Please keep this page open.", "warning");
-      const result = await postJson(`/api/archive/${uploadId}/extract`, {}, true);
-      resultNote = `✅ ${result?.message || "Scorecard re-extracted."}`;
+      await postJson(`/api/archive/${uploadId}/extract`, {}, true);
       setStatus("Scorecard re-extracted.", "success");
     } else if (action === "save") {
       const textValue = String(reviewText || textarea?.value || "").trim();
@@ -347,7 +297,6 @@ async function runArchiveActionOnce(action, uploadId, button = null, reviewText 
       adminDebug("Saving reviewed JSON for archive.", { uploadId, textLength: textValue.length });
       setActionStatus("Saving reviewed JSON...", "warning");
       await postJson(`/api/admin/archive/${uploadId}/review`, { text: textValue }, true);
-      resultNote = "✅ Reviewed JSON saved.";
       setStatus("Reviewed extraction saved.", "success");
     } else if (action === "approve") {
       const textValue = String(reviewText || textarea?.value || "").trim();
@@ -369,21 +318,11 @@ async function runArchiveActionOnce(action, uploadId, button = null, reviewText 
       return false;
     }
     await refreshAll();
-    if (resultNote) {
-      archiveCardNote(uploadId, resultNote, "success", true);
-      archiveQueue?.querySelector(`[data-admin-upload="${uploadId}"]`)?.scrollIntoView({ behavior: "smooth", block: "start" });
-    }
     return true;
   } catch (error) {
     adminError("Archive action failed.", error);
     setStatus(error.message, "error");
-    archiveCardNote(uploadId, `⚠️ ${error.message}`, "error");
     return false;
-  } finally {
-    if (button && button.isConnected) {
-      button.disabled = false;
-      if (buttonLabel) button.textContent = buttonLabel;
-    }
   }
 }
 

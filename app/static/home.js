@@ -102,7 +102,6 @@
   }
 
   function renderStrip() {
-    if (!stripEl) return; // the score strip was removed from /live (README "Simple Live page")
     const items = stripItems.filter((m) => stripFilter === "all" || m.kind === stripFilter);
     stripEl.innerHTML = items.length
       ? items.map(stripCard).join("")
@@ -114,7 +113,6 @@
   }
 
   function updateStripNav() {
-    if (!stripEl) return;
     const prev = document.querySelector(".home-strip-nav.prev");
     const next = document.querySelector(".home-strip-nav.next");
     if (!prev || !next) return;
@@ -135,7 +133,7 @@
   );
   document.querySelector(".home-strip-nav.prev")?.addEventListener("click", () => stripEl.scrollBy({ left: -stripEl.clientWidth * 0.8, behavior: "smooth" }));
   document.querySelector(".home-strip-nav.next")?.addEventListener("click", () => stripEl.scrollBy({ left: stripEl.clientWidth * 0.8, behavior: "smooth" }));
-  stripEl?.addEventListener("scroll", updateStripNav, { passive: true });
+  stripEl.addEventListener("scroll", updateStripNav, { passive: true });
   window.addEventListener("resize", updateStripNav);
 
   // ---------- Featured match ----------
@@ -247,7 +245,7 @@
 
     // Scorecards
     const cards = (scorecards?.scorecards || []).slice(0, 4);
-    if (scorecardsEl) scorecardsEl.innerHTML = cards.length
+    scorecardsEl.innerHTML = cards.length
       ? cards.map(scorecardCard).join("")
       : empty("No approved scorecards yet.", "/scorecards", "Open the archive");
 

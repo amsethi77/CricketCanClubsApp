@@ -1,5 +1,5 @@
 /*
- * Plans page (/pricing): Free (the default) and Pro ($9/month or $90/year, Monthly pre-selected).
+ * Plans page (/pricing): Free, Super ($4.99/month) and Premium ($100/year).
  * Signed out: plan cards + comparison. Signed in: "Your plan" (trial days, uploads used),
  * Upgrade buttons (Stripe Checkout when switched on), Manage billing.
  * Site admins: set any user's plan by hand and see who is on which plan.
@@ -38,26 +38,9 @@
     return data;
   }
 
-  let state = { catalog: null, me: null, admin: null, message: "", tone: "", interval: params.get("billing") === "yearly" ? "year" : "month" };
+  let state = { catalog: null, me: null, admin: null, message: "", tone: "" };
 
-  const PLAN_ICON = { free: "🏏", pro: "⭐" };
-
-  function priceFor(plan) {
-    if (plan.yearly && state.interval === "year") {
-      return { price: plan.yearly.price, note: plan.yearly.price_note, sub: `That's ${plan.yearly.monthly_equivalent} a month. ${plan.yearly.saving}.` };
-    }
-    return { price: plan.price, note: plan.price_note, sub: plan.yearly ? `Or ${plan.yearly.price} a year (${plan.yearly.saving.toLowerCase()}).` : "" };
-  }
-
-  function intervalToggle() {
-    const pro = (state.catalog?.plans || []).find((p) => p.yearly);
-    if (!pro) return "";
-    return `
-      <div class="pr-toggle" role="group" aria-label="Billing">
-        <button type="button" data-interval="month" aria-pressed="${state.interval === "month"}" class="${state.interval === "month" ? "on" : ""}">Monthly</button>
-        <button type="button" data-interval="year" aria-pressed="${state.interval === "year"}" class="${state.interval === "year" ? "on" : ""}">Yearly <span class="pr-save">2 months free</span></button>
-      </div>`;
-  }
+  const PLAN_ICON = { free: "🏏", super: "⚡", premium: "👑" };
   const fmtDate = (iso) => {
     if (!iso) return "";
     const d = new Date(iso);
@@ -84,7 +67,7 @@
     if (!sub) return "";
     let when = "";
     if (sub.source === "site_admin") when = "Site admins always have every feature.";
-    else if (sub.is_trial) when = `Free Pro trial: ${esc(sub.days_left)} day${sub.days_left === 1 ? "" : "s"} left (ends ${esc(fmtDate(sub.period_end))}). After that you move to Free unless you choose a plan.`;
+    else if (sub.is_trial) when = `Free Premium trial: ${esc(sub.days_left)} day${sub.days_left === 1 ? "" : "s"} left (ends ${esc(fmtDate(sub.period_end))}). After that you move to Free unless you choose a plan.`;
     else if (sub.plan !== "free" && sub.period_end) when = sub.cancel_at_period_end ? `Ends on ${esc(fmtDate(sub.period_end))}.` : `Renews on ${esc(fmtDate(sub.period_end))}.`;
     else if (sub.source === "expired") when = `Your ${esc(sub.expired_from)} access has ended, so you're on Free now.`;
     else if (sub.plan === "free") when = "Live scoring, stats and scorecards are free forever.";
@@ -97,11 +80,7 @@
         : `<p class="pr-uploads"><strong>${used} of ${limit}</strong> scorecard image uploads used this month</p>
            <div class="pr-meter" role="img" aria-label="${used} of ${limit} uploads used"><span style="width:${pct}%"></span></div>`;
     const club = state.me.club_paid && sub.plan === "free"
-      ? `<p class="pr-note">✅ A captain or admin of your club is on Pro, so you can mark availability and get match alerts.</p>`
-      : "";
-    const trial = sub.ai_trial;
-    const ai = trial
-      ? `<p class="pr-note">🎁 ${trial.used ? "You've used your free AI match. AI on other matches needs Pro." : "You have 1 free AI match: try the AI Assistant or AI Scorer on any match."}</p>`
+      ? `<p class="pr-note">✅ A captain or admin of your club is on a paid plan, so you can mark availability and get match alerts.</p>`
       : "";
     const billing =
       state.catalog?.stripe_enabled && sub.has_stripe_customer
@@ -119,7 +98,6 @@
         <p class="pr-muted">${when}</p>
         ${uploads}
         ${club}
-        ${ai}
       </section>`;
   }
 
@@ -131,13 +109,13 @@
     if (!signedIn) {
       cta = plan.id === "free"
         ? `<a class="pr-btn ghost" href="/register">Get started free</a>`
-        : `<a class="pr-btn primary" href="/register?plan=${esc(plan.id)}&billing=${state.interval === "year" ? "yearly" : "monthly"}">Register to choose ${esc(plan.name)}</a>`;
+        : `<a class="pr-btn primary" href="/register?plan=${esc(plan.id)}">Register to choose ${esc(plan.name)}</a>`;
     } else if (current && !sub.is_trial) {
       cta = `<span class="pr-btn current">✓ Your plan</span>`;
     } else if (plan.id === "free") {
       cta = sub?.plan === "free" ? `<span class="pr-btn current">✓ Your plan</span>` : `<span class="pr-btn quiet">Included for everyone</span>`;
     } else if (state.catalog?.stripe_enabled) {
-      cta = `<button type="button" class="pr-btn primary" data-checkout="${esc(plan.id)}">${sub?.is_trial && current ? "Keep" : "Choose"} ${esc(plan.name)} ${state.interval === "year" ? "yearly" : "monthly"}</button>`;
+      cta = `<button type="button" class="pr-btn primary" data-checkout="${esc(plan.id)}">${sub?.is_trial && current ? "Keep" : "Choose"} ${esc(plan.name)}</button>`;
     } else {
       cta = `<span class="pr-btn quiet">Online payment coming soon</span><p class="pr-cta-note">Ask your site admin to switch you to ${esc(plan.name)}.</p>`;
     }
@@ -145,11 +123,10 @@
       .map((h) => (/plus:$/.test(h) ? `<li class="pr-plus">${esc(h)}</li>` : `<li>${esc(h)}</li>`))
       .join("");
     return `
-      <article class="pr-plan pr-plan-${esc(plan.id)}${plan.id === "pro" ? " is-popular" : ""}${current ? " is-current" : ""}">
-        ${plan.id === "pro" ? '<span class="pr-ribbon">Everything</span>' : ""}
+      <article class="pr-plan pr-plan-${esc(plan.id)}${plan.id === "super" ? " is-popular" : ""}${current ? " is-current" : ""}">
+        ${plan.id === "super" ? '<span class="pr-ribbon">Most popular</span>' : ""}
         <p class="pr-plan-name">${PLAN_ICON[plan.id] || ""} ${esc(plan.name)}</p>
-        <p class="pr-price">${esc(priceFor(plan).price)}<small> ${esc(priceFor(plan).note)}</small></p>
-        ${priceFor(plan).sub ? `<p class="pr-price-sub">${esc(priceFor(plan).sub)}</p>` : ""}
+        <p class="pr-price">${esc(plan.price)}<small> ${esc(plan.price_note)}</small></p>
         <p class="pr-tagline">${esc(plan.tagline)}</p>
         <ul class="pr-list">${highlights}</ul>
         <div class="pr-cta">${cta}</div>
@@ -187,12 +164,10 @@
     return `
       <section class="pr-faq">
         <h2>Good to know</h2>
-        <details><summary>Is live scoring really free?</summary><p>Yes. Scoring matches, player and club stats, and viewing scorecards are free for everyone, forever. You can even score a match without an account using a guest code. Pro adds upcoming matches and availability, alerts, AI and unlimited uploads.</p></details>
-        <details><summary>Monthly or yearly?</summary><p>Pro is $9 a month, or $90 a year. Yearly works out at $7.50 a month, so you save $18 (2 months free). You can cancel any time.</p></details>
-        <details><summary>What is the free AI match?</summary><p>On Free you can try AI on one match: ask the AI Assistant to mark availability or update the score, or use the AI Scorer in Quick Score. The first match you use AI on becomes your free AI match. AI on other matches needs Pro.</p></details>
-        <details><summary>What is the AI Live Scorer?</summary><p>A Pro feature in Quick Score. Say what happened ("four", "wide, then two runs", "caught by Sam") and the ball is added for you. The normal scoring engine still does all the maths, and you confirm every wicket.</p></details>
-        <details><summary>Do all my players need to pay?</summary><p>No. When a captain or club admin is on Pro, every player in that club can mark availability and gets match and live score alerts.</p></details>
-        <details><summary>I was already using the app. What happens to me?</summary><p>Everyone who joined before plans started gets ${esc(days)} days of Pro free. After that you move to Free unless you choose a plan. Nothing is deleted.</p></details>
+        <details><summary>Is live scoring really free?</summary><p>Yes. Scoring matches, player and club stats, and viewing scorecards are free for everyone, forever. Paid plans add team management, alerts, AI and more uploads.</p></details>
+        <details><summary>What is the AI Live Scorer?</summary><p>A Premium feature in Quick Score. Say what happened ("four", "wide, then two runs", "caught by Sam") and the ball is added for you. The normal scoring engine still does all the maths, and you confirm every wicket.</p></details>
+        <details><summary>Do all my players need to pay?</summary><p>No. When a captain or club admin is on Super or Premium, every player in that club can mark availability and gets match and live score alerts.</p></details>
+        <details><summary>I was already using the app. What happens to me?</summary><p>Everyone who joined before plans started gets ${esc(days)} days of Premium free. After that you move to Free unless you choose a plan. Nothing is deleted.</p></details>
         <details><summary>What happens to uploads when I reach my limit?</summary><p>Your earlier uploads stay. The count resets on the 1st of each month, or you can upgrade for more.</p></details>
       </section>`;
   }
@@ -203,7 +178,7 @@
     const counts = admin?.counts || {};
     const stripe = state.catalog?.stripe_enabled
       ? `Stripe is on${state.catalog.stripe_test_mode ? " (test mode)" : ""}.`
-      : "Stripe is off. Add STRIPE_SECRET_KEY, STRIPE_PRICE_PRO_MONTHLY, STRIPE_PRICE_PRO_YEARLY and STRIPE_WEBHOOK_SECRET to the .env file (see MD/README.md) and restart the app.";
+      : "Stripe is off. Add STRIPE_SECRET_KEY, STRIPE_PRICE_SUPER, STRIPE_PRICE_PREMIUM and STRIPE_WEBHOOK_SECRET to the .env file (see README) and restart the app.";
     const rows = (admin?.users || [])
       .map(
         (u) => `<tr><td>${esc(u.name)}</td><td>${esc(u.role)}</td><td><strong>${esc(u.plan)}</strong></td><td>${esc(u.source)}</td><td>${esc(u.period_end ? fmtDate(u.period_end) : "")}</td><td>${esc(u.uploads_used)}</td></tr>`
@@ -216,12 +191,13 @@
         <p class="pr-muted">${esc(stripe)}</p>
         <div class="pr-counts">
           <span>Free <strong>${esc(counts.free ?? "–")}</strong></span>
-          <span>Pro <strong>${esc(counts.pro ?? "–")}</strong></span>
+          <span>Super <strong>${esc(counts.super ?? "–")}</strong></span>
+          <span>Premium <strong>${esc(counts.premium ?? "–")}</strong></span>
         </div>
         <form id="prAdminForm" class="pr-admin-form">
           <label>User <input name="user" placeholder="Name, mobile, email or id" required autocomplete="off" /></label>
           <label>Plan
-            <select name="plan"><option value="pro">Pro</option><option value="free">Free</option></select>
+            <select name="plan"><option value="super">Super</option><option value="premium">Premium</option><option value="free">Free</option></select>
           </label>
           <label>Days (0 = no end date) <input name="days" type="number" min="0" value="30" /></label>
           <label>Note <input name="note" placeholder="e.g. paid cash at AGM" autocomplete="off" /></label>
@@ -242,11 +218,10 @@
       <section class="pr-hero">
         <p class="pr-kicker">Plans</p>
         <h1>Your cricket. Every match. One place.</h1>
-        <p class="pr-lede">Everyone starts on Free: live scoring, stats, scorecards and one free AI match. Go Pro for upcoming matches, availability, alerts, AI and unlimited uploads.</p>
+        <p class="pr-lede">Live scoring, stats and scorecards are free for every player. Upgrade when you want team management, alerts, AI and more history.</p>
       </section>
       ${banner()}
       ${yourPlan()}
-      ${intervalToggle()}
       <section class="pr-plans">${plans.map(planCard).join("")}</section>
       ${compareTable()}
       ${faq()}
@@ -254,18 +229,12 @@
   }
 
   app.addEventListener("click", async (event) => {
-    const toggle = event.target.closest("[data-interval]");
-    if (toggle) {
-      state.interval = toggle.dataset.interval === "year" ? "year" : "month";
-      render();
-      return;
-    }
     const checkout = event.target.closest("[data-checkout]");
     if (checkout) {
       checkout.disabled = true;
       checkout.textContent = "Opening checkout…";
       try {
-        const data = await api("POST", "/api/subscription/checkout", { plan: checkout.dataset.checkout, interval: state.interval });
+        const data = await api("POST", "/api/subscription/checkout", { plan: checkout.dataset.checkout });
         if (data.url) location.href = data.url;
       } catch (e) {
         state.message = e.message;

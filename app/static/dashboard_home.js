@@ -58,27 +58,12 @@
       "beforeend",
       `<p class="dash-hello" id="dashHello"></p>
        <div class="dash-hero-actions">
-         <a class="home-btn primary small" href="/score">🎯 Score a match</a>
-         <a class="home-btn ghost small" href="/matches" data-paid-action="availability">✅ Update availability</a>
-         <a class="home-btn ghost small" href="/scorecards/upload" data-scorer-action hidden>📤 Upload scorecard</a>
+         <a class="home-btn primary small" href="/player-availability">✅ Update availability</a>
+         <a class="home-btn ghost small" href="/score">🎯 Quick score</a>
+         <a class="home-btn ghost small" href="/dashboard/widgets/archive">📤 Upload scorecard</a>
          <a class="home-btn ghost small" href="/scorecards">📋 Scorecards</a>
-         <a class="home-btn ghost small" href="/pricing" data-free-only hidden>⭐ See plans</a>
        </div>`
     );
-    // Plan-based actions (README: "Plan-based menu"): Free members see scoring and viewing; paid plans see everything.
-    fetch("/api/auth/me", { headers: { Accept: "application/json", "X-Auth-Token": localStorage.getItem("cricketClubAppAuthToken") || "" } })
-      .then((response) => (response.ok ? response.json() : null))
-      .then((data) => {
-        const user = data && data.user;
-        if (!user) return;
-        const role = String(user.effective_role || user.role || "");
-        const paid = role === "superadmin" || (user.plan && user.plan !== "free");
-        hero.querySelectorAll('[data-paid-action="availability"]').forEach((el) => (el.hidden = !(paid || user.club_paid)));
-        hero.querySelectorAll("[data-free-only]").forEach((el) => (el.hidden = paid));
-        // Captains and club admins upload scorecards (README: "Scorecard uploads: checks, review and duplicates").
-        hero.querySelectorAll("[data-scorer-action]").forEach((el) => (el.hidden = !(user.permissions || []).includes("score_matches")));
-      })
-      .catch(() => null);
     const fillHello = () => {
       const hello = document.getElementById("dashHello");
       const badge = document.getElementById("userIdentityBadge");
@@ -103,7 +88,7 @@
     <div class="dash-strip-head">
       <h2>Matches</h2>
       <div class="home-strip-tabs" role="tablist">
-        <button type="button" class="home-strip-tab is-active" data-strip="all" role="tab" aria-selected="true">Overview</button>
+        <button type="button" class="home-strip-tab is-active" data-strip="all" role="tab" aria-selected="true">All</button>
         <button type="button" class="home-strip-tab" data-strip="live" role="tab" aria-selected="false">Live</button>
         <button type="button" class="home-strip-tab" data-strip="result" role="tab" aria-selected="false">Results</button>
         <button type="button" class="home-strip-tab" data-strip="upcoming" role="tab" aria-selected="false">Upcoming</button>
@@ -142,10 +127,10 @@
         kind === "upcoming"
           ? [f.scheduled_time !== "Time TBD" ? f.scheduled_time : "", f.venue !== "Venue TBD" ? f.venue : ""].filter(Boolean).join(" · ") || "Time TBD"
           : !result || /^(tbd|club won)$/i.test(result)
-            ? kind === "live" ? "In progress" : sc(f.heartlake_score) || sc(f.opponent_score) ? "Full time" : "Result not recorded"
+            ? kind === "live" ? "In progress" : "Result not recorded"
             : result,
       meta: [f.match_type, f.overs ? `${f.overs} ov` : ""].filter(Boolean).join(" · "),
-      href: kind === "upcoming" ? "/matches" : `/live/${encodeURIComponent(f.id)}`,
+      href: kind === "upcoming" ? "/dashboard/widgets/schedule" : `/live/${encodeURIComponent(f.id)}`,
     };
   }
 
@@ -166,37 +151,14 @@
   }
 
   function updateNav() {
-    if (row.classList.contains("is-grouped")) return;
     const prev = strip.querySelector(".home-strip-nav.prev");
     const next = strip.querySelector(".home-strip-nav.next");
     prev.hidden = row.scrollLeft <= 4;
     next.hidden = row.scrollLeft + row.clientWidth >= row.scrollWidth - 4;
   }
 
-  // Overview: clear "Live now", "Recent results" and "Coming up" rows (README: "Home: live and past matches").
-  function renderGrouped() {
-    const groups = [
-      ["live", "🔴 Live now", "No match is live right now.", `<a class="home-link" href="/score">Score a match →</a>`],
-      ["result", "🏁 Recent results", "No results yet.", `<a class="home-link" href="/scorecards">All scorecards →</a>`],
-      ["upcoming", "📅 Coming up", "No upcoming fixtures.", ""],
-    ];
-    row.classList.add("is-grouped");
-    row.innerHTML = groups
-      .map(([kind, title, empty, link]) => {
-        const list = items.filter((m) => m.kind === kind);
-        return `<div class="dash-group">
-          <div class="dash-group-head"><h3>${title}${list.length ? ` <span>${list.length}</span>` : ""}</h3>${link}</div>
-          <div class="dash-group-row">${list.length ? list.map(card).join("") : `<div class="home-strip-empty">${empty}</div>`}</div>
-        </div>`;
-      })
-      .join("");
-    strip.querySelectorAll(".home-strip-nav").forEach((b) => (b.hidden = true));
-  }
-
   function renderStrip() {
-    if (filter === "all") return renderGrouped();
-    row.classList.remove("is-grouped");
-    const list = items.filter((m) => m.kind === filter);
+    const list = items.filter((m) => filter === "all" || m.kind === filter);
     row.innerHTML = list.length
       ? list.map(card).join("")
       : `<div class="home-strip-empty">${
@@ -265,8 +227,8 @@
     <div class="muse-home-chips">
       <button type="button" data-muse="Who is available for the next match?">✅ Who's available?</button>
       <button type="button" data-muse="Ask everyone for availability for the next match">📣 Ask for availability</button>
-      <button type="button" data-muse="Mark me available for the next match">🙋 I'm available</button>
-      <button type="button" data-muse="Pick the best XI for the next match">🏏 Pick the XI</button>
+      <button type="button" data-muse="Enter a match score">📝 Enter a score</button>
+      <button type="button" data-muse="Suggest the best playing XI">🏏 Best XI</button>
       <button type="button" data-muse="How can our club improve its ranking?">📈 Improve our ranking</button>
     </div>`;
   shell.appendChild(museCard);
@@ -312,6 +274,6 @@
     list.sort((a, b) => Number(b.club_id === clubId) - Number(a.club_id === clubId) || String(b.date).localeCompare(String(a.date)));
     grid.innerHTML = list.length
       ? list.slice(0, 4).map(scCard).join("")
-      : `<div class="home-empty">No approved scorecards yet. <a href="/scorecards/upload">Upload a scorecard photo</a></div>`;
+      : `<div class="home-empty">No approved scorecards yet. <a href="/dashboard/widgets/archive">Upload one in Archives</a></div>`;
   })();
 })();
