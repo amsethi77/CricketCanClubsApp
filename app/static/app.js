@@ -3324,7 +3324,7 @@ function renderMembers(members) {
           ${avatar}
           <div>
             <h3>${displayName}</h3>
-            <p>${member.role} · Age ${member.age || "TBD"} · Jersey ${member.jersey_number || "--"}</p>
+            <p>${member.role}${member.jersey_number ? ` · Jersey ${member.jersey_number}` : ""}</p>
             <p>${member.batting_style || "Batting style TBD"} / ${member.bowling_style || "Bowling style TBD"}</p>
             <p class="member-stats">${storedRuns} stored runs · ${stats.wickets} wickets · ${stats.matches} applied matches</p>
             <small>${pending.runs ? `${stats.runs} confirmed + ${pending.runs} reviewed historical archive runs` : `${stats.runs} confirmed runs`}</small>
@@ -4557,7 +4557,7 @@ function renderTeamPageInto(targets = {}) {
               ${member.picture_url ? `<img class="avatar-image" src="${member.picture_url}" alt="${member.name}" />` : `<div class="avatar-fallback">${member.picture}</div>`}
               <div>
                 <h3>${displayName}</h3>
-                <p>${member.role} · Age ${member.age || "TBD"}</p>
+                <p>${member.role}</p>
                 <p class="member-stats">${confirmedRuns} confirmed runs · ${stats.wickets} wickets · ${stats.matches} applied matches</p>
                 <small>${archiveRuns ? `${confirmedRuns} confirmed + ${archiveRuns} reviewed historical archive runs` : `${confirmedRuns} confirmed runs`}</small>
                 <small>${member.notes || "No profile notes yet."}</small>

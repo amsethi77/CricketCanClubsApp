@@ -242,6 +242,7 @@ This section captures the user requirements in the order they were given and ref
 134. Re-processing scorecard images in the Admin Center must extract the handwritten scorecard (AI reader), as scorecard extraction is the main feature.
 135. Train the AI to read scorecards properly: learn names people correct (e.g. Meshad → Heshad), read RUNS(BALLS) like 4(17) as 4 runs off 17 balls, and never misread the year (2026 read as 2020).
 136. (Amit, Oct 19) Sign-in must show the player name field, sign-in must go to club selection, and club data must be easy to find: put back the name field, send people to /clubs after sign-in, and add Clubs and Stats to the top menu. Don't revert the other work.
+137. Stats is seen by every signed-in player (basic numbers); Pro unlocks more detail (season-by-season trends). Train the AI Assistant to do better.
 131. Find duplicate scorecards smartly with AI (Gemini, or Ollama offline), not only exact matches.
 
 ## Current behavior summary
@@ -574,6 +575,20 @@ This section documents the work done in September 2026. See "Change log" at the 
 - The panel header says "Powered by Google Gemini" when the key is set (`chat_provider` in `GET /api/llm/status`), otherwise "Ask me anything or tell me what to do" (no more "AI model offline"); answers are labelled "AI Assistant" instead of "Heuristic fallback"; **bold** in answers is shown bold.
 - **Typing feel (Oct 16):** after you send a message the assistant shows animated thinking dots for at least 1.2 seconds, then the reply types out (about 1.5 seconds, any length); links / Confirm buttons appear when the text is finished (`thinkAtLeast` / `typeOutLast` in `static/muse.js` and `static/muse_public.js`, `.muse-dots` in `muse.css`). Respects "reduce motion".
 
+### Stats: basic for everyone, more for Pro (Oct 20 2026)
+- Request: Stats should be seen by every player, with extra detail for Pro.
+- **Stats** (`/dashboard/widgets/performance`, top menu) for every signed-in player: season picker, batting / bowling / fielding rankings, search a player, team roster and scoreboard. Ages are no longer shown in the roster.
+- Only people who can manage players (site admin, or `manage_players` / `manage_club`) see **Invite player** and **Add player performance**. `main.py` sets `<body data-can-manage>` and CSS hides `[data-stats-manage]`; the APIs still check permissions.
+- Pro members and site admins (`<body data-paid="1">`) get **Season by season**: each player's runs and wickets per season (last 4 seasons with numbers), best season and most improved player (`app/static/stats_page.js`, from `member_year_stats`). Free members see a Pro card with **Upgrade to Pro**.
+- If the chosen season has no numbers yet but another season has, a note says "No numbers for 2026 yet" with a **See 2025** button.
+- Numbers come from published scorecards and matches scored in the app; a fresh database shows empty rankings until scorecards are published.
+
+### AI Assistant knows your club (Oct 20 2026)
+- Request: "train AI assistant to do better".
+- Every question answered by Gemini now gets a short club snapshot (`_assistant_club_snapshot` in `main.py`): club, season, today's date, who is asking, player names, upcoming matches, recent results, the latest published scorecards (scores, top scorer, best bowling), the top 5 run scorers and wicket takers for the last two seasons with numbers, and the asker's own season numbers. Names and cricket numbers only, never phone, email or age.
+- Better instructions (`APP_GUIDE` in `app/ai_chat.py`): the new menu (Clubs and Stats), give real names and numbers straight away, "me / my" means the person asking, follow-ups use the earlier messages, ask one short question when unclear, reply in the person's language, bold names and numbers.
+- Built-in answers (no AI needed): "where are the stats" and the new "switch club" (Clubs in the menu).
+
 ### How the AI reader learns (Oct 19 2026)
 - Request: "train AI to read properly", after the Heartlake vs Afghans card was read with Meshad instead of Heshad, Keshav 4(17) as 12 balls, and the year 2026 as 2020.
 - Better instructions (`app/ai_vision.py` PROMPT): the TOTAL column is RUNS(BALLS), so "4(17)" = 4 runs off 17 balls; the AI also counts the balls in each batter's ball-by-ball scribbles (`ball_count`); the year is read digit by digit.
@@ -840,6 +855,7 @@ Model (soft launch, Oct 2026): keep the core cricket experience free; one paid p
 - 2026-10-16: Plan restrictions: no AI before sign-in (public assistant and guest AI Scorer); AI reading of scorecard photos is Pro, or the Free plan's one free AI try. See "Plans: what each group can use".
 - 2026-10-16: AI Assistant answers greetings, cricket and app questions with Gemini (`app/ai_chat.py`), uses club data for club questions; no sign-in prompts when signed in on public pages; full-height right-side panel. See "AI Assistant answers (Gemini)".
 - 2026-10-16: AI Assistant shows thinking dots, then types its reply; "Take the app tour" removed from the account menu (tour is only shown once to first-time users).
+- 2026-10-20: Stats for every player, invite / add-performance only for admins, no ages in the roster, Pro "Season by season" table, "See 2025" hint (`stats_page.js`). AI Assistant gets a club snapshot (players, matches, results, scorecards, top scorers, your own numbers) and better instructions.
 - 2026-10-20: Amit's feedback: Player name field always shown on /signin again (for sign-in without a password); after sign-in everyone goes to /clubs to pick their club; Clubs and Stats (/dashboard/widgets/performance) are back in the top menu (`shared_header.html`, `multipage.js`).
 - 2026-10-19: AI reader reads without manual edits: name letter-by-letter rule, bowling figures from the analysis boxes, bowlers' wickets from the batting card, photo date from the WhatsApp/IMG file name, season follows the date read.
 - 2026-10-19: AI reader learns: RUNS(BALLS) rule, ball-by-ball count check, photo date for the year, known names, and name fixes saved per club (`app_ai_corrections`) and used on the next read. See "How the AI reader learns".

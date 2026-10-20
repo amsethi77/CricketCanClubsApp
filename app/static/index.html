@@ -30,7 +30,7 @@
       rel="stylesheet"
     />
     <link rel="stylesheet" href="/assets/tailwind.css?v=20260426a" />
-    <link rel="stylesheet" href="/assets/styles.css?v=20261016g" />
+    <link rel="stylesheet" href="/assets/styles.css?v=20261020a" />
     <link rel="stylesheet" href="/assets/app_polish.css?v=20261004a" />
     <link rel="stylesheet" href="/assets/home.css?v=20260924a" />
     <link rel="stylesheet" href="/assets/dashboard_home.css?v=20261006a" />
@@ -542,7 +542,8 @@
               <select id="rankingYearSelect" class="season-select"></select>
             </div>
           </div>
-          <p class="lede">Track batting, bowling, and fielding totals for each club player here. Use the Profile menu for the editable player record and all-year match history.</p>
+          <p class="lede">Runs, wickets and catches for your club's players. Numbers come from published scorecards and matches scored in the app.</p>
+          <div id="statsSeasonHint" hidden></div>
           <div class="three-column-grid">
             <div class="stack-card">
               <div class="panel-head compact-head">
@@ -554,7 +555,7 @@
               <input id="performancePlayerSearchInput" type="search" placeholder="Search player by name, alias, or full name" />
               <div id="performancePlayerSearchResults" class="detail-stack"></div>
             </div>
-            <div class="stack-card">
+            <div class="stack-card" data-stats-manage>
               <div class="panel-head compact-head">
                 <div>
                   <p class="section-kicker">Invite Player</p>
@@ -579,7 +580,7 @@
           </div>
           <div class="split-grid performance-layout">
             <div>
-              <form id="performanceForm" class="form-grid">
+              <form id="performanceForm" class="form-grid" data-stats-manage>
                 <select id="performancePlayerSelect"></select>
                 <input id="performanceRunsInput" type="number" placeholder="Runs" />
                 <input id="performanceBallsInput" type="number" placeholder="Balls" />
@@ -593,6 +594,7 @@
               <div id="playerLeaderboard" class="leaderboard"></div>
             </div>
           </div>
+          <div id="statsProTrends" class="stats-pro"></div>
           <div class="panel-head compact-head">
             <div>
               <p class="section-kicker">Teams</p>
@@ -889,7 +891,8 @@
       </main>
     </div>
     <script src="/assets/multipage.js?v=20261020a"></script>
-    <script src="/assets/app.js?v=20261004a"></script>
+    <script src="/assets/app.js?v=20261020a"></script>
+    <script src="/assets/stats_page.js?v=20261020a"></script>
     <script src="/assets/dashboard_home.js?v=20261011a"></script>
     <script src="/assets/insights.js?v=20260929a"></script>
   </body>

@@ -5404,6 +5404,7 @@ def _dashboard_page_html(request: Request, widget_name: str | None = None) -> HT
         return session
     token = _auth_token_from_request(request)
     badge_html = ""
+    body_attrs = ' data-can-manage="0" data-paid="0"'
     if token:
         try:
             user_row, current_club_id = _auth_user_from_token(token)
@@ -5412,6 +5413,13 @@ def _dashboard_page_html(request: Request, widget_name: str | None = None) -> HT
                 current_club_id
                 or str(request.query_params.get("focus_club_id") or "").strip(),
             )
+            # Stats page (README "Stats: basic for everyone, more for Pro"): invite / add-performance forms only for
+            # people who can manage players; season-by-season trends only for Pro (and site admins).
+            permissions = set(user_payload.get("permissions") or [])
+            role = str(user_payload.get("effective_role") or user_payload.get("role") or "")
+            can_manage = role == "superadmin" or bool(permissions & {"manage_players", "manage_club"})
+            paid = role == "superadmin" or str(user_payload.get("plan") or "free") != "free"
+            body_attrs = f' data-can-manage="{1 if can_manage else 0}" data-paid="{1 if paid else 0}"'
             badge_html = _identity_badge_html(
                 str(user_payload.get("display_name") or user_payload.get("email") or user_payload.get("mobile") or "Signed in"),
                 str(user_payload.get("effective_role") or user_payload.get("role") or "Player"),
@@ -5420,7 +5428,9 @@ def _dashboard_page_html(request: Request, widget_name: str | None = None) -> HT
             badge_html = ""
     body = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
     if widget_name:
-        body = body.replace("<body>", f'<body data-dashboard-widget="{html.escape(widget_name)}">', 1)
+        body = body.replace("<body>", f'<body data-dashboard-widget="{html.escape(widget_name)}"{body_attrs}>', 1)
+    else:
+        body = body.replace("<body>", f"<body{body_attrs}>", 1)
     if widget_name != "overview":
         body = re.sub(
             r"\s*<section class=\"panel template-shell glass dashboard-hero-panel\">.*?</section>\s*",
@@ -7901,7 +7911,8 @@ def muse_chat(request: MuseRequest, x_auth_token: str | None = Header(default=No
     answer = answer_question(message, chat_store, history=request.history, session_id=request.session_id)
     data_answer = str(answer.get("answer") or "")
     if str(answer.get("source_provider") or "") != "ollama" and ai_chat.enabled():
-        smart = ai_chat.answer(message, data_notes=data_answer, context=_muse_llm_context(ctx), history=request.history)
+        snapshot = _assistant_club_snapshot(store, club, user_row)
+        smart = ai_chat.answer(message, data_notes=data_answer, context=_muse_llm_context(ctx) + ("\n" + snapshot if snapshot else ""), history=request.history)
         if smart:
             return {"reply": smart, "intent": "chat", "source_label": "AI Assistant", "llm": ai_chat.provider()}
     # No AI answer (busy / not set up): app how-tos and cricket terms still get a proper built-in answer.
@@ -7966,6 +7977,82 @@ def _muse_llm_context(ctx: dict[str, Any]) -> str:
     upcoming.sort(key=lambda f: str(f.get("date") or ""))
     nxt = ", ".join(muse.fixture_label(f) for f in upcoming[:3]) or "none"
     return f"Today is {_current_local_date().isoformat()}. Club: {ctx['club_name']}. Speaker: {ctx['actor']} ({ctx['role']}). Next fixtures: {nxt}."
+
+
+def _assistant_club_snapshot(store: dict[str, Any], club: dict[str, Any], user_row: Any) -> str:
+    """Short summary of the club's real data for the AI Assistant (README "AI Assistant knows your club").
+    Names and cricket numbers only - never phone numbers, emails or ages."""
+    club_id = str((club or {}).get("id") or "")
+    if not club_id:
+        return ""
+    lines: list[str] = []
+    try:
+        today = _current_local_date().isoformat()
+        speaker = str(user_row["display_name"] or "") if user_row else ""
+        member_ids: set[str] = set()
+        roster: list[str] = []
+        my_member_id = str(user_row["member_id"] or "") if user_row else ""
+        for member in store.get("members", []) or []:
+            ids = {str(item.get("club_id") or "") for item in member.get("club_memberships") or [] if isinstance(item, dict)}
+            ids.add(str(member.get("primary_club_id") or ""))
+            if club_id in ids:
+                member_ids.add(str(member.get("id") or ""))
+                if member.get("name"):
+                    roster.append(str(member["name"]))
+        lines.append(f"Club: {club.get('name')}. Season: {club.get('season') or ''}. Today: {today}.")
+        if speaker:
+            lines.append(f"The person asking is {speaker} (\"me\", \"my\", \"I\" mean this person).")
+        if roster:
+            lines.append(f"Players ({len(roster)}): " + ", ".join(sorted(roster, key=str.lower)[:70]))
+        fixtures = [f for f in store.get("fixtures", []) or [] if str(f.get("club_id") or "") == club_id]
+        upcoming = sorted((f for f in fixtures if str(f.get("date") or "") >= today and str(f.get("status") or "").lower() != "completed"), key=lambda f: str(f.get("date") or ""))
+        if upcoming:
+            lines.append("Upcoming matches: " + "; ".join(f"{f.get('date')} vs {f.get('opponent') or f.get('visiting_team')}" for f in upcoming[:5]))
+        else:
+            lines.append("Upcoming matches: none scheduled.")
+        played = sorted((f for f in fixtures if str(f.get("status") or "").lower() == "completed" or str(f.get("result") or "").upper() not in {"", "TBD"}), key=lambda f: str(f.get("date") or ""), reverse=True)
+        if played:
+            lines.append("Recent results: " + "; ".join(
+                f"{f.get('date')} vs {f.get('opponent')}: {f.get('heartlake_score') or '?'} v {f.get('opponent_score') or '?'}, {f.get('result') or ''}" for f in played[:5]))
+        cards = [card for card in _public_scorecards(store) if str(card.get("club_id") or "") == club_id]
+        cards.sort(key=lambda card: str(card.get("date") or ""), reverse=True)
+        if cards:
+            lines.append(f"Published scorecards: {len(cards)}. Latest:")
+            for card in cards[:6]:
+                innings = card.get("innings") or []
+                scores = ", ".join(f"{item.get('team')} {item.get('score')}" for item in innings)
+                bats = [row for item in innings for row in item.get("batting") or [] if isinstance(row.get("runs"), int)]
+                bowls = [row for item in innings for row in item.get("bowling") or [] if isinstance(row.get("wickets"), int)]
+                top_bat = max(bats, key=lambda row: row["runs"], default=None)
+                top_bowl = max(bowls, key=lambda row: row["wickets"], default=None)
+                extra = []
+                if top_bat:
+                    extra.append(f"top score {top_bat['name']} {top_bat['runs']}")
+                if top_bowl and top_bowl["wickets"]:
+                    extra.append(f"best bowling {top_bowl['name']} {top_bowl['wickets']} wkts")
+                lines.append(f"- {card.get('date')} {card.get('title')}: {scores}. {card.get('result') or ''} {('(' + '; '.join(extra) + ')') if extra else ''}".strip())
+        else:
+            lines.append("Published scorecards: none yet.")
+        # Season numbers per player (member_year_stats), latest seasons with data first.
+        by_year: dict[str, list[dict[str, Any]]] = {}
+        for stat in store.get("member_year_stats", []) or []:
+            if str(stat.get("member_id") or "") in member_ids and (stat.get("runs") or stat.get("wickets")):
+                by_year.setdefault(str(stat.get("season_year") or ""), []).append(stat)
+        for year in sorted(by_year, reverse=True)[:2]:
+            rows = by_year[year]
+            top_runs = sorted(rows, key=lambda r: int(r.get("runs") or 0), reverse=True)[:5]
+            top_wkts = sorted(rows, key=lambda r: int(r.get("wickets") or 0), reverse=True)[:5]
+            lines.append(f"{year} most runs: " + ", ".join(f"{r.get('player_name')} {int(r.get('runs') or 0)}" + (f" ({int(r.get('matches') or 0)} matches, HS {int(r.get('highest_score') or 0)})" if r.get("matches") else "") for r in top_runs))
+            lines.append(f"{year} most wickets: " + ", ".join(f"{r.get('player_name')} {int(r.get('wickets') or 0)}" for r in top_wkts if int(r.get("wickets") or 0)))
+            mine = next((r for r in rows if str(r.get("member_id") or "") == my_member_id), None)
+            if mine:
+                lines.append(f"{year} the asker's own stats: {int(mine.get('runs') or 0)} runs in {int(mine.get('matches') or 0)} matches, "
+                             f"HS {int(mine.get('highest_score') or 0)}, average {mine.get('batting_average') or 0}, {int(mine.get('wickets') or 0)} wickets, {int(mine.get('catches') or 0)} catches.")
+        if not by_year:
+            lines.append("Season stats: no runs or wickets recorded yet (they appear once scorecards are published or matches are scored).")
+    except Exception:
+        logger.exception("Assistant snapshot failed")
+    return "\n".join(lines)[:6000]
 
 
 def _muse_llm_call(system_prompt: str, user_prompt: str) -> str:

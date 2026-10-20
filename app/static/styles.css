@@ -7120,3 +7120,17 @@ html, body { max-width: 100%; overflow-x: hidden; }
 @supports (overflow-x: clip) { html, body { overflow-x: clip; } }
 html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
 body { touch-action: manipulation; }
+
+/* Stats page (README "Stats: basic for everyone, more for Pro") */
+body[data-can-manage="0"] [data-stats-manage] { display: none !important; }
+body[data-can-manage="0"] #performance .three-column-grid { grid-template-columns: minmax(0, 1fr); }
+.stats-season-hint { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin: 8px 0 12px; }
+.stats-pro { margin: 18px 0; }
+.stats-pro-card { display: grid; gap: 10px; padding: 18px; border-radius: 18px; border: 1px solid rgba(148, 163, 184, 0.35); background: var(--surface, #fff); }
+.stats-pro-card h3 { margin: 0; }
+.stats-pro-locked { background: linear-gradient(135deg, rgba(225, 29, 72, 0.06), rgba(124, 58, 237, 0.06)); }
+.stats-pro-locked .primary-button { justify-self: start; }
+.stats-pro-scroll { overflow-x: auto; }
+.stats-pro-table { width: 100%; border-collapse: collapse; font-size: 0.92rem; }
+.stats-pro-table th, .stats-pro-table td { padding: 8px 10px; border-bottom: 1px solid rgba(148, 163, 184, 0.25); text-align: left; white-space: nowrap; }
+.stats-pro-table thead th { font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.04em; color: #64748b; }

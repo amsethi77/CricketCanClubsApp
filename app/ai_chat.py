@@ -35,11 +35,13 @@ GEMINI_CHAT_MODELS = ("gemini-3.8-flash", "gemini-3.6-flash", "gemini-3.5-flash-
 
 APP_GUIDE = """You are the AI Assistant inside CricketCanClubs, a web app for community cricket clubs in Canada.
 Be friendly, short and clear (2-6 short sentences or a few bullet points). Plain words, no jargon.
+Use **bold** for names and key numbers. Use the same language the person writes in (e.g. Hindi or Punjabi in English letters).
 
 How the app works (use this to help people):
-- Menu after sign-in: Home (live matches, recent results, coming up), Matches (upcoming games and availability),
-  Score (score a match ball by ball), Scorecards (all published scorecards, upload a photo), Plans.
-  Profile, Clubs (switch club), Plan and Sign out are in the account menu (initials, top right).
+- Menu after sign-in: Home (live matches, recent results, coming up), Clubs (pick or switch your club),
+  Matches (upcoming games and availability), Score (score a match ball by ball), Scorecards (all published
+  scorecards, upload a photo), Stats (season rankings, team roster; Pro also sees season-by-season trends), Plans.
+  Profile, Plan and Sign out are in the account menu (initials, top right). After signing in you pick your club on Clubs.
   New users get a short app tour once, after their first sign-in.
 - Before sign-in anyone can see Live scores, Fixtures, Scorecards and Rankings, and score a quick guest match by hand.
 - Plans: Free ($0) = live scoring, stats, scorecards, 2 scorecard photo uploads a month and ONE free AI try
@@ -59,8 +61,12 @@ How the app works (use this to help people):
 Rules for answering:
 - Greetings and small talk: reply warmly and say what you can help with.
 - General cricket questions (laws, terms like no ball, LBW, strike rate, DLS, formats, tips): answer from your own knowledge.
-- Questions about THIS club, its players, scores, fixtures or stats: use ONLY the "Club data" below. If the answer isn't
-  there, say you don't have it yet and where in the app to look. Never invent names, scores or numbers.
+- Questions about THIS club, its players, scores, fixtures or stats: use ONLY the club facts in "Context" and
+  "Club data" below. Give the actual names and numbers straight away (like "<name> has the most runs: <runs> in <season>").
+  "Me", "my", "I" mean the person asking (named in Context). If the answer isn't there, say you don't have it
+  yet and where in the app to look (Stats, Scorecards, Matches). Never invent names, scores or numbers.
+- Follow-up questions ("and wickets?", "what about last year?") refer to the earlier messages - answer them in that light.
+- If the question is unclear, give your best short answer and ask one short question to check.
 - Questions about using the app: answer from the guide above.
 - Anything unrelated to cricket or the app (homework, coding, news...): answer briefly if it is harmless and simple, then steer back to cricket.
 - Never share anyone's phone number, email or age.
@@ -201,7 +207,8 @@ _BASIC: list[tuple[str, str, str]] = [
     ("howto", r"\bhow\b.*\b(score|scoring)\b", "Tap **Score**, choose the match, set both line-ups (2–11 players each), then tap 0–6, Wd, Nb, B, LB or W after every ball. ↶ Undo fixes a mistake. Captains and club admins score club matches; anyone can score a quick guest match."),
     ("howto", r"\b(upload|photo|picture)\b.*\bscore ?card|\bscore ?card\b.*\b(upload|photo|picture)", "Open **Scorecards** → 📷 Upload a scorecard (captains and club admins). The app reads the photo and shows the digital scorecard. Check it, fix anything with ✏️ Edit, then tap Publish. You can also tap 📎 here."),
     ("howto", r"\b(plan|plans|price|pricing|cost|pro|subscription|upgrade|pay)\b", "**Free** ($0): live scoring, stats, scorecards, 2 photo uploads a month and 1 free AI try.\n**Pro**: $9 a month or $90 a year (2 months free): availability, Playing XI, alerts, AI Assistant, AI Scorer, unlimited uploads read by AI. See **Plans**."),
-    ("howto", r"\b(switch|change)\b.*\bclub\b", "Open your account menu (your initials, top right) → **Clubs**, then tap “Select club”."),
+    ("howto", r"\b(switch|change)\b.*\bclub\b", "Tap **Clubs** in the menu, then “Select club” next to your club."),
+    ("howto", r"\b(where|how)\b.*\b(stats|statistics|rankings?|leaderboard|performances?)\b", "Tap **Stats** in the menu: season rankings for batting, bowling and fielding, and your team roster. Pick the season at the top. Pro members also see season-by-season numbers."),
     ("howto", r"\b(sign ?out|log ?out)\b", "Open your account menu (your initials, top right) and tap **Sign out**."),
     ("howto", r"\b(tour|tutorial|guide me|show me around)\b", "The app tour shows once, after your first sign-in. Quick recap: **Matches** to mark availability, **Score** to score a match, **Scorecards** to see or upload scorecards, and your initials (top right) for profile, clubs and plan. Ask me anything else!"),
     ("cricket", r"\bno ?-?ball\b", "A **no ball** is an illegal delivery (e.g. the bowler oversteps the crease or it's a high full toss). The batting side gets 1 extra run plus any runs scored, the ball doesn't count in the over, and in limited-overs games the next ball is a free hit."),
