@@ -5058,6 +5058,19 @@ def _admin_center_html(request: Request) -> HTMLResponse:
             </div>
 
             <div class="detail-stack">
+              <div class="stack-card" id="adminRereadCard" hidden>
+                <div class="panel-head compact-head">
+                  <div>
+                    <p class="section-kicker">Scorecard photos</p>
+                    <h2>Clean up and re-read all with AI</h2>
+                  </div>
+                </div>
+                <p class="lede">Reads every scorecard photo again with the AI reader and runs the checks. About half a minute per photo; you can keep using the app.</p>
+                <label style="display:flex;gap:10px;align-items:flex-start;margin:6px 0"><input type="checkbox" id="adminRereadCleanup" checked style="width:auto;margin-top:4px" /> Clean up first: delete uploads whose photo isn't on this computer and extra copies of the same photo, and add new photos from the img folder</label>
+                <label style="display:flex;gap:10px;align-items:flex-start;margin:6px 0"><input type="checkbox" id="adminRereadSkip" style="width:auto;margin-top:4px" /> Skip cards already read by the newest AI reader (to continue after the daily free limit)</label>
+                <div class="toolbar-actions"><button id="adminRereadButton" class="primary-button" type="button">🤖 Re-read all scorecards</button></div>
+                <div id="adminRereadStatus" class="status-banner info" hidden></div>
+              </div>
               <div class="stack-card">
                 <div class="panel-head compact-head">
                   <div>
@@ -5127,6 +5140,7 @@ def _admin_center_html(request: Request) -> HTMLResponse:
         <script src="/assets/multipage.js?v=20261020a"></script>
         <script src="/assets/scorecard.js?v=20261019a"></script>
         <script src="/assets/admin_center.js?v=20261017a"></script>
+        <script src="/assets/admin_reread.js?v=20261020a"></script>
       </body>
     </html>
     """
@@ -10170,7 +10184,33 @@ def _ai_corrections_table(connection: sqlite3.Connection) -> None:
     )
 
 
+# What the AI reader has learned is also kept in app/ai_learning.json, which is committed to git, so every copy of
+# the app (Amit's Mac, Azure, a fresh database) reads with the same training (README "How the AI reader learns").
+AI_LEARNING_FILE = Path(__file__).resolve().parent / "ai_learning.json"
+
+
+def _ai_learning() -> dict[str, Any]:
+    try:
+        data = json.loads(AI_LEARNING_FILE.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _save_ai_learning(club_id: str, pairs: dict[str, str]) -> None:
+    data = _ai_learning()
+    data.setdefault("about", "Names the AI scorecard reader learned from people's fixes, per club (wrong -> right). Committed to git so every copy of the app uses them. README: How the AI reader learns.")
+    club = data.setdefault("corrections", {}).setdefault(club_id, {})
+    club.update(pairs)
+    data["updated_at"] = now_iso()
+    try:
+        AI_LEARNING_FILE.write_text(json.dumps(data, indent=2, ensure_ascii=False, sort_keys=True) + "\n", encoding="utf-8")
+    except OSError:
+        logger.exception("Could not write %s", AI_LEARNING_FILE)
+
+
 def _ai_corrections(club_id: str) -> dict[str, str]:
+    learned = {str(k).lower(): str(v) for k, v in ((_ai_learning().get("corrections") or {}).get(str(club_id or "")) or {}).items()}
     try:
         with _auth_connection() as connection:
             _ai_corrections_table(connection)
@@ -10178,10 +10218,10 @@ def _ai_corrections(club_id: str) -> dict[str, str]:
                 "SELECT wrong, right_value FROM app_ai_corrections WHERE club_id = ? AND kind = 'name' ORDER BY times DESC",
                 (str(club_id or ""),),
             ).fetchall()
-        return {str(row["wrong"]): str(row["right_value"]) for row in rows}
+        learned.update({str(row["wrong"]): str(row["right_value"]) for row in rows})
     except Exception:
         logger.exception("Could not read AI corrections")
-        return {}
+    return learned
 
 
 def _template_names(template: Any) -> list[list[tuple[str, int, str]]]:
@@ -10232,6 +10272,7 @@ def _learn_ai_corrections(club_id: str, old_template: Any, new_template: Any) ->
                     (club_id, wrong, right, now_iso()),
                 )
         logger.info("AI reader learned %s name fix(es) for club %s: %s", len(pairs), club_id, pairs)
+        _save_ai_learning(club_id, pairs)
     except Exception:
         logger.exception("Could not save AI corrections")
         return []
@@ -10258,6 +10299,7 @@ def _ai_known_names(store: dict[str, Any], club: dict[str, Any]) -> list[str]:
             template = _scorecard_json(upload.get("review_template_json")) if upload.get("review_template_json") else None
         for rows in _template_names(template):
             names.update(name for _, _, name in rows)
+    names.update(str(name) for name in ((_ai_learning().get("known_names") or {}).get(club_id) or []) if str(name).strip())
     return sorted(names, key=str.lower)[:400]
 
 
@@ -10307,10 +10349,17 @@ def _scorecard_ai_read(store: dict[str, Any], record: dict[str, Any], path: Path
     card_date = str((template.get("match") or {}).get("date") or "")[:10]
     if re.match(r"^20\d{2}-\d{2}-\d{2}$", card_date):
         record.update({"scorecard_date": card_date, "archive_date": card_date, "archive_date_source": "scorecard", "archive_year": card_date[:4], "season": f"{card_date[:4]} Season"})
+    elif str(record.get("archive_date_source") or "") == "filesystem-modified":
+        # No date on the card: don't keep a date taken from when the file was copied.
+        record.update({"scorecard_date": "", "archive_date": ""})
     record["review_llm_model"] = str(result.get("model") or "")
     record["review_llm_notes"] = "Read by AI: " + ("; ".join(result.get("notes") or []) or "no problems found.")
     record["ocr_engine"] = f"ai:{result.get('model')}"
-    record["ocr_pipeline"] = "Photo read by an AI vision model (handwriting included)"
+    if result.get("fallback") == "ollama":
+        # Backup read: no reader stamp, so "Skip cards already read by the newest AI reader" reads it again with Gemini later.
+        record["ocr_pipeline"] = "Photo read by the local Ollama AI (backup while Gemini's free limit was used up)"
+    else:
+        record["ocr_pipeline"] = f"Photo read by an AI vision model (handwriting included), reader {ai_vision.READER_VERSION}"
     record["confidence"] = f"AI read ({(template.get('meta') or {}).get('confidence') or 'unrated'})"
     record["ocr_processed_at"] = now_iso()
     record["ai_flags"] = list(result.get("notes") or [])
@@ -10548,12 +10597,12 @@ def scorecard_reader_info(x_auth_token: str | None = Header(default=None)) -> di
                 plan = _plan_for(user_row, current_club_id)
                 if not _ai_trial_open(plan.get("ai_trial")):
                     return {"provider": "basic", "label": "Basic photo reader, then you type it in (AI reading is part of Pro)", "speed": "about a minute", "locked": True}
-                return {"provider": chosen, "label": "AI (your 1 free AI try on the Free plan)", "speed": "usually under a minute", "trial": True}
+                return {"provider": chosen, "label": "AI (your 1 free AI try on the Free plan)", "speed": "usually well under a minute", "trial": True}
         except HTTPException:
             pass
     labels = {
-        "gemini": ("Google Gemini (free AI)", "usually under a minute"),
-        "claude": ("Claude AI", "usually under a minute"),
+        "gemini": ("Google Gemini (free AI)", "usually well under a minute"),
+        "claude": ("Claude AI", "usually well under a minute"),
         "ollama": (f"Ollama on this computer ({ai_vision.ollama_model()})", "can take a few minutes"),
     }
     label, speed = labels.get(chosen, ("Basic photo reader (can't read handwriting)", "about a minute"))
@@ -10621,6 +10670,87 @@ def scorecard_upload_manual(upload_id: str, request: ScorecardManualRequest, x_a
         "checks": {key: value for key, value in checks.items() if key != "scorecard"},
         "learned": [{"wrong": wrong, "right": right} for wrong, right in learned],
     }
+
+
+# ---------------------------------------------------------------------------
+# Admin Center: clean up and re-read all scorecards with AI (README "Clean up and re-read all scorecards").
+# Runs scripts/scorecards_reread_all.py in a background thread; the Admin Center polls the progress.
+# ---------------------------------------------------------------------------
+_REREAD_JOB: dict[str, Any] = {"running": False}
+_REREAD_LOCK = threading.Lock()
+
+
+class RereadAllRequest(BaseModel):
+    cleanup: bool = True
+    skip_done: bool = False
+
+
+def _reread_script():
+    import importlib.util
+
+    path = Path(__file__).resolve().parent.parent / "scripts" / "scorecards_reread_all.py"
+    spec = importlib.util.spec_from_file_location("scorecards_reread_all", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+@app.post("/api/admin/scorecards/reread-all")
+def admin_reread_all(request: RereadAllRequest, x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
+    """Site admin: start the clean-up + AI re-read of every scorecard photo (background)."""
+    user_row, _ = _require_superadmin(x_auth_token)
+    if not ai_vision.enabled():
+        raise HTTPException(status_code=400, detail="No AI reader is set up. Put GEMINI_API_KEY=... in the .env file and restart the app.")
+    with _REREAD_LOCK:
+        if _REREAD_JOB.get("running"):
+            return {"job": dict(_REREAD_JOB), "message": "Already running."}
+        _REREAD_JOB.clear()
+        _REREAD_JOB.update({"running": True, "started_at": now_iso(), "started_by": str(user_row["display_name"] or ""), "message": "Starting...", "number": 0, "total": 0, "done": []})
+    import sys
+    import types
+
+    args = types.SimpleNamespace(dry_run=False, no_cleanup=not request.cleanup, skip_done=request.skip_done,
+                                 since=datetime.utcnow().strftime("%Y-%m-%d"), pause=4.0)
+    app_module = sys.modules[__name__]
+
+    def progress(info: dict[str, Any]) -> None:
+        with _REREAD_LOCK:
+            if info.get("message"):
+                _REREAD_JOB["message"] = info["message"]
+            for key in ("stage", "number", "total", "file"):
+                if key in info:
+                    _REREAD_JOB[key] = info[key]
+            if info.get("done"):
+                _REREAD_JOB["done"] = (_REREAD_JOB.get("done") or [])[-40:] + [f"{info.get('file')}: {info['done']}"]
+
+    def work() -> None:
+        try:
+            result = _reread_script().run(app_module, args, progress=progress)
+            with _REREAD_LOCK:
+                _REREAD_JOB.update({
+                    "message": ("Stopped early: the AI wasn't answering (busy or today's free limit). Tomorrow, tap the button again with “Skip cards already read by the newest AI reader” ticked: it carries on where it stopped."
+                                if result.get("stopped") else f"Done: {result.get('records', 0)} photos read."),
+                    "report_path": result.get("report_path", ""),
+                })
+        except Exception as exc:
+            logger.exception("Re-read all failed")
+            with _REREAD_LOCK:
+                _REREAD_JOB["message"] = f"Stopped with an error: {exc}"
+        finally:
+            with _REREAD_LOCK:
+                _REREAD_JOB["running"] = False
+                _REREAD_JOB["finished_at"] = now_iso()
+        _audit_event("archive.reread_all", "archive_upload", "all", actor=user_row, details={"cleanup": request.cleanup}, source="api")
+
+    threading.Thread(target=work, name="reread-all", daemon=True).start()
+    return {"job": dict(_REREAD_JOB), "message": "Started."}
+
+
+@app.get("/api/admin/scorecards/reread-all")
+def admin_reread_all_status(x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
+    _require_superadmin(x_auth_token)
+    with _REREAD_LOCK:
+        return {"job": dict(_REREAD_JOB)}
 
 
 @app.get("/api/admin/scorecards/checks")

@@ -434,7 +434,9 @@ def refresh_archive_dates(item: dict[str, Any], scorecard_text: str = "") -> dic
         preferred_source = "scorecard"
         preferred_year = scorecard_date[:4]
         preferred_season = f"{preferred_year} Season"
-    elif not preferred_date and re.match(r"20\d{2}-\d{2}-\d{2}$", photo_taken_at[:10] if photo_taken_at else ""):
+    # A file's "modified" time on a computer is not when the match was played (photos copied later), so it
+    # isn't used as the match date (README "Clean up and re-read all scorecards").
+    elif not preferred_date and photo_date_source != "filesystem-modified" and re.match(r"20\d{2}-\d{2}-\d{2}$", photo_taken_at[:10] if photo_taken_at else ""):
         preferred_date = photo_taken_at[:10]
         preferred_source = photo_date_source or "metadata"
         preferred_year = photo_taken_at[:4]
@@ -3616,6 +3618,10 @@ def _duplicate_bundle_dir() -> Path:
 
 
 def _copy_for_review(source_path: Path, target_path: Path) -> None:
+    # A photo can be missing (moved, or a path from another computer): skip the copy instead of failing the save.
+    if not Path(source_path).is_file():
+        logger.warning("Duplicate review copy skipped, photo not found: %s", source_path)
+        return
     shutil.copy2(source_path, target_path)
 
 

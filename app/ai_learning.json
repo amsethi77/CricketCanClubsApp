@@ -1,0 +1,12 @@
+{
+  "about": "Names the AI scorecard reader learned from people's fixes, per club (wrong -> right). Committed to git so every copy of the app uses them. README: How the AI reader learns.",
+  "corrections": {
+    "club-heartlake": {
+      "meshad": "Heshad"
+    }
+  },
+  "known_names": {
+    "club-heartlake": ["Heshad", "Sarabjeet", "Dhillon", "Dixit", "Bipul", "Keshav"]
+  },
+  "updated_at": "2026-10-20T00:00:00Z"
+}

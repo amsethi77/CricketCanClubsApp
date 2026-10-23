@@ -52,6 +52,12 @@ MAX_EDGE = 1568  # the API scales larger images down to about this anyway
 
 GEMINI_DEFAULT_MODEL = "gemini-3.8-flash"
 GEMINI_FALLBACK_MODELS = ("gemini-3.6-flash", "gemini-3-flash-preview", "gemini-3.5-flash-lite")
+# Scorecard photos are never read with the "lite" model: in the Oct 22 re-read it got extras and totals wrong
+# (e.g. extras 52 instead of 43). When the better models hit today's free limit, reading stops and is tried
+# again later instead (README "How the AI reader learns").
+GEMINI_SCORECARD_MODELS = ("gemini-3.8-flash", "gemini-3.6-flash", "gemini-3-flash-preview")
+# Bump when the reading instructions/checks change, so "Re-read all" can skip cards the newest reader already read.
+READER_VERSION = "2026-10-22b"
 
 
 def api_key() -> str:
@@ -125,6 +131,35 @@ def ro_meaning() -> str:
 
 def is_ro(text: Any) -> bool:
     return str(text or "").strip().lower() in RO_FORMS
+
+
+def _zoomed_halves(path: Path, max_edge: int = 3072) -> list[tuple[str, str]]:
+    """Top and bottom half of the photo at higher resolution (JPEG, base64), so small handwriting in the batting
+    table and the bowling boxes is sharper than in the whole-page image. [] if the photo can't be opened."""
+    try:
+        from PIL import Image, ImageOps
+
+        try:
+            from pillow_heif import register_heif_opener
+
+            register_heif_opener()
+        except Exception:
+            pass
+        out = []
+        with Image.open(path) as image:
+            image = ImageOps.exif_transpose(image).convert("RGB")
+            width, height = image.size
+            if max(width, height) <= MAX_EDGE * 1.2:
+                return []  # small photo: the whole-page image is already full size
+            for box in ((0, 0, width, int(height * 0.56)), (0, int(height * 0.44), width, height)):
+                part = image.crop(box)
+                part.thumbnail((max_edge, max_edge))
+                buffer = io.BytesIO()
+                part.save(buffer, format="JPEG", quality=88)
+                out.append(("image/jpeg", base64.b64encode(buffer.getvalue()).decode("ascii")))
+        return out
+    except Exception:
+        return []
 
 
 def _image_payload(path: Path) -> tuple[str, str]:
@@ -274,29 +309,63 @@ def _apply_learning(template: dict[str, Any], roster: list[str] | None) -> list[
             if corrections[low] != text:
                 notes.append(f"'{text}' was changed to '{corrections[low]}' (corrected on an earlier card).")
             return corrections[low]
-        if low in known_lower or len(low) < 4:
+        if low in known_lower or len(low) < 5:
             return text
-        match = difflib.get_close_matches(low, list(known_lower), n=1, cutoff=0.8)
-        if match:
-            notes.append(f"'{text}' was read; changed to the known player '{known_lower[match[0]]}'. Check it against the photo.")
-            return known_lower[match[0]]
+        # Only fix a clear one-letter-ish misread of ONE known player (e.g. MESHAD -> Heshad, DILLON -> Dhillon).
+        # A first name shared by several players ("AMIT": Amit S / Amit G) or a different real name
+        # ("Simran" is not "Imran") is left as written (README "How the AI reader learns").
+        if sum(1 for name in known_lower if name.split()[0] == low or name.startswith(low + " ")) > 0:
+            return text
+        scored = sorted(((difflib.SequenceMatcher(None, low, name).ratio(), name) for name in known_lower), reverse=True)
+        if not scored:
+            return text
+        best_ratio, best = scored[0]
+        second = scored[1][0] if len(scored) > 1 else 0.0
+        # One letter added/dropped keeps the first letter (DILLON/Dhillon, Kiron/Kirron); a misread first letter
+        # keeps the length (MESHAD/Heshad). "Simran" vs "Imran" is neither, so it stays.
+        close_shape = (len(best) == len(low)) or (abs(len(best) - len(low)) == 1 and best[:1] == low[:1] and best_ratio >= 0.9)
+        if best_ratio >= 0.83 and close_shape and best_ratio - second >= 0.1:
+            notes.append(f"'{text}' was read; changed to the known player '{known_lower[best]}'. Check it against the photo.")
+            return known_lower[best]
         return text
+
+    club_key = _team_key(hints.get("club_name") or "")
+
+    def ours(team: Any) -> bool:
+        key = _team_key(team)
+        return bool(club_key and key and (club_key in key or key in club_key))
 
     for inn in template.get("innings") or []:
         if not isinstance(inn, dict):
             continue
-        for row in (inn.get("batting") or []) + (inn.get("bowling") or []):
-            if isinstance(row, dict) and isinstance(row.get("player"), dict) and row["player"].get("name"):
-                fixed = fix(row["player"]["name"])
-                if fixed != row["player"]["name"]:
-                    row["player"]["name"] = fixed
-                    row["player"]["normalized_name"] = str(fixed).lower()
+        # Our players' names are only matched on our side: our batters when we bat, our bowlers and fielders
+        # when we bowl. The other team's "DILLON" is not our Dhillon. (Corrections people made apply everywhere.)
+        bat_ours = ours(inn.get("batting_team")) or not club_key
+        bowl_ours = ours(inn.get("bowling_team")) or not club_key
+
+        def fix_side(name: Any, our_side: bool) -> Any:
+            low = " ".join(str(name or "").split()).lower()
+            if our_side or low in corrections:
+                return fix(name)
+            return name
+
+        for rows, our_side in ((inn.get("batting") or [], bat_ours), (inn.get("bowling") or [], bowl_ours)):
+            for row in rows:
+                if isinstance(row, dict) and isinstance(row.get("player"), dict) and row["player"].get("name"):
+                    fixed = fix_side(row["player"]["name"], our_side)
+                    if fixed != row["player"]["name"]:
+                        row["player"]["name"] = fixed
+                        row["player"]["normalized_name"] = str(fixed).lower()
         for row in inn.get("batting") or []:
             dismissal = row.get("dismissal") if isinstance(row, dict) and isinstance(row.get("dismissal"), dict) else None
             if dismissal:
                 for key in ("bowler", "fielder"):
                     if dismissal.get(key):
-                        dismissal[key] = fix(dismissal[key])
+                        dismissal[key] = fix_side(dismissal[key], bowl_ours)
+            # TOTAL column left empty on the card: use the batter's ball-by-ball runs.
+            if isinstance(row, dict) and row.get("runs") in (None, 0) and isinstance(row.get("ball_runs_sum"), int) and row["ball_runs_sum"] > 0:
+                notes.append(f"{(row.get('player') or {}).get('name')}'s TOTAL was empty; used the ball-by-ball runs ({row['ball_runs_sum']}). Check it.")
+                row["runs"] = row["ball_runs_sum"]
 
     # Balls and bowlers' wickets from what is already on the card (no guessing):
     #  - a batter with no balls in brackets gets the ball-by-ball count,
@@ -429,7 +498,7 @@ def read_scorecard(
     known_names / corrections / photo_date are what the app learned about this club (see _prompt).
     If the batters' runs + extras don't add up to the total, the model is asked once more to look at
     the photo again, told exactly which numbers don't add up (a second "checking" pass)."""
-    token = _HINTS.set({"known_names": list(known_names or []), "corrections": dict(corrections or {}), "photo_date": photo_date or ""})
+    token = _HINTS.set({"known_names": list(known_names or []), "corrections": dict(corrections or {}), "photo_date": photo_date or "", "club_name": club_name or ""})
     try:
         result = _read_scorecard(path, roster=roster, club_name=club_name, timeout=timeout)
         template = result.get("template")
@@ -447,7 +516,15 @@ def _read_scorecard(path: Path, *, roster: list[str] | None, club_name: str, tim
     if not template:
         return first
     _fix_team_names(template, club_name)
-    problems = sum_problems(template) + [note for note in review_notes(template) if "ball-by-ball" in note or "card shows" in note]
+    if first.get("fallback"):
+        # Read by the Ollama backup: no second look (it takes minutes); the card is flagged for checking.
+        first["notes"] = ["Read by the local AI (Ollama) because Gemini's free limit was used up - check every number, or tap “Read again with AI” tomorrow."] + review_notes(template)
+        return first
+    # Second look only when the totals really don't add up, or two or more batters' runs don't match their
+    # ball-by-ball (a single small mismatch or a balls-count difference stays a note): one read instead of two
+    # on most cards, so uploads are about twice as fast (README "Faster photo reading", Oct 20).
+    runs_notes = [note for note in review_notes(template) if "ball-by-ball adds up" in note or "card shows" in note]
+    problems = sum_problems(template) + (runs_notes if len(runs_notes) >= 2 else [])
     if not problems:
         first["notes"] = review_notes(template)
         return first
@@ -475,7 +552,17 @@ def _read_scorecard(path: Path, *, roster: list[str] | None, club_name: str, tim
 def _read_once(path: Path, *, roster: list[str] | None, club_name: str, timeout: float, extra: str = "") -> dict[str, Any]:
     chosen = provider()
     if chosen == "gemini":
-        return _read_with_gemini(path, roster=roster, club_name=club_name, timeout=timeout, extra=extra)
+        result = _read_with_gemini(path, roster=roster, club_name=club_name, timeout=timeout, extra=extra)
+        error = str(result.get("error") or "").lower()
+        # Gemini's free daily limit used up (or Google busy): carry on with Ollama on this computer when it's
+        # installed - free and unlimited, slower and less accurate (README "Ollama backup when Gemini's limit runs out").
+        if error and any(word in error for word in ("limit", "busy", "couldn't reach", "no gemini vision model")) and ollama_model():
+            backup = _read_with_ollama(path, roster=roster, club_name=club_name, extra=extra)
+            if backup.get("template"):
+                backup["fallback"] = "ollama"
+                backup["fallback_reason"] = result.get("error")
+                return backup
+        return result
     if chosen == "ollama":
         return _read_with_ollama(path, roster=roster, club_name=club_name, extra=extra)
     return _read_with_claude(path, roster=roster, club_name=club_name, timeout=timeout, extra=extra)
@@ -609,6 +696,9 @@ def _read_with_ollama(path: Path, *, roster: list[str] | None, club_name: str, e
     return {"template": template, "model": model, "usage": {"input_tokens": payload.get("prompt_eval_count"), "output_tokens": payload.get("eval_count")}}
 
 
+_GEMINI_SKIP: dict[str, float] = {}
+
+
 def _read_with_gemini(path: Path, *, roster: list[str] | None, club_name: str, timeout: float, extra: str = "") -> dict[str, Any]:
     key = gemini_key()
     try:
@@ -616,31 +706,65 @@ def _read_with_gemini(path: Path, *, roster: list[str] | None, club_name: str, t
     except Exception as exc:
         return {"error": f"Couldn't open the photo: {exc}"}
     prompt = _prompt(roster, club_name) + extra
+    parts: list[dict[str, Any]] = [{"inline_data": {"mime_type": media_type, "data": data}}]
+    halves = _zoomed_halves(path)
+    for half_type, half_data in halves:
+        parts.append({"inline_data": {"mime_type": half_type, "data": half_data}})
+    if halves:
+        prompt = ("Image 1 is the whole page. Images 2 and 3 are zoomed-in copies of its top half and bottom half - "
+                  "use them to read small handwriting (names, ball-by-ball, TOTAL column, bowling boxes).\n\n") + prompt
+    parts.append({"text": prompt})
     body = {
-        "contents": [{"role": "user", "parts": [{"inline_data": {"mime_type": media_type, "data": data}}, {"text": prompt}]}],
+        "contents": [{"role": "user", "parts": parts}],
         "generationConfig": {"temperature": 0, "responseMimeType": "application/json"},
     }
+    # Less "thinking" time: copying a scorecard needs careful reading, not long reasoning. Models that don't know
+    # the setting answer 400; then we ask again without it (README "Faster photo reading").
+    thinking = subscriptions.setting("GEMINI_THINKING", "low").strip().lower()
     base = subscriptions.setting("GEMINI_BASE_URL", "https://generativelanguage.googleapis.com").rstrip("/")
     configured = subscriptions.setting("GEMINI_VISION_MODEL")
-    models = [configured] if configured else [GEMINI_DEFAULT_MODEL, *GEMINI_FALLBACK_MODELS]
+    models = [configured] if configured else list(GEMINI_SCORECARD_MODELS)
     import time
 
     last_error = ""
     busy = False
+    now = time.time()
+    # Models that just failed (timed out, busy, or out of free reads) are skipped for a while, so the next card
+    # doesn't wait minutes on the same model again (README "Faster photo reading"). Last resort: try them anyway.
+    ready = [model for model in models if _GEMINI_SKIP.get(model, 0) <= now]
+    models = ready or models
     for model in models:
         response = None
-        # "High demand" (503) and similar hiccups are usually gone within seconds: wait and retry,
-        # then try the next free model instead of giving up.
-        for attempt, pause in enumerate((0, 3, 8)):
+        # "High demand" (503) and similar hiccups are usually gone within seconds: wait and retry once,
+        # then try the next free model instead of giving up. A timeout moves straight to the next model.
+        for attempt, pause in enumerate((0, 4)):
             if pause:
                 time.sleep(pause)
+            request_body = body
+            if thinking and thinking not in {"off", "none", "default"}:
+                config = dict(body["generationConfig"])
+                config["thinkingConfig"] = {"thinkingBudget": 512} if "2.5" in model else {"thinkingLevel": thinking}
+                request_body = {**body, "generationConfig": config}
             try:
                 response = httpx.post(
                     f"{base}/v1beta/models/{model}:generateContent",
-                    json=body,
+                    json=request_body,
                     headers={"x-goog-api-key": key, "content-type": "application/json"},
                     timeout=timeout,
                 )
+                if response.status_code == 400 and request_body is not body and "think" in response.text.lower():
+                    thinking = ""  # this model doesn't take the setting: ask normally
+                    response = httpx.post(
+                        f"{base}/v1beta/models/{model}:generateContent",
+                        json=body,
+                        headers={"x-goog-api-key": key, "content-type": "application/json"},
+                        timeout=timeout,
+                    )
+            except httpx.TimeoutException:
+                last_error = f"{model} took too long"
+                response = None
+                _GEMINI_SKIP[model] = time.time() + 20 * 60
+                break
             except httpx.HTTPError as exc:
                 last_error = f"couldn't reach Google ({exc.__class__.__name__})"
                 response = None
@@ -651,12 +775,15 @@ def _read_with_gemini(path: Path, *, roster: list[str] | None, club_name: str, t
                 continue
             break
         if response is None or response.status_code in {500, 502, 503, 504}:
+            if response is not None:
+                _GEMINI_SKIP[model] = time.time() + 10 * 60
             continue  # still busy: try the next free model
         if response.status_code == 404:
             last_error = f"model {model} not available"
             continue
         if response.status_code == 429:
             last_error = f"{model} free limit reached"
+            _GEMINI_SKIP[model] = time.time() + 60 * 60
             continue  # each free model has its own daily limit
         if response.status_code != 200:
             try:

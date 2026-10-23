@@ -66,7 +66,15 @@
     if (!file) return say("Choose a photo first.", true);
     const button = form.querySelector("button[type=submit]");
     button.disabled = true;
-    say(`Uploading and reading the scorecard with ${reader.label}… ${reader.speed}. Keep this page open.`);
+    // Live progress with a seconds counter, so the wait feels shorter (README "Faster photo reading").
+    const started = Date.now();
+    const tick = () => {
+      const secs = Math.round((Date.now() - started) / 1000);
+      const step = secs < 3 ? "📤 Uploading the photo" : secs < 45 ? `🤖 Reading the scorecard with ${reader.label}` : "🤖 Still reading - handwritten cards can take a little longer";
+      say(`${step}… ${secs}s (${reader.speed}). Keep this page open.`);
+    };
+    tick();
+    const timer = setInterval(tick, 1000);
     const body = new FormData();
     body.append("file", file);
     const qs = new URLSearchParams({ focus_club_id: clubEl.value || "" });
@@ -75,9 +83,11 @@
       const response = await fetch(`/api/scorecards/upload?${qs}`, { method: "POST", headers: { "X-Auth-Token": token() }, body });
       const data = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(data.detail || "Upload failed.");
+      clearInterval(timer);
       say(data.message || "Uploaded.");
       location.href = data.preview_url || `/scorecards/${encodeURIComponent(data.upload?.id || "")}?preview=1`;
     } catch (error) {
+      clearInterval(timer);
       say(error.message, true);
       button.disabled = false;
     }

@@ -1,0 +1,543 @@
+{
+  "sample_scorecard_1_heartlake_vs_brampton_lions.jpg": {
+    "match": "Heartlake Cricket Club vs Brampton Lions",
+    "date": "2026-09-13",
+    "venue": "Heartlake",
+    "batting_team": "Heartlake Cricket Club",
+    "total": "139/10",
+    "overs": "17.3",
+    "extras": {
+      "b": 2,
+      "lb": 1,
+      "wd": 7,
+      "nb": 1,
+      "total": 11
+    },
+    "fall_of_wickets": [
+      0,
+      8,
+      12,
+      21,
+      28,
+      48,
+      56,
+      69,
+      136,
+      139
+    ],
+    "batting": [
+      {
+        "name": "Amit Sethi",
+        "runs": 0,
+        "balls": 1,
+        "fours": 0,
+        "sixes": 0,
+        "how_out": "lbw",
+        "bowler": "Rizwan",
+        "fielder": null
+      },
+      {
+        "name": "Dikshit",
+        "runs": 1,
+        "balls": 2,
+        "fours": 0,
+        "sixes": 0,
+        "how_out": "bowled",
+        "bowler": "Faisal",
+        "fielder": null
+      },
+      {
+        "name": "Navesh",
+        "runs": 8,
+        "balls": 6,
+        "fours": 1,
+        "sixes": 0,
+        "how_out": "caught",
+        "bowler": "Rizwan",
+        "fielder": "Zain"
+      },
+      {
+        "name": "Kirron",
+        "runs": 7,
+        "balls": 6,
+        "fours": 1,
+        "sixes": 0,
+        "how_out": "caught",
+        "bowler": "Rizwan",
+        "fielder": "Zain"
+      },
+      {
+        "name": "Aneesh",
+        "runs": 15,
+        "balls": 24,
+        "fours": 2,
+        "sixes": 0,
+        "how_out": "lbw",
+        "bowler": "Hamza",
+        "fielder": null
+      },
+      {
+        "name": "Amit Gaba",
+        "runs": 6,
+        "balls": 5,
+        "fours": 1,
+        "sixes": 0,
+        "how_out": "stumped",
+        "bowler": "Faisal",
+        "fielder": "Ali"
+      },
+      {
+        "name": "Nav",
+        "runs": 12,
+        "balls": 9,
+        "fours": 0,
+        "sixes": 1,
+        "how_out": "bowled",
+        "bowler": "Hamza",
+        "fielder": null
+      },
+      {
+        "name": "Bheem",
+        "runs": 6,
+        "balls": 2,
+        "fours": 0,
+        "sixes": 1,
+        "how_out": "stumped",
+        "bowler": "Usman",
+        "fielder": "Zain"
+      },
+      {
+        "name": "Milan",
+        "runs": 46,
+        "balls": 31,
+        "fours": 5,
+        "sixes": 2,
+        "how_out": "retired out",
+        "bowler": null,
+        "fielder": null
+      },
+      {
+        "name": "Ishaan",
+        "runs": 26,
+        "balls": 19,
+        "fours": 1,
+        "sixes": 2,
+        "how_out": "bowled",
+        "bowler": "Saad",
+        "fielder": null
+      },
+      {
+        "name": "Steve",
+        "runs": 1,
+        "balls": 1,
+        "fours": 0,
+        "sixes": 0,
+        "how_out": "not out",
+        "bowler": null,
+        "fielder": null
+      }
+    ],
+    "bowling": [
+      {
+        "name": "Rizwan",
+        "overs": "3",
+        "maidens": 0,
+        "runs": 21,
+        "wickets": 3,
+        "wides": 0,
+        "no_balls": 0
+      },
+      {
+        "name": "Faisal",
+        "overs": "3",
+        "maidens": 0,
+        "runs": 17,
+        "wickets": 2,
+        "wides": 0,
+        "no_balls": 0
+      },
+      {
+        "name": "Hamza",
+        "overs": "5",
+        "maidens": 0,
+        "runs": 40,
+        "wickets": 2,
+        "wides": 2,
+        "no_balls": 1
+      },
+      {
+        "name": "Usman",
+        "overs": "5",
+        "maidens": 0,
+        "runs": 46,
+        "wickets": 1,
+        "wides": 4,
+        "no_balls": 0
+      },
+      {
+        "name": "Danish",
+        "overs": "1",
+        "maidens": 0,
+        "runs": 9,
+        "wickets": 0,
+        "wides": 0,
+        "no_balls": 0
+      },
+      {
+        "name": "Saad",
+        "overs": "0.3",
+        "maidens": 0,
+        "runs": 3,
+        "wickets": 1,
+        "wides": 1,
+        "no_balls": 0
+      }
+    ]
+  },
+  "sample_scorecard_2_heartlake_vs_mississauga_royals.jpg": {
+    "match": "Heartlake Cricket Club vs Mississauga Royals",
+    "date": "2026-08-23",
+    "venue": "Heartlake",
+    "batting_team": "Heartlake Cricket Club",
+    "total": "213/4",
+    "overs": "25",
+    "extras": {
+      "b": 5,
+      "lb": 1,
+      "wd": 13,
+      "nb": 1,
+      "total": 20
+    },
+    "fall_of_wickets": [
+      8,
+      20,
+      60,
+      113
+    ],
+    "batting": [
+      {
+        "name": "Dhillon",
+        "runs": 6,
+        "balls": 5,
+        "fours": 1,
+        "sixes": 0,
+        "how_out": "lbw",
+        "bowler": "Zuber",
+        "fielder": null
+      },
+      {
+        "name": "Dixit",
+        "runs": 7,
+        "balls": 7,
+        "fours": 0,
+        "sixes": 1,
+        "how_out": "caught",
+        "bowler": "Parvez",
+        "fielder": "Wasim"
+      },
+      {
+        "name": "Heshad",
+        "runs": 21,
+        "balls": 24,
+        "fours": 1,
+        "sixes": 0,
+        "how_out": "caught",
+        "bowler": "Haroon",
+        "fielder": "Shoaib"
+      },
+      {
+        "name": "Sarabjeet",
+        "runs": 38,
+        "balls": 41,
+        "fours": 2,
+        "sixes": 1,
+        "how_out": "lbw",
+        "bowler": "Zuber",
+        "fielder": null
+      },
+      {
+        "name": "Bipul",
+        "runs": 74,
+        "balls": 45,
+        "fours": 7,
+        "sixes": 5,
+        "how_out": "not out",
+        "bowler": null,
+        "fielder": null
+      },
+      {
+        "name": "Amit Sethi",
+        "runs": 47,
+        "balls": 29,
+        "fours": 4,
+        "sixes": 2,
+        "how_out": "not out",
+        "bowler": null,
+        "fielder": null
+      },
+      {
+        "name": "Keshav",
+        "how_out": "did not bat"
+      },
+      {
+        "name": "Nav",
+        "how_out": "did not bat"
+      },
+      {
+        "name": "Amit Gaba",
+        "how_out": "did not bat"
+      },
+      {
+        "name": "Deepak",
+        "how_out": "did not bat"
+      },
+      {
+        "name": "Rajesh",
+        "how_out": "did not bat"
+      }
+    ],
+    "bowling": [
+      {
+        "name": "Parvez",
+        "overs": "4",
+        "maidens": 0,
+        "runs": 25,
+        "wickets": 1,
+        "wides": 0,
+        "no_balls": 0
+      },
+      {
+        "name": "Zuber",
+        "overs": "4",
+        "maidens": 0,
+        "runs": 34,
+        "wickets": 2,
+        "wides": 2,
+        "no_balls": 0
+      },
+      {
+        "name": "Basheer",
+        "overs": "4",
+        "maidens": 0,
+        "runs": 35,
+        "wickets": 0,
+        "wides": 2,
+        "no_balls": 1
+      },
+      {
+        "name": "Shabeer",
+        "overs": "3",
+        "maidens": 0,
+        "runs": 29,
+        "wickets": 0,
+        "wides": 3,
+        "no_balls": 0
+      },
+      {
+        "name": "Tahir",
+        "overs": "4",
+        "maidens": 0,
+        "runs": 40,
+        "wickets": 0,
+        "wides": 3,
+        "no_balls": 0
+      },
+      {
+        "name": "Haroon",
+        "overs": "4",
+        "maidens": 0,
+        "runs": 32,
+        "wickets": 1,
+        "wides": 0,
+        "no_balls": 0
+      },
+      {
+        "name": "Shamsur",
+        "overs": "2",
+        "maidens": 0,
+        "runs": 12,
+        "wickets": 0,
+        "wides": 3,
+        "no_balls": 0
+      }
+    ]
+  },
+  "sample_scorecard_3_oakville_tigers_vs_heartlake.jpg": {
+    "match": "Oakville Tigers vs Heartlake Cricket Club",
+    "date": "2026-07-19",
+    "venue": "Oakville",
+    "batting_team": "Oakville Tigers",
+    "total": "145/8",
+    "overs": "20",
+    "extras": {
+      "b": 5,
+      "lb": 3,
+      "wd": 7,
+      "nb": 2,
+      "total": 17
+    },
+    "fall_of_wickets": [
+      54,
+      75,
+      82,
+      83,
+      97,
+      137,
+      145,
+      145
+    ],
+    "batting": [
+      {
+        "name": "Ryan",
+        "runs": 34,
+        "balls": 27,
+        "fours": 2,
+        "sixes": 2,
+        "how_out": "retired out",
+        "bowler": null,
+        "fielder": null
+      },
+      {
+        "name": "Matthew",
+        "runs": 27,
+        "balls": 30,
+        "fours": 2,
+        "sixes": 1,
+        "how_out": "bowled",
+        "bowler": "Aneesh",
+        "fielder": null
+      },
+      {
+        "name": "Joel",
+        "runs": 9,
+        "balls": 14,
+        "fours": 1,
+        "sixes": 0,
+        "how_out": "bowled",
+        "bowler": "Navesh",
+        "fielder": null
+      },
+      {
+        "name": "Pradeep",
+        "runs": 5,
+        "balls": 7,
+        "fours": 1,
+        "sixes": 0,
+        "how_out": "caught",
+        "bowler": "Kirron",
+        "fielder": "Amit S"
+      },
+      {
+        "name": "Kevin",
+        "runs": 0,
+        "balls": 1,
+        "fours": 0,
+        "sixes": 0,
+        "how_out": "caught",
+        "bowler": "Kirron",
+        "fielder": "Dikshit"
+      },
+      {
+        "name": "Shane",
+        "runs": 17,
+        "balls": 17,
+        "fours": 1,
+        "sixes": 0,
+        "how_out": "lbw",
+        "bowler": "Aneesh",
+        "fielder": null
+      },
+      {
+        "name": "Rohan",
+        "runs": 30,
+        "balls": 20,
+        "fours": 6,
+        "sixes": 0,
+        "how_out": "caught",
+        "bowler": "C Thomas",
+        "fielder": "Amit S"
+      },
+      {
+        "name": "Tyler",
+        "runs": 6,
+        "balls": 4,
+        "fours": 0,
+        "sixes": 0,
+        "how_out": "not out",
+        "bowler": null,
+        "fielder": null
+      },
+      {
+        "name": "Brandon",
+        "runs": 0,
+        "balls": 1,
+        "fours": 0,
+        "sixes": 0,
+        "how_out": "bowled",
+        "bowler": "Aneesh",
+        "fielder": null
+      },
+      {
+        "name": "Marcus",
+        "runs": 0,
+        "balls": 1,
+        "fours": 0,
+        "sixes": 0,
+        "how_out": "not out",
+        "bowler": null,
+        "fielder": null
+      },
+      {
+        "name": "Ethan",
+        "how_out": "did not bat"
+      }
+    ],
+    "bowling": [
+      {
+        "name": "Kirron",
+        "overs": "4",
+        "maidens": 0,
+        "runs": 23,
+        "wickets": 2,
+        "wides": 1,
+        "no_balls": 0
+      },
+      {
+        "name": "Navesh",
+        "overs": "4",
+        "maidens": 0,
+        "runs": 30,
+        "wickets": 1,
+        "wides": 1,
+        "no_balls": 0
+      },
+      {
+        "name": "Nav",
+        "overs": "4",
+        "maidens": 0,
+        "runs": 16,
+        "wickets": 0,
+        "wides": 1,
+        "no_balls": 2
+      },
+      {
+        "name": "C Thomas",
+        "overs": "4",
+        "maidens": 0,
+        "runs": 31,
+        "wickets": 1,
+        "wides": 2,
+        "no_balls": 0
+      },
+      {
+        "name": "Aneesh",
+        "overs": "4",
+        "maidens": 0,
+        "runs": 37,
+        "wickets": 3,
+        "wides": 2,
+        "no_balls": 0
+      }
+    ]
+  }
+}
