@@ -76,6 +76,8 @@ def model_name() -> str:
 OLLAMA_VISION_MODELS = (
     "qwen3-vl:8b", "qwen3-vl:latest", "qwen3-vl", "qwen3-vl:4b", "qwen2.5vl:7b", "qwen2.5vl:latest",
     "qwen2.5vl", "llama3.2-vision:latest", "llama3.2-vision", "minicpm-v:latest", "llava:latest",
+    # Gemma 4: Google's free offline model family (Gemini's open sibling), reads images. e4b fits a laptop.
+    "gemma4:e4b", "gemma4:latest", "gemma4", "gemma4:e2b", "gemma4:26b",
 )
 _OLLAMA_CACHE: dict[str, Any] = {"at": 0.0, "model": ""}
 
