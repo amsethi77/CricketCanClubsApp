@@ -175,6 +175,13 @@ def setting(name: str, default: str = "") -> str:
     return str(os.environ.get(name) or _env_file_values().get(name) or default).strip()
 
 
+def subscriptions_on() -> bool:
+    """Launch mode (Amit, Oct 24): no paid plans yet - everyone gets every Pro feature and the Plans page and
+    Upgrade buttons are hidden. Set CRICKETCLUBAPP_SUBSCRIPTIONS=on in .env when payments start.
+    README "Launch: everyone on Pro"."""
+    return setting("CRICKETCLUBAPP_SUBSCRIPTIONS", "off").strip().lower() in {"on", "true", "1", "yes"}
+
+
 def configured_default_plan() -> str:
     """Plan for users with no admin / Stripe plan (Amit, Oct 15). Pro while developing; set
     CRICKETCLUBAPP_DEFAULT_PLAN=free before launch. "premium" / "super" (old names) mean Pro."""
@@ -316,6 +323,15 @@ def uploads_this_month(connection: sqlite3.Connection, user_id: int) -> int:
 def effective_plan(connection: sqlite3.Connection, user_row: Any, role_names: list[str] | None = None) -> dict[str, Any]:
     """The plan the user has right now, with features and quota."""
     row = _ensure_row(connection, user_row)
+    if not subscriptions_on():
+        info = PLANS["pro"]
+        return {
+            "plan": "pro", "plan_name": info["name"], "price": info["price"], "price_note": info["price_note"],
+            "status": "active", "source": "launch", "is_trial": False, "expired_from": "", "period_end": "",
+            "days_left": None, "cancel_at_period_end": False, "has_stripe_customer": bool(row["stripe_customer_id"]),
+            "features": plan_features("pro"), "upload_limit": info["upload_limit"],
+            "uploads_used": uploads_this_month(connection, int(user_row["id"])), "uploads_left": None, "ai_trial": None,
+        }
     plan = normalize_plan(row["plan"])
     status = str(row["status"] or "active")
     source = str(row["source"] or "free")

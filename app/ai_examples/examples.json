@@ -1,0 +1,29 @@
+{
+ "about": "Worked examples for the AI scorecard reader: real photos checked by a person digit by digit, with the right answer. Sent with every read so the AI learns how these scorebooks are filled in. README: How the AI reader learns -> Worked examples.",
+ "examples": [
+  {
+   "photo": "example_1.jpg",
+   "answer": "example_1.json",
+   "source_file": "IMG_1975.HEIC",
+   "checked_by": "Claude with Dhruvika, 2026-10-27",
+   "lessons": [
+    "Read HOW OUT, BOWLER and the score on the SAME row as the batter - never shift them to the next batter.",
+    "A circled number in the BOWLER column is a shirt number: find it beside a name in the bowling list.",
+    "In the bowling boxes a circled corner number is the bowler's running runs; LB / BOW / CT / ST are wickets; plain W is a wide.",
+    "Overs = boxes used. Use null for numbers you can't work out."
+   ]
+  },
+  {
+   "photo": "example_2.jpg",
+   "answer": "example_2.json",
+   "source_file": "IMG_5094.jpg",
+   "checked_by": "Claude with Dhruvika, 2026-10-27",
+   "lessons": [
+    "Runs come from the TOTAL column at the right of each row, not the scribbles and not the batting-order numbers on the left.",
+    "Extras boxes are tallies: '11111' = 5 and '21' = 3.",
+    "The grand total is the last number in the over-by-over score column when there is no G. TOTAL.",
+    "A bowler can be written above the BOWLER heading ('9. TONY') - include him."
+   ]
+  }
+ ]
+}

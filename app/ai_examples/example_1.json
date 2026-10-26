@@ -1,0 +1,320 @@
+{
+ "meta": {
+  "source": "claude-vision",
+  "confidence": "high",
+  "status": "template"
+ },
+ "match": {
+  "match_type": "club",
+  "date": "2024-09-29",
+  "venue": "PC TP Ground",
+  "teams": {
+   "team_1": "Police Community",
+   "team_2": "Coca Cola XI"
+  },
+  "overs_limit": 30
+ },
+ "innings": [
+  {
+   "inning_number": 1,
+   "batting_team": "Police Community",
+   "bowling_team": "Coca Cola XI",
+   "summary": {
+    "runs": 224,
+    "wickets": 9,
+    "overs": 30,
+    "balls": null
+   },
+   "batting": [
+    {
+     "player": {
+      "name": "Premz"
+     },
+     "runs": 29,
+     "balls": null,
+     "fours": null,
+     "sixes": null,
+     "dismissal": {
+      "type": "lbw",
+      "fielder": null,
+      "bowler": "Koley",
+      "written_as": "LBW"
+     },
+     "ball_runs_sum": 29,
+     "ball_count": null,
+     "unsure": false
+    },
+    {
+     "player": {
+      "name": "Johno"
+     },
+     "runs": 0,
+     "balls": null,
+     "fours": null,
+     "sixes": null,
+     "dismissal": {
+      "type": "lbw",
+      "fielder": null,
+      "bowler": "Sikander",
+      "written_as": "LBW"
+     },
+     "ball_runs_sum": 0,
+     "ball_count": null,
+     "unsure": false
+    },
+    {
+     "player": {
+      "name": "Steve Williams"
+     },
+     "runs": 1,
+     "balls": null,
+     "fours": null,
+     "sixes": null,
+     "dismissal": {
+      "type": "bowled",
+      "fielder": null,
+      "bowler": "Sikander",
+      "written_as": "BOWLED"
+     },
+     "ball_runs_sum": 1,
+     "ball_count": null,
+     "unsure": false
+    },
+    {
+     "player": {
+      "name": "Ramz"
+     },
+     "runs": 12,
+     "balls": null,
+     "fours": null,
+     "sixes": null,
+     "dismissal": {
+      "type": "caught",
+      "fielder": null,
+      "bowler": "Rakesh",
+      "written_as": "CAUGHT"
+     },
+     "ball_runs_sum": 12,
+     "ball_count": null,
+     "unsure": false
+    },
+    {
+     "player": {
+      "name": "Ajaz"
+     },
+     "runs": 77,
+     "balls": null,
+     "fours": null,
+     "sixes": null,
+     "dismissal": {
+      "type": "caught",
+      "fielder": null,
+      "bowler": "Talyo",
+      "written_as": "CAUGHT (12)"
+     },
+     "ball_runs_sum": 76,
+     "ball_count": null,
+     "unsure": false
+    },
+    {
+     "player": {
+      "name": "A. Kullo"
+     },
+     "runs": 5,
+     "balls": null,
+     "fours": null,
+     "sixes": null,
+     "dismissal": {
+      "type": "caught",
+      "fielder": null,
+      "bowler": "Amit",
+      "written_as": "CAUGHT"
+     },
+     "ball_runs_sum": 5,
+     "ball_count": null,
+     "unsure": false
+    },
+    {
+     "player": {
+      "name": "Curtis"
+     },
+     "runs": 24,
+     "balls": null,
+     "fours": null,
+     "sixes": null,
+     "dismissal": {
+      "type": "caught",
+      "fielder": null,
+      "bowler": "Talyo",
+      "written_as": "CAUGHT (12)"
+     },
+     "ball_runs_sum": 24,
+     "ball_count": null,
+     "unsure": false
+    },
+    {
+     "player": {
+      "name": "Shahgen"
+     },
+     "runs": 16,
+     "balls": null,
+     "fours": null,
+     "sixes": null,
+     "dismissal": {
+      "type": "caught",
+      "fielder": null,
+      "bowler": "Johnny",
+      "written_as": "CAUGHT"
+     },
+     "ball_runs_sum": 16,
+     "ball_count": null,
+     "unsure": false
+    },
+    {
+     "player": {
+      "name": "Damon"
+     },
+     "runs": 17,
+     "balls": null,
+     "fours": null,
+     "sixes": null,
+     "dismissal": {
+      "type": "stumped",
+      "fielder": null,
+      "bowler": "Koley",
+      "written_as": "STUMPED"
+     },
+     "ball_runs_sum": 17,
+     "ball_count": null,
+     "unsure": false
+    },
+    {
+     "player": {
+      "name": "Dhani"
+     },
+     "runs": 2,
+     "balls": null,
+     "fours": null,
+     "sixes": null,
+     "dismissal": {
+      "type": "not out",
+      "fielder": null,
+      "bowler": null,
+      "written_as": "NOT OUT"
+     },
+     "ball_runs_sum": 2,
+     "ball_count": null,
+     "unsure": false
+    },
+    {
+     "player": {
+      "name": "Arthur"
+     },
+     "runs": null,
+     "balls": null,
+     "fours": null,
+     "sixes": null,
+     "dismissal": {
+      "type": "did not bat",
+      "fielder": null,
+      "bowler": null,
+      "written_as": null
+     },
+     "ball_runs_sum": null,
+     "ball_count": null,
+     "unsure": false
+    }
+   ],
+   "bowling": [
+    {
+     "player": {
+      "name": "Sikander"
+     },
+     "overs": 3,
+     "maidens": null,
+     "runs_conceded": 15,
+     "wickets": 2
+    },
+    {
+     "player": {
+      "name": "Kevin"
+     },
+     "overs": 4,
+     "maidens": null,
+     "runs_conceded": 16,
+     "wickets": 0
+    },
+    {
+     "player": {
+      "name": "Koley"
+     },
+     "overs": 3,
+     "maidens": null,
+     "runs_conceded": null,
+     "wickets": 2
+    },
+    {
+     "player": {
+      "name": "Amit"
+     },
+     "overs": 6,
+     "maidens": null,
+     "runs_conceded": null,
+     "wickets": 1
+    },
+    {
+     "player": {
+      "name": "Rakesh"
+     },
+     "overs": 3,
+     "maidens": null,
+     "runs_conceded": 11,
+     "wickets": 1
+    },
+    {
+     "player": {
+      "name": "Checky"
+     },
+     "overs": 6,
+     "maidens": null,
+     "runs_conceded": null,
+     "wickets": 0
+    },
+    {
+     "player": {
+      "name": "Talyo"
+     },
+     "overs": 4,
+     "maidens": null,
+     "runs_conceded": null,
+     "wickets": 2
+    },
+    {
+     "player": {
+      "name": "Johnny"
+     },
+     "overs": 1,
+     "maidens": null,
+     "runs_conceded": 5,
+     "wickets": 1
+    }
+   ],
+   "extras": {
+    "wides": 34,
+    "no_balls": 1,
+    "byes": null,
+    "leg_byes": 1,
+    "penalties": 5,
+    "total": 41,
+    "written_as": "WIDES tally with 34 circled, NO BALLS 1, LEG BYES 1, BYES empty, PENALTIES 5",
+    "unsure": false
+   }
+  }
+ ],
+ "validation": {
+  "inning_1_total": 224,
+  "inning_2_total": null,
+  "expected_result": "Police Community 224/9 in 30 overs",
+  "notes": "Batters 183 + extras 41 = 224 (the '224 for 9' written across the page). Year '24 = 2024. Each batter's HOW OUT / BOWLER / SCORE is read on that batter's own row. Rows 5 and 7 have only a circled (12) in the BOWLER column: shirt number 12 is written beside TALYO in the bowling list, so the bowler is Talyo. (26) beside Rakesh is his shirt number. The bowling summary columns are empty: overs = boxes used (3+4+3+6+3+6+4+1 = 30); the circled number in a box corner is the bowler's running runs total (Sikander 15, Kevin 16, Rakesh 11, Johnny 5; the others are unclear, so null). Wickets in the boxes are marked LB / BOW / CT / ST; the many 'W's are wides. Wickets match the batting card: Sikander 2, Koley 2, Talyo 2, Rakesh 1, Amit 1, Johnny 1 = 9. Ajaz's runs column says 77 although his ball-by-ball adds to 76: the runs column wins. The '>>' marks after the scribbles are ticks, not runs."
+ }
+}

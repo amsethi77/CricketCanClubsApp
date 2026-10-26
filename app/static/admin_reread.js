@@ -9,6 +9,7 @@
   const button = document.getElementById("adminRereadButton");
   const cleanup = document.getElementById("adminRereadCleanup");
   const skip = document.getElementById("adminRereadSkip");
+  const problems = document.getElementById("adminRereadProblems");
   const status = document.getElementById("adminRereadStatus");
   const TOKEN_KEY = "cricketClubAppAuthToken";
   let timer = null;
@@ -76,7 +77,7 @@
     if (!window.confirm(what)) return;
     button.disabled = true;
     try {
-      const data = await call("POST", { cleanup: cleanup.checked, skip_done: skip.checked });
+      const data = await call("POST", { cleanup: cleanup.checked, skip_done: skip.checked, only_problems: Boolean(problems && problems.checked) });
       show(data.job);
       timer = setTimeout(poll, 2000);
     } catch (error) {

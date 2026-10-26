@@ -20,6 +20,7 @@ Needs GEMINI_API_KEY in .env. Safe to run again: --skip-done skips cards the AI 
 from __future__ import annotations
 
 import argparse
+import copy
 import io
 import json
 import logging
@@ -181,7 +182,7 @@ def clean_up(main, store: dict, dry_run: bool, report: list[str]) -> list[dict]:
         record = main.archive_record_from_file(
             target,
             club.get("season") or store["club"]["season"],
-            source="upload",
+            source="img-folder",
             club_id=str(club.get("id") or ""),
             club_name=str(club.get("name") or ""),
         )
@@ -196,6 +197,37 @@ def clean_up(main, store: dict, dry_run: bool, report: list[str]) -> list[dict]:
     return keep
 
 
+def card_problems(record: dict) -> list[str]:
+    """What looks wrong in a card the AI read: runs don't add up, wickets don't match the batters out, or the
+    other team's name is missing. [] when it looks right (or was never read)."""
+    template = record.get("extraction_template")
+    if not isinstance(template, dict):
+        try:
+            template = json.loads(record.get("review_template_json") or "{}")
+        except ValueError:
+            template = {}
+    problems = []
+    for inn in template.get("innings") or []:
+        if not isinstance(inn, dict):
+            continue
+        summary = inn.get("summary") or {}
+        extras = (inn.get("extras") or {}).get("total") or 0
+        batting = inn.get("batting") or []
+        bat_sum = sum((row.get("runs") or 0) for row in batting if isinstance(row, dict))
+        outs = sum(
+            1 for row in batting if isinstance(row, dict)
+            and str((row.get("dismissal") or {}).get("type") or "").lower() not in ("", "not out", "not_out", "retired hurt", "did not bat", "dnb", "none")
+        )
+        if isinstance(summary.get("runs"), int) and summary["runs"] != bat_sum + extras:
+            problems.append(f"runs add to {bat_sum + extras}, total {summary['runs']}")
+        if isinstance(summary.get("wickets"), int) and outs and summary["wickets"] != outs:
+            problems.append(f"{outs} out, {summary['wickets']} wickets")
+    teams = (template.get("match") or {}).get("teams") or {}
+    if not teams.get("team_2") or any("opponent" in str(name).lower() for name in teams.values()):
+        problems.append("other team missing")
+    return problems
+
+
 def reread(main, store: dict, records: list[dict], args, report: list[str], progress=None) -> bool:
     """Returns True when it stopped early because the AI wasn't answering."""
     say = progress or (lambda info: None)
@@ -208,6 +240,15 @@ def reread(main, store: dict, records: list[dict], args, report: list[str], prog
     total = len(records)
     stuck = 0
     for number, (record, photo, is_new) in enumerate(records, 1):
+        # Never overwrite a person's work: published cards and cards typed in / fixed with Edit are kept (Oct 27).
+        status = str(record.get("status") or "").lower()
+        typed = str(record.get("ocr_engine") or "") in {"manual-entry", "manual-import"} or '"manual-entry"' in str(record.get("review_template_json") or "")
+        if status in {"approved", "applied to match"} or typed:
+            print(f"[{number}/{total}] {record.get('id')} published or fixed by a person - kept")
+            continue
+        if getattr(args, "only_problems", False) and not card_problems(record):
+            print(f"[{number}/{total}] {record.get('id')} adds up - skipped")
+            continue
         if args.skip_done and f"reader {main.ai_vision.READER_VERSION}" in str(record.get("ocr_pipeline") or ""):
             print(f"[{number}/{total}] {record.get('id')} already re-read - skipped")
             continue
@@ -218,7 +259,16 @@ def reread(main, store: dict, records: list[dict], args, report: list[str], prog
         try:
             if not record.get("image_fingerprint"):
                 record["image_fingerprint"] = image_fingerprint(Path(photo).read_bytes())
+            before = copy.deepcopy(record)
+            old_problems = card_problems(before) if str(before.get("ocr_engine") or "").startswith("ai:") else None
             reason = main._scorecard_ai_read(store, record, Path(photo), club)
+            # Never make a card worse: if the new reading has more problems than the earlier AI reading,
+            # keep the earlier one (Gemini can read the same photo a little differently each time).
+            if not reason and old_problems is not None and len(card_problems(record)) > len(old_problems):
+                record.clear()
+                record.update(before)
+                print("(earlier reading was better - kept it)", end=" ")
+                report.append(f"| {number} | {record.get('id')} | {Path(str(photo)).name} | kept the earlier reading (new one had more problems) | | | | |")
         except Exception as exc:  # keep going with the next card
             reason = f"error: {exc}"
         seconds = round(time.time() - started)
@@ -341,6 +391,7 @@ def main_cli() -> None:
     parser.add_argument("--samples", action="store_true", help="test the AI on the 3 sample cards")
     parser.add_argument("--skip-done", action="store_true", help="skip cards already read by the newest AI reader (to continue after the free daily limit)")
     parser.add_argument("--since", default=datetime.utcnow().strftime("%Y-%m-%d"), help="with --skip-done: date YYYY-MM-DD")
+    parser.add_argument("--only-problems", action="store_true", help="only re-read cards whose numbers don't add up")
     parser.add_argument("--no-cleanup", action="store_true", help="don't delete or add uploads, only re-read")
     parser.add_argument("--pause", type=float, default=4.0, help="seconds between cards (Gemini free limit)")
     args = parser.parse_args()

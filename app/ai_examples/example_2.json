@@ -1,0 +1,329 @@
+{
+ "meta": {
+  "source": "claude-vision",
+  "confidence": "high",
+  "status": "template"
+ },
+ "match": {
+  "match_type": "club",
+  "date": "2026-06-07",
+  "venue": "Brampton",
+  "teams": {
+   "team_1": "Heartlake Cricket Club",
+   "team_2": "Cocoa Cola"
+  },
+  "overs_limit": 35
+ },
+ "innings": [
+  {
+   "inning_number": 1,
+   "batting_team": "Heartlake Cricket Club",
+   "bowling_team": "Cocoa Cola",
+   "summary": {
+    "runs": 224,
+    "wickets": 9,
+    "overs": 35,
+    "balls": null
+   },
+   "batting": [
+    {
+     "player": {
+      "name": "John Sinanan"
+     },
+     "runs": 36,
+     "balls": null,
+     "fours": null,
+     "sixes": null,
+     "dismissal": {
+      "type": "caught",
+      "fielder": null,
+      "bowler": "Raj",
+      "written_as": "Caught"
+     },
+     "ball_runs_sum": 36,
+     "ball_count": null,
+     "unsure": false
+    },
+    {
+     "player": {
+      "name": "Dikshit Goel"
+     },
+     "runs": 27,
+     "balls": null,
+     "fours": null,
+     "sixes": null,
+     "dismissal": {
+      "type": "bowled",
+      "fielder": null,
+      "bowler": "Yuvraj",
+      "written_as": "Bowled"
+     },
+     "ball_runs_sum": 27,
+     "ball_count": null,
+     "unsure": false
+    },
+    {
+     "player": {
+      "name": "Aneesh Tickoo"
+     },
+     "runs": 37,
+     "balls": null,
+     "fours": null,
+     "sixes": null,
+     "dismissal": {
+      "type": "caught",
+      "fielder": null,
+      "bowler": "Raj",
+      "written_as": "Caught"
+     },
+     "ball_runs_sum": 37,
+     "ball_count": null,
+     "unsure": false
+    },
+    {
+     "player": {
+      "name": "C Thomas"
+     },
+     "runs": 22,
+     "balls": null,
+     "fours": null,
+     "sixes": null,
+     "dismissal": {
+      "type": "bowled",
+      "fielder": null,
+      "bowler": "Sarbjeet",
+      "written_as": "Bowled"
+     },
+     "ball_runs_sum": 22,
+     "ball_count": null,
+     "unsure": false
+    },
+    {
+     "player": {
+      "name": "Amit S"
+     },
+     "runs": 19,
+     "balls": null,
+     "fours": null,
+     "sixes": null,
+     "dismissal": {
+      "type": "caught",
+      "fielder": null,
+      "bowler": "Sarbjeet",
+      "written_as": "Caught"
+     },
+     "ball_runs_sum": 19,
+     "ball_count": null,
+     "unsure": false
+    },
+    {
+     "player": {
+      "name": "Steve"
+     },
+     "runs": 5,
+     "balls": null,
+     "fours": null,
+     "sixes": null,
+     "dismissal": {
+      "type": "not out",
+      "fielder": null,
+      "bowler": null,
+      "written_as": "Not out"
+     },
+     "ball_runs_sum": 5,
+     "ball_count": null,
+     "unsure": false
+    },
+    {
+     "player": {
+      "name": "Imran"
+     },
+     "runs": 21,
+     "balls": null,
+     "fours": null,
+     "sixes": null,
+     "dismissal": {
+      "type": "caught",
+      "fielder": null,
+      "bowler": "Yuvraj",
+      "written_as": "Caught"
+     },
+     "ball_runs_sum": 21,
+     "ball_count": null,
+     "unsure": false
+    },
+    {
+     "player": {
+      "name": "Ravi G"
+     },
+     "runs": 1,
+     "balls": null,
+     "fours": null,
+     "sixes": null,
+     "dismissal": {
+      "type": "bowled",
+      "fielder": null,
+      "bowler": "Tony",
+      "written_as": "Bowled"
+     },
+     "ball_runs_sum": 1,
+     "ball_count": null,
+     "unsure": false
+    },
+    {
+     "player": {
+      "name": "Jasmeet P"
+     },
+     "runs": 15,
+     "balls": null,
+     "fours": null,
+     "sixes": null,
+     "dismissal": {
+      "type": "not out",
+      "fielder": null,
+      "bowler": null,
+      "written_as": "Not out"
+     },
+     "ball_runs_sum": 15,
+     "ball_count": null,
+     "unsure": false
+    },
+    {
+     "player": {
+      "name": "Karan R"
+     },
+     "runs": 0,
+     "balls": null,
+     "fours": null,
+     "sixes": null,
+     "dismissal": {
+      "type": "caught",
+      "fielder": null,
+      "bowler": "Yuvraj",
+      "written_as": "Caught"
+     },
+     "ball_runs_sum": 0,
+     "ball_count": null,
+     "unsure": false
+    },
+    {
+     "player": {
+      "name": "Gurri S"
+     },
+     "runs": 3,
+     "balls": null,
+     "fours": null,
+     "sixes": null,
+     "dismissal": {
+      "type": "caught",
+      "fielder": null,
+      "bowler": "Tony",
+      "written_as": "Caught"
+     },
+     "ball_runs_sum": 3,
+     "ball_count": null,
+     "unsure": false
+    }
+   ],
+   "bowling": [
+    {
+     "player": {
+      "name": "Pukraj Sibin"
+     },
+     "overs": 4,
+     "maidens": null,
+     "runs_conceded": null,
+     "wickets": 0
+    },
+    {
+     "player": {
+      "name": "Yuvraj"
+     },
+     "overs": 4,
+     "maidens": null,
+     "runs_conceded": null,
+     "wickets": 3
+    },
+    {
+     "player": {
+      "name": "Harneet"
+     },
+     "overs": 4,
+     "maidens": null,
+     "runs_conceded": null,
+     "wickets": 0
+    },
+    {
+     "player": {
+      "name": "Harjot"
+     },
+     "overs": 4,
+     "maidens": null,
+     "runs_conceded": null,
+     "wickets": 0
+    },
+    {
+     "player": {
+      "name": "Paras"
+     },
+     "overs": 4,
+     "maidens": null,
+     "runs_conceded": null,
+     "wickets": 0
+    },
+    {
+     "player": {
+      "name": "Raj"
+     },
+     "overs": 4,
+     "maidens": null,
+     "runs_conceded": null,
+     "wickets": 2
+    },
+    {
+     "player": {
+      "name": "Sarbjeet"
+     },
+     "overs": 5,
+     "maidens": null,
+     "runs_conceded": null,
+     "wickets": 2
+    },
+    {
+     "player": {
+      "name": "Jasmeet"
+     },
+     "overs": 3,
+     "maidens": null,
+     "runs_conceded": null,
+     "wickets": 0
+    },
+    {
+     "player": {
+      "name": "Tony"
+     },
+     "overs": 2,
+     "maidens": null,
+     "runs_conceded": null,
+     "wickets": 2
+    }
+   ],
+   "extras": {
+    "wides": 29,
+    "no_balls": 3,
+    "byes": 1,
+    "leg_byes": 5,
+    "penalties": null,
+    "total": 38,
+    "written_as": "BYES 1, LEG BYES 11111, WIDES 1112 1 22 22 11 11 113, NO BALLS 21",
+    "unsure": true
+   }
+  }
+ ],
+ "validation": {
+  "inning_1_total": 224,
+  "inning_2_total": null,
+  "expected_result": "Heartlake Cricket Club 224/9 in 35 overs",
+  "notes": "Grand total 224 = the last value of the over-by-over TOTAL SCORE column (over 35). Batters 186 + extras 38 = 224. Runs come from the TOTAL column at the right (36, 27, 37, 22, 19, 5, 21, 1, 15, 0, 3). The batting order numbers written on the left (11 for Steve, 7 for Gurri) are batting positions, not runs. The long lines after the scribbles are not runs. Extras boxes are TALLIES: LEG BYES '11111' = 5, NO BALLS '21' = 3; the wides tally is hard to read, so wides = 38 - 1 - 5 - 3 = 29 and extras is marked unsure. Bowling summary is empty: overs = boxes used; '9. TONY' written above the BOWLER heading is bowler 9 with his two overs in the boxes above row 1. The '6-0', '10-0' under the boxes are running runs-wickets, too unclear to use, so runs are null. Plain 'W' in the boxes are wides; wickets come from the batting card: Yuvraj 3, Raj 2, Sarbjeet 2, Tony 2 = 9."
+ }
+}

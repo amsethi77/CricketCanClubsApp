@@ -47,6 +47,21 @@ const USER_BADGE_ID = "userIdentityBadge";
 const CLUB_BADGE_ID = "currentClubBadge";
 const BOTTOM_NAV_ID = "bottomAppNav";
 const ASSISTANT_FAB_ID = "assistantFloatingButton";
+// Launch mode (README "Launch: everyone on Pro"): no paid plans yet, so links to /pricing are hidden.
+(() => {
+  if (window.CC_PLAN_CONFIG_LOADED) return;
+  window.CC_PLAN_CONFIG_LOADED = true;
+  fetch("/api/public/config")
+    .then((response) => (response.ok ? response.json() : null))
+    .then((config) => {
+      if (!config || config.subscriptions) return;
+      window.CC_SUBSCRIPTIONS_OFF = true;
+      const style = document.createElement("style");
+      style.textContent = 'a[href="/pricing"], a[href^="/pricing?"], .plan-upgrade-only { display: none !important; }';
+      document.head.appendChild(style);
+    })
+    .catch(() => {});
+})();
 const SHARED_HEADER_URL = "/assets/shared_header.html?v=20261020a";
 const SESSION_ACTIVITY_DEBOUNCE_MS = 1200;
 const SESSION_TOUCH_INTERVAL_MS = 60000;

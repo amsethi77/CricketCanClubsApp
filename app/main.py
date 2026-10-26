@@ -949,7 +949,7 @@ def _clubs_page_html(request: Request, search: str = "", focus_club_id: str = ""
             </div>
           </section>
         </div>
-        <script src="/assets/multipage.js?v=20261020a"></script>
+        <script src="/assets/multipage.js?v=20261025a"></script>
         <script src="/assets/clubs.js?v=20260509c"></script>
       </body>
     </html>
@@ -4247,7 +4247,14 @@ def _scorecard_overs_to_balls(overs: Any) -> int | None:
 
 
 def _scorecard_pick_template(archive: dict[str, Any]) -> dict[str, Any]:
-    """Pick the template with the most filled-in figures (reviewed copies win ties)."""
+    """Pick the template with the most filled-in figures (reviewed copies win ties). A card a person typed in or
+    fixed with Edit always wins over the AI's reading, even when the AI listed more rows (Oct 27: fixes made with
+    Edit didn't show because the AI copy had more names - README "Worked examples")."""
+    for key in ("review_template_json", "extraction_template"):
+        template = _scorecard_json(archive.get(key))
+        source = str(((template.get("meta") or {}) if isinstance(template.get("meta"), dict) else {}).get("source") or "")
+        if source in {"manual-entry", "manual-import", "checked-example"} and template.get("innings"):
+            return template
     best: dict[str, Any] = {}
     best_score = -1
     for key in ("review_source_json", "review_template_json", "extraction_template"):
@@ -5068,6 +5075,7 @@ def _admin_center_html(request: Request) -> HTMLResponse:
                 <p class="lede">Reads every scorecard photo again with the AI reader and runs the checks. About half a minute per photo; you can keep using the app.</p>
                 <label style="display:flex;gap:10px;align-items:flex-start;margin:6px 0"><input type="checkbox" id="adminRereadCleanup" checked style="width:auto;margin-top:4px" /> Clean up first: delete uploads whose photo isn't on this computer and extra copies of the same photo, and add new photos from the img folder</label>
                 <label style="display:flex;gap:10px;align-items:flex-start;margin:6px 0"><input type="checkbox" id="adminRereadSkip" style="width:auto;margin-top:4px" /> Skip cards already read by the newest AI reader (to continue after the daily free limit)</label>
+                <label style="display:flex;gap:10px;align-items:flex-start;margin:6px 0"><input type="checkbox" id="adminRereadProblems" style="width:auto;margin-top:4px" /> Only cards with problems (runs or wickets don't add up, other team missing) - saves the free daily limit</label>
                 <div class="toolbar-actions"><button id="adminRereadButton" class="primary-button" type="button">🤖 Re-read all scorecards</button></div>
                 <div id="adminRereadStatus" class="status-banner info" hidden></div>
               </div>
@@ -5137,10 +5145,10 @@ def _admin_center_html(request: Request) -> HTMLResponse:
             </div>
           </section>
         </div>
-        <script src="/assets/multipage.js?v=20261020a"></script>
+        <script src="/assets/multipage.js?v=20261025a"></script>
         <script src="/assets/scorecard.js?v=20261019a"></script>
         <script src="/assets/admin_center.js?v=20261017a"></script>
-        <script src="/assets/admin_reread.js?v=20261020a"></script>
+        <script src="/assets/admin_reread.js?v=20261024a"></script>
       </body>
     </html>
     """
@@ -9470,8 +9478,40 @@ def public_guest_matches() -> dict[str, Any]:
     return {"matches": items}
 
 
+@app.get("/api/public/config")
+def public_config() -> dict[str, Any]:
+    """Small switches the pages need. subscriptions=False: launch mode, everyone on Pro, Plans hidden."""
+    return {"subscriptions": subscriptions.subscriptions_on()}
+
+
+@app.delete("/api/admin/users/{user_id}")
+def admin_delete_user(user_id: int, x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
+    """Site admin: delete a sign-in account (e.g. test accounts before launch). The player record (member)
+    is not touched. You can't delete yourself or another site admin."""
+    admin_row, _ = _require_superadmin(x_auth_token)
+    if int(user_id) == int(admin_row["id"]):
+        raise HTTPException(status_code=400, detail="You can't delete your own account.")
+    with _auth_connection() as connection:
+        row = connection.execute("SELECT id, display_name, role FROM app_users WHERE id = ?", (int(user_id),)).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Account not found.")
+        if str(row["role"] or "") == "superadmin":
+            raise HTTPException(status_code=400, detail="Site admin accounts can't be deleted here.")
+        tables = [r[0] for r in connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'").fetchall()]
+        for table in tables:
+            columns = {r[1] for r in connection.execute(f'PRAGMA table_info("{table}")').fetchall()}
+            for column in ("user_id", "target_user_id"):
+                if column in columns and table != "app_users":
+                    connection.execute(f'DELETE FROM "{table}" WHERE "{column}" = ?', (int(user_id),))
+        connection.execute("DELETE FROM app_users WHERE id = ?", (int(user_id),))
+    _audit_event("user.delete", "app_user", str(user_id), actor=admin_row, details={"display_name": str(row["display_name"] or "")}, source="api")
+    return {"message": f"Account {row['display_name']} deleted."}
+
+
 @app.get("/pricing")
 def pricing_page(request: Request) -> Response:
+    if not subscriptions.subscriptions_on():
+        return RedirectResponse(url="/dashboard", status_code=303)  # launch mode: no plans to show
     token = _auth_token_from_request(request)
     if token:
         try:
@@ -10318,7 +10358,8 @@ def _photo_date(record: dict[str, Any]) -> str:
     if taken and str(record.get("photo_date_source") or "") != "filesystem-modified" and re.match(r"^\d{4}-\d{2}-\d{2}$", taken):
         return taken
     created = str(record.get("created_at") or "")[:10]
-    if str(record.get("source") or "") == "upload" and re.match(r"^\d{4}-\d{2}-\d{2}$", created):
+    imported = str(record.get("uploaded_by") or "").startswith("Re-read script")  # old photos added from img/
+    if str(record.get("source") or "") == "upload" and not imported and re.match(r"^\d{4}-\d{2}-\d{2}$", created):
         return created
     return ""
 
@@ -10654,6 +10695,9 @@ def scorecard_upload_manual(upload_id: str, request: ScorecardManualRequest, x_a
     learned = _learn_ai_corrections(str(upload.get("club_id") or ""), _scorecard_json(upload.get("review_source_json")) if upload.get("review_source_json") else None, template)
     imported = parse_imported_extraction(store, json.dumps(template))
     upload.update(imported)
+    # The typed-in card is THE reviewed copy now (the AI's reading stays in review_source_json for learning).
+    upload["extraction_template"] = deepcopy(template)
+    upload["review_template_json"] = json.dumps(template, indent=2)
     upload["ocr_processed_at"] = now_iso()
     upload["status"] = "Pending review"
     upload["review_flags"] = []
@@ -10683,6 +10727,7 @@ _REREAD_LOCK = threading.Lock()
 class RereadAllRequest(BaseModel):
     cleanup: bool = True
     skip_done: bool = False
+    only_problems: bool = False
 
 
 def _reread_script():
@@ -10709,7 +10754,7 @@ def admin_reread_all(request: RereadAllRequest, x_auth_token: str | None = Heade
     import sys
     import types
 
-    args = types.SimpleNamespace(dry_run=False, no_cleanup=not request.cleanup, skip_done=request.skip_done,
+    args = types.SimpleNamespace(dry_run=False, no_cleanup=not request.cleanup, skip_done=request.skip_done, only_problems=request.only_problems,
                                  since=datetime.utcnow().strftime("%Y-%m-%d"), pause=4.0)
     app_module = sys.modules[__name__]
 

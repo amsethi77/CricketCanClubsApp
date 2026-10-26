@@ -57,7 +57,7 @@ GEMINI_FALLBACK_MODELS = ("gemini-3.6-flash", "gemini-3-flash-preview", "gemini-
 # again later instead (README "How the AI reader learns").
 GEMINI_SCORECARD_MODELS = ("gemini-3.8-flash", "gemini-3.6-flash", "gemini-3-flash-preview")
 # Bump when the reading instructions/checks change, so "Re-read all" can skip cards the newest reader already read.
-READER_VERSION = "2026-10-22b"
+READER_VERSION = "2026-10-27"
 
 
 def api_key() -> str:
@@ -193,7 +193,19 @@ Copy what is written into JSON. Accuracy matters more than completeness.
 How a paper scorecard is laid out:
 - "PLAYED BETWEEN ... AND ..." gives the two teams; "DAY & DATE" the date; "VENUE"; "INNINGS OF" says who batted.
 - Each batting row: batter name, the ball-by-ball scribbles (1 4 . 2 6 ...), then HOW OUT, BOWLER and the TOTAL column.
-  Use the TOTAL column for runs. Only if TOTAL is empty, add up that batter's ball-by-ball runs.
+  ROWS: HOW OUT, BOWLER and TOTAL belong to the batter on the SAME printed row (row numbers 1-11 are printed on the
+  left). Count the rows; never shift a value up or down to the batter above or below. An empty BOWLER cell = null.
+  A circled number next to a name is a shirt number, not runs. A circled number written alone in the BOWLER column
+  (e.g. "(12)") means the bowler wearing that number: find the same circled number beside a name in the bowling
+  list and use that name.
+  Use the TOTAL column for runs (in some books it is called RUNS or TOTAL RUNS, at the right end of the row).
+  If a number is written there it wins, even if the ball-by-ball looks different. Only if it is empty, add up
+  that batter's ball-by-ball runs.
+  Marks drawn after the ball-by-ball like "7", "77", ">", ">>" or a long line are TICKS (end of innings / spare
+  balls), NOT runs - never add them. A "7" that is part of the ball-by-ball is a 7 only if it stands alone
+  among other single digits.
+  A number at the very bottom of the TOTAL column is usually the batters' runs added up (no extras): the
+  grand total is the TOTAL SCORE / G. TOTAL box, or that number plus the extras.
   The TOTAL column is often written as RUNS(BALLS): "34(42)" = 34 runs off 42 balls, "4(17)" = 4 runs off 17 balls.
   Put the number in brackets in "balls". Read bracket digits as carefully as the runs (1 and 7, 2 and 7 look alike).
 - HOW OUT words: caught / c, bowled / b, LBW, run out, stumped / st, not out / NO, retired out, retired hurt,
@@ -202,16 +214,23 @@ How a paper scorecard is laid out:
   Always also copy exactly what is written in HOW OUT into "written_as" (e.g. "RO", "Retired out", "LBW").
 - Grand total: the "G. TOTAL" box, a circled number, or the last value in the running score column.
   Wickets = batters who are out (retired out counts; not out / retired hurt / did not bat don't).
-- Extras: copy what is written in the BYES / LEG BYES / WIDES / NO BALLS / PENALTY boxes. Extras total = the
-  TOTAL EXTRAS box, or else the sum of those boxes. NEVER change extras just to make the sum work: if batters +
+- Extras: copy what is written in the BYES / LEG BYES / WIDES / NO BALLS / PENALTY boxes. Each box often holds a
+  TALLY - one digit per extra ball, e.g. WIDES "1112111" = 8 - and a circled number at its end that is the box's
+  total: use the circled number when there is one, else add up the tally digits. Write that total in the field and
+  the tally exactly as written in "written_as". Extras total = the TOTAL EXTRAS box, or else the sum of the boxes. NEVER change extras just to make the sum work: if batters +
   extras don't equal the grand total, one of the batters' TOTAL numbers is probably misread - look again
   (3 and 8, 1 and 7, 0 and 6 are easily confused). Only if no extras boxes are filled in at all may you use
   extras = grand total minus the batters' runs.
-- The bowling analysis lists the other team's bowlers. If the BOWLING SUMMARY columns (overs / maidens / runs /
+- The bowling analysis lists the other team's bowlers (every row with marks, even if the name is only a circled
+  shirt number or a nickname - use what is written). If the BOWLING SUMMARY columns (overs / maidens / runs /
   wickets) are filled in, copy them. If they are empty, work them out from the BOWLING ANALYSIS boxes: each box with
-  marks in it is one over; runs = every digit in the box plus 1 for each wide (wd / w+) and no ball (nb), dots = 0;
-  W in a box = a wicket; a box with only dots is a maiden. Also count each bowler's wickets in the batting BOWLER
-  column (caught, bowled, LBW, stumped - not run out or retired) and make the two agree.
+  marks in it is one over (so overs = number of used boxes; all bowlers' overs add up to the innings' overs).
+  A small circled number in the corner of a box is that bowler's running total of runs conceded: the last one is
+  his runs. If there are no circled totals, runs = every digit in the box, dots = 0, plus wides and no balls.
+  Wickets in the boxes are written as CT / C, B / BOW, LB / LBW, ST, or a W next to such a word. A plain "W" or
+  "w2" in a box is often a WIDE on these cards, not a wicket - so take wickets from the batting BOWLER column
+  (caught, bowled, LBW, stumped, hit wicket - not run out or retired) and make the boxes agree with it.
+  Use null for any number you can't work out - never guess.
 - A page usually holds ONE innings. Only add a second innings if it is really on the photo.
 
 Double-checking (important):
@@ -258,6 +277,58 @@ Reply with ONLY this JSON, no other text:
 # Passed by read_scorecard(); the read_* functions build the prompt with _prompt().
 # ---------------------------------------------------------------------------
 _HINTS: contextvars.ContextVar[dict[str, Any]] = contextvars.ContextVar("scorecard_hints", default={})
+
+# Worked examples: real scorecard photos that a person checked digit by digit, with the right answer. They are sent
+# with every Gemini / Claude read ("here is a card and how to read it, now read this one") - this is how the reader
+# is trained, and because the files are in git every copy of the app (local, Azure) gets the same training.
+# Add one with: python scripts/add_ai_example.py <upload id>  (README "How the AI reader learns" -> "Worked examples").
+EXAMPLES_DIR = Path(__file__).resolve().parent / "ai_examples"
+_EXAMPLES_CACHE: dict[str, Any] = {}
+
+
+def worked_examples(skip_photo: Path | None = None) -> list[dict[str, Any]]:
+    """[{"name", "media_type", "data", "answer" (JSON text), "lessons"}] from app/ai_examples/examples.json.
+    The photo being read is skipped if it is one of the examples (it would just copy the answer)."""
+    index = EXAMPLES_DIR / "examples.json"
+    if not index.exists():
+        return []
+    try:
+        stamp = index.stat().st_mtime
+        if _EXAMPLES_CACHE.get("stamp") != stamp:
+            items = []
+            for entry in json.loads(index.read_text(encoding="utf-8")).get("examples") or []:
+                photo = EXAMPLES_DIR / str(entry.get("photo") or "")
+                answer = EXAMPLES_DIR / str(entry.get("answer") or "")
+                if not photo.is_file() or not answer.is_file():
+                    continue
+                media = "image/png" if photo.suffix.lower() == ".png" else "image/jpeg"
+                items.append({
+                    "name": photo.name,
+                    "source_file": str(entry.get("source_file") or ""),
+                    "media_type": media,
+                    "data": base64.b64encode(photo.read_bytes()).decode("ascii"),
+                    "answer": json.dumps(json.loads(answer.read_text(encoding="utf-8"))),
+                    "lessons": [str(x) for x in entry.get("lessons") or []],
+                })
+            _EXAMPLES_CACHE.update({"stamp": stamp, "items": items})
+        items = list(_EXAMPLES_CACHE.get("items") or [])
+    except Exception as exc:  # a broken example must never stop reading
+        logger.warning("AI worked examples not loaded: %s", exc)
+        return []
+    if skip_photo is not None:
+        own = Path(skip_photo).name.lower()
+        items = [item for item in items if own not in {item["name"].lower(), item["source_file"].lower()}]
+    limit = subscriptions.setting("AI_WORKED_EXAMPLES", "2").strip()
+    return items[: int(limit) if limit.isdigit() else 2]
+
+
+def _example_intro(example: dict[str, Any]) -> str:
+    lessons = "".join(f"\n- {lesson}" for lesson in example.get("lessons") or [])
+    return (
+        "WORKED EXAMPLE (a different scorecard, already checked by a person). Study how it was read, then read the "
+        "new photo the same way. Do not copy its names or numbers into the new card."
+        + (f"\nWhat this example teaches:{lessons}" if lessons else "")
+    )
 
 
 def _prompt(roster: list[str] | None, club_name: str) -> str:
@@ -400,6 +471,21 @@ def _apply_learning(template: dict[str, Any], roster: list[str] | None) -> list[
             elif isinstance(row.get("wickets"), int) and row["wickets"] != found:
                 notes.append(f"Check {row['player'].get('name')}'s wickets: the bowling figures say {row['wickets']}, the batting card credits {found}.")
 
+    # Grand total read as the batters' runs only (the sum at the bottom of the TOTAL column): add the extras.
+    for inn in template.get("innings") or []:
+        if not isinstance(inn, dict):
+            continue
+        summary = inn.get("summary") if isinstance(inn.get("summary"), dict) else None
+        extras_total = (inn.get("extras") or {}).get("total") if isinstance(inn.get("extras"), dict) else None
+        batted = [row.get("runs") for row in inn.get("batting") or [] if isinstance(row, dict)]
+        if summary and isinstance(summary.get("runs"), int) and isinstance(extras_total, int) and extras_total > 0 and batted and all(isinstance(x, int) or x is None for x in batted):
+            bat_sum = sum(x or 0 for x in batted)
+            if summary["runs"] == bat_sum:
+                notes.append(f"{summary['runs']} is the batters' runs only; added the extras ({extras_total}): total {bat_sum + extras_total}. Check it.")
+                summary["runs"] = bat_sum + extras_total
+
+    notes.extend(reconcile_totals(template))
+
     # Date: never after the photo; a year far from the photo's year with a day/month just before it was misread.
     photo_text = str(hints.get("photo_date") or "")[:10]
     match_info = template.get("match") if isinstance(template.get("match"), dict) else {}
@@ -413,7 +499,12 @@ def _apply_learning(template: dict[str, Any], roster: list[str] | None) -> list[
             same_year = card_day.replace(year=photo_day.year)
         except ValueError:
             same_year = None
-        if same_year and 0 <= (photo_day - same_year).days <= 45:
+        # Only a handwriting mix-up of the last digit (0/6, 1/7, 3/8, 4/9) is fixed: a card from
+        # 2024 photographed in 2026 is a real 2024 match, not a misread (Oct 24: IMG_1894 22-SEP-2024).
+        look_alike = {frozenset(pair) for pair in ("06", "17", "38", "49")}
+        same_decade = card_day.year // 10 == photo_day.year // 10
+        confusable = same_decade and frozenset(f"{card_day.year % 10}{photo_day.year % 10}") in look_alike
+        if same_year and confusable and 0 <= (photo_day - same_year).days <= 45:
             notes.append(f"The year was read as {card_day.year}, but the photo is from {photo_day:%d %b %Y}; changed the date to {same_year:%d %b %Y}. Check it.")
             match_info["date"] = same_year.isoformat()
         elif card_day > photo_day:
@@ -603,6 +694,118 @@ def _fix_team_names(template: dict[str, Any], club_name: str) -> None:
             inn["bowling_team"] = None
 
 
+_EXTRA_LABELS = (
+    ("leg_byes", r"l\.?\s*b(?:ye)?s?|leg\s*byes?|lbyes?"),
+    ("no_balls", r"n\.?\s*b\.?|no\s*balls?"),
+    ("penalties", r"pen(?:alty|alties|s)?"),
+    ("wides", r"w(?:ide)?s?|wd"),
+    ("byes", r"b(?:ye)?s?"),
+)
+
+
+def _written_extras(written: Any) -> dict[str, set[int]]:
+    """'BYES 111, WIDES 1112111, NB 1' -> {"byes": {111, 3}, "wides": {1112111, 8}, "no_balls": {1}}: each box read
+    both as a plain number and as a tally (one digit per extra ball). Used to check the extras total."""
+    found: dict[str, set[int]] = {}
+    for part in re.split(r"[,;/]|\band\b", str(written or ""), flags=re.I):
+        part = part.strip()
+        if not part:
+            continue
+        match = re.fullmatch(r"([A-Za-z][A-Za-z .]*?)\s*[:=]?\s*(\d[\d\s]*)", part)
+        label = match.group(1).strip().lower() if match else ""
+        key = next((name for name, pattern in _EXTRA_LABELS if re.fullmatch(pattern, label)), None) if match else None
+        if not key:
+            return {}  # something written we can't read for sure ("2-1", "HT HT 5"): don't use the boxes at all
+        digits = match.group(2)
+        compact = re.sub(r"\s+", "", digits)
+        if not compact:
+            continue
+        options = {sum(int(ch) for ch in compact)}  # tally
+        if len(compact) <= 2:
+            options.add(int(compact))  # a plain number like 23
+        found.setdefault(key, set()).update(options)
+    return found
+
+
+def _extras_options(extras: dict[str, Any]) -> set[int]:
+    """Possible extras totals from what was written in the boxes (plain numbers or tallies)."""
+    boxes = _written_extras(extras.get("written_as"))
+    if not boxes:
+        return set()
+    totals = {0}
+    for options in boxes.values():
+        totals = {total + option for total in totals for option in options if total + option < 400}
+    return totals
+
+
+def reconcile_totals(template: dict[str, Any]) -> list[str]:
+    """When batters' runs + extras don't make the grand total, try the readings the card itself offers: a batter's
+    ball-by-ball sum instead of the TOTAL column, or the extras boxes read as tallies. If exactly ONE such change
+    makes everything add up, use it and say so; otherwise leave the card for a person (no guessing)."""
+    notes: list[str] = []
+    for inn in template.get("innings") or []:
+        if not isinstance(inn, dict):
+            continue
+        summary = inn.get("summary") if isinstance(inn.get("summary"), dict) else {}
+        extras = inn.get("extras") if isinstance(inn.get("extras"), dict) else {}
+        total = summary.get("runs")
+        rows = [row for row in inn.get("batting") or [] if isinstance(row, dict)]
+        runs = [row.get("runs") for row in rows]
+        if not isinstance(total, int) or not rows or not all(isinstance(x, int) or x is None for x in runs):
+            continue
+        bat = sum(x or 0 for x in runs)
+        extra_now = extras.get("total") if isinstance(extras.get("total"), int) else 0
+        if bat + extra_now == total:
+            continue
+        team = inn.get("batting_team") or "This innings"
+        fixes: list[tuple[str, Any]] = []
+        for option in sorted(_extras_options(extras)):
+            if option != extra_now and bat + option == total:
+                fixes.append(("extras", option))
+        for index, row in enumerate(rows):
+            alt = row.get("ball_runs_sum")
+            if isinstance(alt, int) and isinstance(row.get("runs"), int) and alt != row["runs"] and bat - row["runs"] + alt + extra_now == total:
+                fixes.append(("batter", (index, alt)))
+        if len(fixes) != 1:
+            continue
+        kind, value = fixes[0]
+        if kind == "extras":
+            notes.append(f"{team}: extras were read as {extra_now}, but the extras boxes ('{extras.get('written_as')}') make {value}, "
+                         f"and with {value} the total {total} adds up - used {value}. Check it.")
+            extras["total"] = value
+        else:
+            index, alt = value
+            row = rows[index]
+            name = (row.get("player") or {}).get("name") or "A batter"
+            notes.append(f"{team}: {name}'s runs were read as {row['runs']}, but the ball-by-ball adds up to {alt}, and with {alt} "
+                         f"the total {total} adds up - used {alt}. Check it.")
+            row["runs"] = alt
+    return notes
+
+
+def bowling_notes(template: dict[str, Any]) -> list[str]:
+    """Bowling figures that can't be right: more wickets than batters out to bowlers, or more overs than the innings."""
+    notes: list[str] = []
+    for inn in template.get("innings") or []:
+        if not isinstance(inn, dict):
+            continue
+        team = inn.get("bowling_team") or "The bowlers"
+        bowlers = [row for row in inn.get("bowling") or [] if isinstance(row, dict)]
+        taken = sum(row["wickets"] for row in bowlers if isinstance(row.get("wickets"), int))
+        out_to_bowlers = 0
+        for row in inn.get("batting") or []:
+            how = str(((row or {}).get("dismissal") or {}).get("type") or "").lower() if isinstance(row, dict) else ""
+            if how and not any(word in how for word in ("not out", "did not", "run", "retired", "absent", "dnb")):
+                out_to_bowlers += 1
+        if bowlers and taken > out_to_bowlers:
+            notes.append(f"{team}: the bowlers' wickets add up to {taken}, but only {out_to_bowlers} batters were out to a bowler - check the bowling figures.")
+        overs = [row.get("overs") for row in bowlers if isinstance(row.get("overs"), (int, float))]
+        innings_overs = (inn.get("summary") or {}).get("overs") if isinstance(inn.get("summary"), dict) else None
+        if overs and isinstance(innings_overs, (int, float)) and sum(int(x) for x in overs) > int(innings_overs) + 1:
+            notes.append(f"{team}: the bowlers' overs add up to {sum(int(x) for x in overs)}, more than the {innings_overs} overs batted - check the bowling figures.")
+    return notes
+
+
 def review_notes(template: dict[str, Any]) -> list[str]:
     """Things a person should check against the photo: numbers the model wasn't sure about, and batters
     whose TOTAL doesn't match their own ball-by-ball runs."""
@@ -632,8 +835,13 @@ def review_notes(template: dict[str, Any]) -> list[str]:
             notes.append(f"Check the extras ({extras.get('total')}) against the photo: the handwriting was hard to read.")
         written = str(extras.get("written_as") or "")
         numbers = [int(n) for n in re.findall(r"\d+", written)]
-        if isinstance(extras.get("total"), int) and numbers and max(numbers) != extras["total"] and sum(numbers) != extras["total"]:
+        total = (inn.get("summary") or {}).get("runs") if isinstance(inn.get("summary"), dict) else None
+        bat = [row.get("runs") for row in inn.get("batting") or [] if isinstance(row, dict)]
+        adds_up = isinstance(total, int) and isinstance(extras.get("total"), int) and all(isinstance(x, int) or x is None for x in bat) and sum(x or 0 for x in bat) + extras["total"] == total
+        options = _extras_options(extras)
+        if isinstance(extras.get("total"), int) and numbers and not adds_up and extras["total"] not in options and max(numbers) != extras["total"] and sum(numbers) != extras["total"]:
             notes.append(f"Check the extras: the card shows '{written}' but extras was read as {extras['total']}.")
+    notes.extend(bowling_notes(template))
     return notes[:8]
 
 
@@ -716,8 +924,17 @@ def _read_with_gemini(path: Path, *, roster: list[str] | None, club_name: str, t
         prompt = ("Image 1 is the whole page. Images 2 and 3 are zoomed-in copies of its top half and bottom half - "
                   "use them to read small handwriting (names, ball-by-ball, TOTAL column, bowling boxes).\n\n") + prompt
     parts.append({"text": prompt})
+    contents: list[dict[str, Any]] = []
+    for example in worked_examples(path):
+        contents.append({"role": "user", "parts": [
+            {"inline_data": {"mime_type": example["media_type"], "data": example["data"]}},
+            {"text": _example_intro(example) + "\n\nThe correct JSON for this example card is your next answer."},
+        ]})
+        contents.append({"role": "model", "parts": [{"text": example["answer"]}]})
+    if contents:
+        parts[-1] = {"text": "Now the NEW scorecard to read (the photos above in this message).\n\n" + prompt}
     body = {
-        "contents": [{"role": "user", "parts": parts}],
+        "contents": contents + [{"role": "user", "parts": parts}],
         "generationConfig": {"temperature": 0, "responseMimeType": "application/json"},
     }
     # Less "thinking" time: copying a scorecard needs careful reading, not long reasoning. Models that don't know
@@ -730,6 +947,7 @@ def _read_with_gemini(path: Path, *, roster: list[str] | None, club_name: str, t
 
     last_error = ""
     busy = False
+    tried: list[str] = []  # "model: what happened" for the error message and the log
     now = time.time()
     # Models that just failed (timed out, busy, or out of free reads) are skipped for a while, so the next card
     # doesn't wait minutes on the same model again (README "Faster photo reading"). Last resort: try them anyway.
@@ -764,6 +982,7 @@ def _read_with_gemini(path: Path, *, roster: list[str] | None, club_name: str, t
                     )
             except httpx.TimeoutException:
                 last_error = f"{model} took too long"
+                tried.append(f"{model}: no answer in {int(timeout)}s")
                 response = None
                 _GEMINI_SKIP[model] = time.time() + 20 * 60
                 break
@@ -774,6 +993,17 @@ def _read_with_gemini(path: Path, *, roster: list[str] | None, club_name: str, t
             if response.status_code in {500, 502, 503, 504}:
                 busy = True
                 last_error = f"{model} is busy"
+                try:
+                    why = response.json().get("error", {}).get("message", "")
+                except Exception:
+                    why = response.text[:160]
+                tried.append(f"{model}: {response.status_code} {why[:120]}")
+                logger.warning("Gemini %s answered %s: %s", model, response.status_code, why[:300])
+                # A 500 (not "busy") right after a big request with the worked examples: ask again without them.
+                if response.status_code == 500 and contents and body.get("contents") is not None and len(body["contents"]) > 1:
+                    body = {**body, "contents": body["contents"][-1:]}
+                    body["contents"][0]["parts"][-1] = {"text": prompt}
+                    tried.append(f"{model}: asked again without the worked examples")
                 continue
             break
         if response is None or response.status_code in {500, 502, 503, 504}:
@@ -784,6 +1014,7 @@ def _read_with_gemini(path: Path, *, roster: list[str] | None, club_name: str, t
             last_error = f"model {model} not available"
             continue
         if response.status_code == 429:
+            tried.append(f"{model}: free daily limit reached")
             last_error = f"{model} free limit reached"
             _GEMINI_SKIP[model] = time.time() + 60 * 60
             continue  # each free model has its own daily limit
@@ -803,10 +1034,11 @@ def _read_with_gemini(path: Path, *, roster: list[str] | None, club_name: str, t
             return {"error": "The AI answer wasn't a scorecard.", "raw": text[:2000]}
         usage = payload.get("usageMetadata") or {}
         return {"template": template, "model": model, "usage": {"input_tokens": usage.get("promptTokenCount"), "output_tokens": usage.get("candidatesTokenCount")}}
+    detail = (" [" + "; ".join(tried[-6:]) + "]") if tried else ""
+    if "limit" in last_error or (tried and all("limit" in item for item in tried)):
+        return {"error": "Today's free AI limit is used up. Tap “Read with AI” again tomorrow, or type the scorecard in." + detail}
     if busy:
-        return {"error": "Google's free AI is very busy right now. Tap “Read with AI” again in a few minutes, or type the scorecard in."}
-    if "limit" in last_error:
-        return {"error": "Today's free AI limit is used up. Tap “Read with AI” again tomorrow, or type the scorecard in."}
+        return {"error": "Google's free AI is very busy right now. Tap “Read with AI” again in a few minutes, or type the scorecard in." + detail}
     return {"error": f"No Gemini vision model answered ({last_error}). Set GEMINI_VISION_MODEL in .env."}
 
 
@@ -834,6 +1066,15 @@ def _read_with_claude(path: Path, *, roster: list[str] | None, club_name: str, t
             }
         ],
     }
+    examples: list[dict[str, Any]] = []
+    for example in worked_examples(Path(path)):
+        examples.append({"role": "user", "content": [
+            {"type": "image", "source": {"type": "base64", "media_type": example["media_type"], "data": example["data"]}},
+            {"type": "text", "text": _example_intro(example) + "\n\nReply with the correct JSON for this example card."},
+        ]})
+        examples.append({"role": "assistant", "content": example["answer"]})
+    if examples:
+        body["messages"] = examples + body["messages"]
     try:
         base = subscriptions.setting("ANTHROPIC_BASE_URL", DEFAULT_BASE_URL).rstrip("/")
         response = httpx.post(

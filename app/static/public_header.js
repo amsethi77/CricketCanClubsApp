@@ -1,3 +1,18 @@
+// Launch mode (README "Launch: everyone on Pro"): no paid plans yet, so links to /pricing are hidden.
+(() => {
+  if (window.CC_PLAN_CONFIG_LOADED) return;
+  window.CC_PLAN_CONFIG_LOADED = true;
+  fetch("/api/public/config")
+    .then((response) => (response.ok ? response.json() : null))
+    .then((config) => {
+      if (!config || config.subscriptions) return;
+      window.CC_SUBSCRIPTIONS_OFF = true;
+      const style = document.createElement("style");
+      style.textContent = 'a[href="/pricing"], a[href^="/pricing?"], .plan-upgrade-only { display: none !important; }';
+      document.head.appendChild(style);
+    })
+    .catch(() => {});
+})();
 // Dark / light mode + navbar search (site_tools.js). Apply the saved theme right away to avoid a flash.
 (function loadSiteTools() {
   try {
