@@ -1,5 +1,6 @@
 import SwiftUI
 
+/// CricketCanClubs for iPhone. README "Phone apps (Android + iPhone)".
 @main
 struct CricketClubAppApp: App {
     @StateObject private var appState = AppState()
@@ -8,9 +9,7 @@ struct CricketClubAppApp: App {
         WindowGroup {
             RootView()
                 .environmentObject(appState)
-                .task {
-                    await appState.refreshHealth()
-                }
+                .onOpenURL { url in appState.handleIncoming(url) }
         }
     }
 }

@@ -7631,7 +7631,8 @@ def build_dashboard(
         "llm": llm_status,
         "insights": focused_store["insights"],
         "viewer_profile": store.get("viewer_profile", dict(DEFAULT_VIEWER_PROFILE)),
-        "landing_upcoming_matches": (today_matches or live_matches or future_matches or completed_matches)[:10],
+        # Only matches still to be played (Amit, Oct 26: "Next match" showed an old game when nothing was scheduled).
+        "landing_upcoming_matches": (live_matches + [m for m in today_matches if m not in live_matches] + [m for m in future_matches if m not in today_matches and m not in live_matches])[:10],
         "landing_club_stats": {
             "member_count": len(_club_member_names(store, focus_club)),
             "team_count": _club_team_count(store, focus_club, _club_member_names(store, focus_club)),

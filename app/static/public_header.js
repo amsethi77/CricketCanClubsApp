@@ -19,7 +19,12 @@
     if (localStorage.getItem("cricketClubAppTheme") === "dark") document.documentElement.setAttribute("data-theme", "dark");
   } catch (e) { /* ignore */ }
   // Public AI Assistant (read-only chat for signed-out visitors). See README.md -> "Public AI Assistant".
-  if (!document.querySelector('script[src^="/assets/muse_public.js"]')) {
+  // Signed-in members get the full assistant from the signed-in menu instead (see loadPublicHeader).
+  let hasToken = false;
+  try {
+    hasToken = Boolean(localStorage.getItem("cricketClubAppAuthToken"));
+  } catch (e) { /* ignore */ }
+  if (!hasToken && !document.querySelector('script[src^="/assets/muse_public.js"]')) {
     const muse = document.createElement("script");
     muse.src = "/assets/muse_public.js?v=20261018a";
     muse.defer = true;
@@ -31,9 +36,59 @@
   document.head.appendChild(script);
 })();
 
+// One menu for signed-in members everywhere (Amit, Oct 26: "menus are not consistent"). Public pages
+// (Live, Fixtures, Scorecards, Rankings, a scorecard...) used the public menu even when signed in; now a
+// signed-in member gets the same signed-in menu, bottom bar and assistant as on Home (multipage.js).
+// README "One menu when signed in".
+async function signedInUser() {
+  let token = '';
+  try {
+    token = localStorage.getItem('cricketClubAppAuthToken') || '';
+  } catch (e) {
+    token = '';
+  }
+  if (!token) return null;
+  try {
+    const response = await fetch('/api/auth/me', { headers: { 'X-Auth-Token': token } });
+    if (!response.ok) return null;
+    const data = await response.json();
+    return data.user || null;
+  } catch (e) {
+    return null;
+  }
+}
+
+function loadPublicAssistant() {
+  if (document.querySelector('script[src^="/assets/muse_public.js"]')) return;
+  const muse = document.createElement('script');
+  muse.src = '/assets/muse_public.js?v=20261018a';
+  muse.defer = true;
+  document.head.appendChild(muse);
+}
+
 (async function loadPublicHeader() {
   const mount = document.querySelector('[data-public-header]');
   if (!mount) return;
+
+  // Sign-in and Register pages load multipage.js themselves and keep the public menu.
+  const hasSignedInScript = Boolean(document.querySelector('script[src^="/assets/multipage.js"]'));
+  if (!hasSignedInScript) {
+    const user = await signedInUser();
+    if (user) {
+      const topbar = document.createElement('header');
+      topbar.className = 'page-topbar';
+      mount.replaceWith(topbar);
+      const heroActions = document.getElementById('homeHeroActions');
+      if (heroActions) heroActions.innerHTML = '<a class="home-btn primary" href="/dashboard">Go to my dashboard</a>';
+      document.body.dataset.signedIn = 'true';
+      document.dispatchEvent(new CustomEvent('cc:signed-in', { detail: user }));
+      const script = document.createElement('script');
+      script.src = '/assets/multipage.js?v=20261027a';
+      document.head.appendChild(script);
+      return;
+    }
+    loadPublicAssistant();
+  }
 
   try {
     const response = await fetch('/assets/public_header.html?v=20261016b', {

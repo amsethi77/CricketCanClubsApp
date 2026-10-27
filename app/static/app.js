@@ -32,7 +32,7 @@ function putJson(url, payload, authenticated = false) {
   return shared.putJson(url, payload, authenticated);
 }
 
-const SHARED_HEADER_URL = "/assets/shared_header.html?v=20260511i";
+const SHARED_HEADER_URL = "/assets/shared_header.html?v=20261027a";
 let sharedHeaderTemplate = null;
 let sharedHeaderTemplateInFlight = null;
 
@@ -2457,15 +2457,40 @@ function renderLastMatchHero(dashboard) {
   return true;
 }
 
+// The next match that is still to be played: today or later, not completed (dated ones first, by date).
+function nextScheduledFixture(fixtures) {
+  return (Array.isArray(fixtures) ? fixtures : [])
+    .filter((fixture) => isUpcomingFixture(fixture))
+    .sort((a, b) => String(a.date || "9999").localeCompare(String(b.date || "9999")))[0] || null;
+}
+
+function isUpcomingFixture(fixture) {
+  if (!fixture) return false;
+  const status = String(fixture.status || "").toLowerCase();
+  return !isPastFixture(fixture) && status !== "completed" && /^\d{4}-\d{2}-\d{2}/.test(String(fixture.date || ""));
+}
+
 function renderDashboardMatchHero(match, dashboard) {
   if (!elements.dashboardMatchHero) {
     return;
   }
-  const hasUpcoming = (Array.isArray(dashboard?.fixtures) ? dashboard.fixtures : []).some(
-    (fixture) => !isPastFixture(fixture) && String(fixture.status || "").toLowerCase() !== "completed"
-  );
-  if (!hasUpcoming && (!match || isPastFixture(match) || String(match.status || "").toLowerCase() === "completed")) {
-    if (renderLastMatchHero(dashboard)) return;
+  // "Next Match" only ever shows a match still to be played (Amit, Oct 26: it showed an old, past game).
+  // No upcoming fixture: say so, with a button to add one - no past match here.
+  const kicker = document.querySelector(".dashboard-match-panel .panel-head .section-kicker");
+  const title = document.querySelector(".dashboard-match-panel .panel-head h2");
+  if (kicker) kicker.textContent = "Next Match";
+  if (title) title.textContent = "Matchday at a glance";
+  const isLive = ["live", "in progress", "scorecard in progress"].includes(String(match?.status || "").toLowerCase());
+  if (!match || (!isLive && !isUpcomingFixture(match))) {
+    match = nextScheduledFixture(dashboard?.fixtures);
+  }
+  if (!match) {
+    elements.dashboardMatchHero.innerHTML = `
+      <div class="empty-state">
+        <p>No upcoming match scheduled.</p>
+        <div class="hero-actions"><a class="secondary-button" href="/dashboard/widgets/schedule">Add a fixture</a></div>
+      </div>`;
+    return;
   }
   if (!match) {
     elements.dashboardMatchHero.innerHTML = `<p class="empty-state">No match selected yet.</p>`;
@@ -2845,7 +2870,7 @@ function renderViewerProfile(dashboard) {
   populatePrimaryClubSelect(dashboard);
   renderLandingPlayerResults();
   renderLandingRecentScorecards(dashboard.archive_uploads || []);
-  renderLandingMatches(dashboard.landing_upcoming_matches || []);
+  renderLandingMatches((dashboard.landing_upcoming_matches || []).filter((item) => isUpcomingFixture(item) || ["live", "in progress"].includes(String(item.status || "").toLowerCase())));
   renderLandingClubStats(dashboard.landing_club_stats || {});
 
   const selectedMatchExists = (dashboard.all_fixtures || dashboard.fixtures || []).some((match) => match.id === state.selectedMatchId);
@@ -4738,7 +4763,10 @@ function renderDashboard(dashboard) {
   syncScoringLinkTargets(dashboard);
 
   if (activeWidget === "overview") {
-    const landingNextMatch = dashboard.landing_upcoming_matches?.[0] || dashboard.upcoming_match || {};
+    const landingNextMatch =
+      (dashboard.landing_upcoming_matches || []).find((item) => isUpcomingFixture(item)) ||
+      nextScheduledFixture(dashboard.fixtures) ||
+      {};
     const selectedYear = state.selectedSeasonYear || currentYear;
     const totalFixtures = dashboard.summary?.fixture_count ?? (dashboard.fixtures || []).length;
     const playedMatches = dashboard.summary?.matches_played ?? 0;

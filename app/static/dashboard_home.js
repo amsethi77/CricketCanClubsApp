@@ -43,12 +43,41 @@
     return `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, "0")}-${String(n.getDate()).padStart(2, "0")}`;
   }
 
+  // The signed-in member's club (README "Home shows your own club", Oct 27). The club id is kept in
+  // sessionStorage by multipage.js; /api/auth/me is the reliable source, so Home asks it once.
   function currentClubId() {
     try {
-      return localStorage.getItem("cricketClubAppPrimaryClubId") || "";
+      return sessionStorage.getItem("cricketClubAppPrimaryClubId") || localStorage.getItem("cricketClubAppPrimaryClubId") || "";
     } catch (error) {
       return "";
     }
+  }
+
+  let myClubPromise = null;
+  function myClub() {
+    if (!myClubPromise) {
+      myClubPromise = fetch("/api/auth/me", {
+        headers: { Accept: "application/json", "X-Auth-Token": localStorage.getItem("cricketClubAppAuthToken") || "" },
+      })
+        .then((response) => (response.ok ? response.json() : null))
+        .then((data) => {
+          const user = (data && data.user) || {};
+          return {
+            id: String(user.current_club_id || user.primary_club_id || currentClubId() || ""),
+            name: String(user.current_club_name || user.primary_club_name || ""),
+          };
+        })
+        .catch(() => ({ id: currentClubId(), name: "" }));
+    }
+    return myClubPromise;
+  }
+
+  // "Heartlake Cricket Club", "HEARTLAKE CC" and "Heart Lake" are the same club.
+  function teamKey(name) {
+    return String(name || "")
+      .toLowerCase()
+      .replace(/cricket|club|\bcc\b|\bxi\b/g, "")
+      .replace(/[^a-z0-9]/g, "");
   }
 
   // ---------- 1. Welcome banner: greeting + quick actions ----------
@@ -293,12 +322,26 @@
       getJson("/api/public/fixtures-page"),
       getJson("/api/public/scorecards"),
     ]);
-    const clubId = currentClubId();
+    const club = await myClub();
+    const clubId = club.id;
+    const clubKey = teamKey(club.name);
     const mineFirst = (a, b) => Number(b.club === clubId) - Number(a.club === clubId);
+    // A member's Home shows their own club's matches and scorecards only (Amit, Oct 26: Heartlake's Home
+    // showed other clubs' scorecards). The club's own card, or a card where the club is one of the teams.
+    // When the card names its teams, the club must be one of them (photos of other clubs' games uploaded by
+    // a Heartlake member are not Heartlake's). Only cards without team names fall back to the uploading club.
+    const isMine = (ownerId, teamNames) => {
+      if (!clubId) return true;
+      const names = (teamNames || []).filter((name) => teamKey(name).length >= 3);
+      if (clubKey.length >= 3 && names.length) return names.some((name) => teamKey(name) === clubKey);
+      return ownerId === clubId;
+    };
 
-    const liveList = (live?.live_matches || []).map((f) => fromFixture(f, "live"));
+    const liveList = (live?.live_matches || []).map((f) => fromFixture(f, "live")).filter((m) => isMine(m.club, m.teams.map((t) => t.name)));
     const liveIds = new Set(liveList.map((m) => m.id));
-    const all = (fixtures?.fixtures || []).map((f) => fromFixture(f)).filter((m) => !liveIds.has(m.id));
+    const all = (fixtures?.fixtures || [])
+      .map((f) => fromFixture(f))
+      .filter((m) => !liveIds.has(m.id) && isMine(m.club, m.teams.map((t) => t.name)));
     const results = all.filter((m) => m.kind === "result").sort((a, b) => String(b.date).localeCompare(String(a.date)));
     const today = todayIso();
     const upcoming = all
@@ -308,10 +351,12 @@
     renderStrip();
 
     const grid = scPanel.querySelector(".home-card-grid");
-    const list = (scorecards?.scorecards || []).slice();
-    list.sort((a, b) => Number(b.club_id === clubId) - Number(a.club_id === clubId) || String(b.date).localeCompare(String(a.date)));
+    const list = (scorecards?.scorecards || []).filter((sc) =>
+      isMine(sc.club_id, (sc.teams || []).map((t) => t.name))
+    );
+    list.sort((a, b) => String(b.date).localeCompare(String(a.date)));
     grid.innerHTML = list.length
       ? list.slice(0, 4).map(scCard).join("")
-      : `<div class="home-empty">No approved scorecards yet. <a href="/scorecards/upload">Upload a scorecard photo</a></div>`;
+      : `<div class="home-empty">No published scorecards for your club yet. <a href="/scorecards/upload">Upload a scorecard photo</a></div>`;
   })();
 })();

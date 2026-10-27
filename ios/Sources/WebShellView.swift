@@ -1,27 +1,14 @@
 import SwiftUI
 import WebKit
 
+/// Shows AppState's web view. The web view itself lives in AppState, so switching tabs or screens never reloads it.
+/// Photo uploads (<input type="file">) open the iPhone's own "Take Photo / Photo Library" menu.
 struct WebShellView: UIViewRepresentable {
-    let url: URL
-
-    func makeCoordinator() -> Coordinator {
-        Coordinator()
-    }
+    let webView: WKWebView
 
     func makeUIView(context: Context) -> WKWebView {
-        let webView = WKWebView(frame: .zero)
-        webView.navigationDelegate = context.coordinator
-        webView.allowsBackForwardNavigationGestures = true
-        webView.scrollView.bounces = true
-        webView.load(URLRequest(url: url))
-        return webView
+        webView
     }
 
-    func updateUIView(_ uiView: WKWebView, context: Context) {
-        if uiView.url != url {
-            uiView.load(URLRequest(url: url))
-        }
-    }
-
-    final class Coordinator: NSObject, WKNavigationDelegate {}
+    func updateUIView(_ uiView: WKWebView, context: Context) {}
 }

@@ -1,65 +1,88 @@
 import SwiftUI
 
+private let brandGreen = Color(red: 10 / 255, green: 110 / 255, blue: 70 / 255)
+
+/// The app screen: the website, a thin loading bar, the "no internet" screen and native tabs at the bottom.
 struct RootView: View {
     @EnvironmentObject private var appState: AppState
 
     var body: some View {
-        ZStack(alignment: .topTrailing) {
-            WebShellView(url: appState.baseURL)
-                .ignoresSafeArea()
-
-            VStack(alignment: .trailing, spacing: 10) {
-                VStack(alignment: .trailing, spacing: 6) {
-                    statusPill
-                    Text(appState.healthDetail)
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(.secondary)
-                        .padding(.horizontal, 8)
+        VStack(spacing: 0) {
+            ZStack(alignment: .top) {
+                WebShellView(webView: appState.webView)
+                if appState.progress > 0 && appState.progress < 1 {
+                    ProgressView(value: appState.progress)
+                        .progressViewStyle(.linear)
+                        .tint(brandGreen)
+                        .frame(height: 2)
                 }
-                refreshButton
+                if appState.isOffline {
+                    OfflineView { appState.retry() }
+                }
             }
-            .padding()
+            TabBar()
         }
+        .background(Color(.systemBackground))
     }
+}
 
-    private var statusPill: some View {
-        HStack(spacing: 8) {
-            Circle()
-                .fill(statusColor)
-                .frame(width: 12, height: 12)
-                .scaleEffect(appState.healthState == .thinking || appState.healthState == .connecting ? 1.1 : 1.0)
-                .opacity(appState.healthState == .thinking || appState.healthState == .connecting ? 0.75 : 1.0)
-            Text(appState.healthState.rawValue)
-                .font(.system(size: 14, weight: .semibold))
+/// Native bottom tabs: each opens that page of the website.
+private struct TabBar: View {
+    @EnvironmentObject private var appState: AppState
+
+    var body: some View {
+        let selected = AppConfig.tab(for: appState.currentURL)
+        VStack(spacing: 0) {
+            Divider()
+            HStack(spacing: 0) {
+                ForEach(AppConfig.tabs) { tab in
+                    Button {
+                        appState.open(tab)
+                    } label: {
+                        VStack(spacing: 3) {
+                            Image(systemName: tab.symbol)
+                                .font(.system(size: 19, weight: .semibold))
+                            Text(tab.label)
+                                .font(.system(size: 10, weight: .medium))
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.8)
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.top, 7)
+                        .padding(.bottom, 4)
+                        .foregroundStyle(selected == tab ? brandGreen : Color(.secondaryLabel))
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(tab.label)
+                    .accessibilityAddTraits(selected == tab ? .isSelected : [])
+                }
+            }
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 10)
-        .background(.thinMaterial)
-        .clipShape(Capsule())
-        .overlay(Capsule().strokeBorder(Color.white.opacity(0.15), lineWidth: 1))
-        .shadow(color: .black.opacity(0.12), radius: 10, x: 0, y: 4)
+        .background(.bar)
     }
+}
 
-    private var refreshButton: some View {
-        Button {
-            Task { await appState.refreshHealth() }
-        } label: {
-            Text("Refresh status")
-                .font(.system(size: 13, weight: .medium))
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
-                .background(Color.white.opacity(0.86))
-                .clipShape(Capsule())
-        }
-        .buttonStyle(.plain)
-    }
+private struct OfflineView: View {
+    let retry: () -> Void
 
-    private var statusColor: Color {
-        switch appState.healthState {
-        case .online: return .green
-        case .thinking: return .green
-        case .connecting: return .red
-        case .offline: return .red
+    var body: some View {
+        VStack(spacing: 14) {
+            Image(systemName: "wifi.slash")
+                .font(.system(size: 44))
+                .foregroundStyle(.secondary)
+            Text("No internet connection")
+                .font(.title3.bold())
+            Text("Check your Wi-Fi or mobile data, then try again.")
+                .multilineTextAlignment(.center)
+                .foregroundStyle(.secondary)
+            Button("Try again", action: retry)
+                .buttonStyle(.borderedProminent)
+                .tint(brandGreen)
+                .padding(.top, 6)
         }
+        .padding(32)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color(.systemGroupedBackground))
     }
 }

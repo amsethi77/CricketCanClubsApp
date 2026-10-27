@@ -47,6 +47,15 @@ const USER_BADGE_ID = "userIdentityBadge";
 const CLUB_BADGE_ID = "currentClubBadge";
 const BOTTOM_NAV_ID = "bottomAppNav";
 const ASSISTANT_FAB_ID = "assistantFloatingButton";
+// Inside the iPhone / Android app (README "Phone apps"): the app has its own native tabs at the bottom,
+// so the website's bottom bar is hidden there. The app adds "CricketCanClubsApp" to the browser's user agent.
+(() => {
+  if (!/CricketCanClubsApp/.test(navigator.userAgent || "")) return;
+  document.documentElement.classList.add("in-app");
+  const style = document.createElement("style");
+  style.textContent = ".in-app .bottom-app-nav { display: none !important; } .in-app .assistant-fab { bottom: 16px !important; }";
+  document.head.appendChild(style);
+})();
 // Launch mode (README "Launch: everyone on Pro"): no paid plans yet, so links to /pricing are hidden.
 (() => {
   if (window.CC_PLAN_CONFIG_LOADED) return;
@@ -62,7 +71,7 @@ const ASSISTANT_FAB_ID = "assistantFloatingButton";
     })
     .catch(() => {});
 })();
-const SHARED_HEADER_URL = "/assets/shared_header.html?v=20261020a";
+const SHARED_HEADER_URL = "/assets/shared_header.html?v=20261027a";
 const SESSION_ACTIVITY_DEBOUNCE_MS = 1200;
 const SESSION_TOUCH_INTERVAL_MS = 60000;
 // Soft-launch menu (README: "Simple menu and app tour"). Matches = upcoming games + availability,

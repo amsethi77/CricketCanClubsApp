@@ -1,8 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources xmlns:tools="http://schemas.android.com/tools">
     <style name="Theme.CricketClubApp" parent="Theme.Material3.DayNight.NoActionBar">
-        <item name="android:statusBarColor">@android:color/transparent</item>
-        <item name="android:navigationBarColor">@android:color/transparent</item>
         <item name="android:windowLightStatusBar">true</item>
+    </style>
+
+    <!-- Splash screen while the app starts (androidx.core:core-splashscreen). -->
+    <style name="Theme.CricketClubApp.Starting" parent="Theme.SplashScreen">
+        <item name="windowSplashScreenBackground">@color/cricket_green</item>
+        <item name="windowSplashScreenAnimatedIcon">@mipmap/ic_launcher_foreground</item>
+        <item name="postSplashScreenTheme">@style/Theme.CricketClubApp</item>
     </style>
 </resources>
