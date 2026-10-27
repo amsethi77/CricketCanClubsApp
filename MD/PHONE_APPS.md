@@ -28,10 +28,12 @@ testers for 14 days before the app can be public. If that applies, on Nov 8 Andr
 closed-test link; the store listing goes public when the 14 days are done. Business (organisation) accounts
 don't have this rule.
 
-## Still needed on the website before submitting (Claude)
-- A privacy policy page (e.g. /privacy) - both stores require the link.
-- "Delete my account" for members in their profile - Apple requires it for apps where people can sign up.
-- A demo member account for Apple's reviewers.
+## Website pages the stores ask for
+- Privacy policy (done Oct 27): `https://cricketcanclubs-web.azurewebsites.net/privacy` - paste this link in both
+  stores. Set `SUPPORT_EMAIL` in Azure's Environment variables so the page shows a contact email.
+- Delete my account (done Oct 27): Profile page -> "Delete my account" (type DELETE). Apple asks where it is:
+  "Sign in > Profile > Delete my account".
+- Still to do: a demo member account for Apple's reviewers (a normal player account in a test club, not an admin).
 
 ## Android (Windows, Android Studio)
 1. Install Android Studio (latest). Open the `android` folder (File > Open). Let it sync; if it asks to use the

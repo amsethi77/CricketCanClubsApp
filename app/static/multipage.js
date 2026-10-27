@@ -23,7 +23,7 @@
     if (document.querySelector('script[src^="/assets/app_tour.js"]')) return;
     if (!document.querySelector(".page-topbar")) return;
     const tour = document.createElement("script");
-    tour.src = "/assets/app_tour.js?v=20261016c";
+    tour.src = "/assets/app_tour.js?v=20261027a";
     document.head.appendChild(tour);
   };
   if (document.readyState === "loading") {

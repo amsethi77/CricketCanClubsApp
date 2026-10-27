@@ -50,6 +50,12 @@ async function signedInUser() {
   if (!token) return null;
   try {
     const response = await fetch('/api/auth/me', { headers: { 'X-Auth-Token': token } });
+    if (response.status === 401) {
+      // Expired sign-in: forget it quietly, so the page (and the welcome tour) treat this as a visitor.
+      try {
+        localStorage.removeItem('cricketClubAppAuthToken');
+      } catch (e) { /* ignore */ }
+    }
     if (!response.ok) return null;
     const data = await response.json();
     return data.user || null;
@@ -88,10 +94,17 @@ function loadPublicAssistant() {
       return;
     }
     loadPublicAssistant();
+    // First-visit welcome tour on the Live page (README "App tour in the phone apps and for visitors").
+    const here = (window.location.pathname || '/').replace(/\/+$/, '') || '/';
+    if ((here === '/' || here === '/live') && !document.querySelector('script[src^="/assets/app_tour.js"]')) {
+      const tour = document.createElement('script');
+      tour.src = '/assets/app_tour.js?v=20261027a';
+      document.head.appendChild(tour);
+    }
   }
 
   try {
-    const response = await fetch('/assets/public_header.html?v=20261016b', {
+    const response = await fetch('/assets/public_header.html?v=20261027a', {
       cache: 'no-store',
     });
     if (!response.ok) return;

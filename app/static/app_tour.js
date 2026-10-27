@@ -6,10 +6,20 @@
  * Seen is saved on the account (GET /api/tour, POST /api/tour/seen) so it doesn't show again on
  * another phone or browser. It is only for first-time users (no menu item); support can still show it with ?tour=1.
  * Loaded on signed-in pages by multipage.js. README: "Simple menu and app tour".
+ *
+ * Oct 27 (README "App tour in the phone apps and for visitors"):
+ *  - Inside the iPhone / Android app (user agent "CricketCanClubsApp") the website's bottom bar is hidden and the
+ *    app has native tabs (Home, Live, Score, Scorecards, Upload), so those steps say "tap Score at the bottom"
+ *    and the card sits just above the tabs instead of pointing at a hidden button.
+ *  - First-time visitors who are not signed in get a short 3-step welcome on the Live page (once per browser;
+ *    loaded by public_header.js). ?tour=1 shows it again.
  */
 (() => {
   if (window.CCAppTour) return;
   const SEEN_KEY = "cricketClubAppTourSeen";
+  const VISITOR_SEEN_KEY = "cricketClubAppVisitorTourSeen";
+  const IN_APP = /CricketCanClubsApp/.test(navigator.userAgent || "");
+  let visitorMode = false;
   const TOKEN_KEY = "cricketClubAppAuthToken";
 
   const nav = (href) => [
@@ -47,11 +57,15 @@
           targets: nav("/score"),
           task: true, title: "Score a match",
           text: "On match day, tap Score, choose the game, set both line-ups, then tap 0–6, Wd, Nb or W after every ball.",
+          appTab: true,
+          appText: "On match day, tap <strong>Score</strong> in the tabs at the bottom, choose the game, set both line-ups, then tap 0–6, Wd, Nb or W after every ball.",
         },
         {
           targets: nav("/scorecards"),
           task: true, title: "Upload a paper scorecard",
           text: "Open Scorecards → 📷 Upload a scorecard. Take a photo, check what the app read, fix anything wrong, then tap Publish.",
+          appTab: true,
+          appText: "Tap <strong>Upload</strong> in the tabs at the bottom and take a photo of the paper scorecard. Check what the app read, fix anything wrong, then tap Publish.",
         }
       );
     } else {
@@ -60,11 +74,15 @@
           targets: nav("/dashboard"),
           task: true, title: "Follow the live score",
           text: "Home shows matches being played right now, recent results and what's coming up.",
+          appTab: true,
+          appText: "Tap <strong>Live</strong> in the tabs at the bottom to follow matches being played right now. <strong>Home</strong> shows your club's results and what's coming up.",
         },
         {
           targets: nav("/scorecards"),
           task: true, title: "See your scorecards",
           text: "Open Scorecards to see every published match and your own runs and wickets.",
+          appTab: true,
+          appText: "Tap <strong>Scorecards</strong> in the tabs at the bottom to see every published match and your own runs and wickets.",
         }
       );
     }
@@ -85,6 +103,31 @@
     return steps
       .filter((step) => !step.skip)
       .map((step) => (step.task ? { ...step, title: `Step ${(number += 1)} · ${step.title}` } : step));
+  }
+
+  // Signed-out first visit (Live page): what the app is, sign in / register, quick match without an account.
+  function visitorSteps() {
+    const quick = () =>
+      Array.from(document.querySelectorAll("a")).find((el) => /score a quick match/i.test(el.textContent || "") && visible(el));
+    return [
+      {
+        title: "Welcome to CricketCanClubs 🏏",
+        text: "Live scores, results, fixtures and scorecards for community cricket clubs across Canada. Here's how to get started.",
+      },
+      {
+        targets: ['[data-public-nav="signin"]', "#homeHeroActions a"],
+        title: "Sign in or register your club",
+        text: "Players and captains sign in here. New club? Tap <strong>Register your club</strong> on this page to add your club and players.",
+      },
+      {
+        find: quick,
+        targets: ['[data-public-nav="score"]'],
+        title: "Score a quick match - no account needed",
+        text: IN_APP
+          ? "Want to try it? Tap <strong>Score</strong> in the tabs at the bottom, or the quick match link on this page, and score ball by ball."
+          : "Want to try it? Tap “Score a quick match” and score ball by ball, no sign-in needed.",
+      },
+    ];
   }
 
   let steps = [];
@@ -143,6 +186,14 @@
   }
 
   function markSeen() {
+    if (visitorMode) {
+      try {
+        localStorage.setItem(VISITOR_SEEN_KEY, new Date().toISOString());
+      } catch (error) {
+        /* private mode */
+      }
+      return;
+    }
     try {
       localStorage.setItem(SEEN_KEY, new Date().toISOString());
     } catch (error) {
@@ -161,7 +212,8 @@
 
   function place() {
     if (!layer) return;
-    const target = findTarget(steps[index]);
+    const step = steps[index];
+    const target = IN_APP && step.appTab ? null : findTarget(step);
     const spot = layer.querySelector(".cc-tour-spot");
     const shade = layer.querySelector(".cc-tour-shade");
     const card = layer.querySelector(".cc-tour-card");
@@ -175,11 +227,16 @@
       const below = rect.bottom + 14;
       const top = below + cardRect.height + margin <= window.innerHeight ? below : Math.max(margin, rect.top - cardRect.height - 14);
       const left = Math.min(Math.max(margin, rect.left + rect.width / 2 - cardRect.width / 2), window.innerWidth - cardRect.width - margin);
-      Object.assign(card.style, { top: `${top}px`, left: `${left}px`, transform: "none" });
+      Object.assign(card.style, { top: `${top}px`, left: `${left}px`, bottom: "auto", transform: "none" });
+    } else if (IN_APP && step.appTab) {
+      // The tab is in the app's own bar just below the page: put the card at the bottom, pointing down at it.
+      spot.style.display = "none";
+      shade.style.background = "rgba(15,23,42,.55)";
+      Object.assign(card.style, { top: "auto", bottom: `${margin}px`, left: "50%", transform: "translateX(-50%)" });
     } else {
       spot.style.display = "none";
       shade.style.background = "rgba(15,23,42,.55)";
-      Object.assign(card.style, { top: "50%", left: "50%", transform: "translate(-50%, -50%)" });
+      Object.assign(card.style, { top: "50%", left: "50%", bottom: "auto", transform: "translate(-50%, -50%)" });
     }
   }
 
@@ -190,7 +247,7 @@
     layer.querySelector(".cc-tour-card").innerHTML = `
       <div class="cc-tour-bar" aria-hidden="true"><span style="width:${percent}%"></span></div>
       <h2 id="ccTourTitle">${step.title}</h2>
-      <p>${step.text}</p>
+      <p>${IN_APP && step.appText ? step.appText : step.text}</p>${IN_APP && step.appTab ? '<p style="text-align:center;font-size:1.4rem;margin:0">👇</p>' : ""}
       <div class="cc-tour-foot">
         <span class="cc-tour-dots">${index + 1} of ${steps.length}</span>
         <div class="cc-tour-btns">
@@ -206,6 +263,7 @@
 
   function start(info) {
     close(false);
+    visitorMode = false;
     steps = buildSteps(info || window.CCAppTour.info || {});
     index = 0;
     layer = document.createElement("div");
@@ -238,14 +296,65 @@
     if (event.key === "ArrowLeft") layer.querySelector('[data-tour="back"]')?.click();
   });
 
-  window.CCAppTour = { start: (info) => start(info), close, info: {} };
+  function startVisitor() {
+    close(false);
+    visitorMode = true;
+    steps = visitorSteps();
+    index = 0;
+    layer = document.createElement("div");
+    layer.className = "cc-tour";
+    layer.innerHTML = `<div class="cc-tour-shade"></div><div class="cc-tour-spot"></div><div class="cc-tour-card" role="dialog" aria-modal="true" aria-labelledby="ccTourTitle"></div>`;
+    layer.addEventListener("click", onLayerClick);
+    document.body.appendChild(layer);
+    window.addEventListener("resize", place);
+    render();
+  }
+
+  function onLayerClick(event) {
+    const action = event.target.closest("[data-tour]")?.dataset.tour;
+    if (action === "next") {
+      if (index >= steps.length - 1) close();
+      else {
+        index += 1;
+        render();
+      }
+    } else if (action === "back") {
+      index = Math.max(0, index - 1);
+      render();
+    } else if (action === "skip") {
+      close();
+    }
+  }
+
+  window.CCAppTour = { start: (info) => start(info), startVisitor, close, info: {} };
 
   // Start on its own only after signing in, and only if this account has never seen it (or ?tour=1).
   const path = window.location.pathname.replace(/\/+$/, "") || "/";
   const asked = new URLSearchParams(window.location.search).get("tour") === "1";
   const authPage = path === "/signin" || path === "/register" || path.startsWith("/signin/");
   const t = token();
-  if (authPage || !t) return;
+  if (authPage) return;
+  if (!t) {
+    // Visitor welcome: only on the public Live / home page, once per browser.
+    if (!(path === "/" || path === "/live")) return;
+    let seen = false;
+    try {
+      seen = Boolean(localStorage.getItem(VISITOR_SEEN_KEY));
+    } catch (error) {
+      seen = true;
+    }
+    if (seen && !asked) return;
+    let tries = 0;
+    const timer = setInterval(() => {
+      tries += 1;
+      const ready = document.querySelector('[data-public-nav="signin"]');
+      if (ready || tries > 40) {
+        clearInterval(timer);
+        if (ready && !token()) setTimeout(startVisitor, 800);
+      }
+    }, 250);
+    return;
+  }
 
   fetch("/api/tour", { headers: { "X-Auth-Token": t } })
     .then((response) => (response.ok ? response.json() : null))

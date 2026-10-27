@@ -9491,6 +9491,14 @@ def admin_delete_user(user_id: int, x_auth_token: str | None = Header(default=No
     admin_row, _ = _require_superadmin(x_auth_token)
     if int(user_id) == int(admin_row["id"]):
         raise HTTPException(status_code=400, detail="You can't delete your own account.")
+    row = _delete_app_user(int(user_id))
+    _audit_event("user.delete", "app_user", str(user_id), actor=admin_row, details={"display_name": str(row["display_name"] or "")}, source="api")
+    return {"message": f"Account {row['display_name']} deleted."}
+
+
+def _delete_app_user(user_id: int) -> sqlite3.Row:
+    """Delete a sign-in account and everything linked to it by user id (sessions, settings, tour...).
+    The club's player record and published scorecards stay (club match history). Site admins are never deleted."""
     with _auth_connection() as connection:
         row = connection.execute("SELECT id, display_name, role FROM app_users WHERE id = ?", (int(user_id),)).fetchone()
         if not row:
@@ -9504,8 +9512,38 @@ def admin_delete_user(user_id: int, x_auth_token: str | None = Header(default=No
                 if column in columns and table != "app_users":
                     connection.execute(f'DELETE FROM "{table}" WHERE "{column}" = ?', (int(user_id),))
         connection.execute("DELETE FROM app_users WHERE id = ?", (int(user_id),))
-    _audit_event("user.delete", "app_user", str(user_id), actor=admin_row, details={"display_name": str(row["display_name"] or "")}, source="api")
-    return {"message": f"Account {row['display_name']} deleted."}
+    return row
+
+
+class AccountDeleteRequest(BaseModel):
+    confirmation: str = ""
+
+
+@app.post("/api/account/delete")
+def delete_my_account(request: AccountDeleteRequest, x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
+    """"Delete my account" on the Profile page (README "Privacy policy and Delete my account"; Apple requires it
+    for apps where people can sign up). The member types DELETE to confirm. Signs them out everywhere."""
+    user_row, current_club_id = _auth_user_from_token(x_auth_token, touch=False)
+    if str(request.confirmation or "").strip().upper() != "DELETE":
+        raise HTTPException(status_code=400, detail="Type DELETE to confirm.")
+    if "superadmin" in _user_role_names(user_row, current_club_id) or str(user_row["role"] or "") == "superadmin":
+        raise HTTPException(status_code=400, detail="Site admin accounts can't be deleted from the app. Ask another site admin.")
+    row = _delete_app_user(int(user_row["id"]))
+    _audit_event("user.self_delete", "app_user", str(user_row["id"]), actor=None, club_id=current_club_id, details={"display_name": str(row["display_name"] or "")}, source="api")
+    return {"message": "Your account has been deleted. You are signed out."}
+
+
+@app.get("/privacy")
+def privacy_page() -> HTMLResponse:
+    """Privacy policy (both app stores need a link to it). SUPPORT_EMAIL in .env / Azure settings is the contact."""
+    email = subscriptions.setting("SUPPORT_EMAIL", "").strip()
+    contact = (
+        f'<a href="mailto:{html.escape(email)}">{html.escape(email)}</a>'
+        if email
+        else "your club admin, who passes it to the CricketCanClubs team"
+    )
+    text = (STATIC_DIR / "privacy.html").read_text(encoding="utf-8").replace("{{CONTACT}}", contact)
+    return HTMLResponse(text, headers={"Cache-Control": "no-cache"})
 
 
 @app.get("/pricing")
