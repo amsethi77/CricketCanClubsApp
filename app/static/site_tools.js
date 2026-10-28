@@ -11,11 +11,15 @@
  *   - Right: ⚙️ opens a "Settings" sheet: Change Mode, plus Sign In / Register
  *            (or your account and Sign out when signed in).
  *   - Bottom: tab bar with the first five pages.
+ *
+ * Oct 28 (Dhruvika): Sign out is only in Settings (not in the ☰ Menu). Inside the iPhone / Android app
+ * (user agent "CricketCanClubsApp") the app has its own tabs at the bottom, so the website's tab bar is not shown.
  */
 (() => {
   if (window.CCSiteTools) return;
 
   const THEME_KEY = "cricketClubAppTheme";
+  const IN_APP = /CricketCanClubsApp/.test(navigator.userAgent || "");
   const svg = (body, size = 20) =>
     `<svg viewBox="0 0 24 24" width="${size}" height="${size}" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${body}</svg>`;
   const ICONS = {
@@ -249,7 +253,8 @@
           link.getAttribute("aria-current") === "page" ||
           link.classList.contains("is-active") ||
           (clean !== "#" && (clean === "/dashboard" ? path === clean : path === clean || path.startsWith(`${clean}/`)));
-        const account = ["/signin", "/register"].includes(clean);
+        // Sign In / Register / Sign out live in the ⚙️ Settings sheet, not in the Menu or the tab bar.
+        const account = ["/signin", "/register", "/signout"].includes(clean);
         return { href, icon, label, active, account, disabled: link.classList.contains("is-disabled") };
       });
   }
@@ -379,6 +384,12 @@
   // Bottom tab bar: the first five pages of the navbar.
   let tabbarSignature = "";
   function renderTabbar() {
+    if (IN_APP) {
+      // The app shows its own native tabs: never draw a second bar.
+      document.querySelector(".mobile-tabbar")?.remove();
+      document.body.classList.remove("has-mobile-tabbar");
+      return;
+    }
     const links = navLinks().filter((link) => !link.account).slice(0, 5);
     if (!links.length) return;
     const signature = links.map((l) => `${l.href}|${l.label}|${l.active}|${l.disabled}`).join(";");

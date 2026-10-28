@@ -35,7 +35,7 @@
   }
   if (document.querySelector('script[src^="/assets/site_tools.js"]')) return;
   const script = document.createElement("script");
-  script.src = "/assets/site_tools.js";
+  script.src = "/assets/site_tools.js?v=20261028a";
   document.head.appendChild(script);
 })();
 
