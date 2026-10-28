@@ -1,0 +1,47 @@
+{
+  "expo": {
+    "name": "CricketCanClubs",
+    "slug": "cricketcanclubs",
+    "scheme": "cricketcanclubs",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "ios": {
+      "bundleIdentifier": "com.cricketclubapp",
+      "buildNumber": "1",
+      "supportsTablet": false,
+      "infoPlist": {
+        "NSCameraUsageDescription": "Take a photo of a paper scorecard so CricketCanClubs can read the scores.",
+        "NSPhotoLibraryUsageDescription": "Choose a photo of a paper scorecard to upload to CricketCanClubs.",
+        "ITSAppUsesNonExemptEncryption": false
+      }
+    },
+    "android": {
+      "package": "com.cricketclubapp",
+      "versionCode": 1,
+      "adaptiveIcon": {
+        "backgroundColor": "#08603D",
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "backgroundImage": "./assets/android-icon-background.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
+      },
+      "permissions": ["android.permission.CAMERA"],
+      "predictiveBackGestureEnabled": false
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/splash-icon.png",
+          "imageWidth": 220,
+          "resizeMode": "contain",
+          "backgroundColor": "#0A6E46"
+        }
+      ]
+    ]
+  }
+}

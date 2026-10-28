@@ -24,3 +24,16 @@ app/data/.stats_version
 
 # Scorecard photos / typed-in files kept for importing (not part of the app)
 scorecard_imports/
+
+# Android Studio / Xcode (README "Phone apps"): build output, this computer's SDK path, signing keys
+local.properties
+.idea/
+*.iml
+android/.gradle/
+android/build/
+android/app/build/
+android/app/release/
+*.jks
+*.keystore
+ios/build/
+xcuserdata/
