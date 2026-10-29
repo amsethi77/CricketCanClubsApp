@@ -85,6 +85,7 @@ This section captures the user requirements in the order they were given and ref
 ### October 2026 page title typography request
 - Make titles smaller and more professional across all pages, including the signed-in Home welcome title.
 - Reduce page-title font sizes to half of the previous size after the first sizing adjustment.
+- Deploy the latest reduced page-title sizes to the existing Azure App Service.
 
 ### September 2026 requests
 - Navbar: no More on laptop unless links don't fit; on phone More sits at the edge. Profile and Admin live inside the account (initials) button; Assistant sits at the bottom right.
@@ -933,6 +934,7 @@ Model (soft launch, Oct 2026): keep the core cricket experience free; one paid p
 
 - 2026-10-29: Standardized page titles at a smaller, professional size across the shared sports system, Home, Rankings, Sign In, Quick Score, and pricing pages.
 - 2026-10-29: Halved the page-title font sizes across desktop and phone layouts in response to feedback that titles were still too large.
+- 2026-10-29: Deployed the halved page-title sizes to the existing Canada Central Azure App Service; runtime databases, uploads, and secrets were excluded from the package.
 - 2026-10-29: Broadened `.gitignore` to exclude all `app/data/*.db*` files and sidecars; removed the tracked local database from the pending merge while preserving its on-disk copy.
 - 2026-10-28: Removed the duplicate season badge from signed-in Home and retained the selected season year as the single hero title.
 - 2026-10-28: Redeployed the latest application package to Azure App Service, excluding databases, uploads, and secrets. Enabled the system-assigned managed identity, granted least-privilege Key Vault Secrets User access, and configured the Gemini key as a versionless Key Vault reference. Production health and Gemini reader checks passed; synthetic scorecard extraction returned 17 runs. Production data remains on persistent SQLite pending the backed-up Azure SQL migration.
