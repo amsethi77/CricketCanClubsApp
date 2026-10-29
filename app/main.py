@@ -1083,6 +1083,23 @@ class ScorebookBallRequest(BaseModel):
     wicket_player: str = ""
     fielder: str = ""
     commentary: str = ""
+    # Set when fixing a ball already scored (tap the ball on /score): that ball is replaced in place.
+    id: str = ""
+
+
+def _apply_ball_edit(innings: dict[str, Any], ball: dict[str, Any], ball_id: str) -> bool:
+    """Fixing a scored ball (README "Easier live scoring"): keep its id, place and time. Returns True when editing."""
+    ball_id = str(ball_id or "").strip()
+    if not ball_id:
+        return False
+    existing = next((item for item in innings.get("balls", []) or [] if str(item.get("id") or "") == ball_id), None)
+    if existing is None:
+        raise HTTPException(status_code=404, detail="That ball isn't in this innings any more. Refresh the page.")
+    ball["id"] = ball_id
+    ball["over_number"] = int(existing.get("over_number") or ball.get("over_number") or 1)
+    ball["ball_number"] = int(existing.get("ball_number") or ball.get("ball_number") or 1)
+    ball["created_at"] = str(existing.get("created_at") or ball.get("created_at") or "")
+    return True
 
 
 class ChatRequest(BaseModel):
@@ -7737,6 +7754,7 @@ def add_scorebook_ball(match_id: str, request: ScorebookBallRequest, x_auth_toke
             "commentary": request.commentary,
         }
     )
+    editing = _apply_ball_edit(innings, ball, request.id)
     before_summary = summarize_innings_scorebook(innings)
     before_summary["status"] = str(innings.get("status") or "")
     innings["balls"] = [item for item in innings.get("balls", []) if item.get("id") != ball["id"]]
@@ -7766,6 +7784,8 @@ def add_scorebook_ball(match_id: str, request: ScorebookBallRequest, x_auth_toke
     sync_fixture_scorecard_from_scorebook(match)
     _touch_fixture_audit(match, user_row)
     save_store(store)
+    if editing:
+        return current_dashboard(load_store())  # a fixed ball sends no new alerts
     # Live score alerts (bell icon): match start, wickets, 50s/100s, end of innings
     try:
         alert_events = muse.live_score_events(match, innings, before_summary, summary, ball)
@@ -9410,6 +9430,10 @@ def guest_match_ball(match_id: str, request: ScorebookBallRequest, x_guest_code:
             "commentary": request.commentary,
         }
     )
+    if _apply_ball_edit(innings, ball, request.id):
+        # A fixed ball can undo a finished innings / match (e.g. a wicket that wasn't); worked out again below.
+        innings["status"] = "Live"
+        match["status"] = "Live"
     innings["balls"] = [item for item in innings.get("balls", []) if item.get("id") != ball["id"]]
     innings["balls"].append(ball)
     innings["balls"].sort(key=lambda item: (int(item.get("over_number", 1) or 1), int(item.get("ball_number", 1) or 1), str(item.get("created_at", ""))))

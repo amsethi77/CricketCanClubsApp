@@ -721,3 +721,162 @@ body.quick-score-page .muse-fab {
   font-size: 0.85rem;
   font-weight: 600;
 }
+
+/* ---------- Easier live scoring (Oct 29 2026, README "Easier live scoring") ---------- */
+/* Tap-to-pick player buttons */
+.qs-chips {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(118px, 1fr));
+  gap: 8px;
+}
+
+.qs-chips.big {
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+}
+
+body.quick-score-page .qs-chip {
+  display: grid !important;
+  gap: 1px;
+  align-content: center;
+  min-height: 52px !important;
+  padding: 8px 10px !important;
+  border-radius: 14px !important;
+  border: 1.5px solid #e2e8f0 !important;
+  background: #fff !important;
+  color: #0f172a !important;
+  font: 700 0.98rem/1.2 Inter, system-ui, sans-serif !important;
+  text-align: center;
+  cursor: pointer;
+  box-shadow: none !important;
+  transition: transform 0.08s ease, background 0.15s ease;
+  word-break: break-word;
+}
+
+body.quick-score-page .qs-chips.big .qs-chip {
+  min-height: 60px !important;
+  font-size: 1.08rem !important;
+}
+
+body.quick-score-page .qs-chip small {
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: #64748b;
+}
+
+body.quick-score-page .qs-chip:active {
+  transform: scale(0.96);
+}
+
+body.quick-score-page .qs-chip.on {
+  background: #0a6e46 !important;
+  border-color: #0a6e46 !important;
+  color: #fff !important;
+}
+
+body.quick-score-page .qs-chip.on small {
+  color: #d1fae5;
+}
+
+body.quick-score-page .qs-chip:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.qs-pickers {
+  display: grid;
+  gap: 14px;
+}
+
+.qs-pickgroup {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border-radius: 16px;
+  background: #f8fafc;
+  border: 1px solid #eef2f7;
+}
+
+.qs-pickgroup.done {
+  background: #ecfdf5;
+  border-color: #a7f3d0;
+}
+
+.qs-step {
+  margin: 4px 0 0;
+  font-size: 0.82rem;
+  font-weight: 800;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: #475569;
+}
+
+.qs-step b {
+  text-transform: none;
+  letter-spacing: 0;
+  color: #0a6e46;
+  font-size: 0.95rem;
+}
+
+.qs-other summary {
+  cursor: pointer;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #475569;
+  padding: 4px 0;
+}
+
+.qs-other .qs-short {
+  margin-top: 6px;
+}
+
+/* One-tap pop-ups (no Save button) */
+.qs-modal.qs-sheet .qs-modal-actions {
+  grid-template-columns: 1fr;
+}
+
+body.quick-score-page .qs-modal.qs-sheet [data-modal-ok] {
+  display: none !important;
+}
+
+.qs-sheet-note {
+  margin: 0;
+  padding: 8px 12px;
+  border-radius: 12px;
+  background: #f1f5f9;
+  color: #334155;
+  font-weight: 600;
+}
+
+.qs-fix-more {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+/* Tap a ball in "This over" to fix it */
+body.quick-score-page button.qs-ball {
+  border: 0 !important;
+  cursor: pointer;
+  box-shadow: none !important;
+  min-height: 0 !important;
+}
+
+body.quick-score-page button.qs-ball:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.qs-fix-hint {
+  margin: 6px 0 0;
+  font-size: 0.75rem;
+  color: #94a3b8;
+}
+
+/* Line-up helpers */
+.qs-lineup-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 6px 0;
+}

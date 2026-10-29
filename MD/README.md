@@ -9,7 +9,7 @@ Any AI assistant or coding tool working on this repository (Claude, ChatGPT, Cop
 1. **Document every change in this README.md.** When you add or change a feature, page, API, data rule or workflow, add or update the matching section below (and add a dated line to "Change log") in the same change. Future developers and AI tools rely on this file as the single source of truth.
 2. **Record the user's request.** Add the requirement, in plain words, to "Prompt And Requirement Log" so the reason behind the behaviour is kept.
 3. **Keep the three surfaces in lockstep.** The iOS and Android apps load these web pages, so web changes must work at phone width (390px) as well as laptop width.
-4. **Never commit local data or secrets.** Files in `app/data/` (`*.db`, `*.db-shm`, `*.db-wal`, `*_cache.json`, `.stats_version`), `app/uploads/` and the `.env` file (Stripe keys) stay out of git.
+4. **Never commit local data or secrets.** Files in `app/data/` (`*.db*`, `*_cache.json`, `.stats_version`), `app/uploads/` and the `.env` file (Stripe keys) stay out of git.
 5. **Test before you hand over:** restart with `python app\main.py`, check the pages you touched on laptop and phone widths, and note how to test in the README section you updated.
 
 The same rules are in `AGENTS.md` and `CLAUDE.md` so every tool picks them up. If you use GitHub Copilot, copy `AGENTS.md` to `.github/copilot-instructions.md`.
@@ -78,6 +78,9 @@ This section captures the user requirements in the order they were given and ref
 
 ### October 2026 Home season label request
 - Remove the duplicate “Season: 2026” badge from the signed-in Home page while retaining the “Season 2026” title.
+
+### October 2026 Git sync and database ignore request
+- Push the latest changes, then pull the latest remote changes; update `.gitignore` so local database files and sidecars remain untracked.
 
 ### September 2026 requests
 - Navbar: no More on laptop unless links don't fit; on phone More sits at the edge. Profile and Admin live inside the account (initials) button; Assistant sits at the bottom right.
@@ -273,6 +276,9 @@ This section captures the user requirements in the order they were given and ref
 143. (Amit, Oct 26, after the first Azure deploy) A club's Home must show only its own scorecards; menus must be the same everywhere; "Next match" must not show past games; Plans not showing (launch mode, see "Launch: everyone on Pro").
 144. (Dhruvika, Oct 27) App tour that works inside the phone apps, a welcome tour for first-time visitors, a privacy policy page and "Delete my account" (both needed for the app stores).
 145. (Dhruvika, Oct 28) "Go with React Expo": one Expo / React Native app for iPhone and Android instead of separate Swift and Kotlin apps (iPhone builds in the cloud, no Mac needed).
+146. (Amit + Dhruvika, Oct 28) Before moving to a cloud database, saving must write only what changed, not rewrite every table on every save.
+147. (Amit, Oct 29) "Manual scoring is somewhat tedious. Fix the live scoring and make it really easy and interesting": tap names instead of typing, fewer pop-ups, quicker line-ups, fix any ball, celebrations for fours, sixes, wickets, fifties and hundreds. Also (Amit): stay on SQLite for now; later a daily copy of production data to Azure SQL so it can't be lost.
+148. (Amit, Oct 29, on Azure) "Not allowing to start the match": saving 11 + 11 line-ups said "Match not found."; each team must have at most 11 players; the line-up players must be offered as a list to pick batters and bowlers, not a text box.
 131. Find duplicate scorecards smartly with AI (Gemini, or Ollama offline), not only exact matches.
 
 ## Current behavior summary
@@ -637,6 +643,31 @@ This section documents the work done in September 2026. See "Change log" at the 
 - Better instructions (`APP_GUIDE` in `app/ai_chat.py`): the new menu (Clubs and Stats), give real names and numbers straight away, "me / my" means the person asking, follow-ups use the earlier messages, ask one short question when unclear, reply in the person's language, bold names and numbers.
 - Built-in answers (no AI needed): "where are the stats" and the new "switch club" (Clubs in the menu).
 
+### Fresh data on every request: "Match not found." fix (Oct 29 2026)
+- Amit on Azure (Oct 29): started a match against Afghans, filled both line-ups (11 each) and Save line-ups said "Match not found."; a later try (with 2 players) worked, so it looked like a player-count problem. It wasn't.
+- Cause: every server process keeps the whole store in memory and only re-reads the database when the database file's time or size changes (`_database_signature` in `cricket_store.py`). The database runs in WAL mode, so a save first goes to the `cricketclubapp.db-wal` file and the main file often doesn't change. On Azure a second worker / instance therefore kept its old copy, without the new match, until something else changed the file. A save from such an old copy could also undo newer changes.
+- Fix: every `save_store` adds 1 to a counter (table `app_store_version`, in the same transaction), and the in-memory copy is only used when the counter is unchanged. Reproduced with two processes sharing one database: before, the second process didn't see a new match; now it does. Saves still give the same data (48 tables compared).
+- Line-ups: a 12th tick is refused ("11 players at most") and Save line-ups checks 2-11 per team before sending (the server checked already).
+- Picking batters and bowlers from a list: done in "Easier live scoring" (name buttons from the line-ups). Azure still has the older text boxes until the new code is deployed.
+
+### Easier live scoring (Oct 29 2026)
+- Request (Amit, Oct 29): manual scoring was tedious; make live scoring really easy and interesting. Dhruvika picked: tap names instead of typing, fewer pop-ups, quicker line-ups, fixing mistakes, and celebrations.
+- Tap, don't type: on "Who's batting?" the openers and the bowler are big name buttons from the line-ups (a name already picked is greyed out in the other box); "Someone else?" types a name that isn't in the line-up.
+- One-tap pop-ups (no Save button; `openSheet` in `quick_score.js`): next bowler at the end of an over (shows the over's runs / wickets / "maiden!" and each bowler's figures; the bowler who just bowled is greyed out), byes / leg byes (1 2 3 4) and no balls (No runs, +1 ... +6). Wide still records 1 wide straight away.
+- Wicket in 2-3 taps: How out (Bowled, Caught, LBW, Run out, Stumped, Hit wicket) -> fielder for caught / stumped / run out (the bowler is marked, "Don't know · skip"), for a run out also who is out and runs completed -> next batter (only players still to bat; "No more batters (all out)").
+- Fix any ball: tap a ball in "This over" -> pick what really happened (runs, wides, no balls, byes, leg byes). The ball is replaced in place (`POST /api/matches/{id}/scorebook/ball` or `/api/guest/matches/{id}/ball` with the ball's `id`; `_apply_ball_edit` in `main.py` keeps its over, ball number and time; a fixed ball sends no new alerts; a finished innings opens again if the fix means it isn't finished). For the last ball there are also "It was a wicket" and "Delete this ball". Strike is worked out again when the last ball is fixed.
+- Line-ups: "Select all" / "Clear" for the club's players, "Use Player 1-11" when the other team's names aren't known, and lists pasted from WhatsApp are cleaned ("1. Ravi (c)" -> "Ravi"; also for guest matches).
+- Celebrations (`static/celebrate.js`): FOUR!, SIX!, WICKET!, FIFTY! and HUNDRED! pop up with confetti and a short phone buzz on the Score page, and on the public live page (`/live/{id}`), which now refreshes by itself every 15 seconds while the match is live (the first load never celebrates old balls). The banner never blocks taps; reduced-motion phones get a plain banner.
+- Tested in the cloud workspace on a copy of the database at phone size (412 x 915): a full guest match (pasted line-up, picking openers, four, byes, caught, next bowler, fixing a 2 into a 4, no ball +4, run out of the non-striker) gave the right totals and strike, the public page celebrated a six from another phone, and fixing a club match ball kept its place.
+
+### Saving only what changed (Oct 28 2026)
+- Request (Amit + Dhruvika, Oct 28): the app should move to a cloud database later (Azure SQL / Turso etc.), and whichever one is chosen, a save must first write only the rows that changed.
+- Before: every save (`save_store` in `app/cricket_store.py`) deleted and re-inserted every row of every table - about 3,600 row writes per save, even when one score changed. Fine for a local file, too slow and costly for a cloud database.
+- Now: `_write_changes_only` runs the same table writers through `_DiffWriter`, which records what they would write, compares it with what is already in the database and writes only the differences: removed rows are deleted (child tables first), new or changed rows are inserted / updated (parent tables first), and an `UPDATE ... WHERE id=?` that changes nothing is skipped. `updated_at` on the stats and AI-index tables is ignored when comparing. Everything still runs in one transaction, so a failed save changes nothing.
+- Tested on a copy of the real database (47 tables): first save 80 row writes, a one-player edit 3, adding a fixture 54 (the old way: 3,583-3,633 each time); after the same edits the database is identical to the old full rewrite in all 47 tables.
+- Safety switch: if a writer does something the diff can't follow it falls back to the old full rewrite for that save; setting `CRICKETCLUBAPP_FULL_REWRITE=1` in `.env` / Azure forces the old way.
+- Next (database plan): keep SQLite for the launch with an automatic backup copy, then move to a cloud database after launch; this change is the groundwork for that.
+
 ### Phone apps (Expo): one app for iPhone and Android (Oct 28 2026)
 - Request (Dhruvika, Oct 28): "why not use react native with expo for both ios and android?" -> "go with react expo". Main reason: Expo's cloud (EAS Build) builds and submits the iPhone app from Windows, so no Mac is needed; one codebase for both phones, and later native screens are written once.
 - New folder `mobile/` (Expo SDK 58, React Native 0.88, TypeScript): `App.tsx` shows the website in `react-native-webview` with the same native extras as before - bottom tabs Home / Live / Score / Scorecards / Upload, camera / photo library for scorecard photos (camera permission on Android, permission texts on iPhone), pull to refresh on iPhone (on Android tap the open tab again), Android back button through the pages, "No internet" screen, outside links (WhatsApp, phone, email, other sites) open in their own apps, `cricketcanclubs://` links open the page. User agent `CricketCanClubsApp/1.0 (Expo)`, so the website hides its own bottom bar and uses the in-app tour. Website address in `mobile/src/config.ts`.
@@ -895,6 +926,7 @@ Model (soft launch, Oct 2026): keep the core cricket experience free; one paid p
 
 ## Change log
 
+- 2026-10-29: Broadened `.gitignore` to exclude all `app/data/*.db*` files and sidecars; removed the tracked local database from the pending merge while preserving its on-disk copy.
 - 2026-10-28: Removed the duplicate season badge from signed-in Home and retained the selected season year as the single hero title.
 - 2026-10-28: Redeployed the latest application package to Azure App Service, excluding databases, uploads, and secrets. Enabled the system-assigned managed identity, granted least-privilege Key Vault Secrets User access, and configured the Gemini key as a versionless Key Vault reference. Production health and Gemini reader checks passed; synthetic scorecard extraction returned 17 runs. Production data remains on persistent SQLite pending the backed-up Azure SQL migration.
 - 2026-10-28: Restarted the local app against `app/data/cricketclubapp.db`, verified health, and successfully extracted a synthetic test scorecard through Gemini using the local API key. The initial production check found the basic reader and no Key Vault identity; these Gemini deployment gaps were fixed later the same day. Azure SQL migration remains pending.
@@ -947,6 +979,9 @@ Model (soft launch, Oct 2026): keep the core cricket experience free; one paid p
 - 2026-10-16: Plan restrictions: no AI before sign-in (public assistant and guest AI Scorer); AI reading of scorecard photos is Pro, or the Free plan's one free AI try. See "Plans: what each group can use".
 - 2026-10-16: AI Assistant answers greetings, cricket and app questions with Gemini (`app/ai_chat.py`), uses club data for club questions; no sign-in prompts when signed in on public pages; full-height right-side panel. See "AI Assistant answers (Gemini)".
 - 2026-10-16: AI Assistant shows thinking dots, then types its reply; "Take the app tour" removed from the account menu (tour is only shown once to first-time users).
+- 2026-10-29: Fixed "Match not found." right after starting a match on Azure: the in-memory copy of the data is now checked against a save counter (`app_store_version`) instead of the database file's time and size, which WAL mode often leaves unchanged; line-ups refuse a 12th player. See "Fresh data on every request".
+- 2026-10-29: Easier live scoring on /score: tap player names instead of typing, one-tap pop-ups for next bowler / byes / no balls, wicket in 2-3 taps, tap any ball to fix it, Select all / Player 1-11 / WhatsApp paste for line-ups, and FOUR / SIX / WICKET / FIFTY / HUNDRED celebrations with a phone buzz on /score and the public live page (which now refreshes every 15 s). See "Easier live scoring".
+- 2026-10-28: Saving writes only what changed: `save_store` compares each table with the database and writes only new, changed or removed rows (a one-score edit: about 3 row writes instead of about 3,600); same final data as before; `CRICKETCLUBAPP_FULL_REWRITE=1` turns it off. Groundwork for a cloud database. See "Saving only what changed".
 - 2026-10-28: Phone menu: Sign out is only in the ⚙️ Settings sheet (not in the ☰ Menu); inside the phone app the website's own bottom tab bar is not drawn (the app's native tabs replace it), so there is one bar, not two (`site_tools.js`, loaded as `?v=20261028a`). Requested by Dhruvika after trying the Expo app on her phone.
 - 2026-10-28: Phone apps moved to one Expo / React Native app in `mobile/` for iPhone and Android (cloud builds, no Mac needed); same tabs, camera upload, offline screen and icon. See "Phone apps (Expo)".
 - 2026-10-27: App tour works inside the phone apps ("tap Score at the bottom") and first-time visitors get a 3-step welcome on Live; new Privacy policy page (/privacy) and "Delete my account" on the Profile page for the app stores. See "App tour in the phone apps and for visitors".
