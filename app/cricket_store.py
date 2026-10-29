@@ -140,12 +140,39 @@ def canonical_team_name(name: str) -> str:
     return _TEAM_NAME_ALIASES.get(alias_key, clean)
 
 
-def _database_signature() -> tuple[int, int]:
+def _database_signature() -> tuple[int, ...]:
+    """What the in-memory copy of the store is checked against (README "Fresh data on every request").
+
+    The database runs in WAL mode, so a save first goes to the "-wal" file and the main file's time and size
+    often don't change. A second worker / instance (Azure) then kept serving its old copy ("Match not found." right
+    after a match was created). Every save_store now adds 1 to app_store_version, which is read here.
+    """
     try:
         stat_result = DATABASE_FILE.stat()
-        return stat_result.st_mtime_ns, stat_result.st_size
     except FileNotFoundError:
-        return 0, 0
+        return 0, 0, 0
+    version = 0
+    try:
+        connection = sqlite3.connect(DATABASE_FILE, timeout=60)
+        try:
+            row = connection.execute("SELECT version FROM app_store_version WHERE id = 1").fetchone()
+            version = int(row[0]) if row else 0
+        except sqlite3.OperationalError:
+            version = 0  # table not created yet
+        finally:
+            connection.close()
+    except sqlite3.DatabaseError:
+        version = -1
+    return stat_result.st_mtime_ns, stat_result.st_size, version
+
+
+def _signature_text(signature: tuple[int, ...]) -> str:
+    return ":".join(str(part) for part in signature)
+
+
+def _bump_store_version(connection: sqlite3.Connection) -> None:
+    connection.execute("CREATE TABLE IF NOT EXISTS app_store_version (id INTEGER PRIMARY KEY CHECK (id = 1), version INTEGER NOT NULL)")
+    connection.execute("INSERT INTO app_store_version (id, version) VALUES (1, 1) ON CONFLICT(id) DO UPDATE SET version = version + 1")
 
 
 def _store_cache_signature(store: dict[str, Any]) -> str:
@@ -5979,6 +6006,281 @@ def _write_text_atomic(path: Path, content: str) -> None:
         temp_path.replace(path)
 
 
+# ---------------------------------------------------------------------------
+# Save only what changed (README "Saving only what changed", Oct 28 2026).
+# save_store() used to delete every row of the club tables and insert them all again on every save (about 3,400
+# rows, growing with every ball scored). That is fine for a file on the same machine but slow and costly for an
+# online database (Turso / PostgreSQL / Azure SQL count every written row). _DiffWriter is handed to the existing
+# writers in place of the connection: it records their "DELETE FROM t" + "INSERT INTO t ..." statements, then
+# compares them with what is already in the database and writes only the rows that were added, changed or
+# removed, inside the same transaction. The result is exactly the same database as a full rewrite.
+# Set CRICKETCLUBAPP_FULL_REWRITE=1 to go back to the old full rewrite.
+# ---------------------------------------------------------------------------
+class _DiffUnsupported(Exception):
+    """A statement the diff writer can't record safely: the caller falls back to the full rewrite."""
+
+
+_DIFF_INSERT = re.compile(r"^INSERT INTO (\w+)\s*\(([^)]*)\)\s*VALUES\s*\((.*)\)$", re.IGNORECASE | re.DOTALL)
+_DIFF_DELETE_ALL = re.compile(r"^DELETE FROM (\w+)$", re.IGNORECASE)
+# Columns that change on every save without meaning a real change (kept from the stored row instead).
+_DIFF_IGNORE_COLUMNS: dict[str, set[str]] = {
+    table: {"updated_at"}
+    for table in (
+        "llm_documents",
+        "member_summary_stats",
+        "member_year_stats",
+        "member_club_stats",
+        "club_summary_stats",
+        "club_year_stats",
+    )
+}
+_DIFF_SIMPLE_UPDATE = re.compile(r"^UPDATE (\w+) SET (.+) WHERE (\w+) = \?$", re.IGNORECASE | re.DOTALL)
+
+
+def _diff_norm(value: Any, declared: str) -> Any:
+    """A value as SQLite would store it in a column of this declared type, so stored and new values compare equal."""
+    if isinstance(value, bool):
+        value = int(value)
+    if value is None:
+        return None
+    kind = (declared or "").upper()
+    if "INT" in kind:
+        if isinstance(value, float) and value.is_integer():
+            return int(value)
+        if isinstance(value, str) and re.fullmatch(r"\s*-?\d+\s*", value):
+            return int(value)
+        return value
+    if any(word in kind for word in ("CHAR", "CLOB", "TEXT")):
+        if isinstance(value, (bytes, str)):
+            return value
+        return str(value)
+    if any(word in kind for word in ("REAL", "FLOA", "DOUB")):
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return value
+    return value
+
+
+class _DiffWriter:
+    def __init__(self, connection: sqlite3.Connection, skip_tables: tuple[str, ...] = ()):
+        self.real = connection
+        # Tables another writer rewrites right after this one (their "DELETE FROM" is ignored here).
+        self.skip_tables = set(skip_tables)
+        self.clear_order: list[str] = []
+        self.insert_order: list[str] = []
+        self.targets: dict[str, list[dict[str, Any]]] = {}
+        self.deferred: list[tuple[str, Any, bool]] = []
+        self.rows_written = 0
+
+    # --- the parts of the sqlite3.Connection interface the writers use ---
+    def __enter__(self) -> "_DiffWriter":
+        self.real.__enter__()
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> Any:
+        if exc_type is None:
+            try:
+                self.apply()
+            except BaseException as error:
+                self.real.__exit__(type(error), error, error.__traceback__)
+                raise
+        return self.real.__exit__(exc_type, exc, tb)
+
+    def executescript(self, script: str) -> Any:
+        return self.real.executescript(script)
+
+    def execute(self, sql: str, params: Any = ()) -> Any:
+        text = " ".join(str(sql).split())
+        upper = text.upper()
+        if upper.startswith(("SELECT", "PRAGMA", "WITH")):
+            return self.real.execute(sql, params)
+        match = _DIFF_DELETE_ALL.match(text)
+        if match and match.group(1) in self.skip_tables:
+            return None
+        if match:
+            table = match.group(1)
+            if table not in self.targets:
+                self.targets[table] = []
+                self.clear_order.append(table)
+            return None
+        match = _DIFF_INSERT.match(text)
+        if match and match.group(1) in self.targets:
+            self._record(match, params)
+            return None
+        if upper.startswith(("INSERT", "UPDATE", "DELETE", "REPLACE")):
+            self.deferred.append((sql, params, False))
+            return None
+        raise _DiffUnsupported(text[:80])
+
+    def executemany(self, sql: str, seq: Any) -> Any:
+        rows = list(seq)
+        text = " ".join(str(sql).split())
+        match = _DIFF_INSERT.match(text)
+        if match and match.group(1) in self.targets:
+            for params in rows:
+                self._record(match, params)
+            return None
+        if text.upper().startswith(("INSERT", "UPDATE", "DELETE", "REPLACE")):
+            self.deferred.append((sql, rows, True))
+            return None
+        raise _DiffUnsupported(text[:80])
+
+    def _record(self, match: re.Match, params: Any) -> None:
+        table = match.group(1)
+        columns = [part.strip() for part in match.group(2).split(",")]
+        holders = [part.strip() for part in match.group(3).split(",")]
+        if len(columns) != len(holders) or not all(re.fullmatch(r"\?|:\w+|-?\d+|'[^']*'|NULL", holder) for holder in holders):
+            raise _DiffUnsupported(f"INSERT INTO {table}")
+        row: dict[str, Any] = {}
+        position = 0
+        for column, holder in zip(columns, holders):
+            if re.fullmatch(r"-?\d+", holder):
+                row[column] = int(holder)
+            elif holder.startswith("'"):
+                row[column] = holder[1:-1]
+            elif holder == "NULL":
+                row[column] = None
+            elif holder == "?":
+                row[column] = params[position]
+                position += 1
+            else:
+                row[column] = params[holder[1:]]
+        if table not in self.insert_order:
+            self.insert_order.append(table)
+        self.targets[table].append(row)
+
+    # --- applying the differences ---
+    def _table_info(self, table: str) -> tuple[dict[str, str], list[str]]:
+        info = self.real.execute(f'PRAGMA table_info("{table}")').fetchall()
+        types = {row[1]: str(row[2] or "") for row in info}
+        pk = [row[1] for row in sorted(info, key=lambda r: r[5]) if row[5]]
+        return types, pk
+
+    def _plan(self, table: str):
+        types, pk = self._table_info(table)
+        target = self.targets.get(table, [])
+        column_sets = {tuple(row.keys()) for row in target}
+        if len(column_sets) > 1:
+            raise _DiffUnsupported(f"{table}: different column lists")
+        columns = list(next(iter(column_sets))) if column_sets else list(types)
+        ignore = _DIFF_IGNORE_COLUMNS.get(table, set())
+        compare = [column for column in columns if column not in ignore]
+        keyed = bool(pk) and all(column in columns for column in pk)
+        return types, pk, columns, compare, keyed
+
+    def _current(self, table: str, columns: list[str], keyed: bool, pk: list[str]) -> list[sqlite3.Row]:
+        wanted = ", ".join(f'"{column}"' for column in dict.fromkeys(columns + (pk if keyed else [])))
+        return self.real.execute(f'SELECT rowid AS _rowid_, {wanted} FROM "{table}"').fetchall()
+
+    def apply(self) -> None:
+        # 1. Removed rows, children before parents (the order the old code cleared the tables in).
+        for table in self.clear_order:
+            types, pk, columns, compare, keyed = self._plan(table)
+            target = self.targets.get(table, [])
+            if not target:
+                count = self.real.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0]
+                if count:
+                    self.real.execute(f'DELETE FROM "{table}"')
+                    self.rows_written += count
+                continue
+            current = self._current(table, columns, keyed, pk)
+            if keyed:
+                wanted = {tuple(_diff_norm(row[c], types.get(c, "")) for c in pk) for row in target}
+                for row in current:
+                    if tuple(row[c] for c in pk) not in wanted:
+                        self.real.execute(f'DELETE FROM "{table}" WHERE rowid = ?', (row["_rowid_"],))
+                        self.rows_written += 1
+            else:
+                wanted_counts = Counter(tuple(_diff_norm(row[c], types.get(c, "")) for c in compare) for row in target)
+                for row in current:
+                    signature = tuple(row[c] for c in compare)
+                    if wanted_counts[signature] > 0:
+                        wanted_counts[signature] -= 1
+                    else:
+                        self.real.execute(f'DELETE FROM "{table}" WHERE rowid = ?', (row["_rowid_"],))
+                        self.rows_written += 1
+        # 2. New and changed rows, parents before children (the order the old code inserted them in).
+        for table in self.insert_order:
+            types, pk, columns, compare, keyed = self._plan(table)
+            target = self.targets[table]
+            current = self._current(table, columns, keyed, pk)
+            column_list = ", ".join(f'"{column}"' for column in columns)
+            holders = ", ".join("?" for _ in columns)
+            insert_sql = f'INSERT INTO "{table}" ({column_list}) VALUES ({holders})'
+            if keyed:
+                stored = {tuple(row[c] for c in pk): row for row in current}
+                update_columns = [column for column in columns if column not in pk]
+                update_sql = (
+                    f'UPDATE "{table}" SET ' + ", ".join(f'"{column}" = ?' for column in update_columns)
+                    + " WHERE " + " AND ".join(f'"{column}" = ?' for column in pk)
+                )
+                for row in target:
+                    key = tuple(_diff_norm(row[c], types.get(c, "")) for c in pk)
+                    old = stored.get(key)
+                    if old is None:
+                        self.real.execute(insert_sql, [row[c] for c in columns])
+                        self.rows_written += 1
+                    elif any(old[c] != _diff_norm(row[c], types.get(c, "")) for c in compare if c not in pk):
+                        if update_columns:
+                            self.real.execute(update_sql, [row[c] for c in update_columns] + [row[c] for c in pk])
+                            self.rows_written += 1
+            else:
+                have = Counter(tuple(row[c] for c in compare) for row in current)
+                for row in target:
+                    signature = tuple(_diff_norm(row[c], types.get(c, "")) for c in compare)
+                    if have[signature] > 0:
+                        have[signature] -= 1
+                    else:
+                        self.real.execute(insert_sql, [row[c] for c in columns])
+                        self.rows_written += 1
+        # 3. Everything else (links restored on app_users / sessions, upserts), in the original order.
+        #    "UPDATE t SET a = ?, b = ? WHERE id = ?" is only run when the row really holds other values.
+        stored_rows: dict[str, dict[Any, sqlite3.Row]] = {}
+        for sql, params, many in self.deferred:
+            if many:
+                self.real.executemany(sql, params)
+                continue
+            text = " ".join(str(sql).split())
+            match = _DIFF_SIMPLE_UPDATE.match(text)
+            assignments = [part.strip() for part in match.group(2).split(",")] if match else []
+            if match and all(re.fullmatch(r"\w+ = \?", part) for part in assignments) and len(params) == len(assignments) + 1:
+                table, key_column = match.group(1), match.group(3)
+                columns = [part.split("=")[0].strip() for part in assignments]
+                cache_key = f"{table}|{key_column}|{','.join(columns)}"
+                if cache_key not in stored_rows:
+                    rows = self.real.execute(
+                        f'SELECT "{key_column}" AS _key_, ' + ", ".join(f'"{c}"' for c in columns) + f' FROM "{table}"'
+                    ).fetchall()
+                    stored_rows[cache_key] = {row["_key_"]: row for row in rows}
+                types, _ = self._table_info(table)
+                old = stored_rows[cache_key].get(_diff_norm(params[-1], types.get(key_column, "")))
+                if old is None:
+                    continue  # no such row: the UPDATE would change nothing
+                if all(old[c] == _diff_norm(value, types.get(c, "")) for c, value in zip(columns, params[:-1])):
+                    continue
+            self.real.execute(sql, params)
+            self.rows_written += 1
+
+
+def _full_rewrite_requested() -> bool:
+    return str(os.getenv("CRICKETCLUBAPP_FULL_REWRITE", "")).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _write_changes_only(connection: sqlite3.Connection, writer, *args: Any, skip_tables: tuple[str, ...] = ()) -> Any:
+    """Run one of the full-rewrite writers so it writes only what changed (falls back to the full rewrite)."""
+    if _full_rewrite_requested():
+        return writer(connection, *args)
+    diff = _DiffWriter(connection, skip_tables=skip_tables)
+    try:
+        result = writer(diff, *args)
+    except _DiffUnsupported as error:
+        logger.warning("Saving only changes isn't possible here (%s); doing a full rewrite.", error)
+        return writer(connection, *args)
+    logger.debug("%s: %s rows written", getattr(writer, "__name__", "writer"), diff.rows_written)
+    return result
+
+
 def load_store() -> dict[str, Any]:
     logger.debug("Load store requested → database=%s cache=%s", DATABASE_FILE, CACHE_FILE)
     global _STORE_CACHE_SIGNATURE, _STORE_CACHE_PAYLOAD
@@ -6008,7 +6310,7 @@ def load_store() -> dict[str, Any]:
         if CACHE_FILE.exists():
             cached_store = json.loads(CACHE_FILE.read_text(encoding="utf-8"))
             store = normalize_store(cached_store)
-            store["_cache_signature"] = f"{current_signature[0]}:{current_signature[1]}"
+            store["_cache_signature"] = _signature_text(current_signature)
             _STORE_CACHE_SIGNATURE = current_signature
             _STORE_CACHE_PAYLOAD = deepcopy(store)
             logger.debug(
@@ -6021,7 +6323,7 @@ def load_store() -> dict[str, Any]:
         raise
 
     store = normalize_store(raw_store)
-    store["_cache_signature"] = f"{current_signature[0]}:{current_signature[1]}"
+    store["_cache_signature"] = _signature_text(current_signature)
 
     # ✅ cache only, NO DB writes
     _write_text_atomic(CACHE_FILE, json.dumps(store, indent=2))
@@ -6052,11 +6354,14 @@ def save_store(store: dict[str, Any]) -> None:
     sync_uploads_in_store(normalized)
     ensure_database()
     with _connection() as connection:
-        _write_relational_state(connection, normalized)
-        llm_documents = refresh_llm_document_index(connection, normalized)
+        # Only the rows that changed are written (README "Saving only what changed").
+        _write_changes_only(connection, _write_relational_state, normalized, skip_tables=("llm_documents",))
+        llm_documents = _write_changes_only(connection, refresh_llm_document_index, normalized)
+        # Tells every other worker / instance that its in-memory copy is now out of date (same transaction).
+        _bump_store_version(connection)
     _STORE_CACHE_SIGNATURE = _database_signature()
     normalized["llm_documents"] = llm_documents
-    normalized["_cache_signature"] = f"{_STORE_CACHE_SIGNATURE[0]}:{_STORE_CACHE_SIGNATURE[1]}"
+    normalized["_cache_signature"] = _signature_text(_STORE_CACHE_SIGNATURE)
     _write_text_atomic(CACHE_FILE, json.dumps(normalized, indent=2))
     _STORE_CACHE_PAYLOAD = deepcopy(normalized)
     if _DASHBOARD_CACHE:

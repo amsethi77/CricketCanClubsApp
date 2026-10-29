@@ -218,6 +218,53 @@
     return raw ? String(raw) : "--";
   }
 
+  // Live matches refresh every 15 seconds; a new four, six, wicket, fifty or hundred is celebrated
+  // (celebrate.js, README "Easier live scoring"). The first load never celebrates old balls.
+  const seenBalls = new Set();
+  const seenRuns = {};
+  let firstLoad = true;
+  let refreshTimer = null;
+
+  function celebrateNew(innings) {
+    const fresh = [];
+    innings.forEach((inning) => {
+      (Array.isArray(inning.balls) ? inning.balls : []).forEach((ball) => {
+        if (ball.id && !seenBalls.has(ball.id)) fresh.push({ ball, inning });
+      });
+    });
+    const runsNow = {};
+    innings.forEach((inning) => {
+      (inning.summary?.batting || []).forEach((row) => {
+        runsNow[`${inning.inning_number}:${row.player_name}`] = { runs: Number(row.runs || 0), balls: Number(row.balls || 0) };
+      });
+    });
+    if (!firstLoad && fresh.length && window.ccCelebrateBall) {
+      // Most exciting new ball wins: wicket, hundred, fifty, six, four
+      const score = ({ ball, inning }) => {
+        const key = `${inning.inning_number}:${ball.striker}`;
+        const before = seenRuns[key]?.runs || 0;
+        const after = runsNow[key]?.runs || 0;
+        if (ball.wicket) return 5;
+        if (before < 100 && after >= 100) return 4;
+        if (before < 50 && after >= 50) return 3;
+        if (Number(ball.runs_bat) === 6 && !["bye", "leg_bye"].includes(ball.extras_type)) return 2;
+        if (Number(ball.runs_bat) === 4 && !["bye", "leg_bye"].includes(ball.extras_type)) return 1;
+        return 0;
+      };
+      const best = fresh.slice().sort((a, b) => score(b) - score(a))[0];
+      if (score(best) > 0) {
+        const key = `${best.inning.inning_number}:${best.ball.striker}`;
+        const before = seenRuns[key]?.runs || 0;
+        const now = runsNow[key] || { runs: 0, balls: 0 };
+        // A fifty reached with a single still counts: compare the batter's runs before and after this refresh
+        window.ccCelebrateBall(best.ball, before, now.runs, now.balls);
+      }
+    }
+    fresh.forEach(({ ball }) => seenBalls.add(ball.id));
+    Object.assign(seenRuns, runsNow);
+    firstLoad = false;
+  }
+
   async function loadMatch() {
     const matchId = matchIdFromPath();
     if (!matchId) {
@@ -234,6 +281,10 @@
       const data = await response.json();
       const match = data.match || {};
       const innings = Array.isArray(match.scorebook?.innings) ? match.scorebook.innings : [];
+      celebrateNew(innings);
+      const isLive = String(match.status || "").toLowerCase() === "live" || innings.some((inning) => String(inning.status || "").toLowerCase() === "live");
+      clearTimeout(refreshTimer);
+      if (isLive) refreshTimer = setTimeout(() => !document.hidden && loadMatch(), 15000);
       const liveScore = match.scorecard || {};
       const recentBalls = innings.flatMap((inning) => Array.isArray(inning.balls) ? inning.balls : []);
       const battingRows = uniqueByName(
@@ -382,6 +433,11 @@
       }
     }
   }
+
+  // Coming back to the tab refreshes straight away
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden && refreshTimer) loadMatch();
+  });
 
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", loadMatch);

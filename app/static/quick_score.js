@@ -21,6 +21,11 @@
  * Oct 2026: both line-ups (2-11 players each) must be set before scoring starts, and people who
  * aren't signed in can score a guest match (body data-mode="guest", /api/guest/... APIs, match code
  * sent as X-Guest-Code). README: "Line-ups and guest matches".
+ *
+ * Oct 29 2026 (README "Easier live scoring"): names are picked by tapping player buttons (no typing), the next
+ * bowler / extras / wicket pop-ups save on one tap (wicket: How out -> fielder if needed -> next batter), any ball in
+ * "This over" can be tapped to fix it (POST .../ball with the ball's id), line-ups have Select all / quick opponent
+ * names, and FOUR / SIX / WICKET / FIFTY / HUNDRED get a celebration + phone buzz (celebrate.js).
  */
 (() => {
   const app = document.getElementById("qsApp");
@@ -232,7 +237,6 @@
     const first = innings()[0];
     const isSecond = inn.inning_number === 2;
     const clubBatsFirst = !isSecond ? true : !battingIsClub(first);
-    const datalist = (id, names) => `<datalist id="${id}">${names.map((n) => `<option value="${esc(n)}"></option>`).join("")}</datalist>`;
     app.innerHTML = `
       <section class="qs-card">
         <p class="qs-kicker">${isSecond ? "Second innings" : "New match"} · ${esc(clubName)} vs ${esc(m.opponent)}</p>
@@ -248,30 +252,54 @@
                 </div>`
           }
           <label>Overs<input id="qsOversLimit" type="number" min="1" max="50" value="${esc(inn.overs_limit || m.overs || 20)}" /></label>
-          <label>Striker<input id="qsStriker" list="qsBatList" required placeholder="Opening batter" /></label>
-          <label>Non-striker<input id="qsNonStriker" list="qsBatList" required placeholder="Other opener" /></label>
-          <label>Bowler<input id="qsBowler" list="qsBowlList" required placeholder="Opening bowler" /></label>
-          <div id="qsLists"></div>
+          <div id="qsPickers" class="qs-pickers"></div>
           <button class="qs-btn primary wide" type="submit">Start scoring</button>
         </form>
       </section>`;
-    const lists = document.getElementById("qsLists");
+    const pickers = document.getElementById("qsPickers");
     const sideOf = () => (isSecond ? document.getElementById("qsBat").value : app.querySelector('input[name="bat"]:checked').value);
-    const refreshLists = () => {
+    const picked = { striker: "", nonStriker: "", bowler: "" };
+    const TITLES = { striker: "On strike", nonStriker: "Non-striker", bowler: "Opening bowler" };
+    const drawPickers = () => {
       const bat = sideOf();
-      lists.innerHTML = datalist("qsBatList", rosterFor(bat === "club" ? "club" : "opp")) + datalist("qsBowlList", rosterFor(bat === "club" ? "opp" : "club"));
+      const bats = rosterFor(bat === "club" ? "club" : "opp");
+      const bowls = rosterFor(bat === "club" ? "opp" : "club");
+      const group = (key, names, taken) =>
+        `<div class="qs-pickgroup${picked[key] ? " done" : ""}"><p class="qs-step">${TITLES[key]}${picked[key] ? `: <b>${esc(picked[key])}</b>` : ""}</p>
+          ${chipList(names, `data-role="${key}"`, taken, {}, picked[key])}${otherName(`qsOther_${key}`, TITLES[key], names.length === 0)}</div>`;
+      pickers.innerHTML = group("striker", bats, [picked.nonStriker]) + group("nonStriker", bats, [picked.striker]) + group("bowler", bowls, []);
     };
-    refreshLists();
-    app.querySelectorAll('input[name="bat"]').forEach((r) => r.addEventListener("change", refreshLists));
+    drawPickers();
+    pickers.addEventListener("click", (event) => {
+      const chip = event.target.closest("[data-role]");
+      const other = event.target.closest("[data-other]");
+      if (chip) {
+        picked[chip.dataset.role] = chip.dataset.name;
+      } else if (other) {
+        const key = other.dataset.other.replace("qsOther_", "");
+        const value = document.getElementById(other.dataset.other).value.trim();
+        if (!value) return;
+        picked[key] = value;
+      } else {
+        return;
+      }
+      if (picked.striker && picked.striker === picked.nonStriker) picked.nonStriker = "";
+      drawPickers();
+    });
+    app.querySelectorAll('input[name="bat"]').forEach((r) =>
+      r.addEventListener("change", () => {
+        picked.striker = picked.nonStriker = picked.bowler = "";
+        drawPickers();
+      })
+    );
     document.getElementById("qsSetup").addEventListener("submit", async (event) => {
       event.preventDefault();
       const bat = sideOf();
       const battingTeam = bat === "club" ? clubName : m.opponent;
       const bowlingTeam = bat === "club" ? m.opponent : clubName;
-      const striker = document.getElementById("qsStriker").value.trim();
-      const nonStriker = document.getElementById("qsNonStriker").value.trim();
-      const bowler = document.getElementById("qsBowler").value.trim();
-      if (striker && striker === nonStriker) return toast("Striker and non-striker must be different.", "error");
+      const { striker, nonStriker, bowler } = picked;
+      if (!striker || !nonStriker || !bowler) return toast("Tap the two opening batters and the bowler.", "error");
+      if (striker === nonStriker) return toast("Striker and non-striker must be different.", "error");
       try {
         await api("POST", URLS.setup(), {
           innings_number: inn.inning_number,
@@ -337,7 +365,8 @@
         }</p>
         <div class="qs-batters">${batterRow(p.striker, true)}${batterRow(p.nonStriker, false)}</div>
         <div class="qs-bowler"><span>🎯 ${esc(p.bowler || "–")}</span><strong>${esc(bowlRow.overs || "0.0")}-${bowlRow.maidens || 0}-${bowlRow.runs_conceded || 0}-${bowlRow.wickets || 0}</strong></div>
-        <div class="qs-over"><span>This over</span>${recent.map((b) => `<b class="qs-ball ${b.wicket ? "w" : b.runs_bat === 4 ? "four" : b.runs_bat === 6 ? "six" : b.extras_type !== "none" ? "x" : ""}">${esc(label(b))}</b>`).join("") || '<em class="qs-muted">–</em>'}</div>
+        <div class="qs-over"><span>This over</span>${recent.map((b) => `<button type="button" class="qs-ball ${b.wicket ? "w" : b.runs_bat === 4 ? "four" : b.runs_bat === 6 ? "six" : b.extras_type !== "none" ? "x" : ""}"${String(b.id || "").startsWith("local-") ? " disabled" : ` data-fix="${esc(b.id)}"`} aria-label="Fix this ball: ${esc(label(b))}">${esc(label(b))}</button>`).join("") || '<em class="qs-muted">–</em>'}</div>
+        ${recent.length ? '<p class="qs-fix-hint">Wrong ball? Tap it to fix it.</p>' : ""}
       </section>
 
       ${
@@ -512,10 +541,22 @@
 
   // ---------- line-ups (both teams, 2-11 players, before scoring) ----------
   function lineupCount(text) {
+    return cleanNames(text).length;
+  }
+
+  // "1. Ravi Kumar (c)", "2) Sam 🏏" pasted from WhatsApp -> "Ravi Kumar", "Sam"
+  function cleanNames(text) {
     return String(text || "")
       .split(/[\n,;]+/)
-      .map((n) => n.trim())
-      .filter(Boolean).length;
+      .map((n) =>
+        n
+          .replace(/^\s*\d{1,2}\s*[.)\-:]\s*/, "")
+          .replace(/\((c|vc|wk|captain|keeper)\)|\*/gi, "")
+          .replace(/[^\p{L}\p{N}\s.'-]/gu, "")
+          .replace(/\s+/g, " ")
+          .trim()
+      )
+      .filter(Boolean);
   }
 
   function renderLineups() {
@@ -539,11 +580,13 @@
                     .join("")}</div>`
                 : ""
             }
+            ${roster.length ? `<div class="qs-lineup-tools"><button type="button" class="qs-btn ghost" data-lineup="all">Select all</button><button type="button" class="qs-btn ghost" data-lineup="none">Clear</button></div>` : ""}
             <label>${roster.length ? "Other players (one per line)" : "Players (one per line)"}<textarea id="qsClubExtra" rows="${roster.length ? 2 : 6}" placeholder="Name\nName"></textarea></label>
           </fieldset>
           <fieldset class="qs-lineup">
             <legend>${esc(m.opponent)} <span class="qs-count" data-count="opp">0</span></legend>
-            <label>Players (one per line)<textarea id="qsOppList" rows="6" placeholder="Name\nName">${esc((saved.opponent || []).join("\n"))}</textarea></label>
+            <label>Players (one per line, or paste the WhatsApp list)<textarea id="qsOppList" rows="6" placeholder="Name\nName">${esc((saved.opponent || []).join("\n"))}</textarea></label>
+            <div class="qs-lineup-tools"><span class="qs-muted">Don't know their names?</span><button type="button" class="qs-btn ghost" data-lineup="opp11">Use Player 1–11</button></div>
           </fieldset>
           <button class="qs-btn primary wide" type="submit">Save line-ups</button>
         </form>
@@ -551,9 +594,21 @@
     const form = document.getElementById("qsLineups");
     const clubNames = () => [
       ...Array.from(form.querySelectorAll('input[name="club"]:checked')).map((i) => i.value),
-      ...document.getElementById("qsClubExtra").value.split(/[\n,;]+/).map((n) => n.trim()).filter(Boolean),
+      ...cleanNames(document.getElementById("qsClubExtra").value),
     ];
-    const oppNames = () => document.getElementById("qsOppList").value.split(/[\n,;]+/).map((n) => n.trim()).filter(Boolean);
+    const oppNames = () => cleanNames(document.getElementById("qsOppList").value);
+    form.addEventListener("click", (event) => {
+      const tool = event.target.closest("[data-lineup]")?.dataset.lineup;
+      if (!tool) return;
+      if (tool === "all" || tool === "none") {
+        const boxes = Array.from(form.querySelectorAll('input[name="club"]'));
+        boxes.forEach((box, i) => (box.checked = tool === "all" && i < 11));
+        if (tool === "all" && boxes.length > 11) toast("Ticked the first 11. Untick anyone not playing, then tick the others.");
+      } else if (tool === "opp11") {
+        document.getElementById("qsOppList").value = Array.from({ length: 11 }, (_, i) => `Player ${i + 1}`).join("\n");
+      }
+      updateCounts();
+    });
     const updateCounts = () => {
       const c = clubNames().length;
       const o = oppNames().length;
@@ -563,10 +618,21 @@
       form.querySelector('[data-count="opp"]').classList.toggle("ok", o >= 2 && o <= 11);
     };
     form.addEventListener("input", updateCounts);
-    form.addEventListener("change", updateCounts);
+    form.addEventListener("change", (event) => {
+      // 11 players at most per team (Amit, Oct 29)
+      if (event.target.name === "club" && event.target.checked && clubNames().length > 11) {
+        event.target.checked = false;
+        toast("11 players at most. Untick someone first.", "error");
+      }
+      updateCounts();
+    });
     updateCounts();
     form.addEventListener("submit", async (event) => {
       event.preventDefault();
+      const c = clubNames().length;
+      const o = oppNames().length;
+      if (c < 2 || c > 11) return toast(`${clubName} needs 2 to 11 players (now ${c}).`, "error");
+      if (o < 2 || o > 11) return toast(`${m.opponent} needs 2 to 11 players (now ${o}).`, "error");
       try {
         await api("POST", `/api/matches/${enc(matchId)}/lineups`, { club: clubNames(), opponent: oppNames() });
         toast("Line-ups saved ✓");
@@ -633,8 +699,8 @@
             team_b: document.getElementById("qsTeamB").value,
             overs: Number(document.getElementById("qsGuestOvers").value || 20),
             venue: document.getElementById("qsGuestVenue").value,
-            lineup_a: document.getElementById("qsLineupA").value,
-            lineup_b: document.getElementById("qsLineupB").value,
+            lineup_a: cleanNames(document.getElementById("qsLineupA").value).join("\n"),
+            lineup_b: cleanNames(document.getElementById("qsLineupB").value).join("\n"),
           }),
         });
         const payload = await res.json().catch(() => ({}));
@@ -745,11 +811,7 @@
     };
     // Strike rotation, worked out straight away
     let { striker, nonStriker, bowler } = p;
-    const ranRuns =
-      (ball.runs_bat || 0) +
-      (["bye", "leg_bye"].includes(ball.extras_type) ? ball.extras_runs || 0 : 0) +
-      (ball.extras_type === "wide" ? Math.max(0, (ball.extras_runs || 1) - 1) : 0);
-    if (runsRotate(ranRuns)) [striker, nonStriker] = [nonStriker, striker];
+    if (runsRotate(ranRuns(ball))) [striker, nonStriker] = [nonStriker, striker];
     const overDone = isLegal && (legal + 1) % 6 === 0;
     if (overDone) [striker, nonStriker] = [nonStriker, striker];
     if (ball.wicket) {
@@ -759,13 +821,30 @@
     saveLocal(inn.inning_number, { ...loadLocal(inn.inning_number), striker, nonStriker, bowler, setup: true });
     if (isLegal) pendingLegal += 1;
     queue.push({ payload, legal: isLegal });
+    const row = (inn.summary?.batting || []).find((b) => b.player_name === payload.striker) || {};
+    const runsBefore = Number(row.runs || 0);
+    const bySelf = !["bye", "leg_bye", "wide"].includes(payload.extras_type);
     optimistic(inn, payload);
     drain();
+    if (window.ccCelebrateBall) {
+      window.ccCelebrateBall(payload, runsBefore, runsBefore + (bySelf ? payload.runs_bat || 0 : 0), Number(row.balls || 0) + (payload.extras_type === "wide" ? 0 : 1));
+    }
     const oversLimit = Number(inn.overs_limit || 20);
     if (overDone && legal + 1 < oversLimit * 6) {
-      toast("Over complete. Pick the next bowler.");
-      askBowler();
+      const overBalls = (inn.balls || []).filter((b) => Number(b.over_number) === payload.over_number);
+      const overRuns = overBalls.reduce((sum, b) => sum + Number(b.runs_bat || 0) + Number(b.extras_runs || 0), 0);
+      const overWkts = overBalls.filter((b) => b.wicket).length;
+      askBowler(`Over ${payload.over_number} done: ${overRuns} run${overRuns === 1 ? "" : "s"}${overWkts ? `, ${overWkts} wicket${overWkts === 1 ? "" : "s"}` : ""}${overRuns === 0 && !overWkts ? " · maiden!" : ""}`, true);
     }
+  }
+
+  // Runs the batters ran on a ball (decides strike rotation)
+  function ranRuns(ball) {
+    return (
+      (ball.runs_bat || 0) +
+      (["bye", "leg_bye"].includes(ball.extras_type) ? ball.extras_runs || 0 : 0) +
+      (ball.extras_type === "wide" ? Math.max(0, (ball.extras_runs || 1) - 1) : 0)
+    );
   }
 
   // Show the ball on screen right away (the server copy replaces it when saving finishes)
@@ -816,13 +895,14 @@
     }
   }
 
-  // ---------- pop-ups ----------
+  // ---------- pop-ups (README "Easier live scoring": tap a name or a choice and it saves) ----------
   function openModal(title, bodyHtml, onOk) {
     modalTitle.textContent = title;
     modalBody.innerHTML = bodyHtml;
     modal.hidden = false;
     const ok = modal.querySelector("[data-modal-ok]");
     const cancel = modal.querySelector("[data-modal-cancel]");
+    ok.hidden = false;
     const close = () => {
       modal.hidden = true;
       ok.onclick = null;
@@ -837,9 +917,61 @@
     if (first) setTimeout(() => first.focus(), 50);
   }
 
-  function nameInput(id, list, placeholder, value = "") {
-    return `<input id="${id}" list="${id}List" placeholder="${esc(placeholder)}" value="${esc(value)}" autocomplete="off" />
-      <datalist id="${id}List">${list.map((n) => `<option value="${esc(n)}"></option>`).join("")}</datalist>`;
+  // A pop-up without a Save button: tapping a choice does the job. onTap(target, close) gets every tap inside it.
+  function openSheet(title, bodyHtml, onTap) {
+    modalTitle.textContent = title;
+    modalBody.innerHTML = bodyHtml;
+    modal.hidden = false;
+    modal.classList.add("qs-sheet");
+    const ok = modal.querySelector("[data-modal-ok]");
+    const cancel = modal.querySelector("[data-modal-cancel]");
+    ok.hidden = true;
+    const close = () => {
+      modal.hidden = true;
+      modal.classList.remove("qs-sheet");
+      ok.hidden = false;
+      cancel.onclick = null;
+      modalBody.onclick = null;
+      modalBody.onkeydown = null;
+    };
+    cancel.onclick = close;
+    modalBody.onclick = (event) => onTap(event.target, close);
+    // Enter in a "Someone else?" box works like its OK button
+    modalBody.onkeydown = (event) => {
+      if (event.key !== "Enter" || !event.target.matches("input")) return;
+      event.preventDefault();
+      event.target.parentElement.querySelector("[data-other]")?.click();
+    };
+    return close;
+  }
+
+  // Big name buttons. taken = names shown greyed out; sub = small text under a name; selected = highlighted name.
+  function chipList(names, attrs = "", taken = [], sub = {}, selected = "") {
+    const skip = new Set((taken || []).filter(Boolean));
+    if (!names.length) return "";
+    return `<div class="qs-chips">${names
+      .map(
+        (n) =>
+          `<button type="button" class="qs-chip${n === selected ? " on" : ""}" data-name="${esc(n)}" ${attrs}${skip.has(n) ? " disabled" : ""}>${esc(n)}${
+            sub[n] ? `<small>${esc(sub[n])}</small>` : ""
+          }</button>`
+      )
+      .join("")}</div>`;
+  }
+
+  // "Someone else?" for a player who isn't in the line-up
+  function otherName(id, placeholder, open = false) {
+    return `<details class="qs-other"${open ? " open" : ""}><summary>${open ? "Type the name" : "Someone else?"}</summary>
+      <div class="qs-short"><input id="${id}" placeholder="${esc(placeholder)}" autocomplete="off" /><button type="button" class="qs-btn primary" data-other="${id}">OK</button></div></details>`;
+  }
+
+  // The name chosen by a tap: a name button, or the OK next to a typed name
+  function tappedName(target) {
+    const chip = target.closest("[data-name]");
+    if (chip && !chip.disabled) return chip.dataset.name;
+    const other = target.closest("[data-other]");
+    if (other) return (document.getElementById(other.dataset.other)?.value || "").trim();
+    return "";
   }
 
   function bowlingRoster(inn) {
@@ -849,66 +981,275 @@
     return rosterFor(battingIsClub(inn) ? "club" : "opp");
   }
 
-  function askBowler() {
+  // Next bowler: one tap. afterOver = the over just ended, so the same bowler can't continue.
+  function askBowler(note = "", afterOver = false) {
     const inn = currentInnings();
     const p = players(inn);
-    openModal(
-      "Next bowler",
-      `<label>Bowler ${nameInput("qsNewBowler", bowlingRoster(inn).filter((n) => n !== p.bowler), "Bowler's name")}</label>
-       <p class="qs-muted">The same bowler can't bowl two overs in a row.</p>`,
-      () => {
-        const name = document.getElementById("qsNewBowler").value.trim();
-        if (!name) return false;
-        saveLocal(inn.inning_number, { ...loadLocal(inn.inning_number), striker: p.striker, nonStriker: p.nonStriker, bowler: name, setup: true });
+    const figures = {};
+    (inn.summary?.bowling || []).forEach((b) => {
+      figures[b.player_name] = `${b.overs || "0.0"}-${b.maidens || 0}-${b.runs_conceded || 0}-${b.wickets || 0}`;
+    });
+    const list = bowlingRoster(inn);
+    openSheet(
+      "Who bowls next?",
+      `${note ? `<p class="qs-sheet-note">${esc(note)}</p>` : ""}
+       ${chipList(list, "", afterOver ? [p.bowler] : [], figures, afterOver ? "" : p.bowler)}
+       ${otherName("qsNewBowler", "Bowler's name", list.length === 0)}
+       ${afterOver ? '<p class="qs-muted">The same bowler can\'t bowl two overs in a row.</p>' : ""}`,
+      (target, close) => {
+        const name = tappedName(target);
+        if (!name) return;
+        close();
+        const now = currentInnings();
+        const q = players(now);
+        saveLocal(now.inning_number, { ...loadLocal(now.inning_number), striker: q.striker, nonStriker: q.nonStriker, bowler: name, setup: true });
         render();
       }
     );
   }
 
+  // Wicket in 2-3 taps: How out -> (fielder, and for a run out who / runs) -> next batter.
   function askWicket(preset = "", fielder = "", runsDone = 0) {
     const inn = currentInnings();
     const p = players(inn);
     const batted = new Set((inn.summary?.batting || []).map((b) => b.player_name));
     const remaining = battingRoster(inn).filter((n) => n !== p.striker && n !== p.nonStriker && !batted.has(n));
-    openModal(
-      "Wicket!",
-      `<label>How out
-        <select id="qsHow">
-          ${["bowled", "caught", "lbw", "run_out", "stumped", "hit_wicket"].map((h) => `<option value="${h}"${h === preset ? " selected" : ""}>${h.replace("_", " ")}</option>`).join("")}
-        </select></label>
-       <label>Who is out
-        <select id="qsOut"><option value="${esc(p.striker)}">${esc(p.striker)} (striker)</option><option value="${esc(p.nonStriker)}">${esc(p.nonStriker)} (non-striker)</option></select></label>
-       <label>Fielder (optional) ${nameInput("qsFielder", bowlingRoster(inn), "Catcher / fielder", fielder)}</label>
-       <label>Runs completed before the run out <input id="qsWRuns" type="number" min="0" max="6" value="${Number(runsDone) || 0}" /></label>
-       <label>New batter ${nameInput("qsNewBat", remaining, "Next batter (leave empty if all out)")}</label>`,
-      async () => {
-        const how = document.getElementById("qsHow").value;
-        await record({
-          wicket: true,
-          wicket_type: how,
-          wicket_player: document.getElementById("qsOut").value,
-          fielder: document.getElementById("qsFielder").value.trim(),
-          runs_bat: how === "run_out" ? Number(document.getElementById("qsWRuns").value || 0) : 0,
-          new_batter: document.getElementById("qsNewBat").value.trim(),
-        });
+    const fielders = bowlingRoster(inn);
+    const HOW = [
+      ["bowled", "Bowled"],
+      ["caught", "Caught"],
+      ["lbw", "LBW"],
+      ["run_out", "Run out"],
+      ["stumped", "Stumped"],
+      ["hit_wicket", "Hit wicket"],
+    ];
+    const needsFielder = (how) => ["caught", "run_out", "stumped"].includes(how);
+    const w = { how: preset, out: p.striker, fielder: fielder || "", runs: Number(runsDone) || 0 };
+    let step = !preset ? "how" : needsFielder(preset) && !fielder ? "fielder" : "batter";
+
+    const draw = () => {
+      const howLabel = (HOW.find(([v]) => v === w.how) || [])[1] || "";
+      if (step === "how") {
+        modalTitle.textContent = "Wicket! How out?";
+        modalBody.innerHTML = `<p class="qs-sheet-note">${esc(p.striker)} on strike · ${esc(p.bowler)} bowling</p>
+          <div class="qs-chips big">${HOW.map(([v, l]) => `<button type="button" class="qs-chip" data-how="${v}">${l}</button>`).join("")}</div>`;
+      } else if (step === "fielder") {
+        modalTitle.textContent = w.how === "caught" ? "Caught by?" : w.how === "stumped" ? "Stumped by?" : "Run out";
+        const runOut =
+          w.how === "run_out"
+            ? `<p class="qs-step">Who is out?</p>
+               <div class="qs-chips">${[
+                 [p.striker, "striker"],
+                 [p.nonStriker, "non-striker"],
+               ]
+                 .filter(([n]) => n)
+                 .map(([n, role]) => `<button type="button" class="qs-chip${w.out === n ? " on" : ""}" data-out="${esc(n)}">${esc(n)}<small>${role}</small></button>`)
+                 .join("")}</div>
+               <p class="qs-step">Runs completed before the run out</p>
+               <div class="qs-chips">${[0, 1, 2, 3].map((r) => `<button type="button" class="qs-chip${w.runs === r ? " on" : ""}" data-wruns="${r}">${r}</button>`).join("")}</div>
+               <p class="qs-step">Fielder</p>`
+            : "";
+        const sub = {};
+        if (p.bowler) sub[p.bowler] = "bowler";
+        modalBody.innerHTML = `${runOut}${chipList(fielders, "", [], sub)}${otherName("qsFielderOther", "Fielder's name", fielders.length === 0)}
+          <button type="button" class="qs-btn ghost wide" data-skip-fielder>Don't know · skip</button>`;
+      } else {
+        modalTitle.textContent = "Next batter in";
+        modalBody.innerHTML = `<p class="qs-sheet-note">${esc(w.out)} ${esc(howLabel.toLowerCase())}${w.fielder ? ` · ${esc(w.fielder)}` : ""}</p>
+          ${chipList(remaining)}
+          ${otherName("qsNewBat", "Next batter's name", remaining.length === 0)}
+          <button type="button" class="qs-btn ghost wide" data-no-batter>No more batters (all out)</button>`;
+      }
+    };
+
+    const finish = async (close, newBatter) => {
+      close();
+      await record({
+        wicket: true,
+        wicket_type: w.how,
+        wicket_player: w.out,
+        fielder: w.fielder,
+        runs_bat: w.how === "run_out" ? w.runs : 0,
+        new_batter: newBatter,
+      });
+    };
+
+    openSheet("Wicket!", "", (target, close) => {
+      const how = target.closest("[data-how]")?.dataset.how;
+      if (how) {
+        w.how = how;
+        w.out = p.striker;
+        step = needsFielder(how) ? "fielder" : "batter";
+        return draw();
+      }
+      if (step === "fielder") {
+        const out = target.closest("[data-out]")?.dataset.out;
+        if (out) {
+          w.out = out;
+          return draw();
+        }
+        const runs = target.closest("[data-wruns]")?.dataset.wruns;
+        if (runs != null) {
+          w.runs = Number(runs);
+          return draw();
+        }
+        if (target.closest("[data-skip-fielder]")) {
+          w.fielder = "";
+          step = "batter";
+          return draw();
+        }
+        const name = tappedName(target);
+        if (name) {
+          w.fielder = name;
+          step = "batter";
+          return draw();
+        }
+        return;
+      }
+      if (step === "batter") {
+        if (target.closest("[data-no-batter]")) return finish(close, "");
+        const name = tappedName(target);
+        if (name) return finish(close, name);
+      }
+    });
+    draw();
+  }
+
+  // Byes, leg byes and no balls: one tap on the number. Wide = 1 straight away (fix it by tapping the ball).
+  function askExtra(type) {
+    const labels = { wide: "Wide", no_ball: "No ball", bye: "Byes", leg_bye: "Leg byes" };
+    if (type === "wide") return record({ extras_type: "wide", extras_runs: 1 });
+    const nb = type === "no_ball";
+    const options = nb ? [0, 1, 2, 3, 4, 6] : [1, 2, 3, 4];
+    openSheet(
+      nb ? "No ball · runs off the bat?" : `${labels[type]} · how many?`,
+      `<div class="qs-chips big">${options.map((n) => `<button type="button" class="qs-chip" data-x="${n}">${nb ? (n ? `+${n}` : "No runs") : n}</button>`).join("")}</div>
+       ${nb ? '<p class="qs-muted">1 no-ball run is added by itself.</p>' : ""}`,
+      (target, close) => {
+        const chip = target.closest("[data-x]");
+        if (!chip) return;
+        close();
+        const n = Number(chip.dataset.x);
+        if (nb) record({ extras_type: "no_ball", extras_runs: 1, runs_bat: n });
+        else record({ extras_type: type, extras_runs: n });
       }
     );
   }
 
-  function askExtra(type) {
-    const labels = { wide: "Wide", no_ball: "No ball", bye: "Byes", leg_bye: "Leg byes" };
-    if (type === "wide") return record({ extras_type: "wide", extras_runs: 1 });
-    openModal(
-      labels[type],
-      type === "no_ball"
-        ? `<label>Runs off the bat <input id="qsXRuns" type="number" min="0" max="6" value="0" /></label><p class="qs-muted">1 no-ball run is added automatically.</p>`
-        : `<label>How many ${labels[type].toLowerCase()}? <input id="qsXRuns" type="number" min="1" max="6" value="1" /></label>`,
-      async () => {
-        const n = Number(document.getElementById("qsXRuns").value || 0);
-        if (type === "no_ball") await record({ extras_type: "no_ball", extras_runs: 1, runs_bat: n });
-        else await record({ extras_type: type, extras_runs: Math.max(1, n) });
+  // Fix any ball already scored: tap it in "This over".
+  const FIX_CHOICES = [
+    ["0", { runs_bat: 0 }],
+    ["1", { runs_bat: 1 }],
+    ["2", { runs_bat: 2 }],
+    ["3", { runs_bat: 3 }],
+    ["4", { runs_bat: 4 }],
+    ["6", { runs_bat: 6 }],
+    ["Wd", { extras_type: "wide", extras_runs: 1 }],
+    ["2 wd", { extras_type: "wide", extras_runs: 2 }],
+    ["5 wd", { extras_type: "wide", extras_runs: 5 }],
+    ["Nb", { extras_type: "no_ball", extras_runs: 1, runs_bat: 0 }],
+    ["Nb +1", { extras_type: "no_ball", extras_runs: 1, runs_bat: 1 }],
+    ["Nb +4", { extras_type: "no_ball", extras_runs: 1, runs_bat: 4 }],
+    ["Nb +6", { extras_type: "no_ball", extras_runs: 1, runs_bat: 6 }],
+    ["1 bye", { extras_type: "bye", extras_runs: 1 }],
+    ["4 byes", { extras_type: "bye", extras_runs: 4 }],
+    ["1 lb", { extras_type: "leg_bye", extras_runs: 1 }],
+    ["4 lb", { extras_type: "leg_bye", extras_runs: 4 }],
+  ];
+
+  function ballText(b) {
+    if (b.wicket) return `wicket (${String(b.wicket_type || "out").replace("_", " ")})`;
+    if (b.extras_type === "wide") return `${b.extras_runs || 1} wide`;
+    if (b.extras_type === "no_ball") return `no ball${b.runs_bat ? ` +${b.runs_bat}` : ""}`;
+    if (b.extras_type === "bye") return `${b.extras_runs} bye${b.extras_runs === 1 ? "" : "s"}`;
+    if (b.extras_type === "leg_bye") return `${b.extras_runs} leg bye${b.extras_runs === 1 ? "" : "s"}`;
+    return `${b.runs_bat || 0} run${b.runs_bat === 1 ? "" : "s"}`;
+  }
+
+  function askFix(ballId) {
+    if (queue.length || draining || busy) return toast("Wait a second for the last balls to save, then tap again.");
+    const inn = currentInnings();
+    const balls = inn.balls || [];
+    const index = balls.findIndex((b) => b.id === ballId);
+    if (index < 0) return;
+    const b = balls[index];
+    const isLast = index === balls.length - 1;
+    openSheet(
+      `Fix ball ${b.over_number - 1}.${b.ball_number}`,
+      `<p class="qs-sheet-note">${esc(b.bowler)} to ${esc(b.striker)} · scored as <b>${esc(ballText(b))}</b></p>
+       ${b.wicket ? `<p class="qs-muted">Picking a new result below takes the wicket away${isLast ? "" : ". The batter who came in stays in"}.</p>` : ""}
+       <p class="qs-step">What really happened?</p>
+       <div class="qs-chips">${FIX_CHOICES.map(([label], i) => `<button type="button" class="qs-chip" data-fixto="${i}">${esc(label)}</button>`).join("")}</div>
+       ${
+         isLast
+           ? `<div class="qs-fix-more">
+               ${b.wicket ? "" : '<button type="button" class="qs-btn ghost" data-fix-wicket>It was a wicket</button>'}
+               <button type="button" class="qs-btn ghost" data-fix-delete>Delete this ball</button>
+             </div>`
+           : ""
+       }`,
+      async (target, close) => {
+        if (target.closest("[data-fix-delete]")) {
+          close();
+          return undo();
+        }
+        if (target.closest("[data-fix-wicket]")) {
+          close();
+          await undo();
+          return askWicket();
+        }
+        const chip = target.closest("[data-fixto]");
+        if (!chip) return;
+        close();
+        const result = FIX_CHOICES[Number(chip.dataset.fixto)][1];
+        await saveFix(inn, b, result, isLast);
       }
     );
+  }
+
+  async function saveFix(inn, b, result, isLast) {
+    if (busy) return;
+    busy = true;
+    try {
+      await api("POST", URLS.ball(), {
+        id: b.id,
+        innings_number: inn.inning_number,
+        over_number: b.over_number,
+        ball_number: b.ball_number,
+        striker: b.striker,
+        non_striker: b.non_striker,
+        bowler: b.bowler,
+        runs_bat: 0,
+        extras_type: "none",
+        extras_runs: 0,
+        wicket: false,
+        commentary: b.commentary || "",
+        ...result,
+      });
+      await load();
+      if (isLast && !b.wicket) {
+        // Work out strike again from the fixed ball
+        const now = currentInnings();
+        const fixed = { ...b, runs_bat: 0, extras_type: "none", extras_runs: 0, ...result };
+        let striker = b.striker;
+        let nonStriker = b.non_striker;
+        if (runsRotate(ranRuns(fixed))) [striker, nonStriker] = [nonStriker, striker];
+        const legal = legalBalls(now);
+        const isLegal = !["wide", "no_ball"].includes(fixed.extras_type);
+        const overEnded = isLegal && legal > 0 && legal % 6 === 0;
+        if (overEnded) [striker, nonStriker] = [nonStriker, striker];
+        const local = loadLocal(now.inning_number);
+        saveLocal(now.inning_number, { ...local, striker, nonStriker, bowler: overEnded ? local.bowler || b.bowler : b.bowler, setup: true });
+        render();
+        toast(`Ball fixed: ${ballText(fixed)} ✓`);
+      } else {
+        toast("Ball fixed ✓ If the batters are at the wrong ends, tap ⇄ Swap strike.");
+      }
+    } catch (e) {
+      toast(e.message, "error");
+    } finally {
+      busy = false;
+    }
   }
 
   // ---------- shorthand + voice ----------
@@ -1007,6 +1348,8 @@
     if (runKey) return record({ runs_bat: Number(runKey.dataset.run) });
     const extraKey = event.target.closest("[data-extra]");
     if (extraKey) return askExtra(extraKey.dataset.extra);
+    const fixKey = event.target.closest("[data-fix]");
+    if (fixKey) return askFix(fixKey.dataset.fix);
     const act = event.target.closest("[data-act]")?.dataset.act;
     if (!act) return;
     if (act === "wicket") return askWicket();
@@ -1026,7 +1369,7 @@
       return;
     }
     if (act === "ai-mic") return toggleAiMic();
-    if (act === "bowler") return askBowler();
+    if (act === "bowler") return askBowler("", false);
     if (act === "swap") {
       const inn = currentInnings();
       const p = players(inn);
