@@ -657,7 +657,7 @@ html[data-theme="dark"] .sc-photo img {
 
 /* Page title size (the shared .fixtures-title is small). */
 .scorecards-page .fixtures-title {
-  font-size: clamp(1.35rem, 2.6vw, 1.8rem);
+  font-size: clamp(0.675rem, 1.3vw, 0.9rem);
   line-height: 1.2;
 }
 

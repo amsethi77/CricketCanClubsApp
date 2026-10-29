@@ -82,6 +82,10 @@ This section captures the user requirements in the order they were given and ref
 ### October 2026 Git sync and database ignore request
 - Push the latest changes, then pull the latest remote changes; update `.gitignore` so local database files and sidecars remain untracked.
 
+### October 2026 page title typography request
+- Make titles smaller and more professional across all pages, including the signed-in Home welcome title.
+- Reduce page-title font sizes to half of the previous size after the first sizing adjustment.
+
 ### September 2026 requests
 - Navbar: no More on laptop unless links don't fit; on phone More sits at the edge. Profile and Admin live inside the account (initials) button; Assistant sits at the bottom right.
 - Signed-out visitors can open a public Clubs page, search the site and switch dark/light mode.
@@ -508,6 +512,7 @@ This section documents the work done in September 2026. See "Change log" at the 
 - **Search and dark/light mode** on every page (`site_tools.js`, `GET /api/public/search`). Search never returns phone numbers, emails or ages. Dark mode inverts the page with a CSS filter; photos and the dark banners are flipped back.
 - **Signed-in navbar** (`static/shared_header.html`, `multipage.js`): shows as many links as fit and puts the rest under More. Profile, Admin center, club switch and Sign out are inside the account (initials) button. Scoring opens Quick Score.
 - **Shared look** for all signed-in pages: `static/app_polish.css` (white cards, one heading font, consistent inputs/buttons, status messages as a small toast). It is linked statically in each page's `<head>` to avoid a flash of old styles.
+- **Page titles** use a shared, compact Inter-based heading scale in `static/sports-system.css`; Home, Rankings, Sign In, Quick Score, and pricing overrides follow the same responsive scale.
 - **Sign In / Register** pages: `static/signin.css`, `static/register.css` (Register is a 3-step card).
 - **Public Clubs page** for signed-out visitors: `GET /clubs` serves `public_clubs.html` (`GET /api/public/clubs`).
 
@@ -926,6 +931,8 @@ Model (soft launch, Oct 2026): keep the core cricket experience free; one paid p
 
 ## Change log
 
+- 2026-10-29: Standardized page titles at a smaller, professional size across the shared sports system, Home, Rankings, Sign In, Quick Score, and pricing pages.
+- 2026-10-29: Halved the page-title font sizes across desktop and phone layouts in response to feedback that titles were still too large.
 - 2026-10-29: Broadened `.gitignore` to exclude all `app/data/*.db*` files and sidecars; removed the tracked local database from the pending merge while preserving its on-disk copy.
 - 2026-10-28: Removed the duplicate season badge from signed-in Home and retained the selected season year as the single hero title.
 - 2026-10-28: Redeployed the latest application package to Azure App Service, excluding databases, uploads, and secrets. Enabled the system-assigned managed identity, granted least-privilege Key Vault Secrets User access, and configured the Gemini key as a versionless Key Vault reference. Production health and Gemini reader checks passed; synthetic scorecard extraction returned 17 runs. Production data remains on persistent SQLite pending the backed-up Azure SQL migration.
@@ -1019,7 +1026,7 @@ Prompt for Copilot Chat / Panel:
 > Write a clean, modular CSS layout configuration for a premium light-themed sports website canvas. Import "Anton", "Inter", and "Space Mono" from Google Fonts. Set the global background canvas color to an off-white `#F8F9FA` and default text to `#1A1A1A`. Create two primary structural heading classes:
 > 
 > 
-> 1. `.sports-title`: Uses the font 'Anton', uppercase, large font sizing, for aggressive sports hero typography.
+> 1. `.sports-title`: Uses the font 'Inter', a clear medium-sized heading, and restrained letter spacing for a professional page title.
 > 2. `.sports-subtitle`: Uses 'Inter', weight 800, uppercase, letter-spaced, colored in crimson red `#D32F2F`.
 > Also, include a `.stat-card` class that mimics a floating dashboard panel: background white, smooth rounded corners, a subtle 1px border (`#EAEAEA`), and an ultra-soft drop shadow.
 
