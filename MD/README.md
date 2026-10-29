@@ -53,9 +53,31 @@ These rules are the source of truth for the current implementation. If older log
 - Sign out must invalidate the server session and clear the browser auth state.
 - Success and loading chatter should stay quiet in the UI unless it is needed for a real error or actionable confirmation.
 
+## Azure data architecture
+
+- Production infrastructure is provisioned in **Canada Central**: Azure SQL logical server `cricketcanclubs-prod-sql` and the single free-limit database `cricketcanclubs-prod` (General Purpose Serverless, Gen5, 2-vCore maximum, 60-minute auto-pause, auto-pause when the free limit is exhausted). The database is currently empty and has no application firewall rules.
+- Test remains on SQLite. Do not create a second Azure SQL database for test because the subscription's free monthly allowance applies to only one database.
+- The Canada Central Key Vault is `cricketcanclubs-prod-kv`. The `GEMINI-API-KEY` secret and generated SQL administrator password are stored there. The production App Service uses its system-assigned managed identity with the **Key Vault Secrets User** role and a versionless `GEMINI_API_KEY` Key Vault reference; never copy the secret into source code, deployment packages, or logs. The previous East US vault `testkeyvault179` was soft-deleted on 2026-10-28 and is recoverable through its 90-day retention period; it was not permanently purged.
+- The application still opens SQLite directly and uses SQLite-specific schema and PRAGMA operations. The provisioned SQL database is not yet connected and contains no migrated production data. Keep production on its existing SQLite database until a SQL Server-compatible data layer, a backed-up data migration, and production read/write validation are complete. Test must continue using SQLite.
+- The 2026-10-28 production redeploy verified `/api/health`, a Gemini scorecard reader, and a successful synthetic scorecard extraction using the Key Vault secret. Production data remains on the existing persistent SQLite file at `/home/site/cricketcanclubs/cricketclubapp.db`; the Azure SQL database is paused and empty. Do not cut over the database until the SQL-compatible data layer, a backed-up migration, and production read/write validation are complete.
+
 ## Prompt And Requirement Log
 
 This section captures the user requirements in the order they were given and refined during the build.
+
+### October 2026 Azure infrastructure request
+- Move production persistence from App Service SQLite to one free-tier Azure SQL Database PaaS database in Canada Central; keep test on SQLite; replace the East US Key Vault with a Canada Central vault; create no resources outside Canada Central.
+- Delete the existing East US Key Vault named `testkeyvault179`.
+
+### October 2026 local restart and Azure cutover request
+- Restart the app against the local database, redeploy it to Azure, and ensure production uses Azure SQL and its Gemini API key to respond to scorecard extraction requests.
+- Preserve and migrate the existing production data during the Azure SQL cutover; do not start with an empty database.
+
+### October 2026 production Gemini deployment request
+- Fix production, configure the solution to fetch the Gemini API key from Key Vault for scorecard extraction, and redeploy the latest code to Azure.
+
+### October 2026 Home season label request
+- Remove the duplicate “Season: 2026” badge from the signed-in Home page while retaining the “Season 2026” title.
 
 ### September 2026 requests
 - Navbar: no More on laptop unless links don't fit; on phone More sits at the edge. Profile and Admin live inside the account (initials) button; Assistant sits at the bottom right.
@@ -305,19 +327,19 @@ This section captures the user requirements in the order they were given and ref
 
 ## Run locally
 
-Use the repository startup script from the project root:
+From the project root on Windows, start the app against the local SQLite database:
 
 ```bash
-./startup.sh
+python app\main.py
 ```
 
-The script creates `.venv` if needed, installs `requirements.txt`, and starts the FastAPI server on port `8091` by default. You can override the port when needed:
+The server uses `app\data\cricketclubapp.db` by default and listens on port `8090`. If using the repository virtual environment:
 
 ```bash
-PORT=8092 ./startup.sh
+.\.venv\Scripts\python.exe app\main.py
 ```
 
-Open `http://127.0.0.1:8091`.
+Open `http://127.0.0.1:8090`.
 
 ## Project shape
 
@@ -365,6 +387,8 @@ Open `http://127.0.0.1:8091`.
 
 For Azure, the web app stays on App Service and Ollama runs separately in Azure Container Instances.
 
+- Production Gemini scorecard extraction uses the App Service system-assigned managed identity, the Key Vault Secrets User role on `cricketcanclubs-prod-kv`, and the `GEMINI_API_KEY` application setting as a versionless Key Vault reference to `GEMINI-API-KEY`. Azure resolves the reference into the environment variable read by `app/ai_vision.py`; do not add the key to `.env`, source, or deployment artifacts. After changing the secret, verify the reference and `GET /api/scorecards/reader`.
+- Production was redeployed on 2026-10-28. `/api/health` returned `ok`, `/api/scorecards/reader` reported Gemini, and a synthetic scorecard returned the expected 17-run innings using the Key Vault secret and the application's extraction code. This Gemini configuration does not connect the app to Azure SQL: production continues to use its persistent SQLite database until the separately documented data migration is complete.
 - Deploy Ollama with [`scripts/deploy_ollama_aci.sh`](scripts/deploy_ollama_aci.sh)
 - ACI template: [`infra/ollama-aci.yaml`](infra/ollama-aci.yaml)
 - Operator notes: [`.azure/ollama-aci.md`](.azure/ollama-aci.md)
@@ -491,6 +515,7 @@ This section documents the work done in September 2026. See "Change log" at the 
 ### Home pages
 - **Public home** `/live` (`static/home.js`, `static/home.css`): match strip (Live / Results / Upcoming), off-white banner with featured match, latest scorecards, recent results, coming up, join banner.
 - **Signed-in Home** `/dashboard` (`static/dashboard_home.js/css`, only on the overview): welcome card with quick actions, match strip, latest scorecards, and an **AI Assistant** card at the bottom. Panels that duplicated the navbar (scoring keypad, main menu, registration form) are hidden on Home.
+- The signed-in Home hero shows the selected season year once in its title; the duplicate season badge is omitted.
 - **Matchday tile**: if there is no upcoming fixture it shows the **last match that has a score** (both totals + result) instead of an old date (`renderLastMatchHero` in `app.js`).
 
 ### Quick Score (`/score`)
@@ -870,6 +895,11 @@ Model (soft launch, Oct 2026): keep the core cricket experience free; one paid p
 
 ## Change log
 
+- 2026-10-28: Removed the duplicate season badge from signed-in Home and retained the selected season year as the single hero title.
+- 2026-10-28: Redeployed the latest application package to Azure App Service, excluding databases, uploads, and secrets. Enabled the system-assigned managed identity, granted least-privilege Key Vault Secrets User access, and configured the Gemini key as a versionless Key Vault reference. Production health and Gemini reader checks passed; synthetic scorecard extraction returned 17 runs. Production data remains on persistent SQLite pending the backed-up Azure SQL migration.
+- 2026-10-28: Restarted the local app against `app/data/cricketclubapp.db`, verified health, and successfully extracted a synthetic test scorecard through Gemini using the local API key. The initial production check found the basic reader and no Key Vault identity; these Gemini deployment gaps were fixed later the same day. Azure SQL migration remains pending.
+- 2026-10-28: Provisioned the free-limit production Azure SQL PaaS database and replacement Key Vault in Canada Central; copied the Gemini secret. The SQL database remains empty and the live app remains on SQLite until SQL-compatible code and a backed-up, verified data migration are ready. Test remains SQLite.
+- 2026-10-28: Soft-deleted the former East US Key Vault `testkeyvault179` after confirming the Gemini secret is present in the Canada Central replacement; Azure retains it for 90 days before permanent purge.
 - 2026-10-15: Documented Windows local Ollama installation, chat/vision model setup, and health checks for AI Assistant and scorecard extraction.
 - 2026-10-15: Improved local scorecard extraction with full-page and table-crop Ollama vision inputs, full innings/batting/bowling/extras JSON output, tagged-model discovery, portable HEIC conversion, and stale-JSON clearing on re-extract.
 - 2026-10-15: Renamed the AI Muse interface and user-facing references to AI Assistant across signed-in, public, Home, Quick Score, and plan surfaces.

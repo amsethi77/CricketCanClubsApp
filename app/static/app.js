@@ -516,8 +516,6 @@ const elements = {
   viewerPlayerSnapshotDetails: document.getElementById("viewerPlayerSnapshotDetails"),
   heroEyebrow: document.getElementById("heroEyebrow"),
   heroGreetingTitle: document.getElementById("heroGreetingTitle"),
-  heroSubtitle: document.getElementById("heroSubtitle"),
-  focusClubBadge: document.getElementById("focusClubBadge"),
   activeMatchSelect: document.getElementById("activeMatchSelect"),
   whatsappLink: document.getElementById("whatsappLink"),
   viewerProfileForm: document.getElementById("viewerProfileForm"),
@@ -2857,12 +2855,6 @@ function renderViewerProfile(dashboard) {
     elements.heroGreetingTitle.textContent = state.selectedSeasonYear
       ? `Season ${state.selectedSeasonYear}`
       : "Season overview";
-  }
-  if (elements.heroSubtitle) {
-    elements.heroSubtitle.textContent = `Season : ${state.selectedSeasonYear || new Date().getFullYear()}`;
-  }
-  if (elements.focusClubBadge) {
-    elements.focusClubBadge.textContent = `Season : ${state.selectedSeasonYear || new Date().getFullYear()}`;
   }
   syncClubBadge(clubName);
   syncUserBadge(dashboard?.user || state.viewerAuth?.user || null);

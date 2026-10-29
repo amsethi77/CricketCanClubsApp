@@ -1,7 +1,7 @@
 # Azure Deployment Plan - CricketCanClubsApp
 
 ## Status
-Validated
+Application redeployed and Gemini configured through Key Vault; Azure SQL data migration pending.
 
 ## Goal
 Deploy the CricketClubApp / CricketCanClubs club website to Azure App Service with GitHub Actions, while preserving the current FastAPI app, SQLite persistence, static UI, archive uploads, and club-scoped workflows.
@@ -34,7 +34,10 @@ Deploy the CricketClubApp / CricketCanClubs club website to Azure App Service wi
 ## Recommended Azure Architecture
 - Azure App Service on Linux
 - GitHub Actions deployment from the repo main branch
-- Persistent App Service storage for SQLite/uploads/duplicates under `/home/site/cricketclubapp`
+- Production: Azure SQL Database PaaS, logical server `cricketcanclubs-prod-sql`, database `cricketcanclubs-prod`, in Canada Central. The database is configured for the subscription's free limit, with auto-pause on exhaustion.
+- Test: SQLite. Do not provision a second Azure SQL database for test because the free monthly allowance applies to only one database in the subscription.
+- Keep the existing App Service SQLite database as the production source of truth until the SQL-compatible application backend and a backed-up, verified migration are complete.
+- Canada Central Key Vault: `cricketcanclubs-prod-kv`. The Gemini secret and SQL administrator password are stored there. The App Service system-assigned managed identity has the Key Vault Secrets User role, and `GEMINI_API_KEY` references the Gemini secret. The former East US vault `testkeyvault179` was soft-deleted on 2026-10-28 and is recoverable during Azure's 90-day retention period; it was not permanently purged.
 - Separate Azure Container Instance for Ollama with Azure Files persistence for downloaded models
 - The Ollama container should pull both the chat model and an embedding model (`nomic-embed-text` by default) so the web app can use embeddings-backed grounding and chunk ranking.
 - Azure DNS for `criccanclubs.ca`
@@ -54,11 +57,12 @@ Deploy the CricketClubApp / CricketCanClubs club website to Azure App Service wi
 - Match center, scoring, archive import, and commentary
 - Local assistant / RAG-style chat grounded in persisted data
 
-## Azure Resources to Create
-- Resource group
-- Linux App Service plan
-- Linux Web App
-- Azure DNS zone for custom domain
+## Existing and Provisioned Azure Resources
+- Resource group: `cricketcanclubs-rg` (Canada Central)
+- Linux App Service plan and Web App: `cricketcanclubs-plan`, `cricketcanclubs-web` (Canada Central)
+- Production Azure SQL server and database: `cricketcanclubs-prod-sql`, `cricketcanclubs-prod` (Canada Central)
+- Production Key Vault replacement: `cricketcanclubs-prod-kv` (Canada Central)
+- Azure DNS zone for custom domain (existing status to verify)
 - Optional storage account for future backups/uploads
 
 ## Custom Domain Plan
@@ -73,10 +77,13 @@ Deploy the CricketClubApp / CricketCanClubs club website to Azure App Service wi
 - Restrict inbound access to HTTPS through App Service
 - Store GitHub Actions publish profile as a repository secret
 - Keep runtime data outside the code repository
-- Later move sensitive values to Key Vault if the app is expanded
+- Use the Canada Central Key Vault for application secrets. The App Service managed identity and Gemini Key Vault reference are configured; do not put secret values in source or deployment packages.
+- The SQL server currently has no firewall allow rules. Configure least-privilege SQL connectivity and access before connecting production.
 
 ## Data Plan
-- Keep SQLite for the first Azure release
+- Production SQL database is provisioned but empty and not connected to the app yet.
+- Keep SQLite as the production source of truth until code, backup, migration, and SQL read/write validation are complete.
+- Keep test on SQLite; no Azure SQL test database is planned.
 - Back up the database and upload folders regularly
 - Preserve:
   - `app/data/cricketclubapp.db`
@@ -103,17 +110,16 @@ Deploy the CricketClubApp / CricketCanClubs club website to Azure App Service wi
 
 ## Future Upgrade Path
 - Move uploads to Blob Storage
-- Move persistence to Azure SQL or PostgreSQL if needed
+- Complete the SQLite-to-Azure SQL migration after the application has a SQL Server-compatible persistence layer
 - Keep Ollama on Azure Container Instances for a lightweight model backend, or move OCR/chat workloads to Azure AI services if the local model path becomes limiting
 - Reevaluate App Service scaling after the app is decoupled from local files and local inference
 
 ## Implementation Steps
-1. Confirm Azure subscription and deployment region.
-2. Validate the app for Azure readiness.
-3. Generate infrastructure for the recommended App Service deployment.
-4. Add GitHub Actions deployment workflow.
-5. Add domain and HTTPS configuration.
-6. Deploy and verify the website.
+1. Provisioned production Azure SQL server/database and replacement Key Vault in Canada Central.
+2. Implement and test a SQL Server-compatible application persistence layer while retaining SQLite for test.
+3. Back up the live App Service SQLite database, migrate it to Azure SQL, and verify record counts and application read/write behavior before cutover.
+4. Configure SQL-specific least-privilege identity and narrowly scoped network access for the App Service. Key Vault access for Gemini is already configured and verified.
+5. Before the 90-day retention period expires, confirm that no consumers require secrets from the soft-deleted East US Key Vault; recover it if required, otherwise allow Azure's scheduled purge.
 
 ## Direct CLI Login
 
@@ -132,4 +138,6 @@ This plan is ready for review. After approval, proceed to validation and infrast
 ## Validation Proof
 - `python3 -m compileall app` — passed; all Python modules under `app/` compiled successfully.
 - `az bicep build --file infra/main.bicep` — passed; Bicep template compiled successfully.
+- 2026-10-28 production redeploy — Oryx build reported zero errors and deployment successful; `/api/health` returned `ok`; `/api/scorecards/reader` reported Gemini; synthetic extraction with the Key Vault secret returned the expected 17-run innings.
+- Production remains on the existing SQLite database under `/home/site/cricketcanclubs`; Azure SQL is paused and empty pending a compatible backend and backed-up data migration.
 - `git diff --check` — passed; no whitespace or patch-format issues in the working tree.
