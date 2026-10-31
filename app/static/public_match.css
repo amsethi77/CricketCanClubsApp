@@ -1012,3 +1012,17 @@
 @media (max-width: 360px) {
   .pm-wp-row { flex-wrap: wrap; }
 }
+
+/* Long team names ("Toronto Community Cricket Club Innings") made the innings bar wider than a phone and cut off
+   the SR / Econ columns (Oct 31 check): the body column can shrink, the name gets "...", tables scroll inside. */
+.pm-body {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.pm-body > *,
+.pm-inn,
+.pm-inn-body,
+.pm-innhead {
+  min-width: 0;
+  max-width: 100%;
+}

@@ -624,11 +624,16 @@ def normalize_innings_scorebook(entry: dict[str, Any], default_inning: dict[str,
     normalized["balls"] = [normalize_scorebook_ball(item) for item in normalized.get("balls", []) if isinstance(item, dict)]
     default_batting_team = str(default_inning.get("batting_team") or "").strip()
     default_bowling_team = str(default_inning.get("bowling_team") or "").strip()
-    generic_team_names = {"", "club", "heartlake", "heartlake cricket club"}
-    if str(normalized.get("batting_team") or "").strip().lower() in generic_team_names and default_batting_team:
-        normalized["batting_team"] = default_batting_team
-    if str(normalized.get("bowling_team") or "").strip().lower() in generic_team_names and default_bowling_team:
-        normalized["bowling_team"] = default_bowling_team
+    # Only fill in teams that are really missing. A real club name is kept as it is: "Heartlake Cricket Club" used to
+    # count as a placeholder, so when the other team batted first, Heartlake's chase was saved as the other team
+    # batting again (wrong target and result) - found in the Oct 31 check. "club" / "heartlake" mean the club itself.
+    club_team = default_batting_team if normalized["inning_number"] == 1 else default_bowling_team
+    for key, default_team in (("batting_team", default_batting_team), ("bowling_team", default_bowling_team)):
+        value = str(normalized.get(key) or "").strip().lower()
+        if not value and default_team:
+            normalized[key] = default_team
+        elif value in {"club", "heartlake"} and club_team:
+            normalized[key] = club_team
     normalized["state"] = build_scorebook_live_state(normalized)
     return normalized
 
@@ -640,7 +645,30 @@ def normalize_match_scorebook(scorebook: dict[str, Any] | None, fixture: dict[st
     for index in range(2):
         raw = innings[index] if index < len(innings) and isinstance(innings[index], dict) else {}
         normalized_innings.append(normalize_innings_scorebook(raw, default_scorebook["innings"][index]))
+    _repair_scorebook_teams(normalized_innings, fixture)
     return {"innings": normalized_innings}
+
+
+def _repair_scorebook_teams(innings: list[dict[str, Any]], fixture: dict[str, Any]) -> None:
+    """Afghan Eagles match, Oct 31 2026: an old bug saved "Afghan Eagles bowled to Afghan Eagles" and Heartlake's chase
+    as Afghan Eagles batting again. A team never bowls to itself and the two innings are always different teams, so
+    such matches are put right as they are read (README "Chase saved as the wrong team")."""
+    club_team, opponent_team = _scorebook_team_defaults(fixture)
+    same = lambda a, b: str(a or "").strip().lower() == str(b or "").strip().lower()
+
+    def other(team: str) -> str:
+        return club_team if same(team, opponent_team) else opponent_team if same(team, club_team) else ""
+
+    if len(innings) >= 2 and innings[0].get("batting_team") and same(innings[0].get("batting_team"), innings[1].get("batting_team")):
+        swapped = other(innings[0]["batting_team"])
+        if swapped:
+            innings[1]["batting_team"] = swapped
+            innings[1]["bowling_team"] = innings[0]["batting_team"]
+    for row in innings:
+        if row.get("batting_team") and same(row.get("batting_team"), row.get("bowling_team")):
+            swapped = other(row["batting_team"])
+            if swapped:
+                row["bowling_team"] = swapped
 
 
 def _delivery_is_legal(ball: dict[str, Any]) -> bool:

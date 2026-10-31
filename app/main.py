@@ -1123,6 +1123,41 @@ class ScorebookBallRequest(BaseModel):
     id: str = ""
     # The Score page's own id for a new ball: a retry after a lost connection never saves it twice.
     client_id: str = ""
+    # On a wicket: the batter coming in (so a new name typed on the day joins the line-up before "all out" is decided).
+    new_batter: str = ""
+
+
+def _grow_lineups_with_new_players(match_id: str, match: dict[str, Any], innings: dict[str, Any], ball: dict[str, Any], lineups: dict[str, Any], new_batter: str = "") -> dict[str, Any]:
+    """A batter or bowler typed in on the day ("Someone else?") joins their team's line-up (up to 11), so the next
+    pick lists show them and "all out" counts them (Afghan Eagles match, Oct 31 2026: "Ab" batted but wasn't in the
+    line-up, and the innings could end at 7 wickets with batters still to come)."""
+    if not lineups or not (lineups.get("club") or lineups.get("opponent")):
+        return lineups
+    club = str(match.get("club_name") or "").strip().lower()
+    bat_side = "club" if str(innings.get("batting_team") or "").strip().lower() == club else "opponent"
+    bowl_side = "opponent" if bat_side == "club" else "club"
+    changed = False
+    for side, names in ((bat_side, [ball.get("striker"), ball.get("non_striker"), new_batter]), (bowl_side, [ball.get("bowler")])):
+        current = list(lineups.get(side) or [])
+        known = {str(n).strip().lower() for n in current}
+        for name in names:
+            name = " ".join(str(name or "").split())
+            if name and name.lower() not in known and len(current) < LINEUP_MAX:
+                current.append(name)
+                known.add(name.lower())
+                changed = True
+        lineups[side] = current
+    if changed:
+        try:
+            with _auth_connection() as connection:
+                _ensure_extra_match_tables(connection)
+                connection.execute(
+                    "UPDATE app_match_lineups SET lineups_json = ?, updated_at = ? WHERE match_id = ?",
+                    (json.dumps({"club": lineups.get("club") or [], "opponent": lineups.get("opponent") or [], "roles": lineups.get("roles") or {}}), now_iso(), match_id),
+                )
+        except Exception:
+            logger.exception("Couldn't add new players to the line-ups of %s", match_id)
+    return lineups
 
 
 def _settle_scorebook_result(match: dict[str, Any], lineups: dict[str, list[str]]) -> None:
@@ -7970,7 +8005,7 @@ def add_scorebook_ball(match_id: str, request: ScorebookBallRequest, x_auth_toke
                 break
 
     summary = summarize_innings_scorebook(innings)
-    lineups = _match_lineups(match_id)
+    lineups = _grow_lineups_with_new_players(match_id, match, innings, ball, _match_lineups(match_id), request.new_batter)
     if summary["runs"] or summary["wickets"] or summary["legal_balls"]:
         innings["status"] = "Live"
     if summary["wickets"] >= _all_out_at(match, innings, lineups) or summary["legal_balls"] >= int(innings.get("overs_limit", 20) or 20) * 6:

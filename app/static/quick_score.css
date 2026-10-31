@@ -1070,3 +1070,9 @@ body.quick-score-page .qs-rolebtn.set {
 .qs-fixture.is-done .qs-go {
   color: #166534;
 }
+
+/* more than 11 picked: the count turns red (Oct 31) */
+.qs-count.over {
+  background: #fee2e2 !important;
+  color: #b91c1c !important;
+}
