@@ -313,9 +313,11 @@
     </section>`;
   }
 
-  function renderTabs() {
+  // A finished match has no Live tab (Dhruvika, Oct 31): just Scorecard and Commentary, opening on the Scorecard.
+  function renderTabs(done = false) {
+    const shown = done ? TABS.filter((t) => t !== "live") : TABS;
     const label = { live: "Live", scorecard: "Scorecard", commentary: "Commentary" };
-    return `<nav class="pm-tabbar" role="tablist">${TABS.map(
+    return `<nav class="pm-tabbar" role="tablist">${shown.map(
       (t) => `<button type="button" role="tab" data-tab="${t}" aria-selected="${t === activeTab}" class="${t === activeTab ? "on" : ""}">${label[t]}</button>`
     ).join("")}</nav>`;
   }
@@ -595,11 +597,12 @@
   // ---------- page ----------
   function render(match) {
     const state = matchState(match);
+    if (state.done && activeTab === "live") activeTab = "scorecard";
     const body = activeTab === "scorecard" ? renderScorecardTab(match, state) : activeTab === "commentary" ? renderCommentaryTab(match, state) : renderLive(match, state);
     const updated = document.getElementById("pmUpdated")?.textContent || "";
     root.innerHTML = `
       ${renderHeader(match, state)}
-      ${renderTabs()}
+      ${renderTabs(state.done)}
       <section class="pm-body" role="tabpanel">${body}</section>
       <p class="pm-foot">Read-only scorecard.${state.isLive ? " Updates by itself every 10 seconds." : ""}</p>`;
     const stamp = document.getElementById("pmUpdated");
@@ -706,8 +709,12 @@
       const updated = document.getElementById("pmUpdated");
       if (updated) updated.textContent = `Updated ${new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit", second: "2-digit" })}`;
       const isLive = String(match.status || "").toLowerCase() === "live" || innings.some((inning) => String(inning.status || "").toLowerCase() === "live");
+      // Keep checking until the match is finished (Oct 31): at the innings break nothing is "live", and before the
+      // first ball nothing has started - the page must still pick up the chase / the first ball by itself.
+      const started = innings.some((inning) => (inning.balls || []).length);
+      const wait = finishedNow ? 0 : isLive || started ? POLL_MS : 30000;
       clearTimeout(refreshTimer);
-      refreshTimer = isLive ? setTimeout(() => !document.hidden && loadMatch(), POLL_MS) : null;
+      refreshTimer = wait ? setTimeout(() => !document.hidden && loadMatch(), wait) : null;
     } catch (error) {
       console.error("[Public Match]", error);
       if (!lastData) root.innerHTML = `<p class="pm-empty">${esc(error.message)}</p>`;

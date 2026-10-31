@@ -44,13 +44,13 @@ body :is(.panel, .stack-card, .detail-card, .summary-card, .mini-stat, .stat-car
 }
 
 body :is(.page-shell, .live-shell, .fixtures-shell, .home-shell, .scorecards-shell, .signin-page-grid, .register-layout)
-  :is(h1, .template-title, .fixtures-title, .signin-title, .clubs-greeting):not(.sports-title) {
+  :is(h1, .template-title, .fixtures-title, .signin-title, .clubs-greeting) {
   color: var(--sports-ink);
   font-family: var(--font-sports-ui) !important;
-  font-size: clamp(1.7rem, 4.2vw, 2.6rem) !important;
+  font-size: clamp(0.75rem, 1.35vw, 1.025rem) !important;
   font-weight: 700 !important;
-  letter-spacing: -0.035em !important;
-  line-height: 1.12 !important;
+  letter-spacing: -0.03em !important;
+  line-height: 1.16 !important;
   text-transform: none;
   text-wrap: balance;
 }
@@ -73,16 +73,6 @@ body :is(.page-shell, .live-shell, .fixtures-shell, .home-shell, .scorecards-she
 body :is(.page-shell, .live-shell, .fixtures-shell, .home-shell, .scorecards-shell, .signin-page-grid, .register-layout)
   h3:not(.sports-title) {
   font-size: clamp(1rem, 2.2vw, 1.2rem) !important;
-}
-
-/* Reserve Anton for display headlines that explicitly request sports-title. */
-body .sports-title {
-  font-family: var(--font-sports-display) !important;
-  font-size: clamp(2rem, 5vw, 3.35rem) !important;
-  font-weight: 400 !important;
-  letter-spacing: 0.01em !important;
-  line-height: 1 !important;
-  text-transform: uppercase;
 }
 
 body :is(.section-kicker, .template-kicker, .sports-subtitle, .ins-kicker) {
@@ -244,13 +234,9 @@ body :is(.primary-button, .primary-link, .home-btn.primary) {
   body :is(.panel, .template-shell) { padding: 16px !important; }
 
   body :is(.page-shell, .live-shell, .fixtures-shell, .home-shell, .scorecards-shell, .signin-page-grid, .register-layout)
-    :is(h1, .template-title, .fixtures-title, .signin-title, .clubs-greeting):not(.sports-title) {
-    font-size: clamp(1.6rem, 8vw, 2.15rem) !important;
-    line-height: 1.14 !important;
-  }
-
-  body .sports-title {
-    font-size: clamp(1.9rem, 10vw, 2.8rem) !important;
+    :is(h1, .template-title, .fixtures-title, .signin-title, .clubs-greeting) {
+    font-size: clamp(0.675rem, 2.8vw, 0.9rem) !important;
+    line-height: 1.16 !important;
   }
 
   .custom-table th,

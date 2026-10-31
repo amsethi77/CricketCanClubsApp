@@ -98,8 +98,9 @@ html body.signin-v2 .section-kicker {
 html body.signin-v2 .signin-title {
   margin: 0 !important;
   font-family: var(--font-display, "Roboto", sans-serif) !important;
-  font-size: clamp(1.7rem, 2.6vw, 2.1rem) !important;
-  line-height: 1.15 !important;
+  font-size: clamp(0.75rem, 1.35vw, 1.025rem) !important;
+  font-weight: 700 !important;
+  line-height: 1.16 !important;
   letter-spacing: -0.03em !important;
   color: #0f172a !important;
   max-width: none !important;
@@ -525,6 +526,10 @@ html body.signin-v2 .signin-empty {
 
 /* ---------- Phone ---------- */
 @media (max-width: 640px) {
+  html body.signin-v2 .signin-title {
+    font-size: clamp(0.675rem, 2.8vw, 0.9rem) !important;
+  }
+
   html body.signin-v2 .page-shell {
     width: calc(100% - 24px);
     padding-top: 12px;

@@ -7,16 +7,14 @@ env/
 node_modules/
 
 app/data/heartlake.db
-app/data/*.db
+app/data/*.db*
 app/data/*_cache.json
 app/uploads/
 app/duplicates/
 infra/main.json
 .python_packages/
 
-# Local database temp files and one-off markers
-app/data/*.db-shm
-app/data/*.db-wal
+# Local one-off markers
 app/data/.stats_version
 
 # Secrets (Stripe keys) - see .env.example

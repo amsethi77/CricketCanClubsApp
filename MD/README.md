@@ -9,7 +9,7 @@ Any AI assistant or coding tool working on this repository (Claude, ChatGPT, Cop
 1. **Document every change in this README.md.** When you add or change a feature, page, API, data rule or workflow, add or update the matching section below (and add a dated line to "Change log") in the same change. Future developers and AI tools rely on this file as the single source of truth.
 2. **Record the user's request.** Add the requirement, in plain words, to "Prompt And Requirement Log" so the reason behind the behaviour is kept.
 3. **Keep the three surfaces in lockstep.** The iOS and Android apps load these web pages, so web changes must work at phone width (390px) as well as laptop width.
-4. **Never commit local data or secrets.** Files in `app/data/` (`*.db`, `*.db-shm`, `*.db-wal`, `*_cache.json`, `.stats_version`), `app/uploads/` and the `.env` file (Stripe keys) stay out of git.
+4. **Never commit local data or secrets.** Files in `app/data/` (`*.db*`, `*_cache.json`, `.stats_version`), `app/uploads/` and the `.env` file (Stripe keys) stay out of git.
 5. **Test before you hand over:** restart with `python app\main.py`, check the pages you touched on laptop and phone widths, and note how to test in the README section you updated.
 
 The same rules are in `AGENTS.md` and `CLAUDE.md` so every tool picks them up. If you use GitHub Copilot, copy `AGENTS.md` to `.github/copilot-instructions.md`.
@@ -53,9 +53,39 @@ These rules are the source of truth for the current implementation. If older log
 - Sign out must invalidate the server session and clear the browser auth state.
 - Success and loading chatter should stay quiet in the UI unless it is needed for a real error or actionable confirmation.
 
+## Azure data architecture
+
+- Production infrastructure is provisioned in **Canada Central**: Azure SQL logical server `cricketcanclubs-prod-sql` and the single free-limit database `cricketcanclubs-prod` (General Purpose Serverless, Gen5, 2-vCore maximum, 60-minute auto-pause, auto-pause when the free limit is exhausted). The database is currently empty and has no application firewall rules.
+- Test remains on SQLite. Do not create a second Azure SQL database for test because the subscription's free monthly allowance applies to only one database.
+- The Canada Central Key Vault is `cricketcanclubs-prod-kv`. The `GEMINI-API-KEY` secret and generated SQL administrator password are stored there. The production App Service uses its system-assigned managed identity with the **Key Vault Secrets User** role and a versionless `GEMINI_API_KEY` Key Vault reference; never copy the secret into source code, deployment packages, or logs. The previous East US vault `testkeyvault179` was soft-deleted on 2026-10-28 and is recoverable through its 90-day retention period; it was not permanently purged.
+- The application still opens SQLite directly and uses SQLite-specific schema and PRAGMA operations. The provisioned SQL database is not yet connected and contains no migrated production data. Keep production on its existing SQLite database until a SQL Server-compatible data layer, a backed-up data migration, and production read/write validation are complete. Test must continue using SQLite.
+- The 2026-10-28 production redeploy verified `/api/health`, a Gemini scorecard reader, and a successful synthetic scorecard extraction using the Key Vault secret. Production data remains on the existing persistent SQLite file at `/home/site/cricketcanclubs/cricketclubapp.db`; the Azure SQL database is paused and empty. Do not cut over the database until the SQL-compatible data layer, a backed-up migration, and production read/write validation are complete.
+
 ## Prompt And Requirement Log
 
 This section captures the user requirements in the order they were given and refined during the build.
+
+### October 2026 Azure infrastructure request
+- Move production persistence from App Service SQLite to one free-tier Azure SQL Database PaaS database in Canada Central; keep test on SQLite; replace the East US Key Vault with a Canada Central vault; create no resources outside Canada Central.
+- Delete the existing East US Key Vault named `testkeyvault179`.
+
+### October 2026 local restart and Azure cutover request
+- Restart the app against the local database, redeploy it to Azure, and ensure production uses Azure SQL and its Gemini API key to respond to scorecard extraction requests.
+- Preserve and migrate the existing production data during the Azure SQL cutover; do not start with an empty database.
+
+### October 2026 production Gemini deployment request
+- Fix production, configure the solution to fetch the Gemini API key from Key Vault for scorecard extraction, and redeploy the latest code to Azure.
+
+### October 2026 Home season label request
+- Remove the duplicate “Season: 2026” badge from the signed-in Home page while retaining the “Season 2026” title.
+
+### October 2026 Git sync and database ignore request
+- Push the latest changes, then pull the latest remote changes; update `.gitignore` so local database files and sidecars remain untracked.
+
+### October 2026 page title typography request
+- Make titles smaller and more professional across all pages, including the signed-in Home welcome title.
+- Reduce page-title font sizes to half of the previous size after the first sizing adjustment.
+- Deploy the latest reduced page-title sizes to the existing Azure App Service.
 
 ### September 2026 requests
 - Navbar: no More on laptop unless links don't fit; on phone More sits at the edge. Profile and Admin live inside the account (initials) button; Assistant sits at the bottom right.
@@ -274,6 +304,9 @@ This section captures the user requirements in the order they were given and ref
 166. (Dhruvika, Oct 30) Train the AI scorecard reader well so mistakes like "c Singh b Singh" don't happen.
 167. (Dhruvika, Oct 30) The uploaded scorecard page should use the same font, font size and layout as the live page (Cricbuzz).
 168. (Dhruvika, Oct 30) An uploaded scorecard must look exactly like a manually scored match's scorecard - no difference.
+169. (Dhruvika, Oct 30) "Match not found." when saving line-ups for a new match.
+170. (Dhruvika, Oct 31) Check everything again, especially scoring, before the real match.
+171. (Dhruvika, Oct 31) A finished match's scorecard should not show the Live tab.
 131. Find duplicate scorecards smartly with AI (Gemini, or Ollama offline), not only exact matches.
 
 ## Current behavior summary
@@ -328,19 +361,19 @@ This section captures the user requirements in the order they were given and ref
 
 ## Run locally
 
-Use the repository startup script from the project root:
+From the project root on Windows, start the app against the local SQLite database:
 
 ```bash
-./startup.sh
+python app\main.py
 ```
 
-The script creates `.venv` if needed, installs `requirements.txt`, and starts the FastAPI server on port `8091` by default. You can override the port when needed:
+The server uses `app\data\cricketclubapp.db` by default and listens on port `8090`. If using the repository virtual environment:
 
 ```bash
-PORT=8092 ./startup.sh
+.\.venv\Scripts\python.exe app\main.py
 ```
 
-Open `http://127.0.0.1:8091`.
+Open `http://127.0.0.1:8090`.
 
 ## Project shape
 
@@ -388,6 +421,8 @@ Open `http://127.0.0.1:8091`.
 
 For Azure, the web app stays on App Service and Ollama runs separately in Azure Container Instances.
 
+- Production Gemini scorecard extraction uses the App Service system-assigned managed identity, the Key Vault Secrets User role on `cricketcanclubs-prod-kv`, and the `GEMINI_API_KEY` application setting as a versionless Key Vault reference to `GEMINI-API-KEY`. Azure resolves the reference into the environment variable read by `app/ai_vision.py`; do not add the key to `.env`, source, or deployment artifacts. After changing the secret, verify the reference and `GET /api/scorecards/reader`.
+- Production was redeployed on 2026-10-28. `/api/health` returned `ok`, `/api/scorecards/reader` reported Gemini, and a synthetic scorecard returned the expected 17-run innings using the Key Vault secret and the application's extraction code. This Gemini configuration does not connect the app to Azure SQL: production continues to use its persistent SQLite database until the separately documented data migration is complete.
 - Deploy Ollama with [`scripts/deploy_ollama_aci.sh`](scripts/deploy_ollama_aci.sh)
 - ACI template: [`infra/ollama-aci.yaml`](infra/ollama-aci.yaml)
 - Operator notes: [`.azure/ollama-aci.md`](.azure/ollama-aci.md)
@@ -501,6 +536,7 @@ This section documents the work done in September 2026. See "Change log" at the 
 - **Search and dark/light mode** on every page (`site_tools.js`, `GET /api/public/search`). Search never returns phone numbers, emails or ages. Dark mode inverts the page with a CSS filter; photos and the dark banners are flipped back.
 - **Signed-in navbar** (`static/shared_header.html`, `multipage.js`): shows as many links as fit and puts the rest under More. Profile, Admin center, club switch and Sign out are inside the account (initials) button. Scoring opens Quick Score.
 - **Shared look** for all signed-in pages: `static/app_polish.css` (white cards, one heading font, consistent inputs/buttons, status messages as a small toast). It is linked statically in each page's `<head>` to avoid a flash of old styles.
+- **Page titles** use a shared, compact Inter-based heading scale in `static/sports-system.css`; Home, Rankings, Sign In, Quick Score, and pricing overrides follow the same responsive scale.
 - **Sign In / Register** pages: `static/signin.css`, `static/register.css` (Register is a 3-step card).
 - **Public Clubs page** for signed-out visitors: `GET /clubs` serves `public_clubs.html` (`GET /api/public/clubs`).
 
@@ -514,6 +550,7 @@ This section documents the work done in September 2026. See "Change log" at the 
 ### Home pages
 - **Public home** `/live` (`static/home.js`, `static/home.css`): match strip (Live / Results / Upcoming), off-white banner with featured match, latest scorecards, recent results, coming up, join banner.
 - **Signed-in Home** `/dashboard` (`static/dashboard_home.js/css`, only on the overview): welcome card with quick actions, match strip, latest scorecards, and an **AI Assistant** card at the bottom. Panels that duplicated the navbar (scoring keypad, main menu, registration form) are hidden on Home.
+- The signed-in Home hero shows the selected season year once in its title; the duplicate season badge is omitted.
 - **Matchday tile**: if there is no upcoming fixture it shows the **last match that has a score** (both totals + result) instead of an old date (`renderLastMatchHero` in `app.js`).
 
 ### Quick Score (`/score`)
@@ -1025,6 +1062,15 @@ Model (soft launch, Oct 2026): keep the core cricket experience free; one paid p
 
 ## Change log
 
+- 2026-10-29: Standardized page titles at a smaller, professional size across the shared sports system, Home, Rankings, Sign In, Quick Score, and pricing pages.
+- 2026-10-29: Halved the page-title font sizes across desktop and phone layouts in response to feedback that titles were still too large.
+- 2026-10-29: Deployed the halved page-title sizes to the existing Canada Central Azure App Service; runtime databases, uploads, and secrets were excluded from the package.
+- 2026-10-29: Broadened `.gitignore` to exclude all `app/data/*.db*` files and sidecars; removed the tracked local database from the pending merge while preserving its on-disk copy.
+- 2026-10-28: Removed the duplicate season badge from signed-in Home and retained the selected season year as the single hero title.
+- 2026-10-28: Redeployed the latest application package to Azure App Service, excluding databases, uploads, and secrets. Enabled the system-assigned managed identity, granted least-privilege Key Vault Secrets User access, and configured the Gemini key as a versionless Key Vault reference. Production health and Gemini reader checks passed; synthetic scorecard extraction returned 17 runs. Production data remains on persistent SQLite pending the backed-up Azure SQL migration.
+- 2026-10-28: Restarted the local app against `app/data/cricketclubapp.db`, verified health, and successfully extracted a synthetic test scorecard through Gemini using the local API key. The initial production check found the basic reader and no Key Vault identity; these Gemini deployment gaps were fixed later the same day. Azure SQL migration remains pending.
+- 2026-10-28: Provisioned the free-limit production Azure SQL PaaS database and replacement Key Vault in Canada Central; copied the Gemini secret. The SQL database remains empty and the live app remains on SQLite until SQL-compatible code and a backed-up, verified data migration are ready. Test remains SQLite.
+- 2026-10-28: Soft-deleted the former East US Key Vault `testkeyvault179` after confirming the Gemini secret is present in the Canada Central replacement; Azure retains it for 90 days before permanent purge.
 - 2026-10-15: Documented Windows local Ollama installation, chat/vision model setup, and health checks for AI Assistant and scorecard extraction.
 - 2026-10-15: Improved local scorecard extraction with full-page and table-crop Ollama vision inputs, full innings/batting/bowling/extras JSON output, tagged-model discovery, portable HEIC conversion, and stale-JSON clearing on re-extract.
 - 2026-10-15: Renamed the AI Muse interface and user-facing references to AI Assistant across signed-in, public, Home, Quick Score, and plan surfaces.
@@ -1123,6 +1169,12 @@ Model (soft launch, Oct 2026): keep the core cricket experience free; one paid p
 - 2026-10-30: AI scorecard reader trained more: worked example 3 (printed card), caught-and-bowled rule, and cross-checks of bowling runs / overs / wickets / boundaries that make it look again. See "How the AI reader learns".
 - 2026-10-30: Scorecard page restyled like the live page (Cricbuzz look). See "Live page like a cricket score app".
 - 2026-10-30: Uploaded scorecards look exactly like scored matches (same header, tabs, innings bars and tables).
+- 2026-10-30: Merged Amit's smaller page titles (Oct 29, halved title sizes) with the Roboto font change: titles keep Amit's sizes and use Roboto; changed CSS / app.js have version 20261030m. The local database is no longer in git (Amit's .gitignore).
+- 2026-10-30: "Match not found." on Save line-ups (req 169): the match was saved, but a second copy of the app was still running on port 8090 from an old window, and on Windows the two copies answer requests in turn - the old one didn't know the new match. `python app\main.py` now refuses to start when the app is already running on that port and says to close the other window.
+- 2026-10-31: Full scoring check before the Saturday match (req 170): a whole club match was played through the Score page on a phone-sized screen - 11 + 11 line-ups with captain / keeper, runs, wide, no ball +4, leg byes, byes, bowled, caught, run out (non-striker, 1 run), stumped, fixing a ball, undo, bowler changes, innings break, chase, win - and every total checked against the server, the public page and the scorecard (49 checks). Three problems found and fixed:
+  - Undo while the next ball was being saved could bring the undone ball back (two saves at once, one lost). Scoring saves now go one at a time (`_scoring_locked` in `main.py`: a threading lock plus an SQLite write lock on `cricketclubapp.db.scorelock`, so it also works with several Azure workers), and the Score page refuses a new ball until Undo or a fix has saved ("One moment, still saving the last change"). 12 balls sent at the same moment: all 12 saved.
+  - The public page stopped refreshing at the innings break (nothing was "live"), so followers never saw the chase start. It now keeps checking until the match is finished (every 10 s once started, every 30 s before the first ball).
+- 2026-10-31: A finished match's public page has no Live tab - just Scorecard and Commentary, opening on the Scorecard (req 171). `public_match.js` / `quick_score.js` 20261031a.
 
 ## New UI Look and Feel
 
@@ -1132,7 +1184,7 @@ Prompt for Copilot Chat / Panel:
 > Write a clean, modular CSS layout configuration for a premium light-themed sports website canvas. Import "Anton", "Inter", and "Space Mono" from Google Fonts. Set the global background canvas color to an off-white `#F8F9FA` and default text to `#1A1A1A`. Create two primary structural heading classes:
 > 
 > 
-> 1. `.sports-title`: Uses the font 'Anton', uppercase, large font sizing, for aggressive sports hero typography.
+> 1. `.sports-title`: Uses the font 'Inter', a clear medium-sized heading, and restrained letter spacing for a professional page title.
 > 2. `.sports-subtitle`: Uses 'Inter', weight 800, uppercase, letter-spaced, colored in crimson red `#D32F2F`.
 > Also, include a `.stat-card` class that mimics a floating dashboard panel: background white, smooth rounded corners, a subtle 1px border (`#EAEAEA`), and an ultra-soft drop shadow.
 

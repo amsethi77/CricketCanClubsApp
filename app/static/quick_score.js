@@ -1029,6 +1029,12 @@
   });
 
   function record(ball) {
+    if (busy) {
+      // Undo or a fix is still saving: a ball now would be saved before it and the undo could remove the wrong ball
+      // (Oct 31 test: an undone 6 came back). The scorer taps again in a moment.
+      toast("One moment, still saving the last change. Tap again.", "error");
+      return;
+    }
     const inn = currentInnings();
     const p = players(inn);
     if (!p.striker || !p.bowler) {

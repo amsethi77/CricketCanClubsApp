@@ -279,10 +279,10 @@ html body.home-v2 .home-strip-nav {
 html body.home-v2 .home-hero h1 {
   margin: 16px 0 12px !important;
   font-family: var(--font-display, "Roboto", sans-serif) !important;
-  font-size: clamp(2rem, 4.2vw, 3.3rem) !important;
-  font-weight: 800 !important;
-  line-height: 1.08 !important;
-  letter-spacing: -0.035em !important;
+  font-size: clamp(0.75rem, 1.35vw, 1.025rem) !important;
+  font-weight: 700 !important;
+  line-height: 1.16 !important;
+  letter-spacing: -0.03em !important;
   color: #fff !important;
   max-width: none !important;
 }
@@ -876,6 +876,12 @@ html body.home-v2 .home-shell {
 
 html body.home-v2 .home-hero h1 {
   color: var(--h-ink) !important;
+}
+
+@media (max-width: 640px) {
+  html body.home-v2 .home-hero h1 {
+    font-size: clamp(0.675rem, 2.8vw, 0.9rem) !important;
+  }
 }
 
 html body.home-v2 .home-hero-copy > p {

@@ -19,9 +19,17 @@
 .qs-card h1,
 .qs-card h2 {
   margin: 4px 0 8px;
+  color: #0f172a;
+}
+
+.qs-card h1 {
+  font-size: clamp(0.75rem, 1.35vw, 1.025rem);
+  font-weight: 700;
+}
+
+.qs-card h2 {
   font-size: 1.5rem;
   font-weight: 800;
-  color: #0f172a;
 }
 
 .qs-kicker {
@@ -768,9 +776,16 @@ body.quick-score-page .muse-fab {
 
 .quick-score-guest .qs-card h1 {
   font-family: "Roboto", sans-serif;
-  font-size: 1.6rem;
-  font-weight: 800;
+  font-size: clamp(0.75rem, 1.35vw, 1.025rem);
+  font-weight: 700;
   line-height: 1.2;
+}
+
+@media (max-width: 640px) {
+  .qs-card h1,
+  .quick-score-guest .qs-card h1 {
+    font-size: clamp(0.675rem, 2.8vw, 0.9rem);
+  }
 }
 
 .qs-form label > .qs-count,

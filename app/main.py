@@ -1172,6 +1172,51 @@ def _client_ball_seen(innings: dict[str, Any], ball: dict[str, Any], request: "S
     return False
 
 
+# ---------------------------------------------------------------------------
+# One scoring change at a time (README "Scoring changes one at a time", Oct 31 2026). Every scoring write loads the
+# whole match, changes it and saves it. Two at once (Undo still saving while the next ball arrives, or two phones
+# scoring) each saved their own copy and one change was lost: an undone 6 came back. This lock makes them wait for
+# each other - across threads with a threading lock and across worker processes (Azure) with an SQLite write lock
+# on a small side file (released by itself if a worker stops).
+# ---------------------------------------------------------------------------
+import functools as _functools
+
+_SCORING_THREAD_LOCK = threading.RLock()
+_SCORING_DEPTH = threading.local()  # a locked endpoint calling another one (setup -> lineups) doesn't lock twice
+
+
+def _scoring_locked(func):
+    @_functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        with _SCORING_THREAD_LOCK:
+            depth = getattr(_SCORING_DEPTH, "value", 0)
+            connection = None
+            if depth == 0:
+                lock_file = DATABASE_FILE.with_name(f"{DATABASE_FILE.name}.scorelock")
+                try:
+                    lock_file.parent.mkdir(parents=True, exist_ok=True)
+                    connection = sqlite3.connect(lock_file, timeout=30, isolation_level=None)
+                    connection.execute("BEGIN IMMEDIATE")
+                except sqlite3.Error:
+                    logger.warning("Scoring lock not available; saving without it.", exc_info=True)
+                    if connection is not None:
+                        connection.close()
+                        connection = None
+            _SCORING_DEPTH.value = depth + 1
+            try:
+                return func(*args, **kwargs)
+            finally:
+                _SCORING_DEPTH.value = depth
+                if connection is not None:
+                    try:
+                        connection.execute("COMMIT")
+                    except sqlite3.Error:
+                        pass
+                    connection.close()
+
+    return wrapper
+
+
 def _apply_ball_edit(innings: dict[str, Any], ball: dict[str, Any], ball_id: str) -> bool:
     """Fixing a scored ball (README "Easier live scoring"): keep its id, place and time. Returns True when editing."""
     ball_id = str(ball_id or "").strip()
@@ -7819,6 +7864,7 @@ def add_commentary(match_id: str, request: CommentaryRequest, x_auth_token: str 
 
 
 @app.post("/api/matches/{match_id}/scorebook/setup")
+@_scoring_locked
 def update_scorebook_setup(match_id: str, request: ScorebookSetupRequest, x_auth_token: str | None = Header(default=None), x_lite_response: str | None = Header(default=None)) -> dict[str, Any]:
     user_row, _ = _require_match_scorer(x_auth_token, match_id)
     store = load_store()
@@ -7866,6 +7912,7 @@ def update_scorebook_setup(match_id: str, request: ScorebookSetupRequest, x_auth
 
 
 @app.post("/api/matches/{match_id}/scorebook/ball")
+@_scoring_locked
 def add_scorebook_ball(match_id: str, request: ScorebookBallRequest, x_auth_token: str | None = Header(default=None), x_lite_response: str | None = Header(default=None)) -> dict[str, Any]:
     user_row, _ = _require_match_scorer(x_auth_token, match_id)
     store = load_store()
@@ -7951,6 +7998,7 @@ def add_scorebook_ball(match_id: str, request: ScorebookBallRequest, x_auth_toke
 
 
 @app.delete("/api/matches/{match_id}/scorebook/ball")
+@_scoring_locked
 def delete_scorebook_ball(match_id: str, x_auth_token: str | None = Header(default=None), x_lite_response: str | None = Header(default=None)) -> dict[str, Any]:
     user_row, _ = _require_match_scorer(x_auth_token, match_id)
     store = load_store()
@@ -9005,6 +9053,7 @@ def _time_sort_key(text: str) -> int:
 
 
 @app.post("/api/quick-score/start")
+@_scoring_locked
 def quick_score_start(request: QuickStartRequest, x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
     """Create a fixture for today so scoring can start straight away."""
     user_row, current_club_id = _require_permission(x_auth_token, "manage_fixtures")
@@ -9651,6 +9700,7 @@ class LineupsRequest(BaseModel):
 
 
 @app.post("/api/matches/{match_id}/lineups")
+@_scoring_locked
 def save_match_lineups(match_id: str, request: LineupsRequest, x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
     user_row, _ = _require_match_scorer(x_auth_token, match_id)
     store = load_store()
@@ -9837,6 +9887,7 @@ def _same_overs_both_innings(match: dict[str, Any], scorebook: dict[str, Any], i
 
 
 @app.post("/api/guest/matches/{match_id}/setup")
+@_scoring_locked
 def guest_match_setup(match_id: str, request: ScorebookSetupRequest, x_guest_code: str | None = Header(default=None)) -> dict[str, Any]:
     match = _guest_require(match_id, x_guest_code)
     if str(match.get("date") or "") != _current_local_date().isoformat():
@@ -9858,6 +9909,7 @@ def guest_match_setup(match_id: str, request: ScorebookSetupRequest, x_guest_cod
 
 
 @app.post("/api/guest/matches/{match_id}/ball")
+@_scoring_locked
 def guest_match_ball(match_id: str, request: ScorebookBallRequest, x_guest_code: str | None = Header(default=None)) -> dict[str, Any]:
     match = _guest_require(match_id, x_guest_code)
     scorebook = _match_scorebook(match)
@@ -9924,6 +9976,7 @@ def guest_match_ball(match_id: str, request: ScorebookBallRequest, x_guest_code:
 
 
 @app.delete("/api/guest/matches/{match_id}/ball")
+@_scoring_locked
 def guest_match_undo(match_id: str, x_guest_code: str | None = Header(default=None)) -> dict[str, Any]:
     match = _guest_require(match_id, x_guest_code)
     scorebook = _match_scorebook(match)
@@ -11784,11 +11837,24 @@ def delete_archive(upload_id: str, x_auth_token: str | None = Header(default=Non
 
 
 if __name__ == "__main__":
+    import socket
+    import sys
+
     import uvicorn
+
+    _port = int(os.getenv("PORT", os.getenv("WEBSITES_PORT", "8090")))
+    # Two copies of the app on one port (an old window still open) answer requests in turn on Windows, and the
+    # old copy doesn't know about new matches: "Match not found." (Dhruvika, Oct 30). Refuse to start a second one.
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as _probe:
+        _probe.settimeout(1)
+        if _probe.connect_ex(("127.0.0.1", _port)) == 0:
+            print(f"\nThe app is already running on port {_port} in another window.")
+            print("Close that window (or press Ctrl+C in it) and then start the app again.\n")
+            sys.exit(1)
 
     uvicorn.run(
         "main:app",
         host="0.0.0.0",
-        port=int(os.getenv("PORT", os.getenv("WEBSITES_PORT", "8090"))),
+        port=_port,
         log_level="info",
     )
