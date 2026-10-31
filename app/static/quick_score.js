@@ -709,11 +709,20 @@
         </form>
       </section>`;
     const form = document.getElementById("qsLineups");
-    const clubNames = () => [
-      ...Array.from(form.querySelectorAll('input[name="club"]:checked')).map((i) => i.value),
-      ...cleanNames(document.getElementById("qsClubExtra").value),
-    ];
-    const oppNames = () => cleanNames(document.getElementById("qsOppList").value);
+    // A name ticked AND typed / pasted again counts once (Amit, Oct 31: "needs 2 to 11 players (now 21)" after
+    // ticking players and pasting the same WhatsApp list).
+    const unique = (names) => {
+      const seen = new Set();
+      return names.filter((n) => {
+        const key = n.toLowerCase();
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+    };
+    const ticked = () => Array.from(form.querySelectorAll('input[name="club"]:checked')).map((i) => i.value);
+    const clubNames = () => unique([...ticked(), ...cleanNames(document.getElementById("qsClubExtra").value)]);
+    const oppNames = () => unique(cleanNames(document.getElementById("qsOppList").value));
     // Captain / vice-captain / keeper: one tidy line per team; tap one and pick a name (Dhruvika, Oct 29: keep it simple).
     const roleChoice = { club: { ...((saved.roles || {}).club || {}) }, opponent: { ...((saved.roles || {}).opponent || {}) } };
     const SHORT = { captain: "Captain", vice_captain: "VC", keeper: "WK" };
@@ -785,6 +794,8 @@
       form.querySelector('[data-count="opp"]').textContent = `${o}/11`;
       form.querySelector('[data-count="club"]').classList.toggle("ok", c >= 2 && c <= 11);
       form.querySelector('[data-count="opp"]').classList.toggle("ok", o >= 2 && o <= 11);
+      form.querySelector('[data-count="club"]').classList.toggle("over", c > 11);
+      form.querySelector('[data-count="opp"]').classList.toggle("over", o > 11);
       drawRoles();
     };
     form.addEventListener("input", updateCounts);
@@ -801,8 +812,13 @@
       event.preventDefault();
       const c = clubNames().length;
       const o = oppNames().length;
-      if (c < 2 || c > 11) return toast(`${clubName} needs 2 to 11 players (now ${c}).`, "error");
-      if (o < 2 || o > 11) return toast(`${m.opponent} needs 2 to 11 players (now ${o}).`, "error");
+      if (c < 2 || c > 11) {
+        const t = ticked().length;
+        const typed = c - t;
+        const how = typed && t ? ` (${t} ticked + ${typed} in "Other players")` : typed ? ' (in "Other players")' : "";
+        return toast(c > 11 ? `${clubName}: ${c} players${how}. Keep 11 at most: untick or delete ${c - 11}.` : `${clubName} needs at least 2 players (now ${c}).`, "error");
+      }
+      if (o < 2 || o > 11) return toast(o > 11 ? `${m.opponent}: ${o} players. Keep 11 at most: delete ${o - 11} from the list.` : `${m.opponent} needs at least 2 players (now ${o}).`, "error");
       try {
         await api("POST", `/api/matches/${enc(matchId)}/lineups`, { club: clubNames(), opponent: oppNames(), roles: roleChoice });
         toast("Line-ups saved ✓");
@@ -1069,6 +1085,7 @@
       fielder: ball.fielder || "",
       commentary: ball.commentary || "",
       client_id: newClientId(),
+      new_batter: ball.new_batter || "",
     };
     // Strike rotation, worked out straight away
     let { striker, nonStriker, bowler } = p;
