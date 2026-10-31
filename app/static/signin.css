@@ -97,7 +97,7 @@ html body.signin-v2 .section-kicker {
 
 html body.signin-v2 .signin-title {
   margin: 0 !important;
-  font-family: var(--font-display, "Sora", sans-serif) !important;
+  font-family: var(--font-display, "Roboto", sans-serif) !important;
   font-size: clamp(1.7rem, 2.6vw, 2.1rem) !important;
   line-height: 1.15 !important;
   letter-spacing: -0.03em !important;
@@ -336,7 +336,7 @@ html body.signin-v2 .signin-stats-head {
 
 html body.signin-v2 .signin-stats-title {
   margin: 0 !important;
-  font-family: var(--font-display, "Sora", sans-serif) !important;
+  font-family: var(--font-display, "Roboto", sans-serif) !important;
   font-size: 1.4rem !important;
   letter-spacing: -0.02em !important;
   color: #0f172a !important;
@@ -389,7 +389,7 @@ html body.signin-v2 .signin-widget-kicker {
 
 html body.signin-v2 .signin-widget h3 {
   margin: 0 !important;
-  font-family: var(--font-display, "Sora", sans-serif) !important;
+  font-family: var(--font-display, "Roboto", sans-serif) !important;
   font-size: 1.02rem !important;
   font-weight: 700 !important;
   color: #0f172a !important;
@@ -577,7 +577,7 @@ html body.signin-v2 .si-tour-link {
   border: 0;
   background: transparent;
   color: #be123c;
-  font: 700 0.95rem/1.3 "Inter", system-ui, sans-serif;
+  font: 700 0.95rem/1.3 "Roboto", system-ui, sans-serif;
   cursor: pointer;
   border-radius: 12px;
 }

@@ -56,7 +56,7 @@
       liveHeroFeatureEl.innerHTML = `
         <div class="live-feature-card">
           <div class="live-pill"><span class="live-dot"></span><span>NO LIVE MATCHES</span></div>
-          <h2 style="margin:14px 0 8px;font-family:'Source Serif 4',serif;font-size:clamp(1.8rem,4vw,3rem);">Check back for the next live scorecard.</h2>
+          <h2 style="margin:14px 0 8px;font-family:'Roboto',serif;font-size:clamp(1.8rem,4vw,3rem);">Check back for the next live scorecard.</h2>
           <p>Fixtures are available on the fixtures page.</p>
           <div class="live-cta-row" style="margin-top:16px;">
             <a class="live-action secondary" href="/fixtures">View Fixtures</a>
@@ -68,7 +68,7 @@
     liveHeroFeatureEl.innerHTML = `
       <div class="live-feature-card">
         <div class="live-pill"><span class="live-dot"></span><span>${escapeHtml(String(match.status || "LIVE").toUpperCase())}</span></div>
-        <h2 style="margin:14px 0 8px;font-family:'Source Serif 4',serif;font-size:clamp(1.8rem,4vw,3rem);">${escapeHtml(match.club_name || "Club")} vs ${escapeHtml(match.opponent || "Opponent")}</h2>
+        <h2 style="margin:14px 0 8px;font-family:'Roboto',serif;font-size:clamp(1.8rem,4vw,3rem);">${escapeHtml(match.club_name || "Club")} vs ${escapeHtml(match.opponent || "Opponent")}</h2>
         <p>${escapeHtml(match.date_label || match.date || "Date TBD")} · ${escapeHtml(match.venue || "Venue TBD")} · ${escapeHtml(match.match_type || "Friendly")}</p>
         <div class="live-score" style="margin-top:16px;">${escapeHtml(scoreline(match))}</div>
         <p style="margin-top:10px;">${escapeHtml(match.live_summary || match.result || "Live scorecard")}</p>

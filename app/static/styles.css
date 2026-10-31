@@ -1,4 +1,4 @@
-@import url("https://fonts.googleapis.com/css2?family=Anton&family=Inter:wght@400;500;600;700;800&family=Space+Mono:wght@400;700&display=swap");
+@import url("https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700;900&display=swap");
 
 :root {
   --sports-canvas: #f8f9fa;
@@ -8,9 +8,9 @@
   --sports-crimson-deep: #9a1b1b;
   --sports-line: #eaeaea;
   --sports-shadow: 0 12px 32px rgba(26, 26, 26, 0.055);
-  --font-sports-display: "Anton", Impact, sans-serif;
-  --font-sports-ui: "Inter", "Segoe UI", system-ui, sans-serif;
-  --font-sports-data: "Space Mono", "SFMono-Regular", Consolas, monospace;
+  --font-sports-display: "Roboto", Impact, sans-serif;
+  --font-sports-ui: "Roboto", "Segoe UI", system-ui, sans-serif;
+  --font-sports-data: "Roboto", "SFMono-Regular", Consolas, monospace;
   --bg: #eff6ff;
   --panel: rgba(255, 255, 255, 0.88);
   --panel-strong: #ffffff;
@@ -1279,7 +1279,7 @@ p {
 
 h1,
 h2 {
-  font-family: "Source Serif 4", Georgia, "Times New Roman", serif;
+  font-family: "Roboto", Georgia, "Times New Roman", serif;
 }
 
 h1 {
@@ -1371,7 +1371,7 @@ h1 {
 }
 
 .signin-widget-head h3 {
-  font-family: "Source Serif 4", Georgia, "Times New Roman", serif;
+  font-family: "Roboto", Georgia, "Times New Roman", serif;
   font-size: 1.1rem;
   line-height: 1.15;
 }

@@ -8,14 +8,14 @@
     if (!document.querySelector(".page-topbar") || document.querySelector('script[src^="/assets/muse.js"]')) return;
     const museCss = document.createElement("link");
     museCss.rel = "stylesheet";
-    museCss.href = "/assets/muse.css?v=20261018a";
+    museCss.href = "/assets/muse.css?v=20261030f";
     document.head.appendChild(museCss);
     const museJs = document.createElement("script");
-    museJs.src = "/assets/muse.js?v=20261018a";
+    museJs.src = "/assets/muse.js?v=20261029a";
     document.head.appendChild(museJs);
     // Plans: shows an "Upgrade" pop-up when a paid feature is used. See README.md -> "Subscriptions and plans".
     const gate = document.createElement("script");
-    gate.src = "/assets/plan_gate.js?v=20261011a";
+    gate.src = "/assets/plan_gate.js?v=20261030f";
     document.head.appendChild(gate);
   };
   // App tour once per account after the first sign-in (README: "Simple menu and app tour").
@@ -23,7 +23,7 @@
     if (document.querySelector('script[src^="/assets/app_tour.js"]')) return;
     if (!document.querySelector(".page-topbar")) return;
     const tour = document.createElement("script");
-    tour.src = "/assets/app_tour.js?v=20261027a";
+    tour.src = "/assets/app_tour.js?v=20261030f";
     document.head.appendChild(tour);
   };
   if (document.readyState === "loading") {
@@ -56,7 +56,8 @@ const ASSISTANT_FAB_ID = "assistantFloatingButton";
   style.textContent = ".in-app .bottom-app-nav { display: none !important; } .in-app .assistant-fab { bottom: 16px !important; }";
   document.head.appendChild(style);
 })();
-// Launch mode (README "Launch: everyone on Pro"): no paid plans yet, so links to /pricing are hidden.
+// Launch mode (README "Launch: everyone on Pro"): no paid plans yet. Oct 29 2026 (Dhruvika): the Plans page is
+// shown again (with "free during the launch"); only "Upgrade" links and buttons stay hidden.
 (() => {
   if (window.CC_PLAN_CONFIG_LOADED) return;
   window.CC_PLAN_CONFIG_LOADED = true;
@@ -66,7 +67,7 @@ const ASSISTANT_FAB_ID = "assistantFloatingButton";
       if (!config || config.subscriptions) return;
       window.CC_SUBSCRIPTIONS_OFF = true;
       const style = document.createElement("style");
-      style.textContent = 'a[href="/pricing"], a[href^="/pricing?"], .plan-upgrade-only { display: none !important; }';
+      style.textContent = 'a[href^="/pricing?"], .plan-upgrade-only { display: none !important; }';
       document.head.appendChild(style);
     })
     .catch(() => {});

@@ -1,0 +1,570 @@
+{
+ "meta": {
+  "source": "claude-vision",
+  "confidence": "high",
+  "status": "template"
+ },
+ "match": {
+  "match_type": "club",
+  "date": "2026-10-30",
+  "venue": "Heartlake Park, Brampton",
+  "teams": {
+   "team_1": "Heartlake Cricket Club",
+   "team_2": "Toronto Community Cricket Club"
+  },
+  "overs_limit": 20
+ },
+ "innings": [
+  {
+   "inning_number": 1,
+   "batting_team": "Heartlake Cricket Club",
+   "bowling_team": "Toronto Community Cricket Club",
+   "summary": {
+    "runs": 158,
+    "wickets": 6,
+    "overs": 20,
+    "balls": null
+   },
+   "batting": [
+    {
+     "player": {
+      "name": "Aneesh Tickoo"
+     },
+     "runs": 34,
+     "balls": 28,
+     "fours": 4,
+     "sixes": 1,
+     "dismissal": {
+      "type": "caught",
+      "fielder": "Shah",
+      "bowler": "Khan",
+      "written_as": "c Shah b Khan"
+     },
+     "ball_runs_sum": null,
+     "ball_count": null,
+     "unsure": false
+    },
+    {
+     "player": {
+      "name": "Amit S"
+     },
+     "runs": 12,
+     "balls": 10,
+     "fours": 2,
+     "sixes": 0,
+     "dismissal": {
+      "type": "bowled",
+      "fielder": null,
+      "bowler": "Patel",
+      "written_as": "b Patel"
+     },
+     "ball_runs_sum": null,
+     "ball_count": null,
+     "unsure": false
+    },
+    {
+     "player": {
+      "name": "Dikshit Goel"
+     },
+     "runs": 45,
+     "balls": 33,
+     "fours": 5,
+     "sixes": 2,
+     "dismissal": {
+      "type": "caught and bowled",
+      "fielder": "Singh",
+      "bowler": "Singh",
+      "written_as": "c & b Singh"
+     },
+     "ball_runs_sum": null,
+     "ball_count": null,
+     "unsure": false
+    },
+    {
+     "player": {
+      "name": "Karan R"
+     },
+     "runs": 8,
+     "balls": 9,
+     "fours": 1,
+     "sixes": 0,
+     "dismissal": {
+      "type": "lbw",
+      "fielder": null,
+      "bowler": "Khan",
+      "written_as": "lbw b Khan"
+     },
+     "ball_runs_sum": null,
+     "ball_count": null,
+     "unsure": false
+    },
+    {
+     "player": {
+      "name": "Navesh"
+     },
+     "runs": 21,
+     "balls": 18,
+     "fours": 2,
+     "sixes": 1,
+     "dismissal": {
+      "type": "run out",
+      "fielder": "Ali",
+      "bowler": null,
+      "written_as": "run out (Ali)"
+     },
+     "ball_runs_sum": null,
+     "ball_count": null,
+     "unsure": false
+    },
+    {
+     "player": {
+      "name": "Ravi G"
+     },
+     "runs": 18,
+     "balls": 14,
+     "fours": 1,
+     "sixes": 1,
+     "dismissal": {
+      "type": "not out",
+      "fielder": null,
+      "bowler": null,
+      "written_as": "not out"
+     },
+     "ball_runs_sum": null,
+     "ball_count": null,
+     "unsure": false
+    },
+    {
+     "player": {
+      "name": "Bheem"
+     },
+     "runs": 3,
+     "balls": 5,
+     "fours": 0,
+     "sixes": 0,
+     "dismissal": {
+      "type": "caught",
+      "fielder": "Ali",
+      "bowler": "Patel",
+      "written_as": "c Ali b Patel"
+     },
+     "ball_runs_sum": null,
+     "ball_count": null,
+     "unsure": false
+    },
+    {
+     "player": {
+      "name": "Milan"
+     },
+     "runs": 4,
+     "balls": 3,
+     "fours": 0,
+     "sixes": 0,
+     "dismissal": {
+      "type": "not out",
+      "fielder": null,
+      "bowler": null,
+      "written_as": "not out"
+     },
+     "ball_runs_sum": null,
+     "ball_count": null,
+     "unsure": false
+    },
+    {
+     "player": {
+      "name": "Ishaan"
+     },
+     "runs": null,
+     "balls": null,
+     "fours": null,
+     "sixes": null,
+     "dismissal": {
+      "type": "did not bat",
+      "fielder": null,
+      "bowler": null,
+      "written_as": "Did not bat"
+     },
+     "ball_runs_sum": null,
+     "ball_count": null,
+     "unsure": false
+    },
+    {
+     "player": {
+      "name": "Kirron"
+     },
+     "runs": null,
+     "balls": null,
+     "fours": null,
+     "sixes": null,
+     "dismissal": {
+      "type": "did not bat",
+      "fielder": null,
+      "bowler": null,
+      "written_as": "Did not bat"
+     },
+     "ball_runs_sum": null,
+     "ball_count": null,
+     "unsure": false
+    },
+    {
+     "player": {
+      "name": "John Sinanan"
+     },
+     "runs": null,
+     "balls": null,
+     "fours": null,
+     "sixes": null,
+     "dismissal": {
+      "type": "did not bat",
+      "fielder": null,
+      "bowler": null,
+      "written_as": "Did not bat"
+     },
+     "ball_runs_sum": null,
+     "ball_count": null,
+     "unsure": false
+    }
+   ],
+   "bowling": [
+    {
+     "player": {
+      "name": "S Khan"
+     },
+     "overs": 4,
+     "maidens": 0,
+     "runs_conceded": 28,
+     "wickets": 2
+    },
+    {
+     "player": {
+      "name": "V Patel"
+     },
+     "overs": 4,
+     "maidens": 0,
+     "runs_conceded": 31,
+     "wickets": 2
+    },
+    {
+     "player": {
+      "name": "H Singh"
+     },
+     "overs": 4,
+     "maidens": 0,
+     "runs_conceded": 30,
+     "wickets": 1
+    },
+    {
+     "player": {
+      "name": "F Ali"
+     },
+     "overs": 4,
+     "maidens": 0,
+     "runs_conceded": 35,
+     "wickets": 0
+    },
+    {
+     "player": {
+      "name": "R Shah"
+     },
+     "overs": 4,
+     "maidens": 0,
+     "runs_conceded": 29,
+     "wickets": 0
+    }
+   ],
+   "extras": {
+    "wides": 7,
+    "no_balls": 1,
+    "byes": 2,
+    "leg_byes": 3,
+    "penalties": null,
+    "total": 13,
+    "written_as": "(b 2, lb 3, w 7, nb 1)",
+    "unsure": false
+   }
+  },
+  {
+   "inning_number": 2,
+   "batting_team": "Toronto Community Cricket Club",
+   "bowling_team": "Heartlake Cricket Club",
+   "summary": {
+    "runs": 138,
+    "wickets": 7,
+    "overs": 20,
+    "balls": null
+   },
+   "batting": [
+    {
+     "player": {
+      "name": "R Shah"
+     },
+     "runs": 22,
+     "balls": 17,
+     "fours": 3,
+     "sixes": 0,
+     "dismissal": {
+      "type": "bowled",
+      "fielder": null,
+      "bowler": "Dikshit Goel",
+      "written_as": "b Dikshit Goel"
+     },
+     "ball_runs_sum": null,
+     "ball_count": null,
+     "unsure": false
+    },
+    {
+     "player": {
+      "name": "F Ali"
+     },
+     "runs": 5,
+     "balls": 7,
+     "fours": 1,
+     "sixes": 0,
+     "dismissal": {
+      "type": "caught",
+      "fielder": "Navesh",
+      "bowler": "Ishaan",
+      "written_as": "c Navesh b Ishaan"
+     },
+     "ball_runs_sum": null,
+     "ball_count": null,
+     "unsure": false
+    },
+    {
+     "player": {
+      "name": "S Khan"
+     },
+     "runs": 41,
+     "balls": 35,
+     "fours": 4,
+     "sixes": 2,
+     "dismissal": {
+      "type": "caught",
+      "fielder": "Ravi G",
+      "bowler": "Kirron",
+      "written_as": "c Ravi G b Kirron"
+     },
+     "ball_runs_sum": null,
+     "ball_count": null,
+     "unsure": false
+    },
+    {
+     "player": {
+      "name": "V Patel"
+     },
+     "runs": 19,
+     "balls": 16,
+     "fours": 2,
+     "sixes": 0,
+     "dismissal": {
+      "type": "lbw",
+      "fielder": null,
+      "bowler": "Ishaan",
+      "written_as": "lbw b Ishaan"
+     },
+     "ball_runs_sum": null,
+     "ball_count": null,
+     "unsure": false
+    },
+    {
+     "player": {
+      "name": "H Singh"
+     },
+     "runs": 10,
+     "balls": 9,
+     "fours": 1,
+     "sixes": 0,
+     "dismissal": {
+      "type": "run out",
+      "fielder": "Milan",
+      "bowler": null,
+      "written_as": "run out (Milan)"
+     },
+     "ball_runs_sum": null,
+     "ball_count": null,
+     "unsure": false
+    },
+    {
+     "player": {
+      "name": "T Mehta"
+     },
+     "runs": 15,
+     "balls": 12,
+     "fours": 1,
+     "sixes": 1,
+     "dismissal": {
+      "type": "caught",
+      "fielder": "Amit S",
+      "bowler": "John Sinanan",
+      "written_as": "c Amit S b John Sinanan"
+     },
+     "ball_runs_sum": null,
+     "ball_count": null,
+     "unsure": false
+    },
+    {
+     "player": {
+      "name": "J Brar"
+     },
+     "runs": 12,
+     "balls": 10,
+     "fours": 1,
+     "sixes": 0,
+     "dismissal": {
+      "type": "not out",
+      "fielder": null,
+      "bowler": null,
+      "written_as": "not out"
+     },
+     "ball_runs_sum": null,
+     "ball_count": null,
+     "unsure": false
+    },
+    {
+     "player": {
+      "name": "K Gill"
+     },
+     "runs": 2,
+     "balls": 4,
+     "fours": 0,
+     "sixes": 0,
+     "dismissal": {
+      "type": "bowled",
+      "fielder": null,
+      "bowler": "Kirron",
+      "written_as": "b Kirron"
+     },
+     "ball_runs_sum": null,
+     "ball_count": null,
+     "unsure": false
+    },
+    {
+     "player": {
+      "name": "P Rao"
+     },
+     "runs": 4,
+     "balls": 10,
+     "fours": 0,
+     "sixes": 0,
+     "dismissal": {
+      "type": "not out",
+      "fielder": null,
+      "bowler": null,
+      "written_as": "not out"
+     },
+     "ball_runs_sum": null,
+     "ball_count": null,
+     "unsure": false
+    },
+    {
+     "player": {
+      "name": "A Dhillon"
+     },
+     "runs": null,
+     "balls": null,
+     "fours": null,
+     "sixes": null,
+     "dismissal": {
+      "type": "did not bat",
+      "fielder": null,
+      "bowler": null,
+      "written_as": "Did not bat"
+     },
+     "ball_runs_sum": null,
+     "ball_count": null,
+     "unsure": false
+    },
+    {
+     "player": {
+      "name": "M Sandhu"
+     },
+     "runs": null,
+     "balls": null,
+     "fours": null,
+     "sixes": null,
+     "dismissal": {
+      "type": "did not bat",
+      "fielder": null,
+      "bowler": null,
+      "written_as": "Did not bat"
+     },
+     "ball_runs_sum": null,
+     "ball_count": null,
+     "unsure": false
+    }
+   ],
+   "bowling": [
+    {
+     "player": {
+      "name": "Ishaan"
+     },
+     "overs": 4,
+     "maidens": 0,
+     "runs_conceded": 24,
+     "wickets": 2
+    },
+    {
+     "player": {
+      "name": "Kirron"
+     },
+     "overs": 4,
+     "maidens": 1,
+     "runs_conceded": 22,
+     "wickets": 2
+    },
+    {
+     "player": {
+      "name": "Dikshit Goel"
+     },
+     "overs": 4,
+     "maidens": 0,
+     "runs_conceded": 27,
+     "wickets": 1
+    },
+    {
+     "player": {
+      "name": "John Sinanan"
+     },
+     "overs": 4,
+     "maidens": 0,
+     "runs_conceded": 31,
+     "wickets": 1
+    },
+    {
+     "player": {
+      "name": "Milan"
+     },
+     "overs": 3,
+     "maidens": 0,
+     "runs_conceded": 21,
+     "wickets": 0
+    },
+    {
+     "player": {
+      "name": "Bheem"
+     },
+     "overs": 1,
+     "maidens": 0,
+     "runs_conceded": 10,
+     "wickets": 0
+    }
+   ],
+   "extras": {
+    "wides": 5,
+    "no_balls": 0,
+    "byes": 1,
+    "leg_byes": 2,
+    "penalties": null,
+    "total": 8,
+    "written_as": "(b 1, lb 2, w 5, nb 0)",
+    "unsure": false
+   }
+  }
+ ],
+ "validation": {
+  "inning_1_total": 158,
+  "inning_2_total": 138,
+  "expected_result": "Heartlake Cricket Club won by 20 runs",
+  "notes": ""
+ }
+}

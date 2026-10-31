@@ -958,6 +958,34 @@ def rebuild_fixture_performances_from_scorebook(match: dict[str, Any]) -> None:
     match["performances"] = manual_rows + list(aggregated.values())
 
 
+def scorebook_result_text(
+    first: dict[str, Any],
+    second: dict[str, Any],
+    first_summary: dict[str, Any],
+    second_summary: dict[str, Any],
+    all_out_at: int = 10,
+) -> str:
+    """"Afghans won by 3 wickets" / "Heartlake Cricket Club won by 12 runs" / "Match tied" (README "How a scored match ends")."""
+    first_runs, second_runs = int(first_summary.get("runs") or 0), int(second_summary.get("runs") or 0)
+    if second_runs > first_runs:
+        left = max(1, int(all_out_at or 10) - int(second_summary.get("wickets") or 0))
+        return f"{second.get('batting_team') or 'Team batting second'} won by {left} wicket{'' if left == 1 else 's'}"
+    if first_runs > second_runs:
+        margin = first_runs - second_runs
+        return f"{first.get('batting_team') or 'Team batting first'} won by {margin} run{'' if margin == 1 else 's'}"
+    return "Match tied"
+
+
+def scorebook_match_finished(innings: list[dict[str, Any]]) -> bool:
+    """A ball-by-ball match is over when the side batting second has passed the target or its innings is complete."""
+    ordered = sorted(innings or [], key=lambda row: int(row.get("inning_number") or 1))
+    if len(ordered) < 2 or not (ordered[1].get("balls") or []):
+        return False
+    first_runs = int(summarize_innings_scorebook(ordered[0]).get("runs") or 0)
+    second_runs = int(summarize_innings_scorebook(ordered[1]).get("runs") or 0)
+    return second_runs > first_runs or str(ordered[1].get("status") or "").strip().lower() == "completed"
+
+
 def sync_fixture_scorecard_from_scorebook(match: dict[str, Any]) -> None:
     innings = (match.get("scorebook", {}) or {}).get("innings", [])
     if not innings:
@@ -982,7 +1010,18 @@ def sync_fixture_scorecard_from_scorebook(match: dict[str, Any]) -> None:
             scorecard["opponent_overs"] = overs
     heartlake_runs = int(scorecard.get("heartlake_runs") or 0)
     opponent_runs = int(scorecard.get("opponent_runs") or 0)
-    if heartlake_runs and opponent_runs:
+    if any((row.get("balls") or []) for row in innings):
+        # Scored ball by ball: no result until the match is over (before Oct 29 2026 it said "Club won" as soon as
+        # both sides had runs, i.e. from the first ball of the chase). A result already written when the match
+        # ended (with the real team size) is kept. README "How a scored match ends".
+        ordered = sorted(innings, key=lambda row: int(row.get("inning_number") or 1))
+        if not scorebook_match_finished(innings):
+            scorecard["result"] = "TBD"
+        elif not re.search(r"\bwon by\b|\btied\b", str(scorecard.get("result") or ""), re.IGNORECASE):
+            scorecard["result"] = scorebook_result_text(
+                ordered[0], ordered[1], summarize_innings_scorebook(ordered[0]), summarize_innings_scorebook(ordered[1])
+            )
+    elif heartlake_runs and opponent_runs:
         if heartlake_runs > opponent_runs:
             scorecard["result"] = "Club won"
         elif opponent_runs > heartlake_runs:
@@ -5808,8 +5847,49 @@ def refresh_llm_document_index(connection: sqlite3.Connection, store: dict[str, 
     return documents
 
 
+_INDEXES_CHECKED = False
+
+
+def _repair_indexes_once(connection: sqlite3.Connection) -> None:
+    """Once per server start: rebuild any index that no longer matches its table (README "Database export and import").
+
+    Oct 29 2026: the database had two sign-in sessions (Oct 15-16) missing from the app_auth_sessions index
+    ("row 505 missing from index ..."), most likely from copying / syncing the file while the app was running.
+    The rows were fine; only the index was stale. REINDEX rebuilds indexes from the table rows, so it never
+    changes data. Anything else integrity_check reports is only logged.
+    """
+    global _INDEXES_CHECKED
+    if _INDEXES_CHECKED:
+        return
+    _INDEXES_CHECKED = True
+    try:
+        problems = [str(row[0]) for row in connection.execute("PRAGMA integrity_check").fetchall()]
+    except sqlite3.DatabaseError as exc:
+        logger.error("Database integrity check failed to run: %s", exc)
+        return
+    if problems == ["ok"]:
+        return
+    tables = set()
+    for problem in problems:
+        match = re.search(r"index (\w+)", problem)
+        if match:
+            row = connection.execute("SELECT tbl_name FROM sqlite_master WHERE name = ?", (match.group(1),)).fetchone()
+            if row:
+                tables.add(str(row[0]))
+    for table in sorted(tables):
+        try:
+            connection.execute(f'REINDEX "{table}"')
+            logger.warning("Rebuilt the indexes of table %s (they didn't match the table rows).", table)
+        except sqlite3.DatabaseError as exc:
+            logger.error("Couldn't rebuild the indexes of table %s: %s", table, exc)
+    remaining = [str(row[0]) for row in connection.execute("PRAGMA integrity_check").fetchall()]
+    if remaining != ["ok"]:
+        logger.error("Database integrity problems remain: %s", "; ".join(remaining[:10]))
+
+
 def ensure_database() -> None:
     with _connection() as connection:
+        _repair_indexes_once(connection)
         connection.executescript(_schema_tables())
         existing_fixture_columns = {
             row[1]
@@ -7148,7 +7228,9 @@ def _build_materialized_club_stats(store: dict[str, Any]) -> tuple[list[dict[str
         club_store = scoped_store_for_club(store, club)
         club_members = club_store.get("members", [])
         club_fixtures = _club_owned_fixtures(store, club)
-        club_archives = _club_owned_archives(global_archives, club)
+        # Still canonical after filtering: keep the marker so the stats helpers don't redo
+        # canonical_archive_uploads() for every member (README "Faster saving", Oct 29 2026).
+        club_archives = _CanonicalArchiveList(_club_owned_archives(global_archives, club))
         club_stats = build_combined_player_stats(club_fixtures, club_archives, club_members)
         batting_rankings = build_batting_rankings(club_stats)
         highest_score = max((int(row.get("runs", 0) or 0) for row in club_stats), default=0)
@@ -7185,8 +7267,9 @@ def _build_materialized_club_stats(store: dict[str, Any]) -> tuple[list[dict[str
         )
         for year in season_years:
             year_fixtures = _filter_fixtures_by_year(club_fixtures, year)
-            year_archives = _filter_archives_by_year(club_archives, year)
+            year_archives = _CanonicalArchiveList(_filter_archives_by_year(club_archives, year))
             year_stats = build_combined_player_stats(year_fixtures, year_archives, club_members)
+            year_milestones = [_batting_milestones(year_fixtures, year_archives, member, year=year) for member in club_members]
             year_batting_rankings = build_batting_rankings(year_stats)
             year_highest = max((int(row.get("runs", 0) or 0) for row in year_stats), default=0)
             year_match_counts = _club_match_counts(year_fixtures, year_archives, club_name, str(club.get("short_name") or ""))
@@ -7204,9 +7287,9 @@ def _build_materialized_club_stats(store: dict[str, Any]) -> tuple[list[dict[str
                     "highest_score": year_highest or None,
                     "top_batter": year_batting_rankings[0]["player_name"] if year_batting_rankings else "",
                     "top_batter_runs": year_batting_rankings[0]["runs"] if year_batting_rankings else 0,
-                    "scores_25_plus": sum(_batting_milestones(year_fixtures, year_archives, member, year=year)["scores_25_plus"] for member in club_members),
-                    "scores_50_plus": sum(_batting_milestones(year_fixtures, year_archives, member, year=year)["scores_50_plus"] for member in club_members),
-                    "scores_100_plus": sum(_batting_milestones(year_fixtures, year_archives, member, year=year)["scores_100_plus"] for member in club_members),
+                    "scores_25_plus": sum(item["scores_25_plus"] for item in year_milestones),
+                    "scores_50_plus": sum(item["scores_50_plus"] for item in year_milestones),
+                    "scores_100_plus": sum(item["scores_100_plus"] for item in year_milestones),
                     **year_match_counts,
                     "updated_at": now_iso(),
                 }

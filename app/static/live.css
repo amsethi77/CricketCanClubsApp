@@ -1,7 +1,7 @@
 :root {
   color-scheme: light;
-  --font-ui: "Inter", sans-serif;
-  --font-display: "Sora", sans-serif;
+  --font-ui: "Roboto", sans-serif;
+  --font-display: "Roboto", sans-serif;
 }
 
 body.public-auth-page {
@@ -1315,7 +1315,7 @@ body.public-rankings-page {
   min-height: 100vh;
   color: #1a1a1a;
   background: #f8f9fa;
-  font-family: var(--font-sports-ui, "Inter", sans-serif);
+  font-family: var(--font-sports-ui, "Roboto", sans-serif);
 }
 
 .public-rankings-page .fixtures-shell {
@@ -1344,7 +1344,7 @@ body.public-rankings-page {
 .public-rankings-page .sports-subtitle,
 .public-rankings-page .section-kicker {
   color: #d32f2f;
-  font-family: "Inter", sans-serif;
+  font-family: "Roboto", sans-serif;
   font-weight: 800;
   letter-spacing: 0.12em;
   text-transform: uppercase;
@@ -1353,7 +1353,7 @@ body.public-rankings-page {
 .public-rankings-page .fixtures-title {
   margin: 4px 0 10px;
   color: #1a1a1a;
-  font-family: "Anton", Impact, sans-serif;
+  font-family: "Roboto", Impact, sans-serif;
   font-size: clamp(2.6rem, 7vw, 4.6rem);
   font-weight: 400;
   letter-spacing: 0.015em;
@@ -1375,7 +1375,7 @@ body.public-rankings-page {
 
 .public-rankings-page .summary-grid .summary-card strong {
   color: #1a1a1a;
-  font-family: "Space Mono", monospace;
+  font-family: "Roboto", monospace;
   font-variant-numeric: tabular-nums;
 }
 
@@ -1385,7 +1385,7 @@ body.public-rankings-page {
 
 .public-rankings-page .panel-head h2 {
   color: #1a1a1a;
-  font-family: "Inter", sans-serif;
+  font-family: "Roboto", sans-serif;
   font-size: 1.2rem;
   font-weight: 800;
 }
@@ -1438,7 +1438,7 @@ body.public-rankings-page {
 .rankings-chart-panel h3 {
   margin: 0;
   color: #1a1a1a;
-  font: 800 0.95rem/1.4 "Inter", sans-serif;
+  font: 800 0.95rem/1.4 "Roboto", sans-serif;
 }
 
 #rankingsBattingChart {
@@ -1668,7 +1668,7 @@ body.public-auth-page .signin-form-panel .form-grid > * {
     border: 1px solid rgba(15, 23, 42, 0.12);
     background: #fff;
     color: #334155;
-    font: 700 0.9rem/1 "Inter", system-ui, sans-serif;
+    font: 700 0.9rem/1 "Roboto", system-ui, sans-serif;
     text-decoration: none;
     white-space: nowrap;
   }

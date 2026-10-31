@@ -210,6 +210,15 @@ How a paper scorecard is laid out:
   Put the number in brackets in "balls". Read bracket digits as carefully as the runs (1 and 7, 2 and 7 look alike).
 - HOW OUT words: caught / c, bowled / b, LBW, run out, stumped / st, not out / NO, retired out, retired hurt,
   did not bat (a name with nothing written). Put the dismissal type in "type" and the bowler's name in "bowler".
+- Caught and bowled: "c & b SINGH", "c&b Singh", "ct & b", "C+B", "caught & bowled" all mean the bowler took the
+  catch himself. Write type "caught and bowled" with BOTH "fielder" and "bowler" = that bowler's name. Never write
+  "caught" with the fielder missing when the card says "& b".
+- Printed / typed scorecards (a table with Batter, How out, R, B, 4s, 6s, SR): copy every number exactly as printed.
+  The How out text gives the parts: "c Shah b Khan" = caught, fielder Shah, bowler Khan; "b Patel" = bowled, bowler
+  Patel; "lbw b Khan" = lbw, bowler Khan; "st Rao b Gill" = stumped, fielder Rao, bowler Gill; "run out (Ali)" =
+  run out, fielder Ali, NO bowler; "hit wicket b X" = hit wicket, bowler X; "not out"; "retired hurt". Put the
+  4s and 6s in "fours" / "sixes" and the B column in "balls". "Did not bat:" names go in batting with type "did not
+  bat" and runs null. Copy the bowling table (O M R W) row by row, and every extras part (b, lb, w, nb).
 - In HOW OUT, "RO" (or "R.O.", "R/O") on this club's cards means "{ro}" - write "{ro}" for it.
   Always also copy exactly what is written in HOW OUT into "written_as" (e.g. "RO", "Retired out", "LBW").
 - Grand total: the "G. TOTAL" box, a circled number, or the last value in the running score column.
@@ -234,6 +243,10 @@ How a paper scorecard is laid out:
 - A page usually holds ONE innings. Only add a second innings if it is really on the photo.
 
 Double-checking (important):
+- Before you answer, check the card against itself and look again at anything that doesn't fit:
+  batters' runs + extras = total; bowlers' runs add up to the total minus byes and leg byes; bowlers' overs add up to
+  the innings overs; each bowler's wickets = the batters out "b / c ... b / lbw / st / hit wicket" to him; 4s x 4 +
+  6s x 6 is never more than a batter's runs; wickets = batters out.
 - For every batter also add up the runs in their ball-by-ball scribbles (dots = 0, | = 1) and put it in
   "ball_runs_sum" (null if you can't read them). It should match the TOTAL column; if it doesn't, look at both again.
 - Also count that batter's deliveries in the scribbles (every dot, digit and W is one ball; ignore crossed-out lines)
@@ -318,8 +331,8 @@ def worked_examples(skip_photo: Path | None = None) -> list[dict[str, Any]]:
     if skip_photo is not None:
         own = Path(skip_photo).name.lower()
         items = [item for item in items if own not in {item["name"].lower(), item["source_file"].lower()}]
-    limit = subscriptions.setting("AI_WORKED_EXAMPLES", "2").strip()
-    return items[: int(limit) if limit.isdigit() else 2]
+    limit = subscriptions.setting("AI_WORKED_EXAMPLES", "3").strip()
+    return items[: int(limit) if limit.isdigit() else 3]
 
 
 def _example_intro(example: dict[str, Any]) -> str:
@@ -512,6 +525,98 @@ def _apply_learning(template: dict[str, Any], roster: list[str] | None) -> list[
     return notes
 
 
+_CANDB = re.compile(r"^\s*(c|ct|caught)\s*(&|and|\+)\s*(b|bowled)\b", re.IGNORECASE)
+
+
+def is_caught_and_bowled(dismissal: dict[str, Any]) -> bool:
+    """True for "c & b X", "c&b", "ct & b", "C+B", "caught and bowled", or caught with the catcher = the bowler."""
+    kind = str(dismissal.get("type") or "").strip().lower()
+    written = str(dismissal.get("written_as") or "").strip()
+    if _CANDB.match(kind) or _CANDB.match(written) or kind in {"caught and bowled", "caught & bowled"}:
+        return True
+    fielder = " ".join(str(dismissal.get("fielder") or "").split()).lower()
+    bowler = " ".join(str(dismissal.get("bowler") or "").split()).lower()
+    return kind.startswith("c") and "run" not in kind and bool(fielder) and fielder == bowler
+
+
+def _same_player(a: Any, b: Any) -> bool:
+    """'Khan' and 'S Khan', 'Dikshit' and 'Dikshit Goel' are the same bowler on one card."""
+    x = [w for w in re.split(r"[^a-z0-9]+", str(a or "").lower()) if w]
+    y = [w for w in re.split(r"[^a-z0-9]+", str(b or "").lower()) if w]
+    if not x or not y:
+        return False
+    if x == y:
+        return True
+    short, long = (x, y) if len(x) <= len(y) else (y, x)
+    long_words = set(long)
+    return all(w in long_words or (len(w) == 1 and any(l.startswith(w) for l in long)) for w in short)
+
+
+_OUT_TO_BOWLER = ("caught", "bowled", "lbw", "stumped", "hit wicket", "c ", "b ", "st ")
+
+
+def _credited_to_bowler(dismissal: dict[str, Any]) -> bool:
+    kind = str(dismissal.get("type") or "").strip().lower()
+    return bool(dismissal.get("bowler")) and (kind.startswith(_OUT_TO_BOWLER) or kind in {"c", "b", "st"}) and "run" not in kind and "retired" not in kind
+
+
+def cross_checks(template: dict[str, Any]) -> list[str]:
+    """The card checked against itself (README "How the AI reader learns" -> "Cross-checks", Oct 30). Each problem
+    means a number or name was misread; the reader then looks at the photo again. Only checked when the numbers
+    are all there (handwritten books often leave the bowling summary empty)."""
+    problems: list[str] = []
+    for inn in template.get("innings") or []:
+        if not isinstance(inn, dict):
+            continue
+        team = inn.get("batting_team") or f"Innings {inn.get('inning_number') or ''}".strip()
+        summary = inn.get("summary") if isinstance(inn.get("summary"), dict) else {}
+        extras = inn.get("extras") if isinstance(inn.get("extras"), dict) else {}
+        batting = [row for row in inn.get("batting") or [] if isinstance(row, dict)]
+        bowling = [row for row in inn.get("bowling") or [] if isinstance(row, dict)]
+        total = summary.get("runs")
+        # 1. bowlers' runs = total - byes - leg byes - penalties
+        conceded = [row.get("runs_conceded") for row in bowling]
+        parts = [extras.get(k) for k in ("byes", "leg_byes", "penalties")]
+        if isinstance(total, int) and bowling and all(isinstance(x, int) for x in conceded) and all(isinstance(x, int) or x is None for x in parts):
+            expected = total - sum(x or 0 for x in parts)
+            if sum(conceded) != expected:
+                problems.append(f"{team}: the bowlers' runs add up to {sum(conceded)}, but the total {total} minus byes and leg byes is {expected} - re-read the bowlers' R column and the byes / leg byes.")
+        # 2. bowlers' overs = innings overs
+        bowled = [row.get("overs") for row in bowling]
+        innings_overs = summary.get("overs")
+        if bowling and isinstance(innings_overs, (int, float)) and all(isinstance(x, (int, float)) for x in bowled):
+            balls = sum(int(x) * 6 + round((float(x) - int(x)) * 10) for x in bowled)
+            want = int(innings_overs) * 6 + round((float(innings_overs) - int(innings_overs)) * 10)
+            if abs(balls - want) > 6:  # a whole over out is common on paper books (a bowler left off); more is a misread
+                problems.append(f"{team}: the bowlers' overs add up to {balls // 6}.{balls % 6}, but the innings lasted {innings_overs} overs - re-read the O column.")
+        # 3. each bowler's wickets = batters out to him
+        if bowling and all(isinstance(row.get("wickets"), int) for row in bowling):
+            credited: list[str] = [str((row.get("dismissal") or {}).get("bowler")) for row in batting if isinstance(row.get("dismissal"), dict) and _credited_to_bowler(row["dismissal"])]
+            for row in bowling:
+                name = (row.get("player") or {}).get("name")
+                found = sum(1 for who in credited if _same_player(who, name))
+                if found != row["wickets"]:
+                    problems.append(f"{team}: {name} has {row['wickets']} wicket{'s' if row['wickets'] != 1 else ''} in the bowling, but {found} batter{'s were' if found != 1 else ' was'} out to him in How out - re-read both.")
+            for who in credited:
+                if not any(_same_player(who, (row.get("player") or {}).get("name")) for row in bowling):
+                    problems.append(f"{team}: a batter was out to '{who}', but there is no bowler with that name - re-read the How out column.")
+        # 4. boundaries can't be more than the runs
+        for row in batting:
+            runs, fours, sixes = row.get("runs"), row.get("fours"), row.get("sixes")
+            if isinstance(runs, int) and isinstance(fours, int) and isinstance(sixes, int) and fours * 4 + sixes * 6 > runs:
+                name = (row.get("player") or {}).get("name") or "A batter"
+                problems.append(f"{team}: {name} has {fours} fours and {sixes} sixes ({fours * 4 + sixes * 6} runs) but only {runs} runs - re-read that row.")
+        # 5. wickets = batters out
+        outs = 0
+        for row in batting:
+            kind = str((row.get("dismissal") or {}).get("type") or "").lower() if isinstance(row.get("dismissal"), dict) else ""
+            if kind and not any(word in kind for word in ("not out", "did not", "dnb", "retired hurt", "absent")) and kind != "retired":
+                outs += 1
+        if isinstance(summary.get("wickets"), int) and batting and outs != summary["wickets"]:
+            problems.append(f"{team}: the total says {summary['wickets']} wickets, but {outs} batters are out in How out - re-read How out and the total.")
+    return problems
+
+
 def _parse_json(text: str) -> dict[str, Any] | None:
     cleaned = re.sub(r"^```(?:json)?\s*|\s*```$", "", text.strip(), flags=re.S)
     start, end = cleaned.find("{"), cleaned.rfind("}")
@@ -550,6 +655,11 @@ def _normalise(template: dict[str, Any], model: str) -> dict[str, Any] | None:
             how = str(dismissal.get("type") or "").strip().lower()
             if is_ro(dismissal.get("written_as")) or is_ro(how):
                 dismissal["type"] = how = ro_meaning()  # club rule for the short form "RO"
+            if is_caught_and_bowled(dismissal):
+                # "c & b Singh" (README "How the AI reader learns" -> checks): one name, bowler and catcher
+                dismissal["type"] = how = "caught and bowled"
+                who = dismissal.get("bowler") or dismissal.get("fielder")
+                dismissal["bowler"] = dismissal["fielder"] = who
             if row.get("runs") in (None, "") and how in {"", "did not bat", "dnb", "none", "null"}:
                 dismissal["type"] = "did not bat"  # a name with nothing written next to it
                 row["runs"] = None
@@ -842,12 +952,14 @@ def review_notes(template: dict[str, Any]) -> list[str]:
         if isinstance(extras.get("total"), int) and numbers and not adds_up and extras["total"] not in options and max(numbers) != extras["total"] and sum(numbers) != extras["total"]:
             notes.append(f"Check the extras: the card shows '{written}' but extras was read as {extras['total']}.")
     notes.extend(bowling_notes(template))
-    return notes[:8]
+    notes.extend(note for note in cross_checks(template) if note not in notes)
+    return notes[:10]
 
 
 def sum_problems(template: dict[str, Any]) -> list[str]:
-    """Innings where batters' runs + extras != total (only when all those numbers are present)."""
-    problems: list[str] = []
+    """Innings where batters' runs + extras != total (only when all those numbers are present), plus the
+    cross-checks (bowling runs, overs, wickets, boundaries)."""
+    problems: list[str] = list(cross_checks(template))
     for inn in template.get("innings") or []:
         if not isinstance(inn, dict):
             continue

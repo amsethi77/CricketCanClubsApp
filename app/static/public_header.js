@@ -1,4 +1,5 @@
-// Launch mode (README "Launch: everyone on Pro"): no paid plans yet, so links to /pricing are hidden.
+// Launch mode (README "Launch: everyone on Pro"): no paid plans yet. Oct 29 2026 (Dhruvika): the Plans page is
+// shown again (with "free during the launch"); only "Upgrade" links and buttons stay hidden.
 (() => {
   if (window.CC_PLAN_CONFIG_LOADED) return;
   window.CC_PLAN_CONFIG_LOADED = true;
@@ -8,7 +9,7 @@
       if (!config || config.subscriptions) return;
       window.CC_SUBSCRIPTIONS_OFF = true;
       const style = document.createElement("style");
-      style.textContent = 'a[href="/pricing"], a[href^="/pricing?"], .plan-upgrade-only { display: none !important; }';
+      style.textContent = 'a[href^="/pricing?"], .plan-upgrade-only { display: none !important; }';
       document.head.appendChild(style);
     })
     .catch(() => {});
@@ -26,7 +27,7 @@
   } catch (e) { /* ignore */ }
   if (!hasToken && !document.querySelector('script[src^="/assets/muse_public.js"]')) {
     const muse = document.createElement("script");
-    muse.src = "/assets/muse_public.js?v=20261018a";
+    muse.src = "/assets/muse_public.js?v=20261030f";
     muse.defer = true;
     document.head.appendChild(muse);
   }
@@ -67,7 +68,7 @@ async function signedInUser() {
 function loadPublicAssistant() {
   if (document.querySelector('script[src^="/assets/muse_public.js"]')) return;
   const muse = document.createElement('script');
-  muse.src = '/assets/muse_public.js?v=20261018a';
+  muse.src = '/assets/muse_public.js?v=20261030f';
   muse.defer = true;
   document.head.appendChild(muse);
 }
@@ -89,7 +90,7 @@ function loadPublicAssistant() {
       document.body.dataset.signedIn = 'true';
       document.dispatchEvent(new CustomEvent('cc:signed-in', { detail: user }));
       const script = document.createElement('script');
-      script.src = '/assets/multipage.js?v=20261027a';
+      script.src = '/assets/multipage.js?v=20261030f';
       document.head.appendChild(script);
       return;
     }
@@ -98,7 +99,7 @@ function loadPublicAssistant() {
     const here = (window.location.pathname || '/').replace(/\/+$/, '') || '/';
     if ((here === '/' || here === '/live') && !document.querySelector('script[src^="/assets/app_tour.js"]')) {
       const tour = document.createElement('script');
-      tour.src = '/assets/app_tour.js?v=20261027a';
+      tour.src = '/assets/app_tour.js?v=20261030f';
       document.head.appendChild(tour);
     }
   }

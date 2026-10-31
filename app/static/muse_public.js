@@ -37,7 +37,7 @@ function startPublicMuse() {
 
   const css = document.createElement("link");
   css.rel = "stylesheet";
-  css.href = "/assets/muse.css?v=20261018a";
+  css.href = "/assets/muse.css?v=20261030f";
   document.head.appendChild(css);
 
   const fab = document.createElement("button");

@@ -10,7 +10,7 @@
   const cardPanel = document.getElementById("scPanelCard");
   const photoPanel = document.getElementById("scPanelPhoto");
   const backEl = document.getElementById("scBack");
-  const tabs = Array.from(document.querySelectorAll(".sc-tab"));
+  const tabs = Array.from(document.querySelectorAll(".pm-tabbar [data-tab]"));
   const id = decodeURIComponent(location.pathname.replace(/\/+$/, "").split("/").pop() || "");
   const DASH = "–";
   const preview = new URLSearchParams(location.search).get("preview") === "1";
@@ -39,6 +39,7 @@
     tabs.forEach((tab) => {
       const on = tab.dataset.tab === name;
       tab.classList.toggle("is-active", on);
+      tab.classList.toggle("on", on);
       tab.setAttribute("aria-selected", on ? "true" : "false");
     });
     cardPanel.hidden = name !== "card";
@@ -46,27 +47,39 @@
     history.replaceState(null, "", `${location.pathname}${location.search}${name === "photo" ? "#photo" : ""}`);
   }
 
+  // ---------- Same look as a scored match's page (/live/{id}, public_match.css) - Dhruvika, Oct 30 ----------
+  // "make same like for manual one is made, no different": the uploaded scorecard uses the live page's markup.
+  function shortCode(name) {
+    const words = String(name || "").replace(/[^A-Za-z0-9 ]/g, " ").split(/\s+/).filter(Boolean);
+    if (!words.length) return "?";
+    if (words.length === 1) return words[0].length <= 4 && words[0] === words[0].toUpperCase() ? words[0] : words[0].slice(0, 3).toUpperCase();
+    return words.map((w) => w[0]).join("").slice(0, 3).toUpperCase();
+  }
+
+  function flagHue(name) {
+    let h = 0;
+    for (const ch of String(name || "")) h = (h * 31 + ch.charCodeAt(0)) % 360;
+    return h;
+  }
+
   function headerMarkup(sc) {
-    const facts = [sc.match_type, sc.overs_limit ? `${sc.overs_limit} overs` : "", sc.venue, sc.date_label].filter(Boolean);
-    const [first, second] = sc.innings;
     const winner = (sc.result || "").toLowerCase();
-    const teamLine = (inn) => {
-      const lost = sc.result && !winner.startsWith(String(inn.team || "").toLowerCase());
-      return `
-        <div class="sc-hero-team${lost ? " is-muted" : ""}">
-          <span class="sc-hero-name">${escapeHtml(inn.team)}</span>
-          <span class="sc-hero-score">
-            ${inn.overs ? `<small>(${escapeHtml(inn.overs)} ov)</small>` : ""}
-            <strong>${inn.runs === null || inn.runs === undefined ? DASH : escapeHtml(inn.score)}</strong>
-          </span>
-        </div>`;
+    const row = (inn) => {
+      if (!inn) return "";
+      const won = sc.result && winner.startsWith(String(inn.team || "").toLowerCase());
+      const has = !(inn.runs === null || inn.runs === undefined);
+      return `<div class="pm-trow${won ? " bat" : ""}">
+          <span class="pm-badge pm-flag" style="--h:${flagHue(inn.team)}" aria-hidden="true"></span>
+          <span class="pm-tname" title="${escapeHtml(inn.team)}">${escapeHtml(shortCode(inn.team))}</span>
+          <span class="pm-tscore">${has && inn.overs ? `<small>(${escapeHtml(inn.overs)} ov) </small>` : ""}<b>${has ? escapeHtml(inn.score) : DASH}</b></span></div>`;
     };
+    const info = [sc.title, sc.match_type, sc.overs_limit ? `${sc.overs_limit} overs` : "", sc.venue, sc.date_label].filter(Boolean).map(escapeHtml).join(", ");
+    const [first, second] = sc.innings;
     return `
-      <p class="sc-meta">${facts.map(escapeHtml).join(" · ")}</p>
-      <h1 class="sc-title">${escapeHtml(sc.title)}</h1>
-      <div class="sc-hero-teams">${teamLine(first)}${teamLine(second)}</div>
-      <p class="sc-hero-result">${escapeHtml(sc.result || "Result not recorded")}</p>
-    `;
+      <div class="pm-head-top">${sc.result ? '<span class="pm-state done">RESULT</span>' : '<span class="pm-state">SCORECARD</span>'}</div>
+      <div class="pm-teams">${row(first)}${row(second)}</div>
+      <p class="pm-status done">${escapeHtml(sc.result || "Result not recorded")}</p>
+      <p class="pm-info">${info}</p>`;
   }
 
   function renderHeader(sc) {
@@ -74,101 +87,71 @@
     document.title = `${sc.title} · ${sc.date_label} · Scorecard`;
   }
 
+  // "c Singh b Singh" -> "c & b Singh" (caught by the bowler), README req 165
+  function howOutText(text) {
+    const m = /^c\s+(.+?)\s+b\s+(.+)$/i.exec(String(text || "").trim());
+    return m && m[1].trim().toLowerCase() === m[2].trim().toLowerCase() ? `c & b ${m[2].trim()}` : String(text || "");
+  }
+
+  const rate = (runs, overs) => {
+    const o = Number(overs);
+    if (!Number.isFinite(o) || !o || runs === null || runs === undefined) return "";
+    const balls = Math.floor(o) * 6 + Math.round((o - Math.floor(o)) * 10);
+    return balls ? ((Number(runs) / balls) * 6).toFixed(2) : "";
+  };
+
   function battingTable(inn) {
-    const rows = inn.batting
-      .map(
-        (b) => `
-        <tr>
-          <td class="sc-name"${b.dismissal ? ` data-how="${escapeHtml(b.dismissal)}"` : ""}>${escapeHtml(b.name)}${b.not_out ? '<span class="sc-notout">*</span>' : ""}</td>
-          <td class="sc-how">${escapeHtml(b.dismissal || "")}</td>
-          <td class="sc-num sc-strong">${num(b.runs)}</td>
-          <td class="sc-num">${num(b.balls)}</td>
-          <td class="sc-num sc-hide-sm">${num(b.fours)}</td>
-          <td class="sc-num sc-hide-sm">${num(b.sixes)}</td>
-          <td class="sc-num">${num(b.strike_rate)}</td>
-        </tr>`
-      )
+    const rows = (inn.batting || [])
+      .map((b) => {
+        const how = howOutText(b.dismissal) || (b.not_out ? "not out" : "");
+        return `<tr class="${b.not_out ? "pm-notout" : ""}">
+          <th scope="row"><span class="pm-name">${escapeHtml(b.name)}</span>${how ? `<small>${escapeHtml(how)}</small>` : ""}</th>
+          <td class="pm-r">${num(b.runs)}</td><td>${num(b.balls)}</td><td>${num(b.fours)}</td><td>${num(b.sixes)}</td><td>${num(b.strike_rate)}</td></tr>`;
+      })
       .join("");
-    const extras = `
-      <tr class="sc-extras">
-        <td class="sc-name"${inn.extras_detail ? ` data-how="(${escapeHtml(inn.extras_detail)})"` : ""}>Extras</td>
-        <td class="sc-how">${inn.extras_detail ? `(${escapeHtml(inn.extras_detail)})` : ""}</td>
-        <td class="sc-num sc-strong">${num(inn.extras)}</td>
-        <td colspan="4" class="sc-fill"></td>
-      </tr>`;
-    const totalText =
-      inn.runs === null || inn.runs === undefined
-        ? DASH
-        : `${escapeHtml(inn.runs)}${inn.wickets !== null && inn.wickets !== undefined ? `/${escapeHtml(inn.wickets)}` : ""}`;
-    const total = `
-      <tr class="sc-total">
-        <td class="sc-name"${inn.overs ? ` data-how="${escapeHtml(inn.overs)} Ov"` : ""}>Total</td>
-        <td class="sc-how">${inn.overs ? `${escapeHtml(inn.overs)} Ov` : ""}</td>
-        <td class="sc-num sc-strong">${totalText}</td>
-        <td colspan="4" class="sc-fill"></td>
-      </tr>`;
+    const rr = rate(inn.runs, inn.overs);
+    const totalBits = [inn.wickets !== null && inn.wickets !== undefined ? `${escapeHtml(inn.wickets)} wkts` : "", inn.overs ? `${escapeHtml(inn.overs)} Ov` : "", rr ? `RR ${rr}` : ""].filter(Boolean).join(", ");
     return `
-      <div class="sc-table-wrap">
-        <table class="sc-table sc-batting">
-          <thead>
-            <tr><th class="sc-name">Batting</th><th class="sc-how"></th><th class="sc-num">R</th><th class="sc-num">B</th><th class="sc-num sc-hide-sm">4s</th><th class="sc-num sc-hide-sm">6s</th><th class="sc-num">SR</th></tr>
-          </thead>
-          <tbody>
-            ${rows || `<tr><td colspan="7" class="sc-empty-row">Batting details were not recorded for this innings.</td></tr>`}
-            ${extras}
-            ${total}
-          </tbody>
+      <div class="pm-table-wrap">
+        <table class="pm-table">
+          <thead><tr><th scope="col">Batter</th><th scope="col">R</th><th scope="col">B</th><th scope="col">4s</th><th scope="col">6s</th><th scope="col">SR</th></tr></thead>
+          <tbody>${rows || '<tr><td colspan="6" class="pm-empty">Batting details were not recorded for this innings.</td></tr>'}</tbody>
+          <tfoot>
+            <tr><th scope="row">Extras${inn.extras_detail ? ` <small>(${escapeHtml(inn.extras_detail)})</small>` : ""}</th><td class="pm-r" colspan="5">${num(inn.extras)}</td></tr>
+            <tr class="pm-total"><th scope="row">Total${totalBits ? ` <small>(${totalBits})</small>` : ""}</th><td class="pm-r" colspan="5">${inn.runs === null || inn.runs === undefined ? DASH : escapeHtml(inn.runs)}</td></tr>
+          </tfoot>
         </table>
       </div>
-      ${
-        inn.did_not_bat && inn.did_not_bat.length
-          ? `<p class="sc-dnb"><strong>Did not bat:</strong> ${inn.did_not_bat.map(escapeHtml).join(", ")}</p>`
-          : ""
-      }`;
+      ${inn.did_not_bat && inn.did_not_bat.length ? `<p class="pm-note"><b>Did not bat:</b> ${inn.did_not_bat.map(escapeHtml).join(", ")}</p>` : ""}`;
   }
 
   function bowlingTable(inn) {
-    if (!inn.bowling || !inn.bowling.length) {
-      return `<p class="sc-dnb sc-muted">Bowling figures were not recorded for this innings.</p>`;
-    }
+    if (!inn.bowling || !inn.bowling.length) return '<p class="pm-note">Bowling figures were not recorded for this innings.</p>';
     const rows = inn.bowling
       .map(
-        (b) => `
-        <tr>
-          <td class="sc-name">${escapeHtml(b.name)}</td>
-          <td class="sc-num">${num(b.overs)}</td>
-          <td class="sc-num">${num(b.maidens)}</td>
-          <td class="sc-num">${num(b.runs)}</td>
-          <td class="sc-num sc-strong">${num(b.wickets)}</td>
-          <td class="sc-num">${num(b.economy)}</td>
-        </tr>`
+        (b) => `<tr>
+          <th scope="row"><span class="pm-name">${escapeHtml(b.name)}</span></th>
+          <td>${num(b.overs)}</td><td>${num(b.maidens)}</td><td>${num(b.runs)}</td><td class="pm-r">${num(b.wickets)}</td><td>${num(b.economy)}</td></tr>`
       )
       .join("");
     return `
-      <div class="sc-table-wrap">
-        <table class="sc-table sc-bowling">
-          <thead>
-            <tr><th class="sc-name">Bowling</th><th class="sc-num">O</th><th class="sc-num">M</th><th class="sc-num">R</th><th class="sc-num">W</th><th class="sc-num">Econ</th></tr>
-          </thead>
+      <div class="pm-table-wrap">
+        <table class="pm-table">
+          <thead><tr><th scope="col">Bowler</th><th scope="col">O</th><th scope="col">M</th><th scope="col">R</th><th scope="col">W</th><th scope="col">ECON</th></tr></thead>
           <tbody>${rows}</tbody>
         </table>
       </div>`;
   }
 
   function inningsBlock(inn, open) {
-    const score =
-      inn.runs === null || inn.runs === undefined
-        ? DASH
-        : `${escapeHtml(inn.score)}${inn.overs ? ` <small>(${escapeHtml(inn.overs)} ov)</small>` : ""}`;
-    return `
-      <details class="sc-innings"${open ? " open" : ""}>
-        <summary class="sc-innings-head">
-          <span class="sc-innings-team">${escapeHtml(inn.team)} <small>${inn.number === 1 ? "1st" : "2nd"} innings</small></span>
-          <span class="sc-innings-score">${score}</span>
-        </summary>
-        ${battingTable(inn)}
-        ${bowlingTable(inn)}
-      </details>`;
+    const score = inn.runs === null || inn.runs === undefined ? DASH : `${escapeHtml(inn.runs)}-${escapeHtml(inn.wickets ?? 0)}`;
+    return `<section class="pm-inn${open ? " open" : ""}">
+        <button type="button" class="pm-innhead" data-sc-inn aria-expanded="${open}">
+          <span>${escapeHtml(inn.team)} Innings</span>
+          <b>${score}${inn.overs ? ` <small>(${escapeHtml(inn.overs)} Ov)</small>` : ""}</b><i aria-hidden="true">▾</i>
+        </button>
+        <div class="pm-inn-body">${battingTable(inn)}${bowlingTable(inn)}</div>
+      </section>`;
   }
 
   function matchInfo(sc) {
@@ -182,22 +165,20 @@
       ["Season", sc.season],
       ["Result", sc.result],
     ].filter(([, value]) => value);
-    return `
-      <div class="sc-info">
-        <h3>Match details</h3>
-        <dl>${rows.map(([k, v]) => `<div><dt>${escapeHtml(k)}</dt><dd>${escapeHtml(v)}</dd></div>`).join("")}</dl>
-      </div>`;
+    return `<div class="pm-subhead"><h2>Match details</h2></div>
+      <dl class="pm-details">${rows.map(([k, v]) => `<div><dt>${escapeHtml(k)}</dt><dd>${escapeHtml(v)}</dd></div>`).join("")}</dl>`;
   }
 
   function scorecardMarkup(sc) {
     const blocks = sc.innings.filter((inn) => inn.has_data);
+    const shown = blocks.length ? blocks : sc.innings;
     return `
       ${
         sc.has_details
           ? ""
-          : `<div class="sc-notice">Only the totals of this match have been digitised so far.${sc.photo_url ? ' See the <button type="button" class="sc-link" data-go-photo>original scorecard</button> for full details.' : ""}</div>`
+          : `<p class="pm-note">Only the totals of this match have been digitised so far.${sc.photo_url ? ' See the <button type="button" class="pm-link" data-go-photo>original scorecard</button> for full details.' : ""}</p>`
       }
-      ${(blocks.length ? blocks : sc.innings).map((inn, index) => inningsBlock(inn, index === 0 || sc.innings.length <= 2)).join("")}
+      ${shown.map((inn, index) => inningsBlock(inn, index === shown.length - 1)).join("")}
       ${matchInfo(sc)}
     `;
   }
@@ -223,21 +204,21 @@
 
   // Shared renderer (Amit, Oct 15): Admin Center review shows the same snapshot + original image.
   function renderSnapshot(sc, root) {
+    if (!document.querySelector('link[href*="public_match.css"]')) {
+      const link = document.createElement("link");
+      link.rel = "stylesheet";
+      link.href = "/assets/public_match.css?v=20261030k";
+      document.head.appendChild(link);
+    }
     root.innerHTML = `
-      <div class="scorecards-page admin-scorecard-view">
-        <section class="panel onboarding-panel fixtures-hero-panel">
-          <div class="stack-card sc-header">${headerMarkup(sc)}</div>
-        </section>
-        <section class="panel onboarding-panel fixtures-list-panel">
-          <div class="stack-card">
-            <div class="sc-tabs" role="tablist" aria-label="Scorecard snapshot views">
-              <button class="sc-tab is-active" type="button" role="tab" aria-selected="true" data-preview-tab="card">Scorecard</button>
-              <button class="sc-tab" type="button" role="tab" aria-selected="false" data-preview-tab="photo">Original scorecard</button>
-            </div>
-            <div class="sc-panel" role="tabpanel" data-preview-panel="card">${scorecardMarkup(sc)}</div>
-            <div class="sc-panel" role="tabpanel" data-preview-panel="photo" hidden>${photoMarkup(sc)}</div>
-          </div>
-        </section>
+      <div class="pm-app sc-app admin-scorecard-view">
+        <div class="pm-head">${headerMarkup(sc)}</div>
+        <nav class="pm-tabbar" role="tablist" aria-label="Scorecard snapshot views">
+          <button class="on" type="button" role="tab" aria-selected="true" data-preview-tab="card">Scorecard</button>
+          <button type="button" role="tab" aria-selected="false" data-preview-tab="photo">Original scorecard</button>
+        </nav>
+        <div class="pm-body sc-panel" role="tabpanel" data-preview-panel="card">${scorecardMarkup(sc)}</div>
+        <div class="pm-body sc-panel" role="tabpanel" data-preview-panel="photo" hidden>${photoMarkup(sc)}</div>
       </div>
     `;
     if (root.dataset.previewBound === "true") return;
@@ -249,11 +230,15 @@
         root.querySelectorAll("[data-preview-tab]").forEach((item) => {
           const selected = item === tab;
           item.classList.toggle("is-active", selected);
+          item.classList.toggle("on", selected);
           item.setAttribute("aria-selected", selected ? "true" : "false");
         });
         root.querySelectorAll("[data-preview-panel]").forEach((panel) => {
           panel.hidden = panel.dataset.previewPanel !== name;
         });
+      } else if (event.target.closest("[data-sc-inn]")) {
+        const box = event.target.closest(".pm-inn");
+        box.classList.toggle("open");
       } else if (event.target.closest("[data-go-photo]")) {
         const photoTab = root.querySelector('[data-preview-tab="photo"]');
         if (photoTab) photoTab.click();
@@ -282,6 +267,12 @@
     tabs.forEach((tab) => tab.addEventListener("click", () => showTab(tab.dataset.tab)));
     cardPanel.addEventListener("click", (event) => {
       if (event.target.closest("[data-go-photo]")) showTab("photo");
+      const bar = event.target.closest("[data-sc-inn]");
+      if (bar) {
+        const box = bar.closest(".pm-inn");
+        box.classList.toggle("open");
+        bar.setAttribute("aria-expanded", box.classList.contains("open") ? "true" : "false");
+      }
     });
 
     // "All scorecards" keeps the date the visitor came from.

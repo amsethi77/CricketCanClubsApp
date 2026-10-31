@@ -454,6 +454,7 @@ I always show you the plan first, and nothing changes until you tap Confirm.</di
   function kindIcon(kind) {
     if (String(kind).startsWith("scorecard")) return "📋";
     if (kind === "availability") return "📣";
+    if (kind === "match_reminder") return "📅"; // README "Availability requests and match reminders"
     if (kind === "result") return "🏆";
     if (kind === "live_wicket") return "☝️";
     if (kind === "live_milestone") return "⭐";

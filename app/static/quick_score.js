@@ -64,6 +64,8 @@
   let aiMode = false;
   let aiRecognition = null;
   let aiLast = null; // last AI Scorer result
+  let lastResult = null; // match result at the last load ("TBD" while playing)
+  let secondChosen = false; // "Start 2nd innings" tapped at the innings break
 
   const esc = (v) =>
     String(v ?? "")
@@ -86,7 +88,7 @@
       method,
       headers: guest
         ? { "Content-Type": "application/json", Accept: "application/json", "X-Guest-Code": guestCode() }
-        : { "Content-Type": "application/json", Accept: "application/json", "X-Auth-Token": token() },
+        : { "Content-Type": "application/json", Accept: "application/json", "X-Auth-Token": token(), "X-Lite-Response": "1" },
       body: body ? JSON.stringify(body) : undefined,
     });
     let payload = null;
@@ -95,7 +97,11 @@
     } catch (e) {
       payload = null;
     }
-    if (!response.ok) throw new Error((payload && payload.detail) || `Request failed (${response.status})`);
+    if (!response.ok) {
+      const error = new Error((payload && payload.detail) || `Request failed (${response.status})`);
+      error.status = response.status;
+      throw error;
+    }
     return payload;
   }
 
@@ -150,6 +156,46 @@
   function overString(balls) {
     return `${Math.floor(balls / 6)}.${balls % 6}`;
   }
+
+  // ---------- recent balls row + "More" (README "Easier live scoring") ----------
+  const RECENT_BALLS = 12;
+  // Which over (0, 1, 2 ...) each ball belongs to; wides / no balls stay in the over they were bowled in.
+  function overNumbers(balls) {
+    const map = new Map();
+    let legalCount = 0;
+    balls.forEach((b) => {
+      map.set(b, Math.floor(legalCount / 6));
+      if (!["wide", "no_ball"].includes(b.extras_type)) legalCount += 1;
+    });
+    return map;
+  }
+  // Whole overs only, newest first, up to 12 balls (the over being bowled is always shown), so the row never
+  // starts with the end of an over ("4 6 1 |" looked like a 3-ball over, Oct 29 2026).
+  function recentWholeOvers(balls, overOf) {
+    if (!balls.length) return [];
+    const lastOver = overOf.get(balls[balls.length - 1]);
+    let start = balls.length;
+    for (let over = lastOver; over >= 0; over -= 1) {
+      let first = start;
+      while (first > 0 && overOf.get(balls[first - 1]) === over) first -= 1;
+      if (over !== lastOver && balls.length - first > RECENT_BALLS) break;
+      start = first;
+    }
+    return balls.slice(start);
+  }
+  function ballText2(b) {
+    if (b.wicket) return "W";
+    if (b.extras_type === "wide") return `${b.extras_runs > 1 ? b.extras_runs : ""}wd`;
+    if (b.extras_type === "no_ball") return `nb${b.runs_bat ? "+" + b.runs_bat : ""}`;
+    if (b.extras_type === "bye") return `${b.extras_runs}b`;
+    if (b.extras_type === "leg_bye") return `${b.extras_runs}lb`;
+    return String(b.runs_bat || 0);
+  }
+  function ballButton(b) {
+    const cls = b.wicket ? "w" : b.extras_type === "none" && b.runs_bat === 4 ? "four" : b.extras_type === "none" && b.runs_bat === 6 ? "six" : b.extras_type !== "none" ? "x" : "";
+    const fixable = !String(b.id || "").startsWith("local-");
+    return `<button type="button" class="qs-ball ${cls}"${fixable ? ` data-fix="${esc(b.id)}"` : " disabled"} aria-label="Fix this ball: ${esc(ballText2(b))}">${esc(ballText2(b))}</button>`;
+  }
   function battingIsClub(inn) {
     const club = String(data?.club?.name || "").toLowerCase();
     return String(inn.batting_team || "").toLowerCase() === club || (!inn.batting_team && inn.inning_number === 1);
@@ -186,9 +232,16 @@
           open.length
             ? `<div class="qs-list">${open
                 .map(
-                  (f) => `<a class="qs-fixture is-open" href="/score?match=${encodeURIComponent(f.id)}">
-                    <span><strong>vs ${esc(f.opponent)}</strong><small>${esc(f.date_label)} · ${esc(f.overs)} overs</small></span>
-                    <span class="qs-go">Score now ›</span></a>`
+                  (f) => {
+                    // Oct 29 2026: show the start time and whether the match is new, going on or finished
+                    const done = f.result && !/^tbd$/i.test(f.result);
+                    const go = done ? "View ›" : f.started ? "Continue ›" : "Score now ›";
+                    const href = done ? `/live/${encodeURIComponent(f.id)}` : `/score?match=${encodeURIComponent(f.id)}`;
+                    const state = done ? `<b class="qs-state done">Finished</b> ${esc(f.result)}` : f.started ? '<b class="qs-state live">Live</b>' : "";
+                    return `<a class="qs-fixture is-open${done ? " is-done" : ""}" href="${href}">
+                    <span><strong>vs ${esc(f.opponent)}</strong><small>${esc(f.date_label)}${f.time ? ` · ${esc(f.time)}` : ""} · ${esc(f.overs)} overs</small>${state ? `<small class="qs-fx-state">${state}</small>` : ""}</span>
+                    <span class="qs-go">${go}</span></a>`;
+                  }
                 )
                 .join("")}</div>`
             : `<p class="qs-empty">No match is open for scoring today. Scoring opens on the match day.</p>`
@@ -196,7 +249,7 @@
         ${
           list.can_create
             ? `<form id="qsStart" class="qs-start">
-                <p class="qs-kicker">Start a match now</p>
+                <p class="qs-kicker">Start a new match</p>
                 <div class="qs-row">
                   <input id="qsOpp" placeholder="Opponent name" required />
                   <input id="qsOvers" type="number" min="1" max="50" value="20" aria-label="Overs" />
@@ -251,7 +304,7 @@
                   <label><input type="radio" name="bat" value="opp" /> <span>${esc(m.opponent)} bat</span></label>
                 </div>`
           }
-          <label>Overs<input id="qsOversLimit" type="number" min="1" max="50" value="${esc(inn.overs_limit || m.overs || 20)}" /></label>
+          <label>Overs<input id="qsOversLimit" type="number" min="1" max="50" value="${esc((isSecond && first?.overs_limit) || inn.overs_limit || m.overs || 20)}" /></label>
           <div id="qsPickers" class="qs-pickers"></div>
           <button class="qs-btn primary wide" type="submit">Start scoring</button>
         </form>
@@ -264,9 +317,10 @@
       const bat = sideOf();
       const bats = rosterFor(bat === "club" ? "club" : "opp");
       const bowls = rosterFor(bat === "club" ? "opp" : "club");
+      const tagsFor = (names, side) => Object.fromEntries(names.map((n) => [n, roleTags(n, side)]).filter(([, t]) => t));
       const group = (key, names, taken) =>
         `<div class="qs-pickgroup${picked[key] ? " done" : ""}"><p class="qs-step">${TITLES[key]}${picked[key] ? `: <b>${esc(picked[key])}</b>` : ""}</p>
-          ${chipList(names, `data-role="${key}"`, taken, {}, picked[key])}${otherName(`qsOther_${key}`, TITLES[key], names.length === 0)}</div>`;
+          ${chipList(names, `data-role="${key}"`, taken, tagsFor(names, (key === "bowler") === (bat === "club") ? "opponent" : "club"), picked[key])}${otherName(`qsOther_${key}`, TITLES[key], names.length === 0)}</div>`;
       pickers.innerHTML = group("striker", bats, [picked.nonStriker]) + group("nonStriker", bats, [picked.striker]) + group("bowler", bowls, []);
     };
     drawPickers();
@@ -330,19 +384,15 @@
     const ballsLeft = oversLimit * 6 - legal;
     const batterRow = (name, star) => {
       const row = (sum.batting || []).find((b) => b.player_name === name) || {};
-      return `<div class="qs-batter${star ? " on-strike" : ""}"><span>${esc(name || "–")}${star ? " *" : ""}</span><strong>${row.runs || 0}<small> (${row.balls || 0})</small></strong></div>`;
+      const tag = name ? roleTags(name, battingIsClub(inn) ? "club" : "opponent") : "";
+      return `<div class="qs-batter${star ? " on-strike" : ""}"><span>${esc(name || "–")}${star ? " *" : ""}${tag ? ` <em class="qs-tag">${esc(tag)}</em>` : ""}</span><strong>${row.runs || 0}<small> (${row.balls || 0})</small></strong></div>`;
     };
     const bowlRow = (sum.bowling || []).find((b) => b.player_name === p.bowler) || {};
-    const overStart = Math.floor(legal / 6) * 6;
-    let count = 0;
-    const thisOver = [];
-    (inn.balls || []).forEach((b) => {
-      const isLegal = !["wide", "no_ball"].includes(b.extras_type);
-      if (count >= overStart) thisOver.push(b);
-      if (isLegal) count += 1;
-    });
-    // balls bowled after the last completed over
-    const recent = (inn.balls || []).slice(-(thisOver.length || 0));
+    // Recent balls (Amit, Oct 29): the last 12 balls in one row, newest on the right, a gap between overs;
+    // "More" opens every over. (Before Oct 29 an empty new over showed every ball of the innings.)
+    const allBalls = inn.balls || [];
+    const overOf = overNumbers(allBalls);
+    const recent = recentWholeOvers(allBalls, overOf);
     const label = (b) => {
       if (b.wicket) return "W";
       if (b.extras_type === "wide") return `${b.extras_runs > 1 ? b.extras_runs : ""}wd`;
@@ -365,7 +415,17 @@
         }</p>
         <div class="qs-batters">${batterRow(p.striker, true)}${batterRow(p.nonStriker, false)}</div>
         <div class="qs-bowler"><span>🎯 ${esc(p.bowler || "–")}</span><strong>${esc(bowlRow.overs || "0.0")}-${bowlRow.maidens || 0}-${bowlRow.runs_conceded || 0}-${bowlRow.wickets || 0}</strong></div>
-        <div class="qs-over"><span>This over</span>${recent.map((b) => `<button type="button" class="qs-ball ${b.wicket ? "w" : b.runs_bat === 4 ? "four" : b.runs_bat === 6 ? "six" : b.extras_type !== "none" ? "x" : ""}"${String(b.id || "").startsWith("local-") ? " disabled" : ` data-fix="${esc(b.id)}"`} aria-label="Fix this ball: ${esc(label(b))}">${esc(label(b))}</button>`).join("") || '<em class="qs-muted">–</em>'}</div>
+        <div class="qs-recent-head"><span>${recent.length ? `Last ${recent.length} ball${recent.length === 1 ? "" : "s"}` : "No balls yet"}</span>${
+          allBalls.length > recent.length ? '<button type="button" class="qs-more" data-act="all-overs">More ›</button>' : ""
+        }</div>
+        <div class="qs-over" data-recent>${
+          recent
+            .map((b, i) => {
+              const gap = i > 0 && overOf.get(b) !== overOf.get(recent[i - 1]) ? '<i class="qs-over-gap" aria-hidden="true"></i>' : "";
+              return `${gap}${ballButton(b)}`;
+            })
+            .join("") || '<em class="qs-muted">–</em>'
+        }</div>
         ${recent.length ? '<p class="qs-fix-hint">Wrong ball? Tap it to fix it.</p>' : ""}
       </section>
 
@@ -403,6 +463,8 @@
             </form>
             <p class="qs-help">Voice: say “dot”, “single”, “two”, “four”, “six”, “wide”, “no ball”, “bye”, “leg bye”, “bowled”, “caught”, “LBW”, “run out” or “undo”.</p>`
       }`;
+    const row = app.querySelector("[data-recent]");
+    if (row) row.scrollLeft = row.scrollWidth; // newest ball on the right, always in view
   }
 
   // ---------- AI Live Scorer (Pro; Free users get one free AI match) ----------
@@ -519,6 +581,22 @@
   }
 
   function render() {
+    const playedInnings = innings().filter((i) => (i.balls || []).length);
+    const result = String(data.match?.result || "TBD");
+    if (!data.open && playedInnings.length && result !== "TBD") {
+      // A finished match (guest matches close when they end): show the result, not "Scoring is closed".
+      app.innerHTML = `<section class="qs-card qs-done">
+          <p class="qs-kicker">Match complete</p>
+          <h1>${esc(result)}</h1>
+          <p class="qs-muted">${playedInnings
+            .map((i) => `${esc(i.batting_team)} ${i.summary?.runs || 0}/${i.summary?.wickets || 0} (${overString(legalBalls(i))} ov)`)
+            .join(" · ")}</p>
+          <a class="qs-btn primary wide" href="/live/${encodeURIComponent(matchId)}">View scorecard</a>
+          ${guest ? '<button class="qs-btn ghost wide" data-act="undo">↶ Undo last ball</button>' : ""}
+        </section>`;
+      if (guest) showGuestBanner();
+      return;
+    }
     if (!data.open) {
       app.innerHTML = `<section class="qs-card"><p class="qs-kicker">Quick Score</p><h1>Scoring is closed</h1>
         <p class="qs-muted">Ball-by-ball scoring opens on the match day. For past matches, use AI Assistant (“Heartlake 145/6, Imran XI 120/9…”) or upload a scorecard photo in Archives.</p>
@@ -534,6 +612,13 @@
     const inn = currentInnings();
     const local = loadLocal(inn.inning_number);
     const hasBalls = (inn.balls || []).length > 0;
+    const first = innings()[0];
+    // Innings break: show "First innings complete" (with Undo) until the scorer taps "Start 2nd innings".
+    if (inn.inning_number === 2 && !hasBalls && !local.setup && first && (first.balls || []).length && !secondChosen) {
+      renderScoring(first);
+      if (guest) showGuestBanner();
+      return;
+    }
     if (!hasBalls && !local.setup) return renderSetup(inn);
     renderScoring(inn);
     if (guest) showGuestBanner();
@@ -544,6 +629,36 @@
     return cleanNames(text).length;
   }
 
+  // ---------- captain / vice-captain / keeper (README "Captain, vice-captain and keeper") ----------
+  const ROLE_LABELS = { captain: "Captain", vice_captain: "Vice-captain", keeper: "Wicket keeper" };
+  const ROLE_TAGS = { captain: "C", vice_captain: "VC", keeper: "WK" };
+  // Markers in a pasted list: "Ravi (c)", "Sam (vc)", "Dev (wk)", "Ali (c)(wk)", "Ravi*" (captain), "Dev†" (keeper)
+  function parseRoles(text) {
+    const roles = {};
+    String(text || "")
+      .split(/[\n,;]+/)
+      .forEach((line) => {
+        const name = cleanNames(line)[0];
+        if (!name) return;
+        if (/\((vc|v\.?c\.?|vice[ -]?capt(ain)?)\)/i.test(line)) roles.vice_captain = roles.vice_captain || name;
+        else if (/\((c|capt|captain)\)|\*/i.test(line)) roles.captain = roles.captain || name;
+        if (/\((wk|w\.?k\.?|keeper)\)|†/i.test(line)) roles.keeper = roles.keeper || name;
+      });
+    return roles;
+  }
+  // "C", "VC", "WK" tags for a player of the team batting / bowling in this innings
+  function rolesOf(side) {
+    const all = (data && data.lineups && data.lineups.roles) || {};
+    return all[side] || {};
+  }
+  function roleTags(name, side) {
+    const r = rolesOf(side);
+    return Object.keys(ROLE_TAGS)
+      .filter((role) => r[role] && r[role] === name)
+      .map((role) => ROLE_TAGS[role])
+      .join(" ");
+  }
+
   // "1. Ravi Kumar (c)", "2) Sam 🏏" pasted from WhatsApp -> "Ravi Kumar", "Sam"
   function cleanNames(text) {
     return String(text || "")
@@ -551,7 +666,7 @@
       .map((n) =>
         n
           .replace(/^\s*\d{1,2}\s*[.)\-:]\s*/, "")
-          .replace(/\((c|vc|wk|captain|keeper)\)|\*/gi, "")
+          .replace(/\((c|vc|wk|w\.?k\.?|v\.?c\.?|capt|captain|vice[ -]?capt(ain)?|keeper)\)|[*†]/gi, "")
           .replace(/[^\p{L}\p{N}\s.'-]/gu, "")
           .replace(/\s+/g, " ")
           .trim()
@@ -582,11 +697,13 @@
             }
             ${roster.length ? `<div class="qs-lineup-tools"><button type="button" class="qs-btn ghost" data-lineup="all">Select all</button><button type="button" class="qs-btn ghost" data-lineup="none">Clear</button></div>` : ""}
             <label>${roster.length ? "Other players (one per line)" : "Players (one per line)"}<textarea id="qsClubExtra" rows="${roster.length ? 2 : 6}" placeholder="Name\nName"></textarea></label>
+            <div class="qs-roles" data-roles="club"></div>
           </fieldset>
           <fieldset class="qs-lineup">
             <legend>${esc(m.opponent)} <span class="qs-count" data-count="opp">0</span></legend>
             <label>Players (one per line, or paste the WhatsApp list)<textarea id="qsOppList" rows="6" placeholder="Name\nName">${esc((saved.opponent || []).join("\n"))}</textarea></label>
             <div class="qs-lineup-tools"><span class="qs-muted">Don't know their names?</span><button type="button" class="qs-btn ghost" data-lineup="opp11">Use Player 1–11</button></div>
+            <div class="qs-roles" data-roles="opponent"></div>
           </fieldset>
           <button class="qs-btn primary wide" type="submit">Save line-ups</button>
         </form>
@@ -597,6 +714,58 @@
       ...cleanNames(document.getElementById("qsClubExtra").value),
     ];
     const oppNames = () => cleanNames(document.getElementById("qsOppList").value);
+    // Captain / vice-captain / keeper: one tidy line per team; tap one and pick a name (Dhruvika, Oct 29: keep it simple).
+    const roleChoice = { club: { ...((saved.roles || {}).club || {}) }, opponent: { ...((saved.roles || {}).opponent || {}) } };
+    const SHORT = { captain: "Captain", vice_captain: "VC", keeper: "WK" };
+    const lists = () => ({ club: clubNames(), opponent: oppNames() });
+    const drawRoles = () => {
+      const names = lists();
+      const pasted = { club: parseRoles(document.getElementById("qsClubExtra").value), opponent: parseRoles(document.getElementById("qsOppList").value) };
+      ["club", "opponent"].forEach((side) => {
+        Object.keys(ROLE_LABELS).forEach((role) => {
+          if (!roleChoice[side][role] && pasted[side][role]) roleChoice[side][role] = pasted[side][role]; // "(c)" etc. in a pasted list
+          if (roleChoice[side][role] && !names[side].includes(roleChoice[side][role])) delete roleChoice[side][role]; // player removed
+        });
+        const box = form.querySelector(`[data-roles="${side}"]`);
+        const html = names[side].length
+          ? `<div class="qs-roleline">${Object.keys(ROLE_LABELS)
+              .map((role) => `<button type="button" class="qs-rolebtn${roleChoice[side][role] ? " set" : ""}" data-role-side="${side}" data-role="${role}"><span>${SHORT[role]}</span><b>${esc(roleChoice[side][role] || "—")}</b></button>`)
+              .join("")}</div>`
+          : "";
+        // only redraw when something changed, so a tap right after typing isn't lost
+        if (box.dataset.html !== html) {
+          box.innerHTML = html;
+          box.dataset.html = html;
+        }
+      });
+    };
+    form.addEventListener("click", (event) => {
+      const btn = event.target.closest("[data-role-side]");
+      if (!btn) return;
+      const side = btn.dataset.roleSide;
+      const role = btn.dataset.role;
+      const names = lists()[side];
+      const r = roleChoice[side];
+      openSheet(
+        `${side === "club" ? clubName : m.opponent} · ${ROLE_LABELS[role].toLowerCase()}?`,
+        `${chipList(names, "", [], {}, r[role] || "")}
+         ${r[role] ? '<button type="button" class="qs-btn ghost wide" data-role-none>No ' + ROLE_LABELS[role].toLowerCase() + "</button>" : ""}`,
+        (target, close) => {
+          if (target.closest("[data-role-none]")) {
+            delete r[role];
+          } else {
+            const name = tappedName(target);
+            if (!name) return;
+            r[role] = name;
+            // one person can't be captain and vice-captain: the other role moves off them
+            if (role === "captain" && r.vice_captain === name) delete r.vice_captain;
+            if (role === "vice_captain" && r.captain === name) delete r.captain;
+          }
+          close();
+          drawRoles();
+        }
+      );
+    });
     form.addEventListener("click", (event) => {
       const tool = event.target.closest("[data-lineup]")?.dataset.lineup;
       if (!tool) return;
@@ -616,6 +785,7 @@
       form.querySelector('[data-count="opp"]').textContent = `${o}/11`;
       form.querySelector('[data-count="club"]').classList.toggle("ok", c >= 2 && c <= 11);
       form.querySelector('[data-count="opp"]').classList.toggle("ok", o >= 2 && o <= 11);
+      drawRoles();
     };
     form.addEventListener("input", updateCounts);
     form.addEventListener("change", (event) => {
@@ -634,7 +804,7 @@
       if (c < 2 || c > 11) return toast(`${clubName} needs 2 to 11 players (now ${c}).`, "error");
       if (o < 2 || o > 11) return toast(`${m.opponent} needs 2 to 11 players (now ${o}).`, "error");
       try {
-        await api("POST", `/api/matches/${enc(matchId)}/lineups`, { club: clubNames(), opponent: oppNames() });
+        await api("POST", `/api/matches/${enc(matchId)}/lineups`, { club: clubNames(), opponent: oppNames(), roles: roleChoice });
         toast("Line-ups saved ✓");
         await load();
       } catch (e) {
@@ -668,6 +838,7 @@
             <label>Overs<input id="qsGuestOvers" type="number" min="1" max="50" value="20" /></label>
             <label>Ground (optional)<input id="qsGuestVenue" maxlength="60" placeholder="e.g. Heart Lake Park" /></label>
           </div>
+          <p class="qs-muted">One player per line. Mark the captain (c), vice-captain (vc) and wicket keeper (wk), e.g. "Ravi (c)".</p>
           <label>Team 1 line-up <span class="qs-count" data-count="a">0/11</span><textarea id="qsLineupA" rows="6" placeholder="One player per line"></textarea></label>
           <label>Team 2 line-up <span class="qs-count" data-count="b">0/11</span><textarea id="qsLineupB" rows="6" placeholder="One player per line"></textarea></label>
           <button class="qs-btn primary wide" type="submit">Create match and start scoring</button>
@@ -701,6 +872,7 @@
             venue: document.getElementById("qsGuestVenue").value,
             lineup_a: cleanNames(document.getElementById("qsLineupA").value).join("\n"),
             lineup_b: cleanNames(document.getElementById("qsLineupB").value).join("\n"),
+            roles: { club: parseRoles(document.getElementById("qsLineupA").value), opponent: parseRoles(document.getElementById("qsLineupB").value) },
           }),
         });
         const payload = await res.json().catch(() => ({}));
@@ -735,9 +907,15 @@
       api("GET", URLS.state()),
       plan || guest ? Promise.resolve(null) : api("GET", "/api/subscription/me").catch(() => null),
     ]);
+    const before = lastResult;
     data = match;
     if (me) plan = me.subscription;
+    lastResult = String(data?.match?.result || "TBD");
     render();
+    // HURRAY! the moment the match is won (not when an already finished match is opened)
+    if (before !== null && /^tbd$/i.test(before) && !/^tbd$/i.test(lastResult) && window.ccCelebrateWin) {
+      setTimeout(() => window.ccCelebrateWin(lastResult), 700);
+    }
   }
 
   // ---------- recording a ball ----------
@@ -746,9 +924,49 @@
   }
 
   // Taps are queued and saved one after another, so fast scoring never loses a ball.
+  // Oct 29 2026 (README "Balls are never lost"): before, a ball that couldn't be saved (no signal at the ground,
+  // server restarting) was thrown away after a short message. Now it waits and is retried until it saves, the
+  // waiting balls are kept in this phone's storage (they survive a reload), and every ball carries its own
+  // client_id so a retry can never save the same ball twice.
+  const queueKey = () => `qsQueue:${matchId}`;
   const queue = [];
   let pendingLegal = 0;
   let draining = false;
+  let retryTimer = null;
+  let retryDelay = 2000;
+  let offline = false;
+
+  function storeQueue() {
+    try {
+      if (queue.length) localStorage.setItem(queueKey(), JSON.stringify(queue));
+      else localStorage.removeItem(queueKey());
+    } catch (e) {
+      /* storage blocked: the queue still lives in memory */
+    }
+  }
+
+  function restoreQueue() {
+    let saved = [];
+    try {
+      saved = JSON.parse(localStorage.getItem(queueKey()) || "[]") || [];
+    } catch (e) {
+      saved = [];
+    }
+    if (!saved.length) return;
+    const known = new Set(innings().flatMap((inn) => (inn.balls || []).map((b) => b.id)));
+    saved
+      .filter((item) => item && item.payload && !known.has(item.payload.client_id))
+      .forEach((item) => {
+        queue.push(item);
+        const inn = innings().find((i) => i.inning_number === item.payload.innings_number);
+        if (inn) optimistic(inn, item.payload, true);
+      });
+    storeQueue();
+    if (queue.length) {
+      toast(`${queue.length} ball${queue.length === 1 ? "" : "s"} from before still to save. Saving now…`);
+      drain();
+    }
+  }
 
   function showPending() {
     let el = document.querySelector(".qs-pending");
@@ -757,32 +975,58 @@
       el.className = "qs-pending";
       document.body.appendChild(el);
     }
-    el.hidden = !queue.length && !draining;
-    el.textContent = `Saving ${queue.length + (draining ? 1 : 0)} ball${queue.length + (draining ? 1 : 0) === 1 ? "" : "s"}…`;
+    const n = queue.length;
+    el.hidden = !n && !draining;
+    el.dataset.offline = offline ? "1" : "";
+    el.textContent = offline
+      ? `No connection · ${n} ball${n === 1 ? "" : "s"} waiting, will save automatically`
+      : `Saving ${n || 1} ball${n > 1 ? "s" : ""}…`;
+  }
+
+  function newClientId() {
+    return `c${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
   }
 
   async function drain() {
     if (draining) return;
+    clearTimeout(retryTimer);
     draining = true;
     showPending();
+    let stopped = false;
     try {
       while (queue.length) {
         const item = queue[0];
         try {
           await api("POST", URLS.ball(), item.payload);
         } catch (e) {
+          if (!e.status || e.status >= 500 || e.status === 408 || e.status === 429) {
+            // No connection or the server is busy / restarting: keep the ball and try again shortly.
+            offline = true;
+            stopped = true;
+            retryTimer = setTimeout(drain, retryDelay);
+            retryDelay = Math.min(retryDelay * 2, 15000);
+            break;
+          }
+          // The server said no (e.g. the innings is over): this ball can't be saved as it is.
           toast(`A ball wasn't saved: ${e.message}`, "error");
         }
+        offline = false;
+        retryDelay = 2000;
         queue.shift();
+        storeQueue();
         if (item.legal) pendingLegal = Math.max(0, pendingLegal - 1);
         showPending();
       }
-      await load();
+      if (!stopped) await load().catch(() => {});
     } finally {
       draining = false;
       showPending();
     }
   }
+
+  window.addEventListener("online", () => {
+    if (queue.length) drain();
+  });
 
   function record(ball) {
     const inn = currentInnings();
@@ -793,6 +1037,16 @@
     }
     const legal = legalBalls(inn) + pendingLegal;
     const isLegal = !["wide", "no_ball"].includes(ball.extras_type || "none");
+    if (inningsOver(inn)) {
+      toast("This innings is over. To change the last ball, tap Undo.", "error");
+      return;
+    }
+    if (needsNewBowler(inn, p.bowler)) {
+      // Oct 29 2026: closing "Who bowls next?" let the same bowler bowl the next over (GT match, ball 2.1).
+      toast("New over: pick the next bowler first.", "error");
+      askBowler("", true);
+      return;
+    }
     const payload = {
       innings_number: inn.inning_number,
       over_number: Math.floor(legal / 6) + 1,
@@ -808,6 +1062,7 @@
       wicket_player: ball.wicket_player || "",
       fielder: ball.fielder || "",
       commentary: ball.commentary || "",
+      client_id: newClientId(),
     };
     // Strike rotation, worked out straight away
     let { striker, nonStriker, bowler } = p;
@@ -821,6 +1076,7 @@
     saveLocal(inn.inning_number, { ...loadLocal(inn.inning_number), striker, nonStriker, bowler, setup: true });
     if (isLegal) pendingLegal += 1;
     queue.push({ payload, legal: isLegal });
+    storeQueue();
     const row = (inn.summary?.batting || []).find((b) => b.player_name === payload.striker) || {};
     const runsBefore = Number(row.runs || 0);
     const bySelf = !["bye", "leg_bye", "wide"].includes(payload.extras_type);
@@ -830,12 +1086,40 @@
       window.ccCelebrateBall(payload, runsBefore, runsBefore + (bySelf ? payload.runs_bat || 0 : 0), Number(row.balls || 0) + (payload.extras_type === "wide" ? 0 : 1));
     }
     const oversLimit = Number(inn.overs_limit || 20);
-    if (overDone && legal + 1 < oversLimit * 6) {
+    // No "next bowler" when this ball ended the innings: target passed or all out.
+    const first = innings()[0];
+    const target = inn.inning_number === 2 && first ? Number(first.summary?.runs || 0) + 1 : null;
+    const battingSide = battingRoster(inn);
+    const allOut = battingSide.length >= 2 && Number(inn.summary?.wickets || 0) >= Math.min(10, battingSide.length - 1);
+    const won = target != null && Number(inn.summary?.runs || 0) >= target;
+    if (overDone && legal + 1 < oversLimit * 6 && !won && !allOut) {
       const overBalls = (inn.balls || []).filter((b) => Number(b.over_number) === payload.over_number);
       const overRuns = overBalls.reduce((sum, b) => sum + Number(b.runs_bat || 0) + Number(b.extras_runs || 0), 0);
       const overWkts = overBalls.filter((b) => b.wicket).length;
       askBowler(`Over ${payload.over_number} done: ${overRuns} run${overRuns === 1 ? "" : "s"}${overWkts ? `, ${overWkts} wicket${overWkts === 1 ? "" : "s"}` : ""}${overRuns === 0 && !overWkts ? " · maiden!" : ""}`, true);
     }
+  }
+
+  // An over has just ended and the bowler for the next ball is still the one who bowled it.
+  function needsNewBowler(inn, bowler) {
+    const legal = legalBalls(inn);
+    if (!legal || legal % 6 !== 0) return false;
+    const balls = inn.balls || [];
+    const lastLegal = [...balls].reverse().find((b) => !["wide", "no_ball"].includes(b.extras_type));
+    const afterOver = balls.slice(balls.lastIndexOf(lastLegal) + 1); // wides / no balls already in the new over
+    if (afterOver.some((b) => b.bowler && b.bowler !== lastLegal.bowler)) return false;
+    return Boolean(lastLegal && bowler && lastLegal.bowler === bowler);
+  }
+
+  // All out, overs used up, or target passed: no more balls (the server checks too).
+  function inningsOver(inn) {
+    const sum = inn.summary || {};
+    const side = battingRoster(inn);
+    const allOutAt = side.length >= 2 ? Math.min(10, side.length - 1) : 10;
+    if (Number(sum.wickets || 0) >= allOutAt) return true;
+    if (legalBalls(inn) >= Number(inn.overs_limit || 20) * 6) return true;
+    const first = innings()[0];
+    return inn.inning_number === 2 && first && (first.balls || []).length > 0 && Number(sum.runs || 0) > Number(first.summary?.runs || 0);
   }
 
   // Runs the batters ran on a ball (decides strike rotation)
@@ -849,7 +1133,7 @@
 
   // Show the ball on screen right away (the server copy replaces it when saving finishes)
   function optimistic(inn, payload) {
-    inn.balls = [...(inn.balls || []), { ...payload, id: `local-${Date.now()}` }];
+    inn.balls = [...(inn.balls || []), { ...payload, id: `local-${payload.client_id || Date.now()}` }];
     const sum = inn.summary || (inn.summary = {});
     const extra = payload.extras_type !== "none" ? payload.extras_runs || 0 : 0;
     sum.runs = (sum.runs || 0) + (payload.runs_bat || 0) + extra;
@@ -1014,7 +1298,11 @@
     const p = players(inn);
     const batted = new Set((inn.summary?.batting || []).map((b) => b.player_name));
     const remaining = battingRoster(inn).filter((n) => n !== p.striker && n !== p.nonStriker && !batted.has(n));
+    const battingSide = battingIsClub(inn) ? "club" : "opponent";
+    const fieldingSide = battingSide === "club" ? "opponent" : "club";
+    const keeper = rolesOf(fieldingSide).keeper || "";
     const fielders = bowlingRoster(inn);
+    const nextTags = Object.fromEntries(remaining.map((n) => [n, roleTags(n, battingSide)]).filter(([, t]) => t));
     const HOW = [
       ["bowled", "Bowled"],
       ["caught", "Caught"],
@@ -1050,13 +1338,19 @@
                <p class="qs-step">Fielder</p>`
             : "";
         const sub = {};
-        if (p.bowler) sub[p.bowler] = "bowler";
-        modalBody.innerHTML = `${runOut}${chipList(fielders, "", [], sub)}${otherName("qsFielderOther", "Fielder's name", fielders.length === 0)}
+        fielders.forEach((n) => {
+          const t = roleTags(n, fieldingSide);
+          if (t) sub[n] = t;
+        });
+        if (p.bowler) sub[p.bowler] = sub[p.bowler] ? `${sub[p.bowler]} · bowler` : "bowler";
+        // Stumped: the wicket keeper first (and caught: keeper second, after the bowler for c & b)
+        const order = w.how === "stumped" && keeper ? [keeper, ...fielders.filter((n) => n !== keeper)] : fielders;
+        modalBody.innerHTML = `${runOut}${chipList(order, "", [], sub)}${otherName("qsFielderOther", "Fielder's name", fielders.length === 0)}
           <button type="button" class="qs-btn ghost wide" data-skip-fielder>Don't know · skip</button>`;
       } else {
         modalTitle.textContent = "Next batter in";
         modalBody.innerHTML = `<p class="qs-sheet-note">${esc(w.out)} ${esc(howLabel.toLowerCase())}${w.fielder ? ` · ${esc(w.fielder)}` : ""}</p>
-          ${chipList(remaining)}
+          ${chipList(remaining, "", [], nextTags)}
           ${otherName("qsNewBat", "Next batter's name", remaining.length === 0)}
           <button type="button" class="qs-btn ghost wide" data-no-batter>No more batters (all out)</button>`;
       }
@@ -1134,6 +1428,34 @@
         else record({ extras_type: type, extras_runs: n });
       }
     );
+  }
+
+  // Every over of the innings, newest first; tap a ball to fix it.
+  function showAllOvers() {
+    const inn = currentInnings();
+    const balls = inn.balls || [];
+    const overOf = overNumbers(balls);
+    const overs = [];
+    balls.forEach((b) => {
+      const n = overOf.get(b);
+      (overs[n] = overs[n] || []).push(b);
+    });
+    const rows = overs
+      .map((list, n) => {
+        if (!list) return "";
+        const runs = list.reduce((sum, b) => sum + Number(b.runs_bat || 0) + Number(b.extras_runs || 0), 0);
+        const wkts = list.filter((b) => b.wicket).length;
+        return `<div class="qs-over-row"><div class="qs-over-row-head"><b>Over ${n + 1}</b><span>${esc(list[0].bowler || "")} · ${runs} run${runs === 1 ? "" : "s"}${wkts ? `, ${wkts} wkt${wkts === 1 ? "" : "s"}` : ""}</span></div>
+          <div class="qs-over">${list.map(ballButton).join("")}</div></div>`;
+      })
+      .reverse()
+      .join("");
+    openSheet(`${inn.batting_team || "Innings"} · all overs`, `<div class="qs-all-overs">${rows}</div><p class="qs-muted">Tap a ball to fix it.</p>`, (target, close) => {
+      const fix = target.closest("[data-fix]");
+      if (!fix) return;
+      close();
+      askFix(fix.dataset.fix);
+    });
   }
 
   // Fix any ball already scored: tap it in "This over".
@@ -1370,6 +1692,7 @@
     }
     if (act === "ai-mic") return toggleAiMic();
     if (act === "bowler") return askBowler("", false);
+    if (act === "all-overs") return showAllOvers();
     if (act === "swap") {
       const inn = currentInnings();
       const p = players(inn);
@@ -1378,6 +1701,7 @@
     }
     if (act === "second") {
       const list = innings();
+      secondChosen = true;
       if (list[1]) renderSetup(list[1]);
     }
   });
@@ -1416,6 +1740,7 @@
         renderFixtureList(await api("GET", "/api/quick-score/fixtures"));
       } else {
         await load();
+        restoreQueue(); // balls that hadn't saved before a reload / lost connection
       }
     } catch (e) {
       app.innerHTML = `<section class="qs-card"><h1>Couldn't load</h1><p class="qs-muted">${esc(e.message)}</p><a class="qs-btn primary" href="/score">Back</a></section>`;

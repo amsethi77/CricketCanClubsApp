@@ -13,12 +13,18 @@
   .cc-cele{position:fixed;inset:0;z-index:2147483000;display:grid;place-items:center;pointer-events:none;}
   .cc-cele-card{display:grid;gap:4px;justify-items:center;padding:22px 34px;border-radius:26px;color:#fff;
     box-shadow:0 24px 60px rgba(15,23,42,.35);animation:cc-pop 1.9s cubic-bezier(.2,.9,.25,1.2) forwards;text-align:center;max-width:88vw;}
-  .cc-cele-title{font:900 clamp(2.6rem,13vw,4.6rem)/1 Sora,Inter,system-ui,sans-serif;letter-spacing:.02em;text-shadow:0 4px 18px rgba(0,0,0,.25);}
-  .cc-cele-sub{font:700 1.05rem/1.3 Inter,system-ui,sans-serif;opacity:.95;}
+  .cc-cele-title{font:900 clamp(2.6rem,13vw,4.6rem)/1 Roboto,system-ui,sans-serif;letter-spacing:.02em;text-shadow:0 4px 18px rgba(0,0,0,.25);}
+  .cc-cele-sub{font:700 1.05rem/1.3 Roboto,system-ui,sans-serif;opacity:.95;}
   .cc-cele.four .cc-cele-card{background:linear-gradient(135deg,#2563eb,#1d4ed8);}
   .cc-cele.six .cc-cele-card{background:linear-gradient(135deg,#8b5cf6,#6d28d9);}
   .cc-cele.wicket .cc-cele-card{background:linear-gradient(135deg,#f43f5e,#be123c);}
   .cc-cele.fifty .cc-cele-card,.cc-cele.hundred .cc-cele-card{background:linear-gradient(135deg,#f59e0b,#d97706);}
+  .cc-cele.win{background:rgba(15,23,42,.35);}
+  .cc-cele.win .cc-cele-card{background:linear-gradient(135deg,#0a6e46,#16a34a 55%,#f59e0b);padding:28px 36px;animation-duration:4s;}
+  .cc-cele.win .cc-cele-title{font-size:clamp(3rem,15vw,5.2rem);}
+  .cc-cele.win .cc-cele-trophy{font-size:3.2rem;line-height:1;animation:cc-bounce .9s ease-in-out infinite;}
+  .cc-cele.win .cc-bit{animation-duration:2.4s;}
+  @keyframes cc-bounce{0%,100%{transform:translateY(0)}50%{transform:translateY(-10px)}}
   .cc-bit{position:absolute;top:50%;left:50%;width:10px;height:14px;border-radius:3px;opacity:0;animation:cc-burst 1.3s ease-out forwards;}
   @keyframes cc-pop{0%{transform:scale(.3);opacity:0}14%{transform:scale(1.08);opacity:1}24%{transform:scale(1)}80%{transform:scale(1);opacity:1}100%{transform:scale(.92) translateY(-14px);opacity:0}}
   @keyframes cc-burst{0%{transform:translate(-50%,-50%) rotate(0);opacity:1}100%{transform:translate(calc(-50% + var(--x)),calc(-50% + var(--y))) rotate(var(--r));opacity:0}}
@@ -31,8 +37,9 @@
     wicket: ["#fecdd3", "#ffffff", "#e11d48"],
     fifty: ["#fde68a", "#ffffff", "#f59e0b", "#34d399"],
     hundred: ["#fde68a", "#ffffff", "#f59e0b", "#34d399", "#60a5fa"],
+    win: ["#fde68a", "#ffffff", "#f59e0b", "#34d399", "#60a5fa", "#f472b6", "#a78bfa"],
   };
-  const BUZZ = { four: [60], six: [60, 50, 90], wicket: [180], fifty: [70, 50, 70, 50, 160], hundred: [90, 60, 90, 60, 260] };
+  const BUZZ = { four: [60], six: [60, 50, 90], wicket: [180], fifty: [70, 50, 70, 50, 160], hundred: [90, 60, 90, 60, 260], win: [120, 80, 120, 80, 120, 80, 400] };
 
   let current = null;
   function addStyle() {
@@ -53,6 +60,12 @@
     wrap.setAttribute("aria-live", "polite");
     const card = document.createElement("div");
     card.className = "cc-cele-card";
+    if (kind === "win") {
+      const trophy = document.createElement("div");
+      trophy.className = "cc-cele-trophy";
+      trophy.textContent = "🏆";
+      card.appendChild(trophy);
+    }
     const t = document.createElement("div");
     t.className = "cc-cele-title";
     t.textContent = title;
@@ -64,12 +77,12 @@
       card.appendChild(s);
     }
     wrap.appendChild(card);
-    const bits = kind === "four" ? 18 : 34;
+    const bits = kind === "four" ? 18 : kind === "win" ? 70 : 34;
     for (let i = 0; i < bits; i += 1) {
       const bit = document.createElement("span");
       bit.className = "cc-bit";
       const angle = (Math.PI * 2 * i) / bits + Math.random() * 0.4;
-      const dist = 120 + Math.random() * 160;
+      const dist = (kind === "win" ? 160 : 120) + Math.random() * (kind === "win" ? 260 : 160);
       bit.style.setProperty("--x", `${Math.round(Math.cos(angle) * dist)}px`);
       bit.style.setProperty("--y", `${Math.round(Math.sin(angle) * dist)}px`);
       bit.style.setProperty("--r", `${Math.round(Math.random() * 540 - 270)}deg`);
@@ -87,7 +100,7 @@
     setTimeout(() => {
       wrap.remove();
       if (current === wrap) current = null;
-    }, 2000);
+    }, kind === "win" ? 4200 : 2000);
   }
 
   const HOW = { bowled: "bowled", caught: "caught", lbw: "LBW", run_out: "run out", stumped: "stumped", hit_wicket: "hit wicket" };
@@ -124,6 +137,15 @@
     return false;
   }
 
+  /** The match is won (Oct 29 2026): "HURRAY!" with the result, e.g. "Heartlake Cricket Club won by 18 runs". */
+  function celebrateWin(resultText) {
+    const text = String(resultText || "").trim();
+    if (!text || /^tbd$/i.test(text)) return false;
+    celebrate("win", /tied/i.test(text) ? "WHAT A FINISH!" : "HURRAY!", text);
+    return true;
+  }
+
   window.ccCelebrate = celebrate;
+  window.ccCelebrateWin = celebrateWin;
   window.ccCelebrateBall = celebrateBall;
 })();

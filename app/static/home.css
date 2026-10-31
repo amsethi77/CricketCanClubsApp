@@ -278,7 +278,7 @@ html body.home-v2 .home-strip-nav {
 
 html body.home-v2 .home-hero h1 {
   margin: 16px 0 12px !important;
-  font-family: var(--font-display, "Sora", sans-serif) !important;
+  font-family: var(--font-display, "Roboto", sans-serif) !important;
   font-size: clamp(2rem, 4.2vw, 3.3rem) !important;
   font-weight: 800 !important;
   line-height: 1.08 !important;
@@ -361,7 +361,7 @@ html body.home-v2 .home-hero-copy > p {
 }
 
 .home-stats strong {
-  font-family: var(--font-display, "Sora", sans-serif);
+  font-family: var(--font-display, "Roboto", sans-serif);
   font-size: 1.6rem;
   font-weight: 800;
 }
@@ -398,7 +398,7 @@ html body.home-v2 .home-hero-copy > p {
 
 .home-feature-title {
   margin: 0;
-  font-family: var(--font-display, "Sora", sans-serif);
+  font-family: var(--font-display, "Roboto", sans-serif);
   font-size: 1.3rem;
   color: var(--h-ink);
 }
@@ -428,7 +428,7 @@ html body.home-v2 .home-hero-copy > p {
 
 .home-feature-team strong {
   flex-shrink: 0;
-  font-family: var(--font-display, "Sora", sans-serif);
+  font-family: var(--font-display, "Roboto", sans-serif);
   font-size: 1.6rem;
   font-weight: 800;
   color: var(--h-ink);
@@ -504,7 +504,7 @@ html body.home-v2 .home-hero-copy > p {
 
 html body.home-v2 .home-section h2 {
   margin: 0 !important;
-  font-family: var(--font-display, "Sora", sans-serif) !important;
+  font-family: var(--font-display, "Roboto", sans-serif) !important;
   font-size: 1.3rem !important;
   font-weight: 800 !important;
   letter-spacing: -0.02em !important;
@@ -566,7 +566,7 @@ html body.home-v2 .home-section h2 {
 }
 
 .home-sc-date strong {
-  font-family: var(--font-display, "Sora", sans-serif);
+  font-family: var(--font-display, "Roboto", sans-serif);
   font-size: 1.3rem;
   color: var(--h-ink);
 }
@@ -709,7 +709,7 @@ html body.home-v2 .home-section h2 {
 
 html body.home-v2 .home-join h2 {
   margin: 0 0 6px !important;
-  font-family: var(--font-display, "Sora", sans-serif) !important;
+  font-family: var(--font-display, "Roboto", sans-serif) !important;
   font-size: 1.4rem !important;
   font-weight: 800 !important;
   color: #fff !important;

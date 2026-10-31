@@ -13,8 +13,8 @@
   style.textContent = `
     .plan-gate-backdrop{position:fixed;inset:0;z-index:2500;display:grid;place-items:center;padding:16px;background:rgba(15,23,42,.5)}
     .plan-gate-backdrop[hidden]{display:none}
-    .plan-gate-card{font-family:"Inter",system-ui,sans-serif;width:min(440px,100%);display:grid;gap:12px;padding:22px;border-radius:22px;background:#fff;box-shadow:0 30px 70px rgba(15,23,42,.3);color:#0f172a}
-    .plan-gate-card h2{font-family:"Sora","Inter",sans-serif;margin:0;font-size:1.25rem;font-weight:800}
+    .plan-gate-card{font-family:"Roboto",system-ui,sans-serif;width:min(440px,100%);display:grid;gap:12px;padding:22px;border-radius:22px;background:#fff;box-shadow:0 30px 70px rgba(15,23,42,.3);color:#0f172a}
+    .plan-gate-card h2{font-family:"Roboto",sans-serif;margin:0;font-size:1.25rem;font-weight:800}
     .plan-gate-card p{margin:0;color:#475569;line-height:1.5}
     .plan-gate-kicker{font-size:.72rem;font-weight:800;letter-spacing:.12em;text-transform:uppercase;color:#7c3aed}
     .plan-gate-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:4px}

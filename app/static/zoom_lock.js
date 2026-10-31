@@ -58,7 +58,7 @@
     note.setAttribute("role", "status");
     note.style.cssText =
       "position:fixed;left:50%;top:12px;transform:translateX(-50%);z-index:4000;display:flex;gap:12px;align-items:center;" +
-      "padding:10px 14px;border-radius:14px;background:#0f172a;color:#fff;font:600 15px/1.4 Inter,system-ui,sans-serif;" +
+      "padding:10px 14px;border-radius:14px;background:#0f172a;color:#fff;font:600 15px/1.4 Roboto,system-ui,sans-serif;" +
       "box-shadow:0 12px 30px rgba(15,23,42,.3);max-width:calc(100vw - 32px)";
     note.innerHTML =
       '<span>Your browser is zoomed out (about ' + percent + '%). Press <b>Ctrl + 0</b> to see the app at normal size.</span>' +

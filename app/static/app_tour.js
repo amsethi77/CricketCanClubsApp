@@ -139,8 +139,8 @@
     .cc-tour{position:fixed;inset:0;z-index:3000;pointer-events:none}
     .cc-tour-shade{position:fixed;inset:0;background:rgba(15,23,42,.55);pointer-events:auto}
     .cc-tour-spot{position:fixed;border-radius:14px;box-shadow:0 0 0 9999px rgba(15,23,42,.55);outline:3px solid #fbbf24;transition:all .2s ease;pointer-events:none}
-    .cc-tour-card{position:fixed;width:min(360px,calc(100vw - 32px));display:grid;gap:10px;padding:18px;border-radius:18px;background:#fff;color:#0f172a;box-shadow:0 24px 60px rgba(15,23,42,.35);font-family:"Inter",system-ui,sans-serif;pointer-events:auto}
-    .cc-tour-card h2{margin:0;font-family:"Sora","Inter",sans-serif;font-size:1.1rem;font-weight:800}
+    .cc-tour-card{position:fixed;width:min(360px,calc(100vw - 32px));display:grid;gap:10px;padding:18px;border-radius:18px;background:#fff;color:#0f172a;box-shadow:0 24px 60px rgba(15,23,42,.35);font-family:"Roboto",system-ui,sans-serif;pointer-events:auto}
+    .cc-tour-card h2{margin:0;font-family:"Roboto",sans-serif;font-size:1.1rem;font-weight:800}
     .cc-tour-card p{margin:0;color:#475569;line-height:1.5}
     .cc-tour-bar{height:6px;border-radius:99px;background:#e2e8f0;overflow:hidden}
     .cc-tour-bar span{display:block;height:100%;background:#e11d48;border-radius:99px;transition:width .2s ease}

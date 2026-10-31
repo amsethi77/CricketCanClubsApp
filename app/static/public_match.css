@@ -1,0 +1,1014 @@
+/* Public live scorecard (/live/{id}) - README "Public scorecard (Oct 29 2026)" and
+   "Live page like a cricket score app (Oct 30 2026)". Compact, white, 14px text. Built by public_match.js. */
+.pm-app {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0;
+  width: min(760px, 100%);
+  margin: 0 auto;
+  padding: 0 0 120px;
+  color: #1f2937;
+  font: 400 14px/1.45 Roboto, Arial, sans-serif;
+  background: #fff;
+  border-radius: 14px;
+  border: 1px solid #e5e7eb;
+  overflow: hidden;
+}
+
+.pm-app * {
+  box-sizing: border-box;
+}
+
+.pm-app > * {
+  min-width: 0;
+}
+
+/* ---------- Header: team rows + situation ---------- */
+.pm-head {
+  display: grid;
+  gap: 6px;
+  padding: 12px 14px 10px;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.pm-head-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+
+.pm-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  color: #6b7280;
+}
+
+.pm-state.live {
+  color: #dc2626;
+}
+
+.pm-state.live i {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #dc2626;
+  animation: pm-blink 1.2s infinite;
+}
+
+.pm-state.break {
+  color: #b45309;
+}
+
+.pm-state.done {
+  color: #15803d;
+}
+
+@keyframes pm-blink {
+  50% { opacity: 0.25; }
+}
+
+.pm-updated {
+  font-size: 11px;
+  color: #9ca3af;
+}
+
+.pm-app .pm-title {
+  margin: 0;
+  font: 600 15px/1.3 Roboto, Arial, sans-serif !important;
+  color: #111827 !important;
+  -webkit-text-fill-color: #111827 !important;
+  background: none !important;
+  text-shadow: none !important;
+  letter-spacing: 0 !important;
+}
+
+.pm-info {
+  margin: 0;
+  font-size: 12px;
+  color: #6b7280;
+}
+
+.pm-teams {
+  display: grid;
+  gap: 4px;
+  margin-top: 4px;
+}
+
+.pm-trow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  color: #6b7280;
+}
+
+.pm-trow.bat {
+  color: #111827;
+}
+
+.pm-badge {
+  flex: 0 0 auto;
+  display: inline-grid;
+  place-items: center;
+  min-width: 34px;
+  height: 22px;
+  padding: 0 4px;
+  border-radius: 5px;
+  background: hsl(var(--h, 210) 55% 92%);
+  color: hsl(var(--h, 210) 60% 28%);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+}
+
+.pm-tname {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 15px;
+  font-weight: 500;
+}
+
+.pm-trow.bat .pm-tname {
+  font-weight: 700;
+}
+
+.pm-tscore {
+  flex: 0 0 auto;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.pm-tscore small {
+  font-size: 12px;
+  color: #6b7280;
+}
+
+.pm-tscore b {
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.pm-trow.bat .pm-tscore b {
+  color: #111827;
+}
+
+.pm-status {
+  margin: 4px 0 0;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.pm-status.live { color: #c2410c; }
+.pm-status.break { color: #b45309; }
+.pm-status.done { color: #1d4ed8; }
+.pm-status.wait { color: #6b7280; font-weight: 500; }
+
+/* ---------- Tabs ---------- */
+.pm-tabbar {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  display: flex;
+  gap: 4px;
+  padding: 0 8px;
+  background: #fff;
+  border-bottom: 1px solid #e5e7eb;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.pm-app .pm-tabbar button {
+  flex: 0 0 auto;
+  min-height: 0 !important;
+  margin: 0 !important;
+  padding: 10px 10px 8px !important;
+  border: 0 !important;
+  border-bottom: 3px solid transparent !important;
+  border-radius: 0 !important;
+  background: none !important;
+  box-shadow: none !important;
+  color: #6b7280 !important;
+  font: 600 14px Roboto, Arial, sans-serif !important;
+  cursor: pointer;
+}
+
+.pm-app .pm-tabbar button.on {
+  color: #047857 !important;
+  border-bottom-color: #047857 !important;
+}
+
+.pm-body {
+  display: grid;
+  gap: 10px;
+  padding: 10px 14px 4px;
+}
+
+/* ---------- Live tab ---------- */
+.pm-rates {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 14px;
+  margin: 0;
+  font-size: 13px;
+  color: #4b5563;
+}
+
+.pm-rates b {
+  color: #111827;
+  font-weight: 600;
+}
+
+.pm-strip {
+  display: flex;
+  flex-wrap: nowrap; /* one row, newest on the right (Amit, Oct 29); everything in Commentary */
+  align-items: center;
+  gap: 6px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  padding: 2px 0;
+}
+
+.pm-strip::-webkit-scrollbar,
+.pm-tabbar::-webkit-scrollbar {
+  display: none;
+}
+
+.pm-ovgrp {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.pm-ovlab {
+  font-size: 11px;
+  font-weight: 600;
+  color: #6b7280;
+  margin-right: 2px;
+  white-space: nowrap;
+}
+
+.pm-ovsum {
+  font-size: 12px;
+  font-weight: 600;
+  color: #374151;
+  margin-left: 2px;
+  white-space: nowrap;
+}
+
+.pm-ovsep {
+  flex: 0 0 1px;
+  align-self: stretch;
+  margin: 2px 2px;
+  background: #d1d5db;
+}
+
+.pm-ball {
+  flex: 0 0 auto;
+  min-width: 24px;
+  height: 24px;
+  padding: 0 5px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: #f3f4f6;
+  border: 1px solid #e5e7eb;
+  color: #111827;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.pm-ball.four { background: #2563eb; border-color: #2563eb; color: #fff; }
+.pm-ball.six { background: #7c3aed; border-color: #7c3aed; color: #fff; }
+.pm-ball.w { background: #dc2626; border-color: #dc2626; color: #fff; }
+.pm-ball.x { background: #fff7ed; border-color: #fdba74; color: #9a3412; }
+
+.pm-facts {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+  font-size: 13px;
+  color: #374151;
+}
+
+.pm-facts b {
+  font-weight: 600;
+  color: #111827;
+}
+
+.pm-subhead {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.pm-app .pm-subhead h2 {
+  margin: 0;
+  font: 700 14px Roboto, Arial, sans-serif;
+  color: #111827;
+}
+
+.pm-app .pm-link {
+  padding: 0 !important;
+  min-height: 0 !important;
+  border: 0 !important;
+  background: none !important;
+  box-shadow: none !important;
+  color: #047857 !important;
+  font: 600 13px Roboto, Arial, sans-serif !important;
+  cursor: pointer;
+}
+
+/* Innings break / result: top performers */
+.pm-key {
+  display: grid;
+  gap: 4px;
+  padding: 8px 0;
+  border-bottom: 1px solid #f1f5f9;
+}
+
+.pm-key-head {
+  margin: 0;
+  font-size: 13px;
+  color: #374151;
+}
+
+.pm-key-head b {
+  color: #111827;
+}
+
+.pm-key-head small {
+  color: #6b7280;
+}
+
+.pm-key-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 12px;
+}
+
+.pm-key-grid ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.pm-key-grid li {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+  min-width: 0;
+  font-size: 13px;
+}
+
+.pm-key-grid li span {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pm-key-grid li small {
+  color: #6b7280;
+}
+
+/* ---------- Tables (one row per player) ---------- */
+.pm-table-wrap {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.pm-app .pm-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  background: transparent;
+}
+
+.pm-app .pm-table th,
+.pm-app .pm-table td {
+  padding: 7px 5px;
+  border: 0;
+  border-bottom: 1px solid #f1f5f9;
+  background: transparent;
+  color: #1f2937;
+  text-align: right;
+  white-space: nowrap;
+  font-weight: 400;
+}
+
+.pm-app .pm-table th:first-child {
+  text-align: left;
+  white-space: normal;
+  width: 100%;
+  padding-left: 0;
+}
+
+.pm-app .pm-table td:last-child,
+.pm-app .pm-table th:last-child {
+  padding-right: 0;
+}
+
+.pm-app .pm-table thead th {
+  padding-top: 6px;
+  padding-bottom: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  color: #6b7280;
+  background: #f9fafb;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.pm-app .pm-table thead th:first-child {
+  padding-left: 6px;
+}
+
+.pm-app .pm-mini thead th {
+  background: #f9fafb;
+}
+
+.pm-name {
+  display: block;
+  font-weight: 500;
+  color: #1d4ed8;
+}
+
+.pm-mini .pm-name {
+  color: #111827;
+}
+
+.pm-table th small {
+  display: block;
+  font-size: 12px;
+  font-weight: 400;
+  color: #6b7280;
+}
+
+.pm-table tfoot th small {
+  display: inline;
+}
+
+.pm-app .pm-table .pm-r {
+  font-weight: 700;
+  color: #111827;
+}
+
+.pm-app .pm-table tfoot th,
+.pm-app .pm-table tfoot td {
+  font-weight: 600;
+}
+
+.pm-app .pm-table .pm-total th,
+.pm-app .pm-table .pm-total td {
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.pm-note {
+  margin: 0;
+  padding: 6px 0;
+  font-size: 13px;
+  color: #4b5563;
+}
+
+.pm-note b {
+  color: #111827;
+  font-weight: 600;
+}
+
+/* Scorecard tab: one bar per innings, tap to open / close */
+.pm-inn {
+  display: grid;
+  gap: 4px;
+}
+
+.pm-app .pm-innhead {
+  display: flex !important;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 0 !important;
+  margin: 0 !important;
+  padding: 10px 12px !important;
+  border: 0 !important;
+  border-radius: 8px !important;
+  background: #f3f4f6 !important;
+  box-shadow: none !important;
+  color: #111827 !important;
+  font: 600 14px Roboto, Arial, sans-serif !important;
+  text-align: left;
+  cursor: pointer;
+}
+
+.pm-innhead span {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pm-innhead b {
+  white-space: nowrap;
+}
+
+.pm-innhead small {
+  font-weight: 500;
+  color: #6b7280;
+}
+
+.pm-innhead i {
+  font-style: normal;
+  color: #6b7280;
+  transition: transform 0.15s;
+}
+
+.pm-inn:not(.open) .pm-innhead i {
+  transform: rotate(-90deg);
+}
+
+.pm-inn-body {
+  display: grid;
+  gap: 4px;
+  padding-bottom: 6px;
+}
+
+/* ---------- Commentary ---------- */
+.pm-comm {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+}
+
+.pm-comm li {
+  display: grid;
+  grid-template-columns: 40px minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+  padding: 8px 0;
+  border-bottom: 1px solid #f1f5f9;
+}
+
+.pm-comm li:last-child {
+  border-bottom: 0;
+}
+
+.pm-cno {
+  display: grid;
+  justify-items: center;
+  gap: 3px;
+}
+
+.pm-cno small {
+  font-size: 12px;
+  font-weight: 600;
+  color: #374151;
+}
+
+.pm-comm p {
+  margin: 0;
+  font-size: 14px;
+  color: #1f2937;
+}
+
+.pm-comm .pm-4 { color: #1d4ed8; }
+.pm-comm .pm-6 { color: #6d28d9; }
+.pm-comm .pm-w { color: #dc2626; }
+
+.pm-comm li.pm-overend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  margin: 4px 0;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 8px;
+  background: #f3f4f6;
+  font-size: 13px;
+  color: #374151;
+}
+
+.pm-overend b {
+  color: #111827;
+}
+
+.pm-comm-inn {
+  margin: 8px 0 0;
+  font-size: 13px;
+  font-weight: 700;
+  color: #047857;
+}
+
+.pm-extra-note {
+  font-size: 13px !important;
+  color: #6b7280 !important;
+  font-style: italic;
+}
+
+.pm-notes {
+  margin: 0;
+  padding-left: 18px;
+  display: grid;
+  gap: 4px;
+  font-size: 14px;
+  color: #1f2937;
+}
+
+.pm-empty {
+  margin: 0;
+  padding: 18px;
+  text-align: center;
+  color: #6b7280;
+}
+
+.pm-foot {
+  margin: 8px 0 0;
+  text-align: center;
+  font-size: 12px;
+  color: #9ca3af;
+}
+
+/* Captain / vice-captain / keeper tags */
+.pm-tag {
+  display: inline-block;
+  margin-left: 4px;
+  padding: 0 4px;
+  border-radius: 4px;
+  background: #fef3c7;
+  color: #92400e;
+  font-style: normal;
+  font-size: 10px;
+  font-weight: 700;
+  vertical-align: middle;
+}
+
+@media (max-width: 420px) {
+  .pm-app {
+    border-radius: 0;
+    border-left: 0;
+    border-right: 0;
+  }
+  .pm-head,
+  .pm-body {
+    padding-left: 12px;
+    padding-right: 12px;
+  }
+}
+
+/* ---------- Cricbuzz layout (Dhruvika, Oct 30: "exactly like this") ---------- */
+.pm-head {
+  gap: 4px;
+  padding: 14px 16px 12px;
+}
+
+.pm-state {
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.12em;
+  color: #4b5563;
+}
+
+.pm-state.live,
+.pm-state.break {
+  color: #4b5563;
+}
+
+.pm-state.live i,
+.pm-state.break i {
+  width: 8px;
+  height: 8px;
+  background: #ef4444;
+}
+
+.pm-state.break i {
+  background: #f59e0b;
+  animation: none;
+}
+
+.pm-teams {
+  gap: 10px;
+  margin: 10px 0 8px;
+}
+
+.pm-trow {
+  gap: 12px;
+  color: #6b7280;
+}
+
+.pm-badge {
+  min-width: 26px;
+  height: 18px;
+  border-radius: 2px;
+  font-size: 9px;
+  font-weight: 700;
+}
+
+.pm-tname {
+  font-size: 20px;
+  font-weight: 500;
+}
+
+.pm-trow.bat .pm-tname {
+  font-weight: 500;
+  color: #111827;
+}
+
+.pm-tscore small {
+  font-size: 14px;
+  color: #4b5563;
+}
+
+.pm-tscore b {
+  font-size: 20px;
+  font-weight: 500;
+  color: #6b7280;
+}
+
+.pm-trow.bat .pm-tscore b {
+  color: #111827;
+}
+
+.pm-status {
+  margin: 8px 0 0;
+  font-size: 15px;
+  font-weight: 400;
+}
+
+.pm-status.live,
+.pm-status.break {
+  color: #111827;
+}
+
+.pm-status.done {
+  color: #1d4ed8;
+}
+
+.pm-head .pm-rates {
+  display: block;
+  margin: 0;
+  font-size: 14px;
+  color: #111827;
+}
+
+.pm-info {
+  margin: 10px 0 0;
+  font-size: 12px;
+  color: #6b7280;
+}
+
+/* Tabs: blue like Cricbuzz */
+.pm-tabbar {
+  gap: 18px;
+  padding: 0 16px;
+}
+
+.pm-app .pm-tabbar button {
+  padding: 12px 0 10px !important;
+  font: 400 16px Roboto, Arial, sans-serif !important;
+  color: #4b5563 !important;
+}
+
+.pm-app .pm-tabbar button.on {
+  color: #1d63c9 !important;
+  border-bottom-color: #1d63c9 !important;
+  font-weight: 500 !important;
+}
+
+.pm-body {
+  gap: 0;
+  padding: 0 16px 4px;
+}
+
+/* Ball strip: newest on the left, square chips, "15th / 3 RUNS" between overs */
+.pm-strip {
+  gap: 8px;
+  margin: 0 -16px;
+  padding: 12px 16px;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.pm-ovgrp {
+  gap: 8px;
+}
+
+.pm-chip {
+  flex: 0 0 auto;
+  min-width: 30px;
+  height: 30px;
+  padding: 0 6px;
+  border-radius: 4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: #f3f4f6;
+  color: #111827;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.pm-chip.dot { font-size: 16px; }
+.pm-chip.four { background: #2563eb; color: #fff; }
+.pm-chip.six { background: #7c3aed; color: #fff; }
+.pm-chip.w { background: #dc2626; color: #fff; }
+.pm-chip.x { background: #fff7ed; color: #9a3412; }
+
+.pm-ovsep {
+  margin: -12px 0;
+  background: #e5e7eb;
+}
+
+.pm-ovmark {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  white-space: nowrap;
+}
+
+.pm-ovmark small {
+  font-size: 13px;
+  color: #6b7280;
+}
+
+.pm-ovmark b {
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.15;
+  text-align: center;
+  color: #111827;
+}
+
+/* Win probability */
+.pm-wp {
+  display: grid;
+  gap: 8px;
+  padding: 14px 0;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.pm-wp-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px 14px;
+  margin: 0;
+  font-size: 15px;
+  color: #111827;
+}
+
+.pm-wp-i {
+  color: #9ca3af;
+  font-size: 13px;
+  cursor: help;
+}
+
+.pm-wp-teams {
+  display: inline-flex;
+  gap: 14px;
+}
+
+.pm-wp-teams i {
+  display: inline-block;
+  width: 11px;
+  height: 11px;
+  margin-right: 6px;
+  border-radius: 50%;
+  vertical-align: -1px;
+}
+
+.pm-wp-teams i.a { background: #1d63c9; }
+.pm-wp-teams i.b { background: #f59e0b; }
+
+.pm-wp-bar {
+  height: 4px;
+  border-radius: 4px;
+  background: #f59e0b;
+  overflow: hidden;
+}
+
+.pm-wp-bar span {
+  display: block;
+  height: 100%;
+  background: #1d63c9;
+}
+
+/* Batting / bowling: grey header bands across the full width */
+.pm-app .pm-bleed {
+  width: calc(100% + 32px);
+  max-width: none;
+  margin: 0 -16px;
+}
+
+.pm-app .pm-strip {
+  max-width: none;
+}
+
+.pm-app .pm-mini {
+  font-size: 15px;
+}
+
+.pm-app .pm-mini th,
+.pm-app .pm-mini td {
+  padding: 12px 8px;
+  border-bottom: 0;
+}
+
+.pm-app .pm-mini th:first-child {
+  padding-left: 16px;
+}
+
+.pm-app .pm-mini td:last-child,
+.pm-app .pm-mini th:last-child {
+  padding-right: 16px;
+}
+
+.pm-app .pm-mini thead th {
+  padding-top: 9px;
+  padding-bottom: 9px;
+  background: #f3f4f6;
+  border: 0;
+  font-size: 12px;
+  font-weight: 500;
+  color: #6b7280;
+}
+
+.pm-app .pm-mini thead th:first-child {
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.pm-app .pm-mini tbody th:first-child {
+  white-space: nowrap;
+}
+
+.pm-app .pm-mini thead th:first-child {
+  padding-left: 16px;
+}
+
+.pm-app .pm-mini .pm-name {
+  font-weight: 400;
+  color: #111827;
+}
+
+.pm-app .pm-mini .pm-r {
+  font-weight: 500;
+}
+
+.pm-facts {
+  padding: 10px 0;
+  font-size: 13px;
+  color: #4b5563;
+  border-top: 1px solid #e5e7eb;
+}
+
+/* Team "flag": two colour bands made from the team name (no real flags for club teams) */
+.pm-badge.pm-flag {
+  min-width: 0;
+  width: 30px;
+  height: 20px;
+  padding: 0;
+  border-radius: 2px;
+  background: linear-gradient(180deg, hsl(var(--h, 210) 65% 45%) 0 50%, hsl(calc(var(--h, 210) + 150) 60% 55%) 50% 100%);
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.08);
+}
+
+/* the first over marker sits right after the over being bowled */
+.pm-strip > .pm-ovsep:first-child {
+  display: none;
+}
+
+.pm-wp-row {
+  flex-wrap: nowrap;
+  font-size: 14px;
+  gap: 8px;
+}
+
+.pm-wp-title,
+.pm-wp-teams {
+  white-space: nowrap;
+}
+
+.pm-wp-teams {
+  gap: 10px;
+}
+
+@media (max-width: 360px) {
+  .pm-wp-row { flex-wrap: wrap; }
+}

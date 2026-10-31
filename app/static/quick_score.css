@@ -318,12 +318,80 @@ body.quick-score-page .qs-btn.ghost {
 
 .qs-over {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap; /* one row (Amit, Oct 29); scrolls sideways, newest on the right */
   align-items: center;
-  gap: 6px;
+  gap: 5px;
+  margin-top: 6px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+  font-size: 0.8rem;
+  color: #94a3b8;
+}
+
+.qs-over::-webkit-scrollbar {
+  display: none;
+}
+
+.qs-over .qs-ball {
+  flex: 0 0 auto;
+}
+
+.qs-over-gap {
+  flex: 0 0 1px;
+  align-self: stretch;
+  margin: 3px 3px;
+  background: rgba(148, 163, 184, 0.45);
+}
+
+.qs-recent-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
   margin-top: 12px;
   font-size: 0.8rem;
   color: #94a3b8;
+}
+
+body.quick-score-page .qs-more {
+  min-height: 0 !important;
+  padding: 2px 10px !important;
+  border: 0 !important;
+  border-radius: 999px !important;
+  background: rgba(255, 255, 255, 0.12) !important;
+  color: #e2e8f0 !important;
+  font: 700 0.78rem Roboto, system-ui, sans-serif !important;
+  box-shadow: none !important;
+  cursor: pointer;
+}
+
+.qs-all-overs {
+  display: grid;
+  gap: 10px;
+  max-height: 60vh;
+  overflow-y: auto;
+}
+
+.qs-over-row {
+  padding: 10px 12px;
+  border-radius: 14px;
+  background: #0f172a;
+}
+
+.qs-over-row-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  color: #e2e8f0;
+  font-size: 0.85rem;
+}
+
+.qs-over-row-head span {
+  color: #94a3b8;
+}
+
+.qs-over-row .qs-over {
+  flex-wrap: wrap;
 }
 
 .qs-over > span {
@@ -699,7 +767,7 @@ body.quick-score-page .muse-fab {
 }
 
 .quick-score-guest .qs-card h1 {
-  font-family: "Sora", "Inter", sans-serif;
+  font-family: "Roboto", sans-serif;
   font-size: 1.6rem;
   font-weight: 800;
   line-height: 1.2;
@@ -744,7 +812,7 @@ body.quick-score-page .qs-chip {
   border: 1.5px solid #e2e8f0 !important;
   background: #fff !important;
   color: #0f172a !important;
-  font: 700 0.98rem/1.2 Inter, system-ui, sans-serif !important;
+  font: 700 0.98rem/1.2 Roboto, system-ui, sans-serif !important;
   text-align: center;
   cursor: pointer;
   box-shadow: none !important;
@@ -879,4 +947,111 @@ body.quick-score-page button.qs-ball:disabled {
   align-items: center;
   gap: 8px;
   margin: 6px 0;
+}
+
+/* The recent-balls row scrolls sideways inside the board; never let it widen the page (Oct 29 2026). */
+.qs-app,
+.qs-app > section,
+.qs-board,
+.qs-board > * {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.qs-app {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+/* No connection: balls wait and save by themselves (README "Balls are never lost") */
+.qs-pending[data-offline="1"] {
+  background: #b91c1c !important;
+  color: #fff !important;
+}
+
+/* Captain / vice-captain / keeper: one line per team, tap to pick (README "Captain, vice-captain and keeper") */
+.qs-roles {
+  margin-top: 10px;
+}
+
+.qs-roleline {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+
+body.quick-score-page .qs-rolebtn {
+  display: grid !important;
+  gap: 1px;
+  min-height: 0 !important;
+  padding: 6px 8px !important;
+  border-radius: 10px !important;
+  border: 1.5px dashed #cbd5e1 !important;
+  background: #fff !important;
+  color: #0f172a !important;
+  text-align: left;
+  box-shadow: none !important;
+  cursor: pointer;
+}
+
+body.quick-score-page .qs-rolebtn.set {
+  border-style: solid !important;
+  border-color: #86efac !important;
+  background: #f0fdf4 !important;
+}
+
+.qs-rolebtn span {
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #64748b;
+}
+
+.qs-rolebtn b {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.9rem;
+}
+
+.qs-tag {
+  display: inline-block;
+  padding: 0 5px;
+  border-radius: 6px;
+  background: rgba(250, 204, 21, 0.22);
+  color: #fde68a;
+  font-style: normal;
+  font-size: 0.7rem;
+  font-weight: 800;
+  vertical-align: middle;
+}
+
+/* Match list: start time, Live / Finished (Oct 29 2026) */
+.qs-fx-state {
+  display: block;
+  margin-top: 2px;
+}
+
+.qs-state {
+  display: inline-block;
+  margin-right: 4px;
+  padding: 0 6px;
+  border-radius: 6px;
+  font-size: 0.7rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.qs-state.live {
+  background: #fee2e2;
+  color: #b91c1c;
+}
+
+.qs-state.done {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.qs-fixture.is-done .qs-go {
+  color: #166534;
 }

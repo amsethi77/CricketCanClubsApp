@@ -7,9 +7,9 @@
   --sports-crimson-deep: #9a1b1b;
   --sports-line: #eaeaea;
   --sports-shadow: 0 12px 32px rgba(26, 26, 26, 0.055);
-  --font-sports-display: "Anton", Impact, sans-serif;
-  --font-sports-ui: "Inter", "Segoe UI", system-ui, sans-serif;
-  --font-sports-data: "Space Mono", "SFMono-Regular", Consolas, monospace;
+  --font-sports-display: "Roboto", Impact, sans-serif;
+  --font-sports-ui: "Roboto", "Segoe UI", system-ui, sans-serif;
+  --font-sports-data: "Roboto", "SFMono-Regular", Consolas, monospace;
   --font-ui: var(--font-sports-ui);
   --font-display: var(--font-sports-ui);
 }

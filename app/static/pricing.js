@@ -43,6 +43,9 @@
   const PLAN_ICON = { free: "🏏", pro: "⭐" };
 
   function priceFor(plan) {
+    if (state.launch && plan.id !== "free") {
+      return { price: "Free", note: "during the launch", sub: `Later: ${plan.price} ${plan.price_note}${plan.yearly ? ` or ${plan.yearly.price} a year` : ""}.` };
+    }
     if (plan.yearly && state.interval === "year") {
       return { price: plan.yearly.price, note: plan.yearly.price_note, sub: `That's ${plan.yearly.monthly_equivalent} a month. ${plan.yearly.saving}.` };
     }
@@ -65,6 +68,10 @@
   };
 
   function banner() {
+    if (state.launch) {
+      // Launch mode (README "Launch: everyone on Pro"): show the plans, nothing to pay yet.
+      return `<div class="pr-banner good pr-launch">🎉 <strong>Launch offer: every club gets Pro free.</strong> All features are switched on for everyone while we launch, so there is nothing to pay. Paid plans start later, and we'll tell you well before anything changes.</div>`;
+    }
     const checkout = params.get("checkout");
     const feature = params.get("feature");
     const featureInfo = (state.catalog?.features || []).find((f) => f.key === feature);
@@ -83,7 +90,8 @@
     const sub = state.me?.subscription;
     if (!sub) return "";
     let when = "";
-    if (sub.source === "site_admin") when = "Site admins always have every feature.";
+    if (state.launch && sub.source !== "site_admin") when = "Launch offer: you have every Pro feature, free.";
+    else if (sub.source === "site_admin") when = "Site admins always have every feature.";
     else if (sub.is_trial) when = `Free Pro trial: ${esc(sub.days_left)} day${sub.days_left === 1 ? "" : "s"} left (ends ${esc(fmtDate(sub.period_end))}). After that you move to Free unless you choose a plan.`;
     else if (sub.plan !== "free" && sub.period_end) when = sub.cancel_at_period_end ? `Ends on ${esc(fmtDate(sub.period_end))}.` : `Renews on ${esc(fmtDate(sub.period_end))}.`;
     else if (sub.source === "expired") when = `Your ${esc(sub.expired_from)} access has ended, so you're on Free now.`;
@@ -128,7 +136,13 @@
     const signedIn = Boolean(state.me);
     const current = Boolean(sub && sub.plan === plan.id);
     let cta = "";
-    if (!signedIn) {
+    if (state.launch) {
+      cta = plan.id === "free"
+        ? `<span class="pr-btn quiet">Included for everyone</span>`
+        : signedIn
+        ? `<span class="pr-btn current">✓ Free during the launch</span>`
+        : `<a class="pr-btn primary" href="/register">Register free: Pro included</a>`;
+    } else if (!signedIn) {
       cta = plan.id === "free"
         ? `<a class="pr-btn ghost" href="/register">Get started free</a>`
         : `<a class="pr-btn primary" href="/register?plan=${esc(plan.id)}&billing=${state.interval === "year" ? "yearly" : "monthly"}">Register to choose ${esc(plan.name)}</a>`;
@@ -242,11 +256,15 @@
       <section class="pr-hero">
         <p class="pr-kicker">Plans</p>
         <h1>Your cricket. Every match. One place.</h1>
-        <p class="pr-lede">Everyone starts on Free: live scoring, stats, scorecards and one free AI match. Go Pro for upcoming matches, availability, alerts, AI and unlimited uploads.</p>
+        <p class="pr-lede">${
+          state.launch
+            ? "During the launch every club gets Pro for free. Here's what each plan includes, for when paid plans start."
+            : "Everyone starts on Free: live scoring, stats, scorecards and one free AI match. Go Pro for upcoming matches, availability, alerts, AI and unlimited uploads."
+        }</p>
       </section>
       ${banner()}
       ${yourPlan()}
-      ${intervalToggle()}
+      ${state.launch ? "" : intervalToggle()}
       <section class="pr-plans">${plans.map(planCard).join("")}</section>
       ${compareTable()}
       ${faq()}
@@ -311,6 +329,8 @@
 
   (async () => {
     try {
+      const config = await fetch("/api/public/config").then((r) => (r.ok ? r.json() : null)).catch(() => null);
+      state.launch = Boolean(config && config.subscriptions === false);
       if (token()) {
         try {
           state.me = await api("GET", "/api/subscription/me");

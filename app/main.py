@@ -8,6 +8,7 @@ import secrets
 import sqlite3
 import shutil
 import threading
+import time as time_module
 import httpx
 from copy import deepcopy
 from urllib import request
@@ -18,11 +19,22 @@ from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
+# The clubs play in Ontario, but Azure's servers run on GMT/UTC: a match started at 12:08 AM showed "4:08 AM"
+# and "today" could be tomorrow's date in the evening. Run the whole app on the clubs' time zone
+# (APP_TIMEZONE, default America/Toronto) so datetime.now() / date.today() are local everywhere.
+# Stored timestamps from now_iso() stay UTC (with "Z"). README "Local time (Oct 29 2026)".
+APP_TIMEZONE = os.getenv("APP_TIMEZONE", "America/Toronto")
+if hasattr(__import__("time"), "tzset"):  # Linux / Mac (Azure); Windows already uses the PC's own time zone
+    os.environ["TZ"] = APP_TIMEZONE
+    __import__("time").tzset()
+
 
 from fastapi import FastAPI, File, Form, Header, HTTPException, Request, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.background import BackgroundTask
 from pydantic import BaseModel, Field
 
 import sqlite3
@@ -157,6 +169,8 @@ try:
         save_store,
         scoped_store_for_club,
         summarize_innings_scorebook,
+        scorebook_match_finished,
+        scorebook_result_text,
         sync_fixture_scorecard_from_scorebook,
     )
 except ModuleNotFoundError:
@@ -213,6 +227,8 @@ except ModuleNotFoundError:
         save_store,
         scoped_store_for_club,
         summarize_innings_scorebook,
+        scorebook_match_finished,
+        scorebook_result_text,
         sync_fixture_scorecard_from_scorebook,
     )
 
@@ -236,6 +252,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+# Squeeze JSON and pages (about 8x smaller), so the live scorecard and the Score page stay quick on
+# phone data at the ground (README "Live page like a cricket score app (Oct 30 2026)").
+app.add_middleware(GZipMiddleware, minimum_size=1024)
 
 
 def _canonical_dashboard_widget_path(path: str) -> str:
@@ -511,6 +530,23 @@ def _auth_token_from_request(request: Request, x_auth_token: str | None = None) 
     if token:
         return token
     return str(request.cookies.get("cricketClubAppAuthToken") or "").strip()
+
+
+def _sqlite_copy(source_file: Path, target_file: Path) -> None:
+    """Copy a SQLite database with SQLite's own backup API (README "Database export and import").
+
+    The database runs in WAL mode: recent saves sit in the "-wal" file until a checkpoint, so copying the
+    .db file alone can miss them or give an inconsistent file. The backup API copies the full, current data.
+    """
+    source = sqlite3.connect(str(source_file), timeout=60)
+    try:
+        target = sqlite3.connect(str(target_file), timeout=60)
+        try:
+            source.backup(target)
+        finally:
+            target.close()
+    finally:
+        source.close()
 
 
 def _validated_database_backup_path() -> Path:
@@ -1085,6 +1121,55 @@ class ScorebookBallRequest(BaseModel):
     commentary: str = ""
     # Set when fixing a ball already scored (tap the ball on /score): that ball is replaced in place.
     id: str = ""
+    # The Score page's own id for a new ball: a retry after a lost connection never saves it twice.
+    client_id: str = ""
+
+
+def _settle_scorebook_result(match: dict[str, Any], lineups: dict[str, list[str]]) -> None:
+    """After a ball / fix / undo (club and guest matches): end the chase once the target is passed and write the
+    result with the real team size ("Afghans won by 3 wickets"), or clear it if the match isn't over (README
+    "How a scored match ends")."""
+    ordered = sorted(_match_scorebook(match).get("innings", []), key=lambda row: int(row.get("inning_number") or 1))
+    if len(ordered) < 2:
+        return
+    first, second = ordered[0], ordered[1]
+    first_summary, second_summary = summarize_innings_scorebook(first), summarize_innings_scorebook(second)
+    if (second.get("balls") or []) and int(second_summary["runs"]) > int(first_summary["runs"]):
+        second["status"] = "Completed"
+    scorecard = match.setdefault("scorecard", {})
+    if scorebook_match_finished(ordered):
+        text = scorebook_result_text(first, second, first_summary, second_summary, _all_out_at(match, second, lineups))
+    else:
+        text = "TBD"
+    scorecard["result"] = text
+    match["result"] = text
+
+
+def _innings_is_over(match: dict[str, Any], innings: dict[str, Any], lineups: dict[str, list[str]]) -> bool:
+    """No new balls once an innings is finished: all out, overs used up, or (2nd innings) target passed.
+    Oct 29 2026: fast taps after the last wicket were saved, giving "28/11" (README "Full test and fixes")."""
+    summary = summarize_innings_scorebook(innings)
+    if summary["wickets"] >= _all_out_at(match, innings, lineups):
+        return True
+    if summary["legal_balls"] >= int(innings.get("overs_limit", 20) or 20) * 6:
+        return True
+    if int(innings.get("inning_number") or 1) == 2:
+        first = next((row for row in _match_scorebook(match).get("innings", []) if int(row.get("inning_number") or 1) == 1), None)
+        if first and (first.get("balls") or []) and summary["runs"] > summarize_innings_scorebook(first)["runs"]:
+            return True
+    return False
+
+
+def _client_ball_seen(innings: dict[str, Any], ball: dict[str, Any], request: "ScorebookBallRequest") -> bool:
+    """New balls from the Score page carry a client_id (README "Balls are never lost"). It becomes the ball's id;
+    if a ball with that id is already saved, this is a retry of a ball that did save, so nothing is added."""
+    client_id = re.sub(r"[^A-Za-z0-9_-]", "", str(request.client_id or ""))[:40]
+    if not client_id or str(request.id or "").strip():
+        return False
+    if any(str(item.get("id") or "") == client_id for item in innings.get("balls", []) or []):
+        return True
+    ball["id"] = client_id
+    return False
 
 
 def _apply_ball_edit(innings: dict[str, Any], ball: dict[str, Any], ball_id: str) -> bool:
@@ -1408,6 +1493,8 @@ class SeasonFixtureRequest(BaseModel):
     match_type: str = "Friendly"
     scheduled_time: str = ""
     overs: str = "20"
+    # Ask the club's players "Are you available?" when the match is added (off for "Start a new match" today).
+    notify: bool = True
 
 
 class PlayerAvailabilitySelfRequest(BaseModel):
@@ -3326,6 +3413,7 @@ def root(request: Request) -> RedirectResponse:
 def startup_tasks() -> None:
     ensure_auth_schema()
     _refresh_player_stats_once()
+    threading.Thread(target=_reminder_loop, name="match-reminders", daemon=True).start()
 
 
 STATS_REFRESH_VERSION = "strike-rate-fix-1"
@@ -3661,7 +3749,7 @@ def _build_public_batting_chart_figure(player_labels: list[str], total_runs: lis
         layout=go.Layout(
             paper_bgcolor="rgba(0,0,0,0)",
             plot_bgcolor="rgba(0,0,0,0)",
-            font={"family": "Inter, sans-serif", "color": "#1A1A1A"},
+            font={"family": "Roboto, Arial, sans-serif", "color": "#1A1A1A"},
             margin={"t": 12, "r": 12, "b": 72, "l": 48},
             xaxis={"tickangle": -25, "automargin": True, "showgrid": False, "zeroline": False},
             yaxis={
@@ -4229,8 +4317,11 @@ def _scorecard_dismissal(raw: Any, fielder: Any = "", bowler: Any = "") -> tuple
         if re.search(r"retired\s*(out|oot)", text):
             return ("retired out", False, False)
         return ("retired", True, False)
-    if text in {"c and b", "c & b", "caught and bowled"}:
-        return (f"c & b {bowler}".strip(), False, False)
+    caught_and_bowled = bool(re.match(r"^(c|ct|caught)\s*(&|and|\+)\s*(b|bowled)\b", text)) or (
+        (text.startswith("caught") or text == "c") and fielder and bowler and fielder.lower() == bowler.lower()
+    )
+    if caught_and_bowled:  # "c Singh b Singh" is written "c & b Singh" (Dhruvika, Oct 30)
+        return (f"c & b {bowler or fielder}".strip(), False, False)
     if text.startswith("caught") or text == "c":
         return (" ".join(part for part in ["c " + fielder if fielder else "caught", "b " + bowler if bowler else ""] if part), False, False)
     if text.startswith("bowled") or text == "b":
@@ -4242,7 +4333,7 @@ def _scorecard_dismissal(raw: Any, fielder: Any = "", bowler: Any = "") -> tuple
     if text.startswith("run out"):
         return (f"run out ({fielder})" if fielder else "run out", False, False)
     if "hit wicket" in text:
-        return ("hit wicket", False, False)
+        return (f"hit wicket b {bowler}" if bowler else "hit wicket", False, False)
     return (text, False, False)
 
 
@@ -4761,10 +4852,18 @@ def public_match(match_id: str) -> dict[str, Any]:
                 raise ValueError("Match not found.")
             guest.pop("_code", None)
             match = _public_match_payload({"fixtures": [guest]}, match_id)
+            lineups = guest.get("lineups") or {}
         else:
             match = _public_match_payload(store, match_id)
+            lineups = _match_lineups(match_id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
+    # Player names only, for "Yet to bat" on the public scorecard (README "Public scorecard (Oct 29 2026)").
+    match["lineups"] = {
+        "club": list(lineups.get("club") or []),
+        "opponent": list(lineups.get("opponent") or []),
+        "roles": _clean_lineup_roles(lineups.get("roles"), list(lineups.get("club") or []), list(lineups.get("opponent") or [])),
+    }
     return {
         "match": match,
         "generated_at": now_iso(),
@@ -6483,6 +6582,8 @@ def create_season_fixture(request: SeasonFixtureRequest, x_auth_token: str | Non
         },
         source="api",
     )
+    if request.notify:
+        _announce_new_fixture(new_fixture)
     return season_setup_data(x_auth_token)
 
 
@@ -6544,6 +6645,11 @@ def update_season_fixture(
                 f"at {request.scheduled_time or 'the selected time'}."
             ),
         )
+    before = (
+        str(fixture.get("date") or ""),
+        str((fixture.get("details") or {}).get("scheduled_time") or "").strip(),
+        str((fixture.get("details") or {}).get("venue") or "").strip(),
+    )
     fixture.update(
         {
             "club_id": club.get("id", ""),
@@ -6582,6 +6688,10 @@ def update_season_fixture(
         },
         source="api",
     )
+    after = (str(request.date or ""), request.scheduled_time.strip(), request.venue.strip())
+    changes = [label for label, old, new in zip(("date", "time", "ground"), before, after) if old != new]
+    if changes:
+        _announce_fixture_change(fixture, " and ".join(changes))
     return season_setup_data(x_auth_token)
 
 
@@ -7019,10 +7129,14 @@ def export_database(x_auth_token: str | None = Header(default=None)) -> FileResp
     _require_superadmin(x_auth_token)
     if not DATABASE_FILE.exists():
         raise HTTPException(status_code=404, detail="Database file not found.")
+    # A complete snapshot (including changes still in the -wal file), deleted after it is sent.
+    snapshot = DATABASE_FILE.with_name(f"{DATABASE_FILE.stem}.export-{uuid.uuid4().hex[:8]}{DATABASE_FILE.suffix}")
+    _sqlite_copy(DATABASE_FILE, snapshot)
     return FileResponse(
-        path=DATABASE_FILE,
+        path=snapshot,
         filename=DATABASE_FILE.name,
         media_type="application/x-sqlite3",
+        background=BackgroundTask(lambda: snapshot.unlink(missing_ok=True)),
     )
 
 
@@ -7065,9 +7179,34 @@ async def import_database(
         incoming_path.unlink(missing_ok=True)
         raise HTTPException(status_code=400, detail=f"Unable to validate uploaded database: {exc}") from exc
 
-    if DATABASE_FILE.exists():
-        shutil.copy2(DATABASE_FILE, backup_path)
-    incoming_path.replace(DATABASE_FILE)
+    # Keep a complete copy of the current data, then load the uploaded data into the live database through
+    # SQLite (swapping the file under a WAL database could apply an old -wal file to the new data).
+    try:
+        old_version = 0
+        if DATABASE_FILE.exists():
+            _sqlite_copy(DATABASE_FILE, backup_path)
+            with sqlite3.connect(str(DATABASE_FILE), timeout=60) as live:
+                try:
+                    row = live.execute("SELECT version FROM app_store_version WHERE id = 1").fetchone()
+                    old_version = int(row[0]) if row else 0
+                except sqlite3.OperationalError:
+                    old_version = 0
+        _sqlite_copy(incoming_path, DATABASE_FILE)
+        # New data: every worker must drop its in-memory copy (README "Fresh data on every request").
+        live = sqlite3.connect(str(DATABASE_FILE), timeout=60)
+        try:
+            live.execute("CREATE TABLE IF NOT EXISTS app_store_version (id INTEGER PRIMARY KEY CHECK (id = 1), version INTEGER NOT NULL)")
+            row = live.execute("SELECT version FROM app_store_version WHERE id = 1").fetchone()
+            new_version = max(old_version, int(row[0]) if row else 0) + 1
+            live.execute(
+                "INSERT INTO app_store_version (id, version) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET version = excluded.version",
+                (new_version,),
+            )
+            live.commit()
+        finally:
+            live.close()
+    finally:
+        incoming_path.unlink(missing_ok=True)
 
     refreshed_store = load_store()
     return {
@@ -7680,7 +7819,7 @@ def add_commentary(match_id: str, request: CommentaryRequest, x_auth_token: str 
 
 
 @app.post("/api/matches/{match_id}/scorebook/setup")
-def update_scorebook_setup(match_id: str, request: ScorebookSetupRequest, x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
+def update_scorebook_setup(match_id: str, request: ScorebookSetupRequest, x_auth_token: str | None = Header(default=None), x_lite_response: str | None = Header(default=None)) -> dict[str, Any]:
     user_row, _ = _require_match_scorer(x_auth_token, match_id)
     store = load_store()
     try:
@@ -7707,6 +7846,7 @@ def update_scorebook_setup(match_id: str, request: ScorebookSetupRequest, x_auth
     innings["batting_team"] = request.batting_team.strip()
     innings["bowling_team"] = request.bowling_team.strip()
     innings["overs_limit"] = max(1, int(request.overs_limit or 20))
+    _same_overs_both_innings(match, scorebook, innings)
     innings["target_runs"] = int(request.target_runs) if request.target_runs else None
     innings["status"] = request.status.strip() or "Not started"
     innings["batters"] = [
@@ -7720,11 +7860,13 @@ def update_scorebook_setup(match_id: str, request: ScorebookSetupRequest, x_auth
     sync_fixture_scorecard_from_scorebook(match)
     _touch_fixture_audit(match, user_row)
     save_store(store)
+    if x_lite_response:
+        return {"ok": True}  # the Score page reloads the match itself (README "Faster saving")
     return current_dashboard(load_store())
 
 
 @app.post("/api/matches/{match_id}/scorebook/ball")
-def add_scorebook_ball(match_id: str, request: ScorebookBallRequest, x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
+def add_scorebook_ball(match_id: str, request: ScorebookBallRequest, x_auth_token: str | None = Header(default=None), x_lite_response: str | None = Header(default=None)) -> dict[str, Any]:
     user_row, _ = _require_match_scorer(x_auth_token, match_id)
     store = load_store()
     try:
@@ -7754,7 +7896,11 @@ def add_scorebook_ball(match_id: str, request: ScorebookBallRequest, x_auth_toke
             "commentary": request.commentary,
         }
     )
+    if _client_ball_seen(innings, ball, request):
+        return {"ok": True, "status": innings.get("status"), "already_saved": True} if x_lite_response else current_dashboard(load_store())
     editing = _apply_ball_edit(innings, ball, request.id)
+    if not editing and _innings_is_over(match, innings, _match_lineups(match_id)):
+        raise HTTPException(status_code=400, detail="This innings is over. To change the last ball, tap Undo.")
     before_summary = summarize_innings_scorebook(innings)
     before_summary["status"] = str(innings.get("status") or "")
     innings["balls"] = [item for item in innings.get("balls", []) if item.get("id") != ball["id"]]
@@ -7777,15 +7923,18 @@ def add_scorebook_ball(match_id: str, request: ScorebookBallRequest, x_auth_toke
                 break
 
     summary = summarize_innings_scorebook(innings)
+    lineups = _match_lineups(match_id)
     if summary["runs"] or summary["wickets"] or summary["legal_balls"]:
         innings["status"] = "Live"
-    if summary["wickets"] >= _all_out_at(match, innings, _match_lineups(match_id)) or summary["legal_balls"] >= int(innings.get("overs_limit", 20) or 20) * 6:
+    if summary["wickets"] >= _all_out_at(match, innings, lineups) or summary["legal_balls"] >= int(innings.get("overs_limit", 20) or 20) * 6:
         innings["status"] = "Completed"
     sync_fixture_scorecard_from_scorebook(match)
+    _settle_scorebook_result(match, lineups)
     _touch_fixture_audit(match, user_row)
     save_store(store)
     if editing:
-        return current_dashboard(load_store())  # a fixed ball sends no new alerts
+        # a fixed ball sends no new alerts
+        return {"ok": True, "status": innings.get("status")} if x_lite_response else current_dashboard(load_store())
     # Live score alerts (bell icon): match start, wickets, 50s/100s, end of innings
     try:
         alert_events = muse.live_score_events(match, innings, before_summary, summary, ball)
@@ -7795,11 +7944,14 @@ def add_scorebook_ball(match_id: str, request: ScorebookBallRequest, x_auth_toke
             _notify(str(match.get("club_id") or ""), kind, title, body, f"/live/{match.get('id')}", str(match.get("id") or ""), "Live scoring")
     except Exception:
         logger.exception("Live score alert failed for match %s", match_id)
+    if x_lite_response:
+        # The Score page only needs "saved"; the full dashboard is ~1.6 MB per ball on mobile data (README "Faster saving").
+        return {"ok": True, "status": innings.get("status")}
     return current_dashboard(load_store())
 
 
 @app.delete("/api/matches/{match_id}/scorebook/ball")
-def delete_scorebook_ball(match_id: str, x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
+def delete_scorebook_ball(match_id: str, x_auth_token: str | None = Header(default=None), x_lite_response: str | None = Header(default=None)) -> dict[str, Any]:
     user_row, _ = _require_match_scorer(x_auth_token, match_id)
     store = load_store()
     try:
@@ -7828,10 +7980,16 @@ def delete_scorebook_ball(match_id: str, x_auth_token: str | None = Header(defau
 
     target_innings, target_ball = sorted(balls_by_innings, key=_ball_sort_key)[-1]
     target_innings["balls"] = [ball for ball in target_innings.get("balls", []) if ball.get("id") != target_ball.get("id")]
+    # Undoing the last ball of a finished innings opens it again (as guest matches already did).
+    summary = summarize_innings_scorebook(target_innings)
+    target_innings["status"] = "Live"
+    if summary["wickets"] >= _all_out_at(match, target_innings, _match_lineups(match_id)) or summary["legal_balls"] >= int(target_innings.get("overs_limit", 20) or 20) * 6:
+        target_innings["status"] = "Completed"
     sync_fixture_scorecard_from_scorebook(match)
+    _settle_scorebook_result(match, _match_lineups(match_id))
     _touch_fixture_audit(match, user_row)
     save_store(store)
-    return current_dashboard(load_store())
+    return {"ok": True} if x_lite_response else current_dashboard(load_store())
 
 
 # ---------------------------------------------------------------------------
@@ -7888,9 +8046,227 @@ def _notify(club_id: str, kind: str, title: str, body: str = "", link: str = "",
         logger.exception("Could not save notification kind=%s club=%s", kind, club_id)
 
 
+# ---------------------------------------------------------------------------
+# Availability requests and match reminders (README "Availability requests and match reminders", Oct 29 2026).
+# Bell notifications, each sent once per match (table app_fixture_reminders, safe with several workers):
+#   ask   - when the match is added (or, for older matches, once it is 7 days away): "Are you available?"
+#   nudge - 2 days before: only to players who haven't replied (one notification each)
+#   eve   - the day before, from 6 PM: "Tomorrow: vs GT at 10:00 AM" with how many are available
+#   day   - match day, from 7 AM: "Match today: vs GT at 10:00 AM"
+# A change of date / time / ground tells everyone and asks again. Matches added on the day itself
+# ("Start a new match") send none of these.
+# ---------------------------------------------------------------------------
+_REMINDER_LOCK = threading.Lock()
+_REMINDER_LAST_RUN = 0.0
+_REMINDER_TABLE = "CREATE TABLE IF NOT EXISTS app_fixture_reminders (fixture_id TEXT NOT NULL, kind TEXT NOT NULL, sent_at TEXT NOT NULL, PRIMARY KEY (fixture_id, kind))"
+
+
+def _reminder_claim(fixture_id: str, kind: str) -> bool:
+    """True the first time (fixture, kind) is claimed, in any worker; False afterwards."""
+    try:
+        with _auth_connection() as connection:
+            connection.execute(_REMINDER_TABLE)
+            cursor = connection.execute(
+                "INSERT OR IGNORE INTO app_fixture_reminders (fixture_id, kind, sent_at) VALUES (?, ?, ?)", (fixture_id, kind, now_iso())
+            )
+            return cursor.rowcount == 1
+    except Exception:
+        logger.exception("Reminder bookkeeping failed for %s/%s", fixture_id, kind)
+        return False
+
+
+def _reminder_unclaim(fixture_id: str, kinds: tuple[str, ...]) -> None:
+    try:
+        with _auth_connection() as connection:
+            connection.execute(_REMINDER_TABLE)
+            connection.executemany("DELETE FROM app_fixture_reminders WHERE fixture_id = ? AND kind = ?", [(fixture_id, kind) for kind in kinds])
+    except Exception:
+        logger.exception("Reminder reset failed for %s", fixture_id)
+
+
+def _club_gets_availability(club_id: str) -> bool:
+    """Availability is a Pro feature; during the launch everyone has Pro."""
+    return (not subscriptions.subscriptions_on()) or _club_is_paid(club_id)
+
+
+def _fixture_day(fixture: dict[str, Any]) -> date | None:
+    try:
+        return date.fromisoformat(str(fixture.get("date") or "")[:10])
+    except ValueError:
+        return None
+
+
+def _fixture_when(fixture: dict[str, Any]) -> str:
+    """'vs GT · Sat Nov 7 · 10:00 AM'"""
+    day = _fixture_day(fixture)
+    details = fixture.get("details") or {}
+    parts = [f"vs {fixture.get('opponent') or 'Opponent'}"]
+    if day:
+        parts.append(f"{day.strftime('%a %b')} {day.day}")
+    if str(details.get("scheduled_time") or "").strip():
+        parts.append(str(details.get("scheduled_time")).strip())
+    return " · ".join(parts)
+
+
+def _fixture_venue(fixture: dict[str, Any]) -> str:
+    venue = str((fixture.get("details") or {}).get("venue") or "").strip()
+    return "" if venue.lower() in {"", "venue tbd", "tbd"} else venue
+
+
+def _fixture_reminders_apply(fixture: dict[str, Any], today: date) -> bool:
+    day = _fixture_day(fixture)
+    status = str(fixture.get("status") or "").strip().lower()
+    if not day or day < today or status in {"completed", "cancelled", "canceled", "abandoned"}:
+        return False
+    created = str(fixture.get("created_at") or "")[:10]
+    if created and day == today and created >= (today - timedelta(days=1)).isoformat():
+        return False  # added on (or the day before) the match day, e.g. "Start a new match"
+    return True
+
+
+def _ask_availability(fixture: dict[str, Any], title_prefix: str = "Are you available?", body: str = "") -> None:
+    club_id = str(fixture.get("club_id") or "")
+    venue = _fixture_venue(fixture)
+    _notify(
+        club_id,
+        "availability",
+        f"{title_prefix} {_fixture_when(fixture)}",
+        body or f"{'At ' + venue + '. ' if venue else ''}Tap to say Available, Maybe or Not available.",
+        f"/player-availability?fixture_id={fixture.get('id')}",
+        str(fixture.get("id") or ""),
+        "Match reminders",
+    )
+
+
+def _announce_new_fixture(fixture: dict[str, Any]) -> None:
+    """A match was added: ask the club's players if they're available (once)."""
+    club_id = str(fixture.get("club_id") or "")
+    day = _fixture_day(fixture)
+    if not club_id or not day or day <= _current_local_date() or not _club_gets_availability(club_id):
+        return
+    if _reminder_claim(str(fixture.get("id")), "ask"):
+        _ask_availability(fixture, "New match · are you available?")
+
+
+def _announce_fixture_change(fixture: dict[str, Any], what: str) -> None:
+    club_id = str(fixture.get("club_id") or "")
+    day = _fixture_day(fixture)
+    if not club_id or not day or day < _current_local_date() or not _club_gets_availability(club_id):
+        return
+    _reminder_unclaim(str(fixture.get("id")), ("nudge", "eve", "day"))  # sent again for the new date / time
+    _reminder_claim(str(fixture.get("id")), "ask")
+    _ask_availability(fixture, "Match changed ·", f"New {what}. Please check you can still make it: tap to update your availability.")
+
+
+def _player_users_for_club(store: dict[str, Any], club: dict[str, Any]) -> list[tuple[int, str]]:
+    """(user id, player name) of signed-up players in this club."""
+    roster = set(_club_member_names(store, club))
+    found: list[tuple[int, str]] = []
+    try:
+        with _auth_connection() as connection:
+            rows = connection.execute("SELECT * FROM app_users").fetchall()
+    except Exception:
+        return found
+    for row in rows:
+        member = _member_for_user(store, row)
+        name = str((member or {}).get("name") or "")
+        if name and name in roster:
+            found.append((int(row["id"]), name))
+    return found
+
+
+def _run_match_reminders(force: bool = False) -> int:
+    """Send the reminders that are due. Cheap; runs every few minutes and when people open the bell."""
+    global _REMINDER_LAST_RUN
+    if not _REMINDER_LOCK.acquire(blocking=False):
+        return 0
+    try:
+        now = time_module.time()
+        if not force and now - _REMINDER_LAST_RUN < 240:
+            return 0
+        _REMINDER_LAST_RUN = now
+        store = load_store()
+        today = _current_local_date()
+        hour = datetime.now().hour
+        sent = 0
+        for fixture in store.get("fixtures", []) or []:
+            if not _fixture_reminders_apply(fixture, today):
+                continue
+            fixture_id = str(fixture.get("id") or "")
+            club_id = str(fixture.get("club_id") or "")
+            if not fixture_id or not club_id or not _club_gets_availability(club_id):
+                continue
+            days = (_fixture_day(fixture) - today).days
+            statuses = fixture.get("availability_statuses") or {}
+            venue = _fixture_venue(fixture)
+            if 1 <= days <= 7 and _reminder_claim(fixture_id, "ask"):
+                _ask_availability(fixture)
+                sent += 1
+            if 1 <= days <= 2 and _reminder_claim(fixture_id, "nudge"):
+                club = _selected_club(store, club_id)
+                for user_id, name in _player_users_for_club(store, club):
+                    if statuses.get(name):
+                        continue
+                    try:
+                        with _auth_connection() as connection:
+                            muse.create_notification(
+                                connection,
+                                club_id=club_id,
+                                kind="availability",
+                                title=f"Reminder: are you available? {_fixture_when(fixture)}",
+                                body="You haven't replied yet. Tap to answer, it only takes a second.",
+                                link=f"/player-availability?fixture_id={fixture_id}",
+                                match_id=fixture_id,
+                                target_user_id=user_id,
+                                created_by="Match reminders",
+                            )
+                        sent += 1
+                    except Exception:
+                        logger.exception("Availability nudge failed for user %s", user_id)
+            if days == 1 and hour >= 18 and _reminder_claim(fixture_id, "eve"):
+                yes = sum(1 for value in statuses.values() if str(value).lower() == "available")
+                _notify(
+                    club_id,
+                    "match_reminder",
+                    f"Tomorrow: {_fixture_when(fixture)}",
+                    f"{'At ' + venue + '. ' if venue else ''}{yes} player{'s' if yes != 1 else ''} available so far. Not replied yet? Tap to answer.",
+                    f"/player-availability?fixture_id={fixture_id}",
+                    fixture_id,
+                    "Match reminders",
+                )
+                sent += 1
+            if days == 0 and hour >= 7 and _reminder_claim(fixture_id, "day"):
+                _notify(
+                    club_id,
+                    "match_reminder",
+                    f"Match today: {_fixture_when(fixture)}",
+                    f"{'At ' + venue + '. ' if venue else ''}Good luck! 🏏 Follow it live once scoring starts.",
+                    f"/live/{fixture_id}",
+                    fixture_id,
+                    "Match reminders",
+                )
+                sent += 1
+        if sent:
+            logger.info("Match reminders sent: %s", sent)
+        return sent
+    except Exception:
+        logger.exception("Match reminders failed")
+        return 0
+    finally:
+        _REMINDER_LOCK.release()
+
+
+def _reminder_loop() -> None:
+    time_module.sleep(20)
+    while True:
+        _run_match_reminders(force=True)
+        time_module.sleep(300)
+
+
 @app.get("/api/notifications")
 def notifications_list(x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
     user_row, current_club_id = _auth_user_from_token(x_auth_token, touch=False)
+    _run_match_reminders()  # also when the bell is opened (the app may have been asleep on Azure)
     store = load_store()
     club_ids = _user_club_ids(store, user_row, current_club_id)
     with _auth_connection() as connection:
@@ -8596,9 +8972,14 @@ def quick_score_fixtures(x_auth_token: str | None = Header(default=None)) -> dic
                 "status": fixture.get("status"),
                 "overs": (fixture.get("details") or {}).get("overs") or "20",
                 "open": open_now,
+                # Oct 29 2026: two matches vs the same team on one day need telling apart
+                "time": str((fixture.get("details") or {}).get("scheduled_time") or ""),
+                "started": _fixture_has_balls(fixture),
+                "result": str((fixture.get("scorecard") or {}).get("result") or fixture.get("result") or "TBD"),
             }
         )
-    items.sort(key=lambda item: (not item["open"], str(item["date"] or "")))
+    # open matches first; on the same day the newest start time first (so a match just started is on top)
+    items.sort(key=lambda item: (not item["open"], str(item["date"] or ""), -_time_sort_key(item["time"])))
     return {
         "club": {"id": club.get("id"), "name": club.get("name")},
         "fixtures": items[:12],
@@ -8606,6 +8987,21 @@ def quick_score_fixtures(x_auth_token: str | None = Header(default=None)) -> dic
         "can_create": "manage_fixtures" in permissions,
         "today": today,
     }
+
+
+def _fixture_has_balls(fixture: dict[str, Any]) -> bool:
+    return any((innings.get("balls") or []) for innings in ((fixture.get("scorebook") or {}).get("innings") or []))
+
+
+def _time_sort_key(text: str) -> int:
+    """'9:05 AM' -> minutes after midnight, for ordering matches on the same day (unknown times last)."""
+    match = re.match(r"\s*(\d{1,2}):(\d{2})\s*([AaPp][Mm])?", str(text or ""))
+    if not match:
+        return 24 * 60
+    hour, minute = int(match.group(1)) % 12, int(match.group(2))
+    if (match.group(3) or "").lower() == "pm":
+        hour += 12
+    return hour * 60 + minute
 
 
 @app.post("/api/quick-score/start")
@@ -8618,30 +9014,42 @@ def quick_score_start(request: QuickStartRequest, x_auth_token: str | None = Hea
         raise HTTPException(status_code=400, detail="Enter the opponent's name.")
     store = load_store()
     club = _selected_club(store, current_club_id)
-    existing = next(
-        (f for f in _club_fixtures(store, str(club.get("id") or "")) if str(f.get("date") or "") == today.isoformat() and str(f.get("opponent") or "").strip().lower() == opponent.lower()),
-        None,
-    )
+
+    def todays_matches(current_store: dict[str, Any]) -> list[dict[str, Any]]:
+        return [
+            f
+            for f in _club_fixtures(current_store, str(club.get("id") or ""))
+            if str(f.get("date") or "") == today.isoformat() and str(f.get("opponent") or "").strip().lower() == opponent.lower()
+        ]
+
+    # Reuse today's match vs this team only if no ball has been bowled in it yet; once a match has started
+    # (or finished), "Start" makes a new match (Dhruvika, Oct 29: it reopened the earlier GT / RCB scorecard).
+    earlier = todays_matches(store)
+    existing = next((f for f in earlier if not _fixture_has_balls(f)), None)
     if not existing:
-        create_season_fixture(
-            SeasonFixtureRequest(
-                club_id=str(club.get("id") or ""),
-                season_year=today.year,
-                date=today.isoformat(),
-                date_label=today.strftime("%B %-d") if os.name != "nt" else today.strftime("%B %#d"),
-                opponent=opponent,
-                venue=request.venue,
-                match_type=request.match_type or "Friendly",
-                scheduled_time=datetime.now().strftime("%I:%M %p").lstrip("0"),
-                overs=request.overs or "20",
-            ),
-            x_auth_token,
-        )
+        try:
+            create_season_fixture(
+                SeasonFixtureRequest(
+                    club_id=str(club.get("id") or ""),
+                    season_year=today.year,
+                    date=today.isoformat(),
+                    date_label=today.strftime("%B %-d") if os.name != "nt" else today.strftime("%B %#d"),
+                    opponent=opponent,
+                    venue=request.venue,
+                    match_type=request.match_type or "Friendly",
+                    scheduled_time=datetime.now().strftime("%I:%M %p").lstrip("0"),
+                    overs=request.overs or "20",
+                    notify=False,
+                ),
+                x_auth_token,
+            )
+        except HTTPException as exc:
+            if exc.status_code == 409:  # same team, same minute
+                raise HTTPException(status_code=409, detail=f"A match against {opponent} was started a moment ago. Open it from the list above.")
+            raise
         store = load_store()
-        existing = next(
-            (f for f in _club_fixtures(store, str(club.get("id") or "")) if str(f.get("date") or "") == today.isoformat() and str(f.get("opponent") or "").strip().lower() == opponent.lower()),
-            None,
-        )
+        known = {str(f.get("id")) for f in earlier}
+        existing = next((f for f in todays_matches(store) if str(f.get("id")) not in known), None)
     if not existing:
         raise HTTPException(status_code=500, detail="Could not create today's match.")
     return {"match_id": existing.get("id")}
@@ -9175,6 +9583,26 @@ def _clean_lineup(names: Any) -> list[str]:
     return cleaned
 
 
+LINEUP_ROLES = ("captain", "vice_captain", "keeper")
+
+
+def _clean_lineup_roles(roles: Any, club_side: list[str], opponent_side: list[str]) -> dict[str, dict[str, str]]:
+    """Captain, vice-captain and wicket keeper of each team (README "Captain, vice-captain and keeper").
+    Only names in that team's line-up are kept; the keeper may also be the captain or vice-captain."""
+    roles = roles if isinstance(roles, dict) else {}
+    cleaned: dict[str, dict[str, str]] = {}
+    for side, names in (("club", club_side), ("opponent", opponent_side)):
+        by_lower = {name.lower(): name for name in names}
+        side_roles = roles.get(side) if isinstance(roles.get(side), dict) else {}
+        picked = {}
+        for role in LINEUP_ROLES:
+            name = by_lower.get(" ".join(str(side_roles.get(role) or "").split()).lower())
+            if name:
+                picked[role] = name
+        cleaned[side] = picked
+    return cleaned
+
+
 def _lineup_problem(club_side: list[str], opponent_side: list[str], club_label: str, opponent_label: str) -> str:
     for label, names in ((club_label, club_side), (opponent_label, opponent_side)):
         if len(names) < LINEUP_MIN:
@@ -9197,7 +9625,8 @@ def _match_lineups(match_id: str) -> dict[str, list[str]]:
         data = json.loads(row["lineups_json"] or "{}")
     except ValueError:
         return {}
-    return {"club": _clean_lineup(data.get("club")), "opponent": _clean_lineup(data.get("opponent"))}
+    club_side, opponent_side = _clean_lineup(data.get("club")), _clean_lineup(data.get("opponent"))
+    return {"club": club_side, "opponent": opponent_side, "roles": _clean_lineup_roles(data.get("roles"), club_side, opponent_side)}
 
 
 def _lineups_ready(lineups: dict[str, list[str]]) -> bool:
@@ -9217,6 +9646,8 @@ def _all_out_at(match: dict[str, Any], innings: dict[str, Any], lineups: dict[st
 class LineupsRequest(BaseModel):
     club: list[str] | str = Field(default_factory=list)
     opponent: list[str] | str = Field(default_factory=list)
+    # {"club": {"captain": "Ravi", "vice_captain": "Sam", "keeper": "Dev"}, "opponent": {...}} - all optional
+    roles: dict[str, dict[str, str]] = Field(default_factory=dict)
 
 
 @app.post("/api/matches/{match_id}/lineups")
@@ -9232,14 +9663,18 @@ def save_match_lineups(match_id: str, request: LineupsRequest, x_auth_token: str
     problem = _lineup_problem(club_side, opponent_side, str(match.get("club_name") or "Your team"), str(match.get("opponent") or "The other team"))
     if problem:
         raise HTTPException(status_code=400, detail=problem)
+    roles = _clean_lineup_roles(request.roles, club_side, opponent_side)
+    for side, label in (("club", str(match.get("club_name") or "Your team")), ("opponent", str(match.get("opponent") or "The other team"))):
+        if roles[side].get("captain") and roles[side].get("captain") == roles[side].get("vice_captain"):
+            raise HTTPException(status_code=400, detail=f"{label}: the captain and vice-captain must be different players.")
     with _auth_connection() as connection:
         _ensure_extra_match_tables(connection)
         connection.execute(
             """INSERT INTO app_match_lineups (match_id, lineups_json, updated_at, updated_by) VALUES (?, ?, ?, ?)
                ON CONFLICT(match_id) DO UPDATE SET lineups_json = excluded.lineups_json, updated_at = excluded.updated_at, updated_by = excluded.updated_by""",
-            (match_id, json.dumps({"club": club_side, "opponent": opponent_side}), now_iso(), str(user_row["display_name"] or "")),
+            (match_id, json.dumps({"club": club_side, "opponent": opponent_side, "roles": roles}), now_iso(), str(user_row["display_name"] or "")),
         )
-    return {"lineups": {"club": club_side, "opponent": opponent_side}, "ready": True}
+    return {"lineups": {"club": club_side, "opponent": opponent_side, "roles": roles}, "ready": True}
 
 
 # ---------- guest matches ----------
@@ -9249,6 +9684,7 @@ class GuestMatchRequest(BaseModel):
     overs: int = 20
     venue: str = ""
     lineup_a: list[str] | str = Field(default_factory=list)
+    roles: dict[str, dict[str, str]] = Field(default_factory=dict)  # same shape as LineupsRequest.roles (club = team 1)
     lineup_b: list[str] | str = Field(default_factory=list)
 
 
@@ -9341,7 +9777,7 @@ def guest_match_create(request: GuestMatchRequest) -> dict[str, Any]:
         "details": {"venue": " ".join(request.venue.split())[:60], "match_type": "Guest match", "scheduled_time": datetime.now().strftime("%I:%M %p").lstrip("0"), "overs": str(overs)},
         "scorecard": default_scorecard("TBD"),
         "performances": [],
-        "lineups": {"club": lineup_a, "opponent": lineup_b},
+        "lineups": {"club": lineup_a, "opponent": lineup_b, "roles": _clean_lineup_roles(request.roles, lineup_a, lineup_b)},
     }
     fixture["scorebook"] = default_match_scorebook({"club_name": team_a, "club_short_name": team_a, "opponent": team_b, "details": {"overs": str(overs)}})
     code = _guest_code()
@@ -9386,6 +9822,20 @@ def guest_match_state(match_id: str, x_guest_code: str | None = Header(default=N
     }
 
 
+def _same_overs_both_innings(match: dict[str, Any], scorebook: dict[str, Any], innings: dict[str, Any]) -> None:
+    """Both teams get the same overs (Dhruvika, Oct 30: a 1-over match gave the other team 2 overs).
+    The overs chosen when an innings is set up are copied to the other innings if it hasn't started, and to the match."""
+    overs = int(innings.get("overs_limit") or 20)
+    for other in scorebook.get("innings", []):
+        if other is not innings and not (other.get("balls") or []):
+            other["overs_limit"] = overs
+    details = match.get("details")
+    if isinstance(details, dict):
+        details["overs"] = str(overs)
+    if "overs" in match:
+        match["overs"] = str(overs)
+
+
 @app.post("/api/guest/matches/{match_id}/setup")
 def guest_match_setup(match_id: str, request: ScorebookSetupRequest, x_guest_code: str | None = Header(default=None)) -> dict[str, Any]:
     match = _guest_require(match_id, x_guest_code)
@@ -9397,6 +9847,7 @@ def guest_match_setup(match_id: str, request: ScorebookSetupRequest, x_guest_cod
     innings["batting_team"] = request.batting_team.strip()
     innings["bowling_team"] = request.bowling_team.strip()
     innings["overs_limit"] = max(1, int(request.overs_limit or 20))
+    _same_overs_both_innings(match, scorebook, innings)
     innings["target_runs"] = int(request.target_runs) if request.target_runs else None
     innings["status"] = request.status.strip() or "Not started"
     innings["batters"] = [{"slot_number": slot, "player_name": str(request.batters[slot - 1] if slot - 1 < len(request.batters) else "").strip()} for slot in range(1, 12)]
@@ -9409,10 +9860,14 @@ def guest_match_setup(match_id: str, request: ScorebookSetupRequest, x_guest_cod
 @app.post("/api/guest/matches/{match_id}/ball")
 def guest_match_ball(match_id: str, request: ScorebookBallRequest, x_guest_code: str | None = Header(default=None)) -> dict[str, Any]:
     match = _guest_require(match_id, x_guest_code)
-    if str(match.get("date") or "") != _current_local_date().isoformat() or str(match.get("status") or "").lower() == "completed":
-        raise HTTPException(status_code=400, detail="This guest match is closed for scoring.")
     scorebook = _match_scorebook(match)
     innings = scorebook["innings"][max(1, min(2, int(request.innings_number or 1))) - 1]
+    retry_id = re.sub(r"[^A-Za-z0-9_-]", "", str(request.client_id or ""))[:40]
+    if retry_id and not str(request.id or "").strip() and any(str(item.get("id") or "") == retry_id for item in innings.get("balls", []) or []):
+        # a retry of a ball that did save (e.g. the winning ball, after which the match closes)
+        return {"ok": True, "status": match.get("status"), "result": match.get("result"), "already_saved": True}
+    if str(match.get("date") or "") != _current_local_date().isoformat() or str(match.get("status") or "").lower() == "completed":
+        raise HTTPException(status_code=400, detail="This guest match is closed for scoring.")
     ball = normalize_scorebook_ball(
         {
             "over_number": request.over_number,
@@ -9430,6 +9885,11 @@ def guest_match_ball(match_id: str, request: ScorebookBallRequest, x_guest_code:
             "commentary": request.commentary,
         }
     )
+    if _client_ball_seen(innings, ball, request):
+        return {"ok": True, "status": match.get("status"), "result": match.get("result"), "already_saved": True}
+    is_edit = bool(str(request.id or "").strip())
+    if not is_edit and _innings_is_over(match, innings, match.get("lineups") or {}):
+        raise HTTPException(status_code=400, detail="This innings is over. To change the last ball, tap Undo.")
     if _apply_ball_edit(innings, ball, request.id):
         # A fixed ball can undo a finished innings / match (e.g. a wicket that wasn't); worked out again below.
         innings["status"] = "Live"
@@ -9451,12 +9911,7 @@ def guest_match_ball(match_id: str, request: ScorebookBallRequest, x_guest_code:
     if first.get("status") == "Completed" and second.get("status") == "Completed":
         match["status"] = "Completed"
         a, b = summarize_innings_scorebook(first), summarize_innings_scorebook(second)
-        if b["runs"] > a["runs"]:
-            match["result"] = f"{second.get('batting_team')} won by {max(1, _all_out_at(match, second, match.get('lineups') or {}) - b['wickets'])} wickets"
-        elif a["runs"] > b["runs"]:
-            match["result"] = f"{first.get('batting_team')} won by {a['runs'] - b['runs']} runs"
-        else:
-            match["result"] = "Match tied"
+        match["result"] = scorebook_result_text(first, second, a, b, _all_out_at(match, second, match.get("lineups") or {}))
         match.setdefault("scorecard", {})["result"] = match["result"]
     sync_fixture_scorecard_from_scorebook(match)
     if str(match.get("status") or "").lower() != "completed":
@@ -9572,8 +10027,7 @@ def privacy_page() -> HTMLResponse:
 
 @app.get("/pricing")
 def pricing_page(request: Request) -> Response:
-    if not subscriptions.subscriptions_on():
-        return RedirectResponse(url="/dashboard", status_code=303)  # launch mode: no plans to show
+    # Launch mode: the page is shown with "free during the launch" (Dhruvika, Oct 29 2026); before it redirected Home.
     token = _auth_token_from_request(request)
     if token:
         try:
@@ -9607,6 +10061,8 @@ def subscription_checkout(request: CheckoutRequest, http_request: Request, x_aut
     user_row, current_club_id = _auth_user_from_token(x_auth_token)
     plan = subscriptions.normalize_plan(request.plan)
     interval = subscriptions.normalize_interval(request.interval)
+    if not subscriptions.subscriptions_on():
+        raise HTTPException(status_code=400, detail="Pro is free for everyone during the launch, so there's nothing to pay.")
     if plan != "pro":
         raise HTTPException(status_code=400, detail="Choose Pro (monthly or yearly).")
     if not subscriptions.stripe_enabled():

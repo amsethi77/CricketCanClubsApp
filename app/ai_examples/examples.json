@@ -24,6 +24,18 @@
     "The grand total is the last number in the over-by-over score column when there is no G. TOTAL.",
     "A bowler can be written above the BOWLER heading ('9. TONY') - include him."
    ]
+  },
+  {
+   "photo": "example_3.png",
+   "answer": "example_3.json",
+   "source_file": "Heartlake_vs_Toronto_CC_scorecard.png",
+   "checked_by": "Claude with Dhruvika, 2026-10-30",
+   "lessons": [
+    "Printed scorecards: copy every number exactly; How out 'c Shah b Khan' = caught, fielder Shah, bowler Khan.",
+    "'c & b Singh' is caught and bowled: type 'caught and bowled', fielder AND bowler = Singh (never 'c Singh b Singh' written as two people).",
+    "'run out (Ali)' has a fielder and no bowler; 'Did not bat' names are listed with runs null.",
+    "Check the card against itself: bowlers' runs = total - byes - leg byes; bowlers' overs = innings overs; each bowler's wickets = batters out to him."
+   ]
   }
  ]
 }

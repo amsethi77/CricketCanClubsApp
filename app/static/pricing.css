@@ -43,7 +43,7 @@
 body.pricing-page .pr-hero h1 {
   color: #fff !important;
   margin: 0;
-  font-family: "Sora", "Inter", sans-serif;
+  font-family: "Roboto", sans-serif;
   font-size: clamp(1.6rem, 4vw, 2.4rem);
   font-weight: 800;
   line-height: 1.15;
@@ -109,7 +109,7 @@ body.pricing-page .pr-hero h1 {
 .pr-faq h2,
 .pr-admin h2 {
   margin: 2px 0 0;
-  font-family: "Sora", "Inter", sans-serif;
+  font-family: "Roboto", sans-serif;
   font-size: 1.3rem;
   font-weight: 800;
 }
@@ -210,14 +210,14 @@ body.pricing-page .pr-hero h1 {
 
 .pr-price {
   margin: 0;
-  font-family: "Sora", "Inter", sans-serif;
+  font-family: "Roboto", sans-serif;
   font-size: 2.3rem;
   font-weight: 800;
   line-height: 1.1;
 }
 
 .pr-price small {
-  font-family: "Inter", sans-serif;
+  font-family: "Roboto", sans-serif;
   font-size: 0.9rem;
   font-weight: 600;
   color: #64748b;
