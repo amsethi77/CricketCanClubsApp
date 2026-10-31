@@ -87,6 +87,9 @@ This section captures the user requirements in the order they were given and ref
 - Reduce page-title font sizes to half of the previous size after the first sizing adjustment.
 - Deploy the latest reduced page-title sizes to the existing Azure App Service.
 
+### October 2026 latest Azure deployment request
+- Deploy the latest code on `main` to the existing Azure App Service without packaging runtime data, uploads, or secrets.
+
 ### September 2026 requests
 - Navbar: no More on laptop unless links don't fit; on phone More sits at the edge. Profile and Admin live inside the account (initials) button; Assistant sits at the bottom right.
 - Signed-out visitors can open a public Clubs page, search the site and switch dark/light mode.
@@ -1062,6 +1065,7 @@ Model (soft launch, Oct 2026): keep the core cricket experience free; one paid p
 
 ## Change log
 
+- 2026-10-31: Deployed the latest `main` code to the Canada Central Azure App Service after compile and scorecard-reader checks; package excluded runtime databases, uploads, and secrets.
 - 2026-10-29: Standardized page titles at a smaller, professional size across the shared sports system, Home, Rankings, Sign In, Quick Score, and pricing pages.
 - 2026-10-29: Halved the page-title font sizes across desktop and phone layouts in response to feedback that titles were still too large.
 - 2026-10-29: Deployed the halved page-title sizes to the existing Canada Central Azure App Service; runtime databases, uploads, and secrets were excluded from the package.
