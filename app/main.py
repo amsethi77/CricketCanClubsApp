@@ -1289,6 +1289,23 @@ def _apply_ball_edit(innings: dict[str, Any], ball: dict[str, Any], ball_id: str
     return True
 
 
+def _validate_retired_out_ball(ball: dict[str, Any]) -> None:
+    wicket_type = str(ball.get("wicket_type") or "").strip().lower()
+    extras_type = str(ball.get("extras_type") or "none").strip().lower()
+    if wicket_type == "retired_out":
+        if (
+            not ball.get("wicket")
+            or not ball.get("wicket_player")
+            or int(ball.get("runs_bat") or 0)
+            or int(ball.get("extras_runs") or 0)
+        ):
+            raise HTTPException(status_code=400, detail="Retired out records a wicket only, with no runs or ball faced.")
+        ball["extras_type"] = "retired_out"
+        ball["bowler"] = ""
+    elif extras_type == "retired_out":
+        raise HTTPException(status_code=400, detail="Retired out must be recorded as a retired-out wicket.")
+
+
 def _reindex_scorebook_innings(innings: dict[str, Any]) -> None:
     balls = sorted(
         innings.get("balls", []) or [],
@@ -1302,7 +1319,7 @@ def _reindex_scorebook_innings(innings: dict[str, Any]) -> None:
     for ball in balls:
         ball["over_number"] = legal_count // 6 + 1
         ball["ball_number"] = legal_count % 6 + 1
-        if str(ball.get("extras_type") or "none") not in {"wide", "no_ball"}:
+        if str(ball.get("extras_type") or "none") not in {"wide", "no_ball", "retired_out"}:
             legal_count += 1
     innings["balls"] = balls
 
@@ -8095,6 +8112,7 @@ def add_scorebook_ball(
             "commentary": request.commentary,
         }
     )
+    _validate_retired_out_ball(ball)
     if _client_ball_seen(innings, ball, request):
         return {"ok": True, "status": innings.get("status"), "already_saved": True} if x_lite_response else current_dashboard(load_store())
     editing = _apply_ball_edit(innings, ball, request.id)
@@ -10151,6 +10169,7 @@ def guest_match_ball(match_id: str, request: ScorebookBallRequest, x_guest_code:
             "commentary": request.commentary,
         }
     )
+    _validate_retired_out_ball(ball)
     if _client_ball_seen(innings, ball, request):
         return {"ok": True, "status": match.get("status"), "result": match.get("result"), "already_saved": True}
     is_edit = bool(str(request.id or "").strip())
@@ -10163,6 +10182,19 @@ def guest_match_ball(match_id: str, request: ScorebookBallRequest, x_guest_code:
     innings["balls"] = [item for item in innings.get("balls", []) if item.get("id") != ball["id"]]
     innings["balls"].append(ball)
     innings["balls"].sort(key=lambda item: (int(item.get("over_number", 1) or 1), int(item.get("ball_number", 1) or 1), str(item.get("created_at", ""))))
+    lineups = match.get("lineups")
+    if not isinstance(lineups, dict):
+        lineups = {}
+        match["lineups"] = lineups
+    batting_side = "club" if str(innings.get("batting_team") or "").strip().lower() == str(match.get("club_name") or "").strip().lower() else "opponent"
+    batting_lineup = list(lineups.get(batting_side) or [])
+    known_batters = {str(name).strip().lower() for name in batting_lineup}
+    for name in (ball.get("striker"), ball.get("non_striker"), request.new_batter):
+        clean_name = " ".join(str(name or "").split())
+        if clean_name and clean_name.lower() not in known_batters and len(batting_lineup) < LINEUP_MAX:
+            batting_lineup.append(clean_name)
+            known_batters.add(clean_name.lower())
+    lineups[batting_side] = batting_lineup
     summary = summarize_innings_scorebook(innings)
     if summary["runs"] or summary["wickets"] or summary["legal_balls"]:
         innings["status"] = "Live"

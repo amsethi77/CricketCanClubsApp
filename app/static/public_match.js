@@ -37,7 +37,7 @@
   }
 
   // ---------- cricket maths from the balls ----------
-  const isLegal = (b) => !["wide", "no_ball"].includes(b.extras_type);
+  const isLegal = (b) => !["wide", "no_ball", "retired_out"].includes(b.extras_type);
   const overs = (legal) => `${Math.floor(legal / 6)}.${legal % 6}`;
   const oversShort = (legal) => (legal % 6 ? overs(legal) : String(legal / 6));
   const ballNo = (b) => `${Math.max(0, Number(b.over_number || 1) - 1)}.${b.ball_number || 1}`;
@@ -143,6 +143,7 @@
   }
 
   function ballLabel(b) {
+    if (String(b.wicket_type || "").toLowerCase() === "retired_out") return "RO";
     if (b.wicket) return "W";
     const er = Number(b.extras_runs || 0);
     const rb = Number(b.runs_bat || 0);
@@ -163,6 +164,9 @@
   }
 
   function commentaryLine(b) {
+    if (String(b.wicket_type || "").toLowerCase() === "retired_out") {
+      return `${esc(b.wicket_player || b.striker || "Batter")} retired out`;
+    }
     const who = `${b.bowler || "Bowler"} to ${b.striker || "batter"}`;
     const rb = Number(b.runs_bat || 0);
     const er = Number(b.extras_runs || 0);
@@ -448,7 +452,9 @@
       if (f.lastWicketBall && f.lastWicketBall.ball.wicket_player) {
         const w = f.lastWicketBall;
         const r = f.batting.find((b) => b.player_name === w.ball.wicket_player) || {};
-        lines.push(`<span>Last Wkt: ${esc(w.ball.wicket_player)} ${r.runs || 0}(${r.balls || 0}) - ${w.runs}/${w.wickets} in ${overs(w.legal)} ov.</span>`);
+        const retiredOut = String(w.ball.wicket_type || "").toLowerCase() === "retired_out";
+        const label = retiredOut ? "Retired out" : "Last Wkt";
+        lines.push(`<span>${label}: ${esc(w.ball.wicket_player)} ${r.runs || 0}(${r.balls || 0}) - ${w.runs}/${w.wickets} in ${overs(w.legal)} ov.</span>`);
       }
       parts.push(`<p class="pm-facts">${lines.join("")}</p>`);
     } else {

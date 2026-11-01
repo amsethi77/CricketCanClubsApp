@@ -1480,7 +1480,7 @@ function scorebookNamedSlots(items) {
 function scorebookNextDeliveryState(innings) {
   const liveState = innings?.state || {};
   const orderedBalls = scorebookSortedBalls(innings);
-  const legalBalls = orderedBalls.filter((ball) => !["wide", "no_ball"].includes(String(ball?.extras_type || "none").toLowerCase()));
+  const legalBalls = orderedBalls.filter((ball) => !["wide", "no_ball", "retired_out"].includes(String(ball?.extras_type || "none").toLowerCase()));
   const nextOver = Math.floor(legalBalls.length / 6) + 1;
   const nextBall = (legalBalls.length % 6) + 1;
   const lastBall = orderedBalls[orderedBalls.length - 1] || null;
@@ -1497,7 +1497,7 @@ function scorebookNextDeliveryState(innings) {
     const lastRunsBat = Number(lastBall.runs_bat || 0);
     const lastExtrasRuns = Number(lastBall.extras_runs || 0);
     const lastExtrasType = String(lastBall.extras_type || "none").toLowerCase();
-    const lastWasLegal = !["wide", "no_ball"].includes(lastExtrasType);
+    const lastWasLegal = !["wide", "no_ball", "retired_out"].includes(lastExtrasType);
     const lastPair = [String(lastBall.striker || "").trim(), String(lastBall.non_striker || "").trim()].filter(Boolean);
     if (lastPair.length >= 2) {
       striker = lastPair[0];
@@ -1511,7 +1511,12 @@ function scorebookNextDeliveryState(innings) {
     if (rotateStrike && striker && nonStriker) {
       [striker, nonStriker] = [nonStriker, striker];
     }
-    if (lastBall.wicket && String(lastBall.wicket_type || "").toLowerCase() !== "run_out") {
+    if (lastBall.wicket && String(lastBall.wicket_type || "").toLowerCase() === "retired_out") {
+      const out = String(lastBall.wicket_player || "").trim();
+      if (striker === out) striker = "";
+      if (nonStriker === out) nonStriker = "";
+      note = "A batter retired out. Choose the next batter before logging a delivery.";
+    } else if (lastBall.wicket && String(lastBall.wicket_type || "").toLowerCase() !== "run_out") {
       striker = "";
       note = "A wicket fell. Choose the new striker before logging the next ball.";
     } else if (!striker || !nonStriker) {
@@ -1799,7 +1804,7 @@ function scorebookSummary(innings) {
     if (extrasType === "leg_bye") {
       legByes += extrasRuns;
     }
-    if (!["wide", "no_ball"].includes(extrasType)) {
+    if (!["wide", "no_ball", "retired_out"].includes(extrasType)) {
       legalBalls += 1;
       if (totalRuns === 0) {
         dotBalls += 1;
@@ -1808,17 +1813,17 @@ function scorebookSummary(innings) {
     if (striker) {
       batterMap[striker] ||= { player_name: striker, runs: 0, balls: 0 };
       batterMap[striker].runs += runsBat;
-      if (extrasType !== "wide") {
+      if (!["wide", "retired_out"].includes(extrasType)) {
         batterMap[striker].balls += 1;
       }
     }
-    if (bowler) {
+    if (bowler && String(ball.wicket_type || "").toLowerCase() !== "retired_out") {
       bowlerMap[bowler] ||= { player_name: bowler, legal_balls: 0, wickets: 0, runs: 0 };
       bowlerMap[bowler].runs += totalRuns;
-      if (!["wide", "no_ball"].includes(extrasType)) {
+      if (!["wide", "no_ball", "retired_out"].includes(extrasType)) {
         bowlerMap[bowler].legal_balls += 1;
       }
-      if (ball.wicket && !["run_out", "retired_hurt"].includes((ball.wicket_type || "").toLowerCase()) && (ball.wicket_player || "").trim()) {
+      if (ball.wicket && !["run_out", "retired_hurt", "retired_out"].includes((ball.wicket_type || "").toLowerCase()) && (ball.wicket_player || "").trim()) {
         bowlerMap[bowler].wickets += 1;
       }
     }
@@ -3178,8 +3183,11 @@ function renderScorebook(match) {
     ? summary.balls
         .map((ball) => {
           const extrasType = String(ball.extras_type || "none").replace(/_/g, " ");
-          const extrasLabel = ball.extras_type && ball.extras_type !== "none" ? ` + ${ball.extras_runs} ${extrasType}` : "";
-          const wicketLabel = ball.wicket ? " W" : "";
+          const retiredOut = String(ball.wicket_type || "").toLowerCase() === "retired_out";
+          const extrasLabel = !retiredOut && ball.extras_type && ball.extras_type !== "none" ? ` + ${ball.extras_runs} ${extrasType}` : "";
+          const wicketLabel = ball.wicket
+            ? retiredOut ? " RO" : " W"
+            : "";
           const totalRuns = Number(ball.runs_bat || 0) + Number(ball.extras_runs || 0);
           return `
             <span class="scorebook-recent-pill">
@@ -3312,10 +3320,13 @@ function renderScorebook(match) {
         .reverse()
         .slice(0, 12)
         .map((ball) => {
+          const retiredOut = String(ball.wicket_type || "").toLowerCase() === "retired_out";
           const extrasLabel =
-            ball.extras_type && ball.extras_type !== "none" ? ` + ${ball.extras_runs} ${String(ball.extras_type).replace("_", " ")}` : "";
+            !retiredOut && ball.extras_type && ball.extras_type !== "none" ? ` + ${ball.extras_runs} ${String(ball.extras_type).replace("_", " ")}` : "";
           const wicketLabel = ball.wicket
-            ? ` · Wicket${ball.wicket_player ? `: ${ball.wicket_player}` : ""}${ball.fielder ? ` · Fielder: ${ball.fielder}` : ""}`
+            ? retiredOut
+              ? ` · Retired out: ${ball.wicket_player || ""}`
+              : ` · Wicket${ball.wicket_player ? `: ${ball.wicket_player}` : ""}${ball.fielder ? ` · Fielder: ${ball.fielder}` : ""}`
             : "";
           return `
             <article class="history-card scorebook-ball">

@@ -839,6 +839,127 @@ class FunctionalQATests(LocalQATestCase):
         recent_ids = {item["id"] for item in recent_response.json()["recent_results"]}
         self.assertIn(fixture["id"], recent_ids)
 
+    def test_retired_out_is_team_wicket_without_delivery_or_bowler_credit(self) -> None:
+        captain = self.signin("2222222222")
+        created = self.create_fixture(captain["token"], opponent="Retired Out Scoring Team")
+        fixture = next(item for item in created["fixtures"] if item["opponent"] == "Retired Out Scoring Team")
+        fixture_id = fixture["id"]
+        store = self.main.load_store()
+        stored = next(item for item in store["fixtures"] if item["id"] == fixture_id)
+        stored["date"] = datetime.utcnow().date().isoformat()
+        stored["status"] = "Live"
+        self.main.save_store(store)
+        scorer = self.signin("14164508695")
+
+        setup = self.client.post(
+            f"/api/matches/{fixture_id}/scorebook/setup",
+            json={
+                "innings_number": 1,
+                "batting_team": "TestClub",
+                "bowling_team": "Retired Out Scoring Team",
+                "overs_limit": 20,
+                "target_runs": None,
+                "status": "Live",
+                "batters": ["Club Player 1", "Club Player 2", "Club Player 3"],
+                "bowlers": ["Opponent Player 1", "Opponent Player 2"],
+            },
+            headers=self.auth_headers(scorer["token"]),
+        )
+        self.assertEqual(setup.status_code, 200, setup.text)
+
+        first_delivery = self.client.post(
+            f"/api/matches/{fixture_id}/scorebook/ball",
+            json={
+                "innings_number": 1,
+                "over_number": 1,
+                "ball_number": 1,
+                "striker": "Club Player 1",
+                "non_striker": "Club Player 2",
+                "bowler": "Opponent Player 1",
+                "runs_bat": 1,
+            },
+            headers=self.auth_headers(scorer["token"]),
+        )
+        self.assertEqual(first_delivery.status_code, 200, first_delivery.text)
+
+        retired = self.client.post(
+            f"/api/matches/{fixture_id}/scorebook/ball",
+            json={
+                "innings_number": 1,
+                "over_number": 1,
+                "ball_number": 2,
+                "striker": "Club Player 2",
+                "non_striker": "Club Player 1",
+                "bowler": "",
+                "extras_type": "none",
+                "wicket": True,
+                "wicket_type": "retired_out",
+                "wicket_player": "Club Player 1",
+                "new_batter": "Club Player 3",
+            },
+            headers=self.auth_headers(scorer["token"]),
+        )
+        self.assertEqual(retired.status_code, 200, retired.text)
+
+        store = self.main.load_store()
+        stored = next(item for item in store["fixtures"] if item["id"] == fixture_id)
+        innings = stored["scorebook"]["innings"][0]
+        summary = self.main.summarize_innings_scorebook(innings)
+        retired_ball = innings["balls"][-1]
+        self.assertEqual((summary["runs"], summary["wickets"], summary["legal_balls"]), (1, 1, 1))
+        before_summary = self.main.summarize_innings_scorebook({**innings, "balls": innings["balls"][:-1]})
+        alerts = self.main.muse.live_score_events(stored, innings, before_summary, summary, retired_ball)
+        retired_alert = next(event for event in alerts if event[0] == "live_wicket")
+        self.assertIn("Retired out: Club Player 1", retired_alert[1])
+        self.assertNotIn("Wicket!", retired_alert[1])
+        self.assertNotIn("Opponent Player 1", retired_alert[1])
+        self.assertEqual(
+            (retired_ball["runs_bat"], retired_ball["extras_runs"], retired_ball["extras_type"], retired_ball["bowler"]),
+            (0, 0, "retired_out", ""),
+        )
+        batters = {row["player_name"]: row for row in summary["batting"]}
+        self.assertEqual((batters["Club Player 1"]["balls"], batters["Club Player 1"]["status"]), (1, "out"))
+        self.assertEqual(batters["Club Player 2"]["balls"], 0)
+        bowler = next(row for row in summary["bowling"] if row["player_name"] == "Opponent Player 1")
+        self.assertEqual((bowler["legal_balls"], bowler["runs_conceded"], bowler["wickets"]), (1, 1, 0))
+        legacy_innings = {
+            **innings,
+            "balls": [{**ball} for ball in innings["balls"]],
+        }
+        legacy_innings["balls"][-1]["bowler"] = "Opponent Player 1"
+        legacy_bowler = next(
+            row
+            for row in self.main.summarize_innings_scorebook(legacy_innings)["bowling"]
+            if row["player_name"] == "Opponent Player 1"
+        )
+        self.assertEqual(
+            (legacy_bowler["legal_balls"], legacy_bowler["runs_conceded"], legacy_bowler["wickets"]),
+            (1, 1, 0),
+        )
+        live_state = self.main.build_scorebook_live_state(innings)
+        self.assertEqual(live_state["current_striker"], "Club Player 2")
+        self.assertEqual(live_state["current_non_striker"], "")
+        self.assertEqual(live_state["this_over_balls"][-1], "RO")
+        self.assertIn("Club Player 3", self.main._match_lineups(fixture_id)["club"])
+
+        invalid = self.client.post(
+            f"/api/matches/{fixture_id}/scorebook/ball",
+            json={
+                "innings_number": 1,
+                "over_number": 1,
+                "ball_number": 2,
+                "striker": "Club Player 2",
+                "non_striker": "Club Player 3",
+                "bowler": "Opponent Player 1",
+                "runs_bat": 1,
+                "wicket": True,
+                "wicket_type": "retired_out",
+                "wicket_player": "Club Player 2",
+            },
+            headers=self.auth_headers(scorer["token"]),
+        )
+        self.assertEqual(invalid.status_code, 400, invalid.text)
+
     def test_f28_authorized_edit_mode_corrects_and_deletes_past_deliveries(self) -> None:
         captain = self.signin("2222222222")
         created = self.create_fixture(captain["token"], opponent="Past Ball Edit Team")

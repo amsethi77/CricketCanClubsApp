@@ -162,7 +162,7 @@
     return second || first;
   }
   function legalBalls(inn) {
-    return (inn.balls || []).filter((b) => !["wide", "no_ball"].includes(b.extras_type)).length;
+    return (inn.balls || []).filter((b) => !["wide", "no_ball", "retired_out"].includes(b.extras_type)).length;
   }
   function overString(balls) {
     return `${Math.floor(balls / 6)}.${balls % 6}`;
@@ -176,7 +176,7 @@
     let legalCount = 0;
     balls.forEach((b) => {
       map.set(b, Math.floor(legalCount / 6));
-      if (!["wide", "no_ball"].includes(b.extras_type)) legalCount += 1;
+      if (!["wide", "no_ball", "retired_out"].includes(b.extras_type)) legalCount += 1;
     });
     return map;
   }
@@ -195,6 +195,7 @@
     return balls.slice(start);
   }
   function ballText2(b) {
+    if (String(b.wicket_type || "").toLowerCase() === "retired_out") return "RO";
     if (b.wicket) return "W";
     if (b.extras_type === "wide") return `${b.extras_runs > 1 ? b.extras_runs : ""}wd`;
     if (b.extras_type === "no_ball") return `nb${b.runs_bat ? "+" + b.runs_bat : ""}`;
@@ -410,6 +411,7 @@
     const overOf = overNumbers(allBalls);
     const recent = recentWholeOvers(allBalls, overOf);
     const label = (b) => {
+      if (String(b.wicket_type || "").toLowerCase() === "retired_out") return "RO";
       if (b.wicket) return "W";
       if (b.extras_type === "wide") return `${b.extras_runs > 1 ? b.extras_runs : ""}wd`;
       if (b.extras_type === "no_ball") return `nb${b.runs_bat ? "+" + b.runs_bat : ""}`;
@@ -1098,12 +1100,17 @@
     }
     const inn = currentInnings();
     const p = players(inn);
-    if (!p.striker || !p.bowler) {
+    const retiredOut = ball.wicket_type === "retired_out";
+    if (!p.striker) {
+      toast("Pick the striker first.", "error");
+      return;
+    }
+    if (!p.bowler && !retiredOut) {
       toast("Pick the striker and bowler first.", "error");
       return;
     }
     const legal = legalBalls(inn) + pendingLegal;
-    const isLegal = !["wide", "no_ball"].includes(ball.extras_type || "none");
+    const isLegal = !["wide", "no_ball", "retired_out"].includes(ball.extras_type || "none");
     if (inningsOver(inn)) {
       toast("This innings is over. To change the last ball, tap Undo.", "error");
       return;
@@ -1120,7 +1127,7 @@
       ball_number: (legal % 6) + 1,
       striker: p.striker,
       non_striker: p.nonStriker,
-      bowler: p.bowler,
+      bowler: retiredOut ? "" : p.bowler,
       runs_bat: ball.runs_bat || 0,
       extras_type: ball.extras_type || "none",
       extras_runs: ball.extras_runs || 0,
@@ -1173,7 +1180,7 @@
     const legal = legalBalls(inn);
     if (!legal || legal % 6 !== 0) return false;
     const balls = inn.balls || [];
-    const lastLegal = [...balls].reverse().find((b) => !["wide", "no_ball"].includes(b.extras_type));
+    const lastLegal = [...balls].reverse().find((b) => !["wide", "no_ball", "retired_out"].includes(b.extras_type));
     const afterOver = balls.slice(balls.lastIndexOf(lastLegal) + 1); // wides / no balls already in the new over
     if (afterOver.some((b) => b.bowler && b.bowler !== lastLegal.bowler)) return false;
     return Boolean(lastLegal && bowler && lastLegal.bowler === bowler);
@@ -1207,12 +1214,12 @@
     sum.runs = (sum.runs || 0) + (payload.runs_bat || 0) + extra;
     if (payload.wicket) sum.wickets = (sum.wickets || 0) + 1;
     const batter = (sum.batting || []).find((b) => b.player_name === payload.striker);
-    if (batter && !["wide"].includes(payload.extras_type)) {
+    if (batter && !["wide", "retired_out"].includes(payload.extras_type)) {
       batter.runs = (batter.runs || 0) + (["bye", "leg_bye"].includes(payload.extras_type) ? 0 : payload.runs_bat || 0);
       batter.balls = (batter.balls || 0) + 1;
     }
     pendingLegal = Math.max(0, pendingLegal); // legalBalls() now counts the optimistic ball
-    if (!["wide", "no_ball"].includes(payload.extras_type)) pendingLegal = Math.max(0, pendingLegal - 1);
+    if (!["wide", "no_ball", "retired_out"].includes(payload.extras_type)) pendingLegal = Math.max(0, pendingLegal - 1);
     render();
   }
 
@@ -1380,7 +1387,9 @@
     const p = editBall
       ? { striker: editBall.striker, nonStriker: editBall.non_striker, bowler: editBall.bowler }
       : players(inn);
-    const batted = new Set((inn.summary?.batting || []).map((b) => b.player_name));
+    const batted = new Set((inn.summary?.batting || [])
+      .filter((b) => String(b.status || "").toLowerCase() !== "not_batted" || Number(b.runs) > 0 || Number(b.balls) > 0)
+      .map((b) => b.player_name));
     const remaining = battingRoster(inn).filter((n) => n !== p.striker && n !== p.nonStriker && !batted.has(n));
     const battingSide = battingIsClub(inn) ? "club" : "opponent";
     const fieldingSide = battingSide === "club" ? "opponent" : "club";
@@ -1392,24 +1401,36 @@
       ["caught", "Caught"],
       ["lbw", "LBW"],
       ["run_out", "Run out"],
+      ["retired_out", "Retired out"],
       ["stumped", "Stumped"],
       ["hit_wicket", "Hit wicket"],
     ];
     const needsFielder = (how) => ["caught", "run_out", "stumped"].includes(how);
+    const retiredOut = (how) => how === "retired_out";
     const w = {
       how: preset,
       out: editBall?.wicket_player || p.striker,
       fielder: fielder || editBall?.fielder || "",
       runs: Number(runsDone) || 0,
     };
-    let step = !preset ? "how" : needsFielder(preset) && !fielder ? "fielder" : "batter";
+    let step = !preset ? "how" : retiredOut(preset) ? "retired" : needsFielder(preset) && !fielder ? "fielder" : "batter";
 
     const draw = () => {
       const howLabel = (HOW.find(([v]) => v === w.how) || [])[1] || "";
       if (step === "how") {
         modalTitle.textContent = "Wicket! How out?";
-        modalBody.innerHTML = `<p class="qs-sheet-note">${esc(p.striker)} on strike · ${esc(p.bowler)} bowling</p>
+        modalBody.innerHTML = `<p class="qs-sheet-note">${esc(p.striker)} on strike${p.bowler ? ` · ${esc(p.bowler)} bowling` : ""}</p>
           <div class="qs-chips big">${HOW.map(([v, l]) => `<button type="button" class="qs-chip" data-how="${v}">${l}</button>`).join("")}</div>`;
+      } else if (step === "retired") {
+        modalTitle.textContent = "Who retired out?";
+        modalBody.innerHTML = `<p class="qs-sheet-note">This counts as a team wicket, but not against a bowler or as a run or ball faced.</p>
+          <div class="qs-chips">${[
+            [p.striker, "striker"],
+            [p.nonStriker, "non-striker"],
+          ]
+            .filter(([name]) => name)
+            .map(([name, role]) => `<button type="button" class="qs-chip${w.out === name ? " on" : ""}" data-retired-player="${esc(name)}">${esc(name)}<small>${role}</small></button>`)
+            .join("")}</div>`;
       } else if (step === "fielder") {
         modalTitle.textContent = w.how === "caught" ? "Caught by?" : w.how === "stumped" ? "Stumped by?" : "Run out";
         const runOut =
@@ -1447,11 +1468,12 @@
 
     const finish = async (close, newBatter) => {
       close();
-      const extrasType = deliveryExtras?.extras_type || editBall?.extras_type || "none";
+      const isRetiredOut = retiredOut(w.how);
+      const extrasType = isRetiredOut ? "retired_out" : deliveryExtras?.extras_type || (editBall?.extras_type === "retired_out" ? "none" : editBall?.extras_type) || "none";
       const baseExtras = Number(deliveryExtras?.extras_runs ?? (extrasType === "wide" ? 1 : editBall?.extras_runs || 0));
       const runOutRuns = w.how === "run_out" ? w.runs : 0;
-      const extrasRuns = extrasType === "wide" ? baseExtras + runOutRuns : baseExtras;
-      const runsBat = w.how === "run_out" && extrasType !== "wide" ? runOutRuns : 0;
+      const extrasRuns = isRetiredOut ? 0 : extrasType === "wide" ? baseExtras + runOutRuns : baseExtras;
+      const runsBat = !isRetiredOut && w.how === "run_out" && extrasType !== "wide" ? runOutRuns : 0;
       if (editBall) {
         return saveFix(inn, editBall, {
           runs_bat: runsBat,
@@ -1481,7 +1503,14 @@
       if (how) {
         w.how = how;
         w.out = p.striker;
-        step = needsFielder(how) ? "fielder" : "batter";
+        step = retiredOut(how) ? "retired" : needsFielder(how) ? "fielder" : "batter";
+        return draw();
+      }
+      if (step === "retired") {
+        const out = target.closest("[data-retired-player]")?.dataset.retiredPlayer;
+        if (!out) return;
+        w.out = out;
+        step = "batter";
         return draw();
       }
       if (step === "fielder") {
@@ -1598,6 +1627,7 @@
   ];
 
   function ballText(b) {
+    if (String(b.wicket_type || "").toLowerCase() === "retired_out") return "retired out";
     if (b.wicket) return `wicket (${String(b.wicket_type || "out").replace("_", " ")})`;
     if (b.extras_type === "wide") return `${b.extras_runs || 1} wide`;
     if (b.extras_type === "no_ball") return `no ball${b.runs_bat ? ` +${b.runs_bat}` : ""}`;
@@ -1680,7 +1710,7 @@
         let nonStriker = b.non_striker;
         if (runsRotate(ranRuns(fixed))) [striker, nonStriker] = [nonStriker, striker];
         const legal = legalBalls(now);
-        const isLegal = !["wide", "no_ball"].includes(fixed.extras_type);
+        const isLegal = !["wide", "no_ball", "retired_out"].includes(fixed.extras_type);
         const overEnded = isLegal && legal > 0 && legal % 6 === 0;
         if (overEnded) [striker, nonStriker] = [nonStriker, striker];
         const local = loadLocal(now.inning_number);

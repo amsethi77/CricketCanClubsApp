@@ -103,7 +103,7 @@
     }, kind === "win" ? 4200 : 2000);
   }
 
-  const HOW = { bowled: "bowled", caught: "caught", lbw: "LBW", run_out: "run out", stumped: "stumped", hit_wicket: "hit wicket" };
+  const HOW = { bowled: "bowled", caught: "caught", lbw: "LBW", run_out: "run out", retired_out: "retired out", stumped: "stumped", hit_wicket: "hit wicket" };
 
   /** Picks the celebration for one ball. runsBefore / runsAfter are the striker's runs either side of it. */
   function celebrateBall(ball, runsBefore = 0, runsAfter = 0, ballsAfter = null) {
@@ -111,6 +111,11 @@
     if (ball.wicket) {
       const how = HOW[ball.wicket_type] || String(ball.wicket_type || "out").replace("_", " ");
       const by = ball.fielder ? ` · ${ball.fielder}` : "";
+      if (String(ball.wicket_type || "").toLowerCase() === "retired_out") {
+        const player = ball.wicket_player || ball.striker || "";
+        celebrate("wicket", "RETIRED OUT", player);
+        return true;
+      }
       celebrate("wicket", "WICKET!", `${ball.wicket_player || ball.striker || ""} ${how}${by}`.trim());
       return true;
     }

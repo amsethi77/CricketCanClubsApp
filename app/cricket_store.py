@@ -595,7 +595,7 @@ def normalize_scorebook_ball(entry: dict[str, Any]) -> dict[str, Any]:
     normalized["extras_runs"] = max(0, int(normalized.get("extras_runs", 0) or 0))
     normalized["wicket"] = bool(normalized.get("wicket"))
     normalized["extras_type"] = str(normalized.get("extras_type", "none") or "none").strip().lower()
-    if normalized["extras_type"] not in {"none", "wide", "no_ball", "bye", "leg_bye"}:
+    if normalized["extras_type"] not in {"none", "wide", "no_ball", "bye", "leg_bye", "retired_out"}:
         normalized["extras_type"] = "none"
     for key in ["striker", "non_striker", "bowler", "wicket_type", "wicket_player", "fielder", "commentary"]:
         normalized[key] = re.sub(r"\s+", " ", str(normalized.get(key, "") or "").strip())
@@ -672,7 +672,7 @@ def _repair_scorebook_teams(innings: list[dict[str, Any]], fixture: dict[str, An
 
 
 def _delivery_is_legal(ball: dict[str, Any]) -> bool:
-    return str(ball.get("extras_type", "none") or "none") not in {"wide", "no_ball"}
+    return str(ball.get("extras_type", "none") or "none") not in {"wide", "no_ball", "retired_out"}
 
 
 def _over_string_from_legal_balls(legal_balls: int) -> str:
@@ -726,7 +726,8 @@ def summarize_innings_scorebook(innings: dict[str, Any]) -> dict[str, Any]:
                 batter["fours"] += 1
             if runs_bat == 6:
                 batter["sixes"] += 1
-        if bowler:
+        retired_out = str(ball.get("wicket_type", "") or "").lower() == "retired_out"
+        if bowler and not retired_out:
             bowler_bucket = bowlers.setdefault(
                 bowler,
                 {"player_name": bowler, "legal_balls": 0, "maidens": 0, "runs_conceded": 0, "wickets": 0},
@@ -735,7 +736,7 @@ def summarize_innings_scorebook(innings: dict[str, Any]) -> dict[str, Any]:
             if _delivery_is_legal(ball):
                 bowler_bucket["legal_balls"] += 1
             over_bowler_runs[(bowler, int(ball.get("over_number", 1) or 1))] += runs_bat + extras_runs
-            if ball.get("wicket") and wicket_player and str(ball.get("wicket_type", "") or "").lower() not in {"run_out", "retired_hurt"}:
+            if ball.get("wicket") and wicket_player and str(ball.get("wicket_type", "") or "").lower() not in {"run_out", "retired_hurt", "retired_out"}:
                 bowler_bucket["wickets"] += 1
         if ball.get("wicket") and wicket_player:
             wickets += 1
@@ -825,6 +826,8 @@ def _scorebook_ball_label(ball: dict[str, Any]) -> str:
     extras_type = str(ball.get("extras_type", "none") or "none").strip().lower()
     runs_bat = int(ball.get("runs_bat", 0) or 0)
     extras_runs = int(ball.get("extras_runs", 0) or 0)
+    if str(ball.get("wicket_type") or "").strip().lower() == "retired_out":
+        return "RO"
     if ball.get("wicket"):
         return "W"
     if extras_type == "wide":
@@ -874,7 +877,15 @@ def build_scorebook_live_state(innings: dict[str, Any]) -> dict[str, Any]:
         last_extras_type = str(last_ball.get("extras_type", "none") or "none").strip().lower()
         wicket_note = ""
         if last_ball.get("wicket"):
-            if str(last_ball.get("wicket_type", "") or "").lower() != "run_out":
+            wicket_type = str(last_ball.get("wicket_type", "") or "").lower()
+            if wicket_type == "retired_out":
+                wicket_player = str(last_ball.get("wicket_player", "") or "").strip()
+                if wicket_player == current_striker:
+                    current_striker = ""
+                elif wicket_player == current_non_striker:
+                    current_non_striker = ""
+                wicket_note = "A batter retired out. Choose the next batter before logging a delivery."
+            elif wicket_type != "run_out":
                 current_striker = ""
                 wicket_note = "A wicket fell. Choose the new striker before logging the next ball."
         if wicket_note:

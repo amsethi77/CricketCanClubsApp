@@ -100,6 +100,7 @@ This section captures the user requirements in the order they were given and ref
 
 ### November 2026 Azure deployment request
 - Deploy the latest local match-management fixes to Azure while preserving production data and the Key Vault Gemini configuration; keep local runtime data and secrets out of the deployment package.
+- Deploy the latest live-style past-match scoring changes to the existing Azure site, including continued scoring through both innings, wide totals, and run-outs on wides and no-balls.
 
 ### November 2026 Heartlake Recent match and RBAC editing request
 - Show the Heartlake–Afghan Eagles match in the signed-in Heartlake Home Recent results even though it has recorded scores/scorebook balls but still says Scheduled and TBD.
@@ -111,6 +112,8 @@ This section captures the user requirements in the order they were given and ref
 - Keep the authorized Home and match-center entry points visible after refreshed assets and a local app restart; do not expose them to other users.
 - Allow the authorized scorer to continue scoring an incomplete past innings with the standard live buttons, extras, wicket, batter/bowler selection, strike rotation, and save/retry flow.
 - Keep the authorized live-style scoring workflow available through the active innings until the match has completed both innings; wide choices must include Wide through Wide +4 and allow a run out on wides and no-balls.
+- Add retired-out scoring: the selected batter is out for the team, but it adds no runs or ball and is not credited to any bowler.
+- Show a retired-out dismissal against the batter as "Retired out" / `RO`, not as a generic wicket; use the same wording in live alerts and do not include it in any bowler's figures.
 
 ### September 2026 requests
 - Navbar: no More on laptop unless links don't fit; on phone More sits at the edge. Profile and Admin live inside the account (initials) button; Assistant sits at the bottom right.
@@ -816,7 +819,7 @@ Bugs found and fixed:
 - Request (Amit, Oct 29): manual scoring was tedious; make live scoring really easy and interesting. Dhruvika picked: tap names instead of typing, fewer pop-ups, quicker line-ups, fixing mistakes, and celebrations.
 - Tap, don't type: on "Who's batting?" the openers and the bowler are big name buttons from the line-ups (a name already picked is greyed out in the other box); "Someone else?" types a name that isn't in the line-up.
 - One-tap pop-ups (no Save button; `openSheet` in `quick_score.js`): next bowler at the end of an over (shows the over's runs / wickets / "maiden!" and each bowler's figures; the bowler who just bowled is greyed out), byes / leg byes (1 2 3 4), no balls (No runs, +1 ... +6), and wides (Wide through Wide +4). Wides and no-balls can also be recorded as run-outs.
-- Wicket in 2-3 taps: How out (Bowled, Caught, LBW, Run out, Stumped, Hit wicket) -> fielder for caught / stumped / run out (the bowler is marked, "Don't know · skip"), for a run out also who is out and runs completed -> next batter (only players still to bat; "No more batters (all out)").
+- Wicket in 2-3 taps: How out (Bowled, Caught, LBW, Run out, Retired out, Stumped, Hit wicket) -> fielder for caught / stumped / run out (the bowler is marked, "Don't know · skip"), for a run out also who is out and runs completed -> next batter (only players still to bat; "No more batters (all out)"). Retired out lets the scorer choose either current batter, counts one team wicket, and records no run, ball faced, legal delivery, or bowler credit.
 - Fix any ball: tap a ball in "This over" -> pick what really happened (runs, wides, no balls, byes, leg byes). The ball is replaced in place (`POST /api/matches/{id}/scorebook/ball` or `/api/guest/matches/{id}/ball` with the ball's `id`; `_apply_ball_edit` in `main.py` keeps its over, ball number and time; a fixed ball sends no new alerts; a finished innings opens again if the fix means it isn't finished). For the last ball there are also "It was a wicket" and "Delete this ball". Strike is worked out again when the last ball is fixed.
 - Line-ups: "Select all" / "Clear" for the club's players, "Use Player 1-11" when the other team's names aren't known, and lists pasted from WhatsApp are cleaned ("1. Ravi (c)" -> "Ravi"; also for guest matches).
 - Celebrations (`static/celebrate.js`): FOUR!, SIX!, WICKET!, FIFTY! and HUNDRED! pop up with confetti and a short phone buzz on the Score page, and on the public live page (`/live/{id}`), which now refreshes by itself every 15 seconds while the match is live (the first load never celebrates old balls). The banner never blocks taps; reduced-motion phones get a plain banner.
@@ -826,6 +829,8 @@ Bugs found and fixed:
 - Authorized match scorers can open `/score?match={id}&edit=1` from Home's Recent results or the match-center scorebook lock message. This opens the same phone-first scoreboard, all-overs view, and tap-to-fix flow used for live scoring.
 - The assigned game captain, club-scoped users with `score_matches` (including club admins), and superadmins are checked server-side through `_require_match_scorer`; unauthorized users cannot use the `edit_mode=true` scorebook write routes.
 - Edit mode follows the active innings with live scoring controls until both innings complete; after the first innings ends, the scorer can start the second innings without leaving edit mode. The authorized scorer can select either innings to fix or remove saved deliveries, undo the last ball, and append deliveries to an unfinished innings. Wide offers Wide and Wide +1 through Wide +4, and both wide and no-ball dialogs support a run out with the usual batter, completed-runs, and fielder choices. Extras and completed runs update totals and strike correctly. Saved edits recalculate summaries/results and reindex deliveries; historical changes do not send live alerts. AI Scorer is not offered in edit mode. Regular past-match routes remain locked.
+- Retired out is available in live scoring and authorized edit mode. It counts as a team wicket, but adds no runs, batter balls faced, legal balls, or bowler attribution; the scorer selects the next batter.
+- Display retired out as `RO` / "Retired out" against the dismissed batter, not as a generic `W` / "Wicket"; live alerts use the same retired-out wording. Exclude it from every bowler's figures, including scorebooks saved before the API began clearing the bowler field.
 - How to test: sign in as the assigned captain, club admin with scoring access, or superadmin; open an unfinished past match with `?edit=1`, append runs/extras or a wicket, refresh and verify the saved score and innings state; confirm an ordinary past-match write remains refused and unauthorized edit-mode writes return 403. Check the scoring controls at 390px and laptop width.
 
 ### Saving only what changed (Oct 28 2026)
@@ -1101,12 +1106,14 @@ Model (soft launch, Oct 2026): keep the core cricket experience free; one paid p
 
 ## Change log
 
+- 2026-11-01: Changed retired-out presentation and alerts to `RO` / "Retired out" against the dismissed batter, and excluded even legacy retired-out records from bowler figures.
+- 2026-11-01: Added Retired out to live and authorized past-match scoring as a team wicket with no runs, ball faced, legal delivery, or bowler attribution; fixed next-batter selection and added scorebook regression coverage.
 - 2026-11-01: Kept authorized edit mode in the active live-scoring flow until both innings complete, added the second-innings transition and Wide/Wide +1..+4 choices, and enabled run-outs on wides and no-balls with scorebook regression coverage.
 - 2026-11-01: Enabled authorized live-style ball-by-ball scoring in past-match edit mode, including append persistence, recalculated innings/result state, notification suppression, refreshed assets, and RBAC regression coverage.
 - 2026-11-01: Added RBAC-gated, live-style Quick Score correction mode for fixing or removing any saved past-match delivery in either innings, with refreshed editor asset versions and Home/match-center links.
 - 2026-11-02: Included scored/started past fixtures in Recent results despite stale Scheduled/TBD metadata and added a club-scoped, RBAC-gated Home edit link.
 - 2026-11-01: Kept played 2026 fixtures visible when their scorebook is still in progress; enabled authorized post-match scorecard-summary corrections and added club-scoped, incomplete-only fixture deletion for captains, club admins, and superadmins.
-- 2026-11-01: Deployed the latest match-management code to the Canada Central Azure App Service. Zip deployment and site startup succeeded; production health returned `ok`, the scorecard reader reported Gemini, the Key Vault reference remained configured, and updated Fixtures, Season Setup, and scorecard assets were verified. Runtime data and secrets were excluded.
+- 2026-11-01: Deployed the latest live-style past-match scoring code to the Canada Central Azure App Service. The data-free zip deployment and site restart succeeded; production health returned `ok`, the scorecard reader reported Gemini, and Quick Score served the updated assets with wide variants and run-out support. Production app settings and persistent runtime data were not included in or changed by the deployment.
 - 2026-10-31: Refreshed `main` to `f09f5ae` and deployed the latest lineup and match-scoring fixes to the Canada Central Azure App Service; package excluded runtime databases, uploads, duplicates, and secrets.
 - 2026-10-31: Deployed the latest `main` code to the Canada Central Azure App Service after compile and scorecard-reader checks; package excluded runtime databases, uploads, and secrets.
 - 2026-10-29: Standardized page titles at a smaller, professional size across the shared sports system, Home, Rankings, Sign In, Quick Score, and pricing pages.
