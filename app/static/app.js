@@ -1511,11 +1511,12 @@ function scorebookNextDeliveryState(innings) {
     if (rotateStrike && striker && nonStriker) {
       [striker, nonStriker] = [nonStriker, striker];
     }
-    if (lastBall.wicket && String(lastBall.wicket_type || "").toLowerCase() === "retired_out") {
+    if (String(lastBall.wicket_type || "").toLowerCase() === "retired_out") {
       const out = String(lastBall.wicket_player || "").trim();
-      if (striker === out) striker = "";
-      if (nonStriker === out) nonStriker = "";
-      note = "A batter retired out. Choose the next batter before logging a delivery.";
+      const newBatter = String(lastBall.new_batter || "").trim();
+      if (striker === out) striker = newBatter;
+      if (nonStriker === out) nonStriker = newBatter;
+      note = newBatter ? "Retired out recorded. Pick the next delivery." : "A batter retired out. Choose the next batter before logging a delivery.";
     } else if (lastBall.wicket && String(lastBall.wicket_type || "").toLowerCase() !== "run_out") {
       striker = "";
       note = "A wicket fell. Choose the new striker before logging the next ball.";
@@ -1578,8 +1579,11 @@ function renderScorebookDeliveryAssist(innings) {
   const lastLabel = lastBall
     ? `${Number(lastBall.over_number || 0)}.${Number(lastBall.ball_number || 0)} · ${lastBall.striker || "Striker"} vs ${lastBall.bowler || "Bowler"}`
     : "No deliveries logged yet";
+  const retiredOut = String(lastBall?.wicket_type || "").toLowerCase() === "retired_out";
   const lastOutcome = lastBall
-    ? `${Number(lastBall.runs_bat || 0)} off the bat${Number(lastBall.extras_runs || 0) ? ` + ${Number(lastBall.extras_runs || 0)} extras` : ""}${lastBall.wicket ? ` · wicket${lastBall.wicket_player ? `: ${lastBall.wicket_player}` : ""}` : ""}`
+    ? retiredOut
+      ? `Retired out: ${lastBall.wicket_player || lastBall.striker || "Batter"}`
+      : `${Number(lastBall.runs_bat || 0)} off the bat${Number(lastBall.extras_runs || 0) ? ` + ${Number(lastBall.extras_runs || 0)} extras` : ""}${lastBall.wicket ? ` · wicket${lastBall.wicket_player ? `: ${lastBall.wicket_player}` : ""}` : ""}`
     : "Open with the batting pair and the opening bowler.";
   const statusChips = [
     `<span class="status-pill neutral">Legal balls ${next.legalBalls}</span>`,
@@ -1588,8 +1592,10 @@ function renderScorebookDeliveryAssist(innings) {
   if (lastBall && ["wide", "no_ball"].includes(String(lastBall.extras_type || "none").toLowerCase())) {
     statusChips.push(`<span class="status-pill maybe">Extra ball</span>`);
   }
-  if (lastBall?.wicket) {
+  if (lastBall?.wicket && !retiredOut) {
     statusChips.push(`<span class="status-pill no">Wicket</span>`);
+  } else if (retiredOut) {
+    statusChips.push(`<span class="status-pill maybe">Retired out</span>`);
   }
   elements.scorebookDeliveryAssist.innerHTML = `
     <article class="detail-card">
@@ -1782,6 +1788,7 @@ function scorebookSummary(innings) {
     const extrasRuns = Number(ball.extras_runs || 0);
     const totalRuns = runsBat + extrasRuns;
     const extrasType = String(ball.extras_type || "none").toLowerCase();
+    const retiredOut = String(ball.wicket_type || "").toLowerCase() === "retired_out";
     const striker = (ball.striker || "").trim();
     const bowler = (ball.bowler || "").trim();
     runs += totalRuns;
@@ -1827,7 +1834,7 @@ function scorebookSummary(innings) {
         bowlerMap[bowler].wickets += 1;
       }
     }
-    if (ball.wicket && (ball.wicket_player || "").trim()) {
+    if (ball.wicket && !retiredOut && (ball.wicket_player || "").trim()) {
       wickets += 1;
     }
   });
@@ -3185,9 +3192,7 @@ function renderScorebook(match) {
           const extrasType = String(ball.extras_type || "none").replace(/_/g, " ");
           const retiredOut = String(ball.wicket_type || "").toLowerCase() === "retired_out";
           const extrasLabel = !retiredOut && ball.extras_type && ball.extras_type !== "none" ? ` + ${ball.extras_runs} ${extrasType}` : "";
-          const wicketLabel = ball.wicket
-            ? retiredOut ? " RO" : " W"
-            : "";
+          const wicketLabel = retiredOut ? " RO" : ball.wicket ? " W" : "";
           const totalRuns = Number(ball.runs_bat || 0) + Number(ball.extras_runs || 0);
           return `
             <span class="scorebook-recent-pill">
@@ -3323,11 +3328,11 @@ function renderScorebook(match) {
           const retiredOut = String(ball.wicket_type || "").toLowerCase() === "retired_out";
           const extrasLabel =
             !retiredOut && ball.extras_type && ball.extras_type !== "none" ? ` + ${ball.extras_runs} ${String(ball.extras_type).replace("_", " ")}` : "";
-          const wicketLabel = ball.wicket
-            ? retiredOut
-              ? ` · Retired out: ${ball.wicket_player || ""}`
-              : ` · Wicket${ball.wicket_player ? `: ${ball.wicket_player}` : ""}${ball.fielder ? ` · Fielder: ${ball.fielder}` : ""}`
-            : "";
+          const wicketLabel = retiredOut
+            ? ` · Retired out: ${ball.wicket_player || ""}`
+            : ball.wicket
+              ? ` · Wicket${ball.wicket_player ? `: ${ball.wicket_player}` : ""}${ball.fielder ? ` · Fielder: ${ball.fielder}` : ""}`
+              : "";
           return `
             <article class="history-card scorebook-ball">
               <strong>${ball.over_number}.${ball.ball_number}</strong>

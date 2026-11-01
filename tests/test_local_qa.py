@@ -158,6 +158,20 @@ class LocalQATestCase(unittest.TestCase):
 
 
 class UnitQATests(LocalQATestCase):
+    def test_ai_scorer_treats_retired_out_as_temporary_without_wicket_or_ball(self) -> None:
+        events = self.main.ai_scorer.interpret("retired out")["events"]
+        accepted, problems = self.main.ai_scorer.validate(
+            events,
+            {"runs": 12, "wickets": 2, "legal_balls": 6},
+            20,
+        )
+
+        self.assertFalse(problems)
+        self.assertEqual(len(accepted), 1)
+        self.assertEqual(self.main.ai_scorer.describe(accepted[0]), "Retired out")
+        self.assertEqual(accepted[0]["projected"], "12/2 (1.0)")
+        self.assertEqual(accepted[0]["extras_type"], "retired_out")
+
     def test_u00_heic_scorecard_preview_is_browser_compatible(self) -> None:
         from PIL import Image
 
@@ -839,7 +853,7 @@ class FunctionalQATests(LocalQATestCase):
         recent_ids = {item["id"] for item in recent_response.json()["recent_results"]}
         self.assertIn(fixture["id"], recent_ids)
 
-    def test_retired_out_is_team_wicket_without_delivery_or_bowler_credit(self) -> None:
+    def test_retired_out_is_temporary_without_wicket_delivery_or_bowler_credit(self) -> None:
         captain = self.signin("2222222222")
         created = self.create_fixture(captain["token"], opponent="Retired Out Scoring Team")
         fixture = next(item for item in created["fixtures"] if item["opponent"] == "Retired Out Scoring Team")
@@ -906,10 +920,10 @@ class FunctionalQATests(LocalQATestCase):
         innings = stored["scorebook"]["innings"][0]
         summary = self.main.summarize_innings_scorebook(innings)
         retired_ball = innings["balls"][-1]
-        self.assertEqual((summary["runs"], summary["wickets"], summary["legal_balls"]), (1, 1, 1))
+        self.assertEqual((summary["runs"], summary["wickets"], summary["legal_balls"]), (1, 0, 1))
         before_summary = self.main.summarize_innings_scorebook({**innings, "balls": innings["balls"][:-1]})
         alerts = self.main.muse.live_score_events(stored, innings, before_summary, summary, retired_ball)
-        retired_alert = next(event for event in alerts if event[0] == "live_wicket")
+        retired_alert = next(event for event in alerts if event[0] == "live_retired_out")
         self.assertIn("Retired out: Club Player 1", retired_alert[1])
         self.assertNotIn("Wicket!", retired_alert[1])
         self.assertNotIn("Opponent Player 1", retired_alert[1])
@@ -917,8 +931,9 @@ class FunctionalQATests(LocalQATestCase):
             (retired_ball["runs_bat"], retired_ball["extras_runs"], retired_ball["extras_type"], retired_ball["bowler"]),
             (0, 0, "retired_out", ""),
         )
+        self.assertFalse(retired_ball["wicket"])
         batters = {row["player_name"]: row for row in summary["batting"]}
-        self.assertEqual((batters["Club Player 1"]["balls"], batters["Club Player 1"]["status"]), (1, "out"))
+        self.assertEqual((batters["Club Player 1"]["balls"], batters["Club Player 1"]["status"]), (1, "retired_out"))
         self.assertEqual(batters["Club Player 2"]["balls"], 0)
         bowler = next(row for row in summary["bowling"] if row["player_name"] == "Opponent Player 1")
         self.assertEqual((bowler["legal_balls"], bowler["runs_conceded"], bowler["wickets"]), (1, 1, 0))
@@ -936,11 +951,86 @@ class FunctionalQATests(LocalQATestCase):
             (legacy_bowler["legal_balls"], legacy_bowler["runs_conceded"], legacy_bowler["wickets"]),
             (1, 1, 0),
         )
-        live_state = self.main.build_scorebook_live_state(innings)
+        live_state = importlib.import_module("app.cricket_store").build_scorebook_live_state(innings)
         self.assertEqual(live_state["current_striker"], "Club Player 2")
-        self.assertEqual(live_state["current_non_striker"], "")
+        self.assertEqual(live_state["current_non_striker"], "Club Player 3")
         self.assertEqual(live_state["this_over_balls"][-1], "RO")
         self.assertIn("Club Player 3", self.main._match_lineups(fixture_id)["club"])
+
+        second_retired = self.client.post(
+            f"/api/matches/{fixture_id}/scorebook/ball",
+            json={
+                "innings_number": 1,
+                "over_number": 1,
+                "ball_number": 2,
+                "striker": "Club Player 2",
+                "non_striker": "Club Player 3",
+                "bowler": "",
+                "extras_type": "retired_out",
+                "wicket": True,
+                "wicket_type": "retired_out",
+                "wicket_player": "Club Player 2",
+                "new_batter": "Club Player 1",
+            },
+            headers=self.auth_headers(scorer["token"]),
+        )
+        self.assertEqual(second_retired.status_code, 200, second_retired.text)
+
+        third_retired = self.client.post(
+            f"/api/matches/{fixture_id}/scorebook/ball",
+            json={
+                "innings_number": 1,
+                "over_number": 1,
+                "ball_number": 2,
+                "striker": "Club Player 1",
+                "non_striker": "Club Player 3",
+                "bowler": "",
+                "extras_type": "retired_out",
+                "wicket": True,
+                "wicket_type": "retired_out",
+                "wicket_player": "Club Player 3",
+                "new_batter": "Club Player 2",
+            },
+            headers=self.auth_headers(scorer["token"]),
+        )
+        self.assertEqual(third_retired.status_code, 200, third_retired.text)
+        store = self.main.load_store()
+        stored = next(item for item in store["fixtures"] if item["id"] == fixture_id)
+        innings = stored["scorebook"]["innings"][0]
+        self.assertEqual(self.main.scorebook_wickets_for_all_out(innings), 0)
+        self.assertFalse(self.main._innings_is_over(stored, innings, self.main._match_lineups(fixture_id)))
+
+        returned = self.client.post(
+            f"/api/matches/{fixture_id}/scorebook/ball",
+            json={
+                "innings_number": 1,
+                "over_number": 1,
+                "ball_number": 2,
+                "striker": "Club Player 1",
+                "non_striker": "Club Player 2",
+                "bowler": "Opponent Player 1",
+                "runs_bat": 4,
+            },
+            headers=self.auth_headers(scorer["token"]),
+        )
+        self.assertEqual(returned.status_code, 200, returned.text)
+        store = self.main.load_store()
+        stored = next(item for item in store["fixtures"] if item["id"] == fixture_id)
+        summary = self.main.summarize_innings_scorebook(stored["scorebook"]["innings"][0])
+        returned_batter = next(row for row in summary["batting"] if row["player_name"] == "Club Player 1")
+        second_returned_batter = next(row for row in summary["batting"] if row["player_name"] == "Club Player 2")
+        still_retired_batter = next(row for row in summary["batting"] if row["player_name"] == "Club Player 3")
+        self.assertEqual((returned_batter["runs"], returned_batter["balls"], returned_batter["status"]), (5, 2, "batting"))
+        self.assertEqual(second_returned_batter["status"], "batting")
+        self.assertEqual(still_retired_batter["status"], "retired_out")
+        self.assertEqual((summary["runs"], summary["wickets"]), (5, 0))
+
+        for invalid_new_batter in (
+            {"wicket": False, "wicket_player": "", "new_batter": "Club Player 1"},
+            {"wicket": True, "wicket_player": "Club Player 1", "new_batter": "Club Player 1"},
+        ):
+            with self.assertRaises(self.main.HTTPException):
+                self.main._validate_retired_out_ball(invalid_new_batter)
 
         invalid = self.client.post(
             f"/api/matches/{fixture_id}/scorebook/ball",

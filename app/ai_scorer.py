@@ -111,6 +111,18 @@ def parse_clause(clause: str) -> list[dict[str, Any]]:
         count = _count_before(text, r"byes?") or _runs_in(re.sub(r"\bbyes?\b", " ", text)) or 1
         return [{"type": "BYE", "extras_type": "bye", "extras_runs": max(1, count), "runs_bat": 0}]
 
+    if re.search(r"\bretired out\b", text):
+        return [
+            {
+                "type": "WICKET",
+                "wicket": True,
+                "wicket_type": "retired_out",
+                "extras_type": "retired_out",
+                "extras_runs": 0,
+                "runs_bat": 0,
+            }
+        ]
+
     # Wickets (checked before runs: "caught at long on" etc.)
     for pattern, kind in _WICKET_KINDS:
         if pattern.search(text) and not re.search(r"\bnot out\b|\bdropped\b|\bmissed\b", text):
@@ -167,6 +179,8 @@ def describe(event: dict[str, Any]) -> str:
     if kind == "LEG_BYE":
         return f"{event.get('extras_runs')} leg bye{'s' if int(event.get('extras_runs') or 1) != 1 else ''}"
     if kind == "WICKET":
+        if str(event.get("wicket_type") or "").lower() == "retired_out":
+            return "Retired out"
         who = f" by {event['fielder']}" if event.get("fielder") else ""
         return f"WICKET ({str(event.get('wicket_type') or 'out').replace('_', ' ')}{who})"
     if kind == "UNDO":
@@ -191,10 +205,11 @@ def validate(events: list[dict[str, Any]], summary: dict[str, Any], overs_limit:
             problems.append("The innings is over, so the rest was ignored.")
             break
         extras_type = event.get("extras_type") or "none"
+        retired_out = str(event.get("wicket_type") or "").strip().lower() == "retired_out"
         runs += int(event.get("runs_bat") or 0) + int(event.get("extras_runs") or 0)
-        if extras_type not in {"wide", "no_ball"}:
+        if extras_type not in {"wide", "no_ball", "retired_out"}:
             legal += 1
-        if event.get("wicket"):
+        if event.get("wicket") and not retired_out:
             wickets += 1
         event["projected"] = f"{runs}/{wickets} ({legal // 6}.{legal % 6})"
         accepted.append(event)

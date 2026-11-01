@@ -50,6 +50,7 @@
     const sum = inn.summary || {};
     const extras = { wd: 0, nb: 0, b: 0, lb: 0 };
     const dismissal = {};
+    const retiredOutPlayers = new Set();
     const fallOfWickets = [];
     const overOf = new Map(); // ball -> over index (0-based), worked out from legal balls
     const overEnd = []; // [over index] -> { runs, wickets, overRuns } once the over is complete
@@ -68,13 +69,24 @@
       if (b.extras_type === "bye") extras.b += er;
       if (b.extras_type === "leg_bye") extras.lb += er;
       if (isLegal(b)) legal += 1;
-      if (b.wicket) {
+      const retiredOut = String(b.wicket_type || "").toLowerCase() === "retired_out";
+      [b.striker, b.non_striker, b.new_batter].filter(Boolean).forEach((name) => {
+        if (retiredOutPlayers.has(name)) {
+          delete dismissal[name];
+          retiredOutPlayers.delete(name);
+        }
+      });
+      if (b.wicket && !retiredOut) {
         wickets += 1;
         lastWicketBall = { ball: b, runs, wickets, legal };
       }
-      if (b.wicket && b.wicket_player) {
-        dismissal[b.wicket_player] = howOut(b);
-        fallOfWickets.push(`${runs}-${fallOfWickets.length + 1} (${b.wicket_player}, ${overs(legal)})`);
+      if ((b.wicket || retiredOut) && b.wicket_player) {
+        dismissal[b.wicket_player] = retiredOut ? "retired out" : howOut(b);
+        if (retiredOut) {
+          retiredOutPlayers.add(b.wicket_player);
+        } else {
+          fallOfWickets.push(`${runs}-${fallOfWickets.length + 1} (${b.wicket_player}, ${overs(legal)})`);
+        }
       }
       if (isLegal(b) && legal % 6 === 0) {
         overEnd[legal / 6 - 1] = { runs, wickets, overRuns };
@@ -135,9 +147,9 @@
     if (ran % 2 === 1) [striker, nonStriker] = [nonStriker, striker];
     const overDone = isLegal(b) && facts.legal > 0 && facts.legal % 6 === 0;
     if (overDone) [striker, nonStriker] = [nonStriker, striker];
-    if (b.wicket && b.wicket_player) {
-      if (striker === b.wicket_player) striker = "";
-      if (nonStriker === b.wicket_player) nonStriker = "";
+    if ((b.wicket || String(b.wicket_type || "").toLowerCase() === "retired_out") && b.wicket_player) {
+      if (striker === b.wicket_player) striker = b.new_batter || "";
+      if (nonStriker === b.wicket_player) nonStriker = b.new_batter || "";
     }
     return { striker, nonStriker, bowler: overDone ? "" : b.bowler || "", lastBowler: b.bowler || "" };
   }
@@ -155,6 +167,7 @@
   }
 
   function ballClass(b) {
+    if (String(b.wicket_type || "").toLowerCase() === "retired_out") return "x";
     if (b.wicket) return "w";
     const plain = !b.extras_type || b.extras_type === "none";
     if (plain && Number(b.runs_bat) === 6) return "six";
@@ -361,7 +374,7 @@
     for (let i = f.balls.length - 1; i >= 0 && legal < n * 6; i -= 1) {
       const b = f.balls[i];
       runs += ballRuns(b);
-      if (b.wicket) wkts += 1;
+      if (b.wicket && String(b.wicket_type || "").toLowerCase() !== "retired_out") wkts += 1;
       if (isLegal(b)) legal += 1;
     }
     return `${runs}/${wkts} (${rate(runs, legal)})`;
@@ -665,7 +678,7 @@
         const key = `${inning.inning_number}:${ball.striker}`;
         const before = seenRuns[key]?.runs || 0;
         const after = runsNow[key]?.runs || 0;
-        if (ball.wicket) return 5;
+        if (ball.wicket && String(ball.wicket_type || "").toLowerCase() !== "retired_out") return 5;
         if (before < 100 && after >= 100) return 4;
         if (before < 50 && after >= 50) return 3;
         if (Number(ball.runs_bat) === 6 && !["bye", "leg_bye"].includes(ball.extras_type)) return 2;

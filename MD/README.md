@@ -115,6 +115,21 @@ This section captures the user requirements in the order they were given and ref
 - Add retired-out scoring: the selected batter is out for the team, but it adds no runs or ball and is not credited to any bowler.
 - Show a retired-out dismissal against the batter as "Retired out" / `RO`, not as a generic wicket; use the same wording in live alerts and do not include it in any bowler's figures.
 
+### November 2026 retired-out Azure deployment request
+- Deploy the latest retired-out scoring and scorecard-display changes to the existing Azure App Service without packaging production data or secrets, and preserve the Gemini Key Vault configuration.
+- Deploy the follow-up clarification that retired out is not a wicket and that a returning batter loses the retired-out scorecard tag.
+
+### November 2026 retired-out return request
+- Allow a batter who retired out to return later in the same innings and resume with the runs and balls already recorded for them.
+- Deploy the retired-out return feature to Azure.
+- If two retired-out batters return to the crease, keep the innings open so they can continue scoring; a returned retired-out wicket no longer counts toward the all-out limit.
+- Once a retired-out batter returns, show them as a normal not-out/batting player, remove their retired-out dismissal status, and allow their resumed scoring to count toward their existing figures.
+- Clear the scorecard's retired-out tag when the batter appears again as striker or non-striker, even if a return marker is absent.
+- Update the README to record all of today's retired-out scoring, return, and deployment changes.
+
+### November 2026 retired-out clarification
+- Treat retired out as a temporary batter departure, not a wicket: do not increase the team wicket total, include it in fall-of-wickets, or count it toward all-out. The batter may return and continue with their existing figures as a normal batter.
+
 ### September 2026 requests
 - Navbar: no More on laptop unless links don't fit; on phone More sits at the edge. Profile and Admin live inside the account (initials) button; Assistant sits at the bottom right.
 - Signed-out visitors can open a public Clubs page, search the site and switch dark/light mode.
@@ -589,6 +604,8 @@ This section documents the work done in September 2026. See "Change log" at the 
 - Files: `static/quick_score.html/js/css`. APIs: `GET /api/quick-score/fixtures`, `GET /api/quick-score/{match_id}`, `POST /api/quick-score/start` (creates today's fixture), plus the existing `POST /api/matches/{id}/scorebook/setup`, `POST .../scorebook/ball` and `DELETE .../scorebook/ball` (undo).
 - Flow: pick today's match (or "Start a match now") → choose batting side, openers and bowler → score with big buttons `0 1 2 3 4 6 / Wd Nb Bye LB / W / Undo`.
 - Strike rotates automatically on odd runs and at the end of each over; after 6 legal balls it asks for the next bowler; W opens a pop-up for how out, fielder and the new batter; 2nd innings shows the target and required rate.
+- **Retired out** is a temporary batter departure, not a wicket. It adds no runs, ball faced, legal ball, bowler credit, or team wicket; the batter can return later with their existing figures.
+- The AI Live Scorer recognizes “retired out” and prompts for the batter and replacement without adding a run, ball, or wicket.
 - **Voice scoring** (Chrome/Edge): "dot", "single", "two", "four", "six", "wide", "no ball", "bye", "leg bye", "bowled", "caught", "LBW", "run out", "undo". **Shorthand**: type `1 4 0 wd 6 w`.
 - Taps are queued and saved in order ("Saving 2 balls…"), so fast scoring never loses a ball. Scoring is open only on the match day (rule in `_scorebook_is_open`); past games go through AI Assistant or Archives.
 - Performance: `canonical_archive_uploads` now returns a marked list that isn't re-processed, which cut each save from ~8–19 s to ~2 s.
@@ -829,9 +846,10 @@ Bugs found and fixed:
 - Authorized match scorers can open `/score?match={id}&edit=1` from Home's Recent results or the match-center scorebook lock message. This opens the same phone-first scoreboard, all-overs view, and tap-to-fix flow used for live scoring.
 - The assigned game captain, club-scoped users with `score_matches` (including club admins), and superadmins are checked server-side through `_require_match_scorer`; unauthorized users cannot use the `edit_mode=true` scorebook write routes.
 - Edit mode follows the active innings with live scoring controls until both innings complete; after the first innings ends, the scorer can start the second innings without leaving edit mode. The authorized scorer can select either innings to fix or remove saved deliveries, undo the last ball, and append deliveries to an unfinished innings. Wide offers Wide and Wide +1 through Wide +4, and both wide and no-ball dialogs support a run out with the usual batter, completed-runs, and fielder choices. Extras and completed runs update totals and strike correctly. Saved edits recalculate summaries/results and reindex deliveries; historical changes do not send live alerts. AI Scorer is not offered in edit mode. Regular past-match routes remain locked.
-- Retired out is available in live scoring and authorized edit mode. It counts as a team wicket, but adds no runs, batter balls faced, legal balls, or bowler attribution; the scorer selects the next batter.
+- Retired out is available in live scoring and authorized edit mode. It counts as a team wicket, but adds no runs, batter balls faced, legal balls, or bowler attribution. Display `RO` / "Retired out" against the dismissed batter, not a generic wicket, and use the same wording in live alerts; exclude retired-out deliveries from bowler figures, including legacy records with bowler names. The next-batter picker lets the scorer bring a retired-out batter back into the innings; their existing runs and balls remain on the same scorecard row. On return, clear that batter's retired-out dismissal status and show them as batting/not out; remove them from the retired-out return choices. Persist the incoming batter with the delivery so the live scorer, public scorecard, and server agree after refresh; SQLite gets a backward-compatible nullable `new_batter` column.
+- A returned retired-out wicket remains in the scorebook's wicket total, but no longer counts toward the all-out limit or wickets remaining in the winning margin. This lets two returned retired-out batters continue scoring; normal innings limits and other dismissals still apply.
 - Display retired out as `RO` / "Retired out" against the dismissed batter, not as a generic `W` / "Wicket"; live alerts use the same retired-out wording. Exclude it from every bowler's figures, including scorebooks saved before the API began clearing the bowler field.
-- How to test: sign in as the assigned captain, club admin with scoring access, or superadmin; open an unfinished past match with `?edit=1`, append runs/extras or a wicket, refresh and verify the saved score and innings state; confirm an ordinary past-match write remains refused and unauthorized edit-mode writes return 403. Check the scoring controls at 390px and laptop width.
+- How to test: sign in as the assigned captain, club admin with scoring access, or superadmin; open an unfinished past match with `?edit=1`, append runs/extras or a wicket, refresh and verify the saved score and innings state; after a retired-out dismissal, choose that batter at a later wicket and verify their previous runs and balls remain, their status is batting/not out, and their retired-out dismissal is cleared; return two retired-out batters and confirm the innings stays open and accepts further runs; confirm an ordinary past-match write remains refused and unauthorized edit-mode writes return 403. Check the scoring controls at 390px and laptop width.
 
 ### Saving only what changed (Oct 28 2026)
 - Request (Amit + Dhruvika, Oct 28): the app should move to a cloud database later (Azure SQL / Turso etc.), and whichever one is chosen, a save must first write only the rows that changed.
@@ -1106,8 +1124,17 @@ Model (soft launch, Oct 2026): keep the core cricket experience free; one paid p
 
 ## Change log
 
+- 2026-11-01: Completed retired-out scoring and return changes: record RO without runs, a legal ball, bowler credit, or a team wicket; show temporary retired status until the batter returns; clear it and resume their figures on return; persist incoming batters; and keep returned batters scoreable. Added migration and regression coverage. The initial return-picker release was deployed to Azure with the Gemini Key Vault reference intact and runtime data/secrets excluded.
+- 2026-11-01: Fixed innings completion and scorecard presentation for retired-out returns. Exclude temporary retirements from team wicket totals and all-out status, while preserving the retirement event to support replacement and later return. Added regression coverage for two retired-out batters returning and scoring; updated return labels and Azure deployment notes.
+- 2026-11-01: Deployed the retired-out return option to the Canada Central Azure App Service. Production returned HTTP 200, the scorecard reader reported Gemini, and Quick Score served the cache-busted bundle with the return picker. Confirmed the Gemini Key Vault reference remained configured; the package excluded runtime data and secrets.
+- 2026-11-01: Let a retired-out batter return in the same innings from the next-batter picker, continuing their existing batting figures and status.
+- 2026-11-02: Deployed the latest retired-out scoring and display changes to the Canada Central Azure App Service. Production health returned `ok`, the scorecard reader reported Gemini, and the refreshed Quick Score/public scorecard assets served the retired-out changes. Confirmed the Gemini app setting remains a Key Vault reference; the data-free package excluded production runtime data and secrets.
 - 2026-11-01: Changed retired-out presentation and alerts to `RO` / "Retired out" against the dismissed batter, and excluded even legacy retired-out records from bowler figures.
-- 2026-11-01: Added Retired out to live and authorized past-match scoring as a team wicket with no runs, ball faced, legal delivery, or bowler attribution; fixed next-batter selection and added scorebook regression coverage.
+- 2026-11-01: Added Retired out to live and authorized past-match scoring as a temporary batter departure with no runs, ball faced, legal delivery, team wicket, or bowler attribution; fixed next-batter selection and added scorebook regression coverage.
+- 2026-11-01: Clarified retired out as a temporary departure, not a wicket. Persist it with no wicket flag, and exclude it from team wicket totals, fall-of-wickets, over wicket counts, all-out calculations, and wicket celebrations; retained a distinct retirement alert and return flow.
+- 2026-11-01: Applied the no-wicket rule to the legacy delivery assistant and AI Live Scorer, including retired-out interpretation, projected score, and batter replacement. Added an AI scorer regression.
+- 2026-11-01: Clear a returning batter's retired-out tag on the public scorecard when they reappear in the batting pair, with or without an explicit incoming-batter marker.
+- 2026-11-01: Deployed the retired-out clarification and returning-batter scorecard fix to `cricketcanclubs-web` in Canada Central. Production health returned `ok`, the scorecard reader reported Gemini, all updated assets returned HTTP 200, and `GEMINI_API_KEY` remained a Key Vault reference. The verified ZIP excluded runtime data, uploads, caches, and secrets.
 - 2026-11-01: Kept authorized edit mode in the active live-scoring flow until both innings complete, added the second-innings transition and Wide/Wide +1..+4 choices, and enabled run-outs on wides and no-balls with scorebook regression coverage.
 - 2026-11-01: Enabled authorized live-style ball-by-ball scoring in past-match edit mode, including append persistence, recalculated innings/result state, notification suppression, refreshed assets, and RBAC regression coverage.
 - 2026-11-01: Added RBAC-gated, live-style Quick Score correction mode for fixing or removing any saved past-match delivery in either innings, with refreshed editor asset versions and Home/match-center links.

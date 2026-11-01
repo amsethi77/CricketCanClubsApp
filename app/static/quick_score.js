@@ -204,7 +204,8 @@
     return String(b.runs_bat || 0);
   }
   function ballButton(b) {
-    const cls = b.wicket ? "w" : b.extras_type === "none" && b.runs_bat === 4 ? "four" : b.extras_type === "none" && b.runs_bat === 6 ? "six" : b.extras_type !== "none" ? "x" : "";
+    const retiredOut = String(b.wicket_type || "").toLowerCase() === "retired_out";
+    const cls = b.wicket && !retiredOut ? "w" : b.extras_type === "none" && b.runs_bat === 4 ? "four" : b.extras_type === "none" && b.runs_bat === 6 ? "six" : b.extras_type !== "none" ? "x" : "";
     const fixable = !String(b.id || "").startsWith("local-");
     return `<button type="button" class="qs-ball ${cls}"${fixable ? ` data-fix="${esc(b.id)}"` : " disabled"} aria-label="Fix this ball: ${esc(ballText2(b))}">${esc(ballText2(b))}</button>`;
   }
@@ -223,9 +224,15 @@
     const local = loadLocal(inn.inning_number);
     const balls = inn.balls || [];
     const last = balls[balls.length - 1];
+    let striker = last?.striker || "";
+    let nonStriker = last?.non_striker || "";
+    if (String(last?.wicket_type || "").toLowerCase() === "retired_out" && last.new_batter) {
+      if (last.wicket_player === striker) striker = last.new_batter;
+      else if (last.wicket_player === nonStriker) nonStriker = last.new_batter;
+    }
     return {
-      striker: local.striker || last?.striker || "",
-      nonStriker: local.nonStriker || last?.non_striker || "",
+      striker: local.striker || striker,
+      nonStriker: local.nonStriker || nonStriker,
       bowler: local.bowler || last?.bowler || "",
     };
   }
@@ -419,7 +426,7 @@
       if (b.extras_type === "leg_bye") return `${b.extras_runs}lb`;
       return String(b.runs_bat || 0);
     };
-    const done = inn.status === "Completed" || (target && (sum.runs || 0) >= target);
+    const done = inningsOver(inn) || (target && (sum.runs || 0) >= target);
     const canContinue = !inningsOver(inn);
     const secondInnings = innings().find((item) => Number(item.inning_number) === 2);
     const canStartSecond = inn.inning_number === 1 && secondInnings && !(secondInnings.balls || []).length && secondInnings.status !== "Completed";
@@ -528,7 +535,7 @@
       return `<section class="qs-ai qs-ai-locked">
         <p class="qs-kicker">Pro</p>
         <h2>AI Live Scorer</h2>
-        <p class="qs-muted">You've used your free AI match. Say “four”, “wide, then two runs” or “caught by Sam” and the scorecard updates by itself. Live scoring with the buttons stays free.</p>
+        <p class="qs-muted">You've used your free AI match. Say “four”, “wide, then two runs”, “caught by Sam” or “retired out” and the scorecard updates by itself. Live scoring with the buttons stays free.</p>
         <a class="qs-btn primary" href="/pricing?feature=ai_live_scorer">See Pro ($9/month)</a>
       </section>`;
     }
@@ -542,7 +549,7 @@
           }
           ${(aiLast.problems || []).map((p) => `<p class="qs-ai-problem">${esc(p)}</p>`).join("")}
         </div>`
-      : `<p class="qs-muted">Say what happened on each ball, or type it below. Examples: “four”, “dot”, “wide, then two runs”, “no ball and a six”, “two leg byes”, “bowled”, “caught by Sam”, “undo”.</p>`;
+      : `<p class="qs-muted">Say what happened on each ball, or type it below. Examples: “four”, “dot”, “wide, then two runs”, “no ball and a six”, “two leg byes”, “bowled”, “caught by Sam”, “retired out”, “undo”.</p>`;
     return `<section class="qs-ai">
       ${aiTrialNote()}
       <div class="qs-ai-head">
@@ -1131,7 +1138,7 @@
       runs_bat: ball.runs_bat || 0,
       extras_type: ball.extras_type || "none",
       extras_runs: ball.extras_runs || 0,
-      wicket: Boolean(ball.wicket),
+      wicket: Boolean(ball.wicket) && !retiredOut,
       wicket_type: ball.wicket_type || "",
       wicket_player: ball.wicket_player || "",
       fielder: ball.fielder || "",
@@ -1144,7 +1151,7 @@
     if (runsRotate(ranRuns(ball))) [striker, nonStriker] = [nonStriker, striker];
     const overDone = isLegal && (legal + 1) % 6 === 0;
     if (overDone) [striker, nonStriker] = [nonStriker, striker];
-    if (ball.wicket) {
+    if (ball.wicket || retiredOut) {
       if (ball.wicket_player === nonStriker) nonStriker = ball.new_batter || "";
       else striker = ball.new_batter || "";
     }
@@ -1165,12 +1172,12 @@
     const first = innings()[0];
     const target = inn.inning_number === 2 && first ? Number(first.summary?.runs || 0) + 1 : null;
     const battingSide = battingRoster(inn);
-    const allOut = battingSide.length >= 2 && Number(inn.summary?.wickets || 0) >= Math.min(10, battingSide.length - 1);
+    const allOut = battingSide.length >= 2 && wicketsForAllOut(inn) >= Math.min(10, battingSide.length - 1);
     const won = target != null && Number(inn.summary?.runs || 0) >= target;
     if (overDone && legal + 1 < oversLimit * 6 && !won && !allOut) {
       const overBalls = (inn.balls || []).filter((b) => Number(b.over_number) === payload.over_number);
       const overRuns = overBalls.reduce((sum, b) => sum + Number(b.runs_bat || 0) + Number(b.extras_runs || 0), 0);
-      const overWkts = overBalls.filter((b) => b.wicket).length;
+      const overWkts = overBalls.filter((b) => b.wicket && String(b.wicket_type || "").toLowerCase() !== "retired_out").length;
       askBowler(`Over ${payload.over_number} done: ${overRuns} run${overRuns === 1 ? "" : "s"}${overWkts ? `, ${overWkts} wicket${overWkts === 1 ? "" : "s"}` : ""}${overRuns === 0 && !overWkts ? " · maiden!" : ""}`, true);
     }
   }
@@ -1186,12 +1193,21 @@
     return Boolean(lastLegal && bowler && lastLegal.bowler === bowler);
   }
 
+  function wicketsForAllOut(inn) {
+    return (inn.balls || []).filter(
+      (ball) =>
+        ball.wicket &&
+        ball.wicket_player &&
+        String(ball.wicket_type || "").toLowerCase() !== "retired_out"
+    ).length;
+  }
+
   // All out, overs used up, or target passed: no more balls (the server checks too).
   function inningsOver(inn) {
     const sum = inn.summary || {};
     const side = battingRoster(inn);
     const allOutAt = side.length >= 2 ? Math.min(10, side.length - 1) : 10;
-    if (Number(sum.wickets || 0) >= allOutAt) return true;
+    if (wicketsForAllOut(inn) >= allOutAt) return true;
     if (legalBalls(inn) >= Number(inn.overs_limit || 20) * 6) return true;
     const first = innings()[0];
     return inn.inning_number === 2 && first && (first.balls || []).length > 0 && Number(sum.runs || 0) > Number(first.summary?.runs || 0);
@@ -1212,7 +1228,9 @@
     const sum = inn.summary || (inn.summary = {});
     const extra = payload.extras_type !== "none" ? payload.extras_runs || 0 : 0;
     sum.runs = (sum.runs || 0) + (payload.runs_bat || 0) + extra;
-    if (payload.wicket) sum.wickets = (sum.wickets || 0) + 1;
+    if (payload.wicket && String(payload.wicket_type || "").toLowerCase() !== "retired_out") {
+      sum.wickets = (sum.wickets || 0) + 1;
+    }
     const batter = (sum.batting || []).find((b) => b.player_name === payload.striker);
     if (batter && !["wide", "retired_out"].includes(payload.extras_type)) {
       batter.runs = (batter.runs || 0) + (["bye", "leg_bye"].includes(payload.extras_type) ? 0 : payload.runs_bat || 0);
@@ -1390,12 +1408,30 @@
     const batted = new Set((inn.summary?.batting || [])
       .filter((b) => String(b.status || "").toLowerCase() !== "not_batted" || Number(b.runs) > 0 || Number(b.balls) > 0)
       .map((b) => b.player_name));
-    const remaining = battingRoster(inn).filter((n) => n !== p.striker && n !== p.nonStriker && !batted.has(n));
+    const retiredOutAvailable = new Set();
+    (inn.balls || []).forEach((ball) => {
+      [ball.striker, ball.non_striker].filter(Boolean).forEach((name) => retiredOutAvailable.delete(name));
+      if (ball.new_batter) retiredOutAvailable.delete(ball.new_batter);
+      if (String(ball.wicket_type || "").toLowerCase() === "retired_out" && ball.wicket_player) {
+        retiredOutAvailable.add(ball.wicket_player);
+      }
+    });
+    const retiredOutReturns = new Set(retiredOutAvailable);
+    const remaining = battingRoster(inn).filter(
+      (n) => n !== p.striker && n !== p.nonStriker && (!batted.has(n) || retiredOutAvailable.has(n))
+    );
     const battingSide = battingIsClub(inn) ? "club" : "opponent";
     const fieldingSide = battingSide === "club" ? "opponent" : "club";
     const keeper = rolesOf(fieldingSide).keeper || "";
     const fielders = bowlingRoster(inn);
-    const nextTags = Object.fromEntries(remaining.map((n) => [n, roleTags(n, battingSide)]).filter(([, t]) => t));
+    const nextTags = Object.fromEntries(
+      remaining
+        .map((n) => [
+          n,
+          [roleTags(n, battingSide), retiredOutReturns.has(n) ? "return · retired out" : ""].filter(Boolean).join(" · "),
+        ])
+        .filter(([, t]) => t)
+    );
     const HOW = [
       ["bowled", "Bowled"],
       ["caught", "Caught"],
@@ -1418,12 +1454,12 @@
     const draw = () => {
       const howLabel = (HOW.find(([v]) => v === w.how) || [])[1] || "";
       if (step === "how") {
-        modalTitle.textContent = "Wicket! How out?";
+        modalTitle.textContent = "Wicket or retirement?";
         modalBody.innerHTML = `<p class="qs-sheet-note">${esc(p.striker)} on strike${p.bowler ? ` · ${esc(p.bowler)} bowling` : ""}</p>
           <div class="qs-chips big">${HOW.map(([v, l]) => `<button type="button" class="qs-chip" data-how="${v}">${l}</button>`).join("")}</div>`;
       } else if (step === "retired") {
         modalTitle.textContent = "Who retired out?";
-        modalBody.innerHTML = `<p class="qs-sheet-note">This counts as a team wicket, but not against a bowler or as a run or ball faced.</p>
+        modalBody.innerHTML = `<p class="qs-sheet-note">This is not a wicket. The batter is temporarily retired and can return later. No run or ball faced is added.</p>
           <div class="qs-chips">${[
             [p.striker, "striker"],
             [p.nonStriker, "non-striker"],
@@ -1460,6 +1496,7 @@
       } else {
         modalTitle.textContent = "Next batter in";
         modalBody.innerHTML = `<p class="qs-sheet-note">${esc(w.out)} ${esc(howLabel.toLowerCase())}${w.fielder ? ` · ${esc(w.fielder)}` : ""}</p>
+          ${retiredOutAvailable.size ? '<p class="qs-muted">A retired-out batter can return with their existing runs and balls.</p>' : ""}
           ${chipList(remaining, "", [], nextTags)}
           ${otherName("qsNewBat", "Next batter's name", remaining.length === 0)}
           <button type="button" class="qs-btn ghost wide" data-no-batter>No more batters (all out)</button>`;
@@ -1479,7 +1516,7 @@
           runs_bat: runsBat,
           extras_type: extrasType,
           extras_runs: extrasRuns,
-          wicket: true,
+          wicket: !isRetiredOut,
           wicket_type: w.how,
           wicket_player: w.out,
           fielder: w.fielder,
@@ -1498,7 +1535,7 @@
       });
     };
 
-    openSheet("Wicket!", "", (target, close) => {
+    openSheet("Wicket or retirement?", "", (target, close) => {
       const how = target.closest("[data-how]")?.dataset.how;
       if (how) {
         w.how = how;
@@ -1587,7 +1624,7 @@
       .map((list, n) => {
         if (!list) return "";
         const runs = list.reduce((sum, b) => sum + Number(b.runs_bat || 0) + Number(b.extras_runs || 0), 0);
-        const wkts = list.filter((b) => b.wicket).length;
+        const wkts = list.filter((b) => b.wicket && String(b.wicket_type || "").toLowerCase() !== "retired_out").length;
         return `<div class="qs-over-row"><div class="qs-over-row-head"><b>Over ${n + 1}</b><span>${esc(list[0].bowler || "")} · ${runs} run${runs === 1 ? "" : "s"}${wkts ? `, ${wkts} wkt${wkts === 1 ? "" : "s"}` : ""}</span></div>
           <div class="qs-over">${list.map(ballButton).join("")}</div></div>`;
       })
@@ -1692,6 +1729,7 @@
         wicket: false,
         wicket_type: "",
         wicket_player: "",
+        new_batter: b.new_batter || "",
         fielder: "",
         commentary: b.commentary || "",
         ...result,

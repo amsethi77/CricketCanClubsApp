@@ -150,15 +150,14 @@ def live_score_events(
         target = innings.get("target_runs")
         events.append(("live_innings", f"Second innings under way: {fixture}", f"{batting} need {target} to win." if target else f"{batting} are batting."))
 
-    if int(after.get("wickets") or 0) > int(before.get("wickets") or 0):
+    if str(ball.get("wicket_type") or "").strip().lower() == "retired_out":
+        out = str(ball.get("wicket_player") or ball.get("striker") or "Batter")
+        events.append(("live_retired_out", f"Retired out: {out}", f"{batting} {score} · {fixture}"))
+    elif int(after.get("wickets") or 0) > int(before.get("wickets") or 0):
         out = str(ball.get("wicket_player") or ball.get("striker") or "Batter")
         how = str(ball.get("wicket_type") or "out").strip().lower().replace("_", " ")
         bowler = str(ball.get("bowler") or "")
-        title = (
-            f"Retired out: {out}"
-            if how == "retired out"
-            else f"Wicket! {out} {how}{f' ({bowler})' if bowler else ''}"
-        )
+        title = f"Wicket! {out} {how}{f' ({bowler})' if bowler else ''}"
         events.append(("live_wicket", title, f"{batting} {score} · {fixture}"))
 
     # Milestones for the striker

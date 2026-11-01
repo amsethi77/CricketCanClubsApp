@@ -192,6 +192,7 @@ try:
         scoped_store_for_club,
         summarize_innings_scorebook,
         scorebook_match_finished,
+        scorebook_wickets_for_all_out,
         scorebook_result_text,
         sync_fixture_scorecard_from_scorebook,
     )
@@ -250,6 +251,7 @@ except ModuleNotFoundError:
         scoped_store_for_club,
         summarize_innings_scorebook,
         scorebook_match_finished,
+        scorebook_wickets_for_all_out,
         scorebook_result_text,
         sync_fixture_scorecard_from_scorebook,
     )
@@ -1206,7 +1208,7 @@ def _innings_is_over(match: dict[str, Any], innings: dict[str, Any], lineups: di
     """No new balls once an innings is finished: all out, overs used up, or (2nd innings) target passed.
     Oct 29 2026: fast taps after the last wicket were saved, giving "28/11" (README "Full test and fixes")."""
     summary = summarize_innings_scorebook(innings)
-    if summary["wickets"] >= _all_out_at(match, innings, lineups):
+    if scorebook_wickets_for_all_out(innings) >= _all_out_at(match, innings, lineups):
         return True
     if summary["legal_balls"] >= int(innings.get("overs_limit", 20) or 20) * 6:
         return True
@@ -1292,18 +1294,24 @@ def _apply_ball_edit(innings: dict[str, Any], ball: dict[str, Any], ball_id: str
 def _validate_retired_out_ball(ball: dict[str, Any]) -> None:
     wicket_type = str(ball.get("wicket_type") or "").strip().lower()
     extras_type = str(ball.get("extras_type") or "none").strip().lower()
+    new_batter = str(ball.get("new_batter") or "").strip()
+    wicket_player = str(ball.get("wicket_player") or "").strip()
+    if new_batter and not ball.get("wicket") and wicket_type != "retired_out":
+        raise HTTPException(status_code=400, detail="A replacement batter can only be selected for a wicket or retired-out event.")
+    if new_batter and new_batter.casefold() == wicket_player.casefold():
+        raise HTTPException(status_code=400, detail="The retired batter cannot be selected as their own replacement.")
     if wicket_type == "retired_out":
         if (
-            not ball.get("wicket")
-            or not ball.get("wicket_player")
+            not ball.get("wicket_player")
             or int(ball.get("runs_bat") or 0)
             or int(ball.get("extras_runs") or 0)
         ):
-            raise HTTPException(status_code=400, detail="Retired out records a wicket only, with no runs or ball faced.")
+            raise HTTPException(status_code=400, detail="Retired out must identify a temporarily retired batter, with no runs or ball faced.")
+        ball["wicket"] = False
         ball["extras_type"] = "retired_out"
         ball["bowler"] = ""
     elif extras_type == "retired_out":
-        raise HTTPException(status_code=400, detail="Retired out must be recorded as a retired-out wicket.")
+        raise HTTPException(status_code=400, detail="Retired out must be recorded as a temporary batter retirement.")
 
 
 def _reindex_scorebook_innings(innings: dict[str, Any]) -> None:
@@ -8110,6 +8118,7 @@ def add_scorebook_ball(
             "wicket_player": resolve_member_name(store, request.wicket_player) if request.wicket_player.strip() else "",
             "fielder": resolve_member_name(store, request.fielder) if request.fielder.strip() else "",
             "commentary": request.commentary,
+            "new_batter": resolve_member_name(store, request.new_batter) if request.new_batter.strip() else "",
         }
     )
     _validate_retired_out_ball(ball)
@@ -8147,7 +8156,7 @@ def add_scorebook_ball(
     if not (edit_mode and editing):
         if summary["runs"] or summary["wickets"] or summary["legal_balls"]:
             innings["status"] = "Live"
-        if summary["wickets"] >= _all_out_at(match, innings, lineups) or summary["legal_balls"] >= int(innings.get("overs_limit", 20) or 20) * 6:
+        if scorebook_wickets_for_all_out(innings) >= _all_out_at(match, innings, lineups) or summary["legal_balls"] >= int(innings.get("overs_limit", 20) or 20) * 6:
             innings["status"] = "Completed"
     else:
         innings["status"] = previous_status or "Completed"
@@ -8259,7 +8268,7 @@ def delete_scorebook_ball(
         target_innings["status"] = "Live"
     if edit_mode:
         _reindex_scorebook_innings(target_innings)
-    if summary["wickets"] >= _all_out_at(match, target_innings, _match_lineups(match_id)) or summary["legal_balls"] >= int(target_innings.get("overs_limit", 20) or 20) * 6:
+    if scorebook_wickets_for_all_out(target_innings) >= _all_out_at(match, target_innings, _match_lineups(match_id)) or summary["legal_balls"] >= int(target_innings.get("overs_limit", 20) or 20) * 6:
         target_innings["status"] = "Completed"
     sync_fixture_scorecard_from_scorebook(match)
     _settle_scorebook_result(match, _match_lineups(match_id))
@@ -10167,6 +10176,7 @@ def guest_match_ball(match_id: str, request: ScorebookBallRequest, x_guest_code:
             "wicket_player": request.wicket_player.strip(),
             "fielder": request.fielder.strip(),
             "commentary": request.commentary,
+            "new_batter": request.new_batter.strip(),
         }
     )
     _validate_retired_out_ball(ball)
@@ -10199,7 +10209,7 @@ def guest_match_ball(match_id: str, request: ScorebookBallRequest, x_guest_code:
     if summary["runs"] or summary["wickets"] or summary["legal_balls"]:
         innings["status"] = "Live"
         match["status"] = "Live"
-    if summary["wickets"] >= _all_out_at(match, innings, match.get("lineups") or {}) or summary["legal_balls"] >= int(innings.get("overs_limit", 20) or 20) * 6:
+    if scorebook_wickets_for_all_out(innings) >= _all_out_at(match, innings, match.get("lineups") or {}) or summary["legal_balls"] >= int(innings.get("overs_limit", 20) or 20) * 6:
         innings["status"] = "Completed"
     first, second = scorebook["innings"][0], scorebook["innings"][1]
     if innings is second and first.get("status") == "Completed":

@@ -108,14 +108,10 @@
   /** Picks the celebration for one ball. runsBefore / runsAfter are the striker's runs either side of it. */
   function celebrateBall(ball, runsBefore = 0, runsAfter = 0, ballsAfter = null) {
     if (!ball) return false;
+    if (String(ball.wicket_type || "").toLowerCase() === "retired_out") return false;
     if (ball.wicket) {
       const how = HOW[ball.wicket_type] || String(ball.wicket_type || "out").replace("_", " ");
       const by = ball.fielder ? ` · ${ball.fielder}` : "";
-      if (String(ball.wicket_type || "").toLowerCase() === "retired_out") {
-        const player = ball.wicket_player || ball.striker || "";
-        celebrate("wicket", "RETIRED OUT", player);
-        return true;
-      }
       celebrate("wicket", "WICKET!", `${ball.wicket_player || ball.striker || ""} ${how}${by}`.trim());
       return true;
     }

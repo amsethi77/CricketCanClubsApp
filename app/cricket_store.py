@@ -588,6 +588,7 @@ def normalize_scorebook_ball(entry: dict[str, Any]) -> dict[str, Any]:
     normalized.setdefault("wicket_player", "")
     normalized.setdefault("fielder", "")
     normalized.setdefault("commentary", "")
+    normalized.setdefault("new_batter", "")
     normalized.setdefault("created_at", now_iso())
     normalized["over_number"] = max(1, int(normalized.get("over_number", 1) or 1))
     normalized["ball_number"] = max(1, int(normalized.get("ball_number", 1) or 1))
@@ -597,9 +598,13 @@ def normalize_scorebook_ball(entry: dict[str, Any]) -> dict[str, Any]:
     normalized["extras_type"] = str(normalized.get("extras_type", "none") or "none").strip().lower()
     if normalized["extras_type"] not in {"none", "wide", "no_ball", "bye", "leg_bye", "retired_out"}:
         normalized["extras_type"] = "none"
-    for key in ["striker", "non_striker", "bowler", "wicket_type", "wicket_player", "fielder", "commentary"]:
+    for key in ["striker", "non_striker", "bowler", "wicket_type", "wicket_player", "fielder", "commentary", "new_batter"]:
         normalized[key] = re.sub(r"\s+", " ", str(normalized.get(key, "") or "").strip())
-    if not normalized["wicket"]:
+    retired_out = normalized["wicket_type"].lower() == "retired_out"
+    if retired_out:
+        normalized["wicket"] = False
+        normalized["extras_type"] = "retired_out"
+    elif not normalized["wicket"]:
         normalized["wicket_type"] = ""
         normalized["wicket_player"] = ""
         normalized["fielder"] = ""
@@ -701,9 +706,19 @@ def summarize_innings_scorebook(innings: dict[str, Any]) -> dict[str, Any]:
     noBalls = 0
     byes = 0
     legByes = 0
+    retired_out_available: set[str] = set()
 
     for ball in innings.get("balls", []):
         striker = str(ball.get("striker", "") or "").strip()
+        non_striker = str(ball.get("non_striker", "") or "").strip()
+        returned_batter = str(ball.get("new_batter") or "").strip()
+        for name in (striker, non_striker, returned_batter):
+            if name in retired_out_available:
+                batters.setdefault(
+                    name,
+                    {"player_name": name, "runs": 0, "balls": 0, "fours": 0, "sixes": 0, "status": "not_batted"},
+                )["status"] = "batting"
+                retired_out_available.discard(name)
         bowler = str(ball.get("bowler", "") or "").strip()
         wicket_player = str(ball.get("wicket_player", "") or "").strip()
         runs_bat = int(ball.get("runs_bat", 0) or 0)
@@ -738,13 +753,24 @@ def summarize_innings_scorebook(innings: dict[str, Any]) -> dict[str, Any]:
             over_bowler_runs[(bowler, int(ball.get("over_number", 1) or 1))] += runs_bat + extras_runs
             if ball.get("wicket") and wicket_player and str(ball.get("wicket_type", "") or "").lower() not in {"run_out", "retired_hurt", "retired_out"}:
                 bowler_bucket["wickets"] += 1
-        if ball.get("wicket") and wicket_player:
-            wickets += 1
+        if (ball.get("wicket") or retired_out) and wicket_player:
             batter = batters.setdefault(
                 wicket_player,
                 {"player_name": wicket_player, "runs": 0, "balls": 0, "fours": 0, "sixes": 0, "status": "not_batted"},
             )
-            batter["status"] = "out" if str(ball.get("wicket_type", "") or "").lower() != "retired_hurt" else "retired"
+            wicket_type = str(ball.get("wicket_type", "") or "").lower()
+            if wicket_type == "retired_out":
+                batter["status"] = "retired_out"
+                retired_out_available.add(wicket_player)
+            else:
+                wickets += 1
+                batter["status"] = "out" if wicket_type != "retired_hurt" else "retired"
+                retired_out_available.discard(wicket_player)
+        if returned_batter:
+            batters.setdefault(
+                returned_batter,
+                {"player_name": returned_batter, "runs": 0, "balls": 0, "fours": 0, "sixes": 0, "status": "not_batted"},
+            )["status"] = "batting"
 
     striker_names = {
         str(ball.get("striker", "") or "").strip()
@@ -876,15 +902,16 @@ def build_scorebook_live_state(innings: dict[str, Any]) -> dict[str, Any]:
         last_runs_bat = int(last_ball.get("runs_bat", 0) or 0)
         last_extras_type = str(last_ball.get("extras_type", "none") or "none").strip().lower()
         wicket_note = ""
-        if last_ball.get("wicket"):
+        if last_ball.get("wicket") or str(last_ball.get("wicket_type") or "").lower() == "retired_out":
             wicket_type = str(last_ball.get("wicket_type", "") or "").lower()
             if wicket_type == "retired_out":
                 wicket_player = str(last_ball.get("wicket_player", "") or "").strip()
+                new_batter = str(last_ball.get("new_batter", "") or "").strip()
                 if wicket_player == current_striker:
-                    current_striker = ""
+                    current_striker = new_batter
                 elif wicket_player == current_non_striker:
-                    current_non_striker = ""
-                wicket_note = "A batter retired out. Choose the next batter before logging a delivery."
+                    current_non_striker = new_batter
+                wicket_note = "" if new_batter else "A batter retired out. Choose the next batter before logging a delivery."
             elif wicket_type != "run_out":
                 current_striker = ""
                 wicket_note = "A wicket fell. Choose the new striker before logging the next ball."
@@ -1007,12 +1034,24 @@ def scorebook_result_text(
     """"Afghans won by 3 wickets" / "Heartlake Cricket Club won by 12 runs" / "Match tied" (README "How a scored match ends")."""
     first_runs, second_runs = int(first_summary.get("runs") or 0), int(second_summary.get("runs") or 0)
     if second_runs > first_runs:
-        left = max(1, int(all_out_at or 10) - int(second_summary.get("wickets") or 0))
+        left = max(1, int(all_out_at or 10) - scorebook_wickets_for_all_out(second))
         return f"{second.get('batting_team') or 'Team batting second'} won by {left} wicket{'' if left == 1 else 's'}"
     if first_runs > second_runs:
         margin = first_runs - second_runs
         return f"{first.get('batting_team') or 'Team batting first'} won by {margin} run{'' if margin == 1 else 's'}"
     return "Match tied"
+
+
+def scorebook_wickets_for_all_out(innings: dict[str, Any]) -> int:
+    """Count dismissals toward all out, excluding temporary retired-out departures."""
+    return sum(
+        1
+        for ball in innings.get("balls", []) or []
+        if isinstance(ball, dict)
+        and ball.get("wicket")
+        and str(ball.get("wicket_player") or "").strip()
+        and str(ball.get("wicket_type") or "").strip().lower() != "retired_out"
+    )
 
 
 def scorebook_match_finished(innings: list[dict[str, Any]]) -> bool:
@@ -4137,6 +4176,7 @@ def _schema_tables() -> str:
       wicket_player TEXT,
       fielder TEXT,
       commentary TEXT,
+      new_batter TEXT,
       created_at TEXT,
       FOREIGN KEY (fixture_id, inning_number) REFERENCES fixture_scorebook_innings(fixture_id, inning_number) ON DELETE CASCADE
     );
@@ -4877,8 +4917,8 @@ def _write_relational_state(connection: sqlite3.Connection, store: dict[str, Any
                         INSERT INTO fixture_scorebook_balls (
                           id, fixture_id, inning_number, over_number, ball_number, striker, non_striker,
                           bowler, runs_bat, extras_type, extras_runs, wicket, wicket_type, wicket_player,
-                          fielder, commentary, created_at
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                          fielder, commentary, new_batter, created_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """,
                         (
                             ball.get("id", str(uuid.uuid4())[:8]),
@@ -4897,6 +4937,7 @@ def _write_relational_state(connection: sqlite3.Connection, store: dict[str, Any
                             ball.get("wicket_player", ""),
                             ball.get("fielder", ""),
                             ball.get("commentary", ""),
+                            ball.get("new_batter", ""),
                             ball.get("created_at", now_iso()),
                         ),
                     )
@@ -5481,6 +5522,7 @@ def _read_relational_state(connection: sqlite3.Connection) -> dict[str, Any]:
                             "wicket_player": item["wicket_player"] or "",
                             "fielder": item["fielder"] or "",
                             "commentary": item["commentary"] or "",
+                            "new_batter": item["new_batter"] or "",
                             "created_at": item["created_at"] or now_iso(),
                         }
                         for item in balls_by_innings.get((row["id"], inning_number), [])
@@ -5946,6 +5988,16 @@ def ensure_database() -> None:
                 except sqlite3.OperationalError as exc:
                     if "duplicate column name" not in str(exc).lower():
                         raise
+        existing_ball_columns = {
+            row[1]
+            for row in connection.execute("PRAGMA table_info(fixture_scorebook_balls)").fetchall()
+        }
+        if "new_batter" not in existing_ball_columns:
+            try:
+                connection.execute("ALTER TABLE fixture_scorebook_balls ADD COLUMN new_batter TEXT")
+            except sqlite3.OperationalError as exc:
+                if "duplicate column name" not in str(exc).lower():
+                    raise
         existing_columns = {
             row[1]
             for row in connection.execute("PRAGMA table_info(members)").fetchall()
