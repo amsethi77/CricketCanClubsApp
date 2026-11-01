@@ -349,6 +349,37 @@ body[data-dashboard-widget="overview"] .home-strip-row.is-grouped {
   scroll-snap-align: start;
 }
 
+.home-match-card-wrap {
+  flex: 0 0 250px;
+  display: grid;
+  gap: 6px;
+  scroll-snap-align: start;
+}
+
+.home-match-card-wrap .home-strip-card {
+  width: 100%;
+  flex: initial;
+}
+
+.home-match-actions {
+  display: flex;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+}
+
+.home-match-edit-link {
+  color: #9f1239;
+  font-size: 0.8rem;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.home-match-edit-link:hover,
+.home-match-edit-link:focus-visible {
+  text-decoration: underline;
+}
+
 .dash-hero-actions [hidden] {
   display: none !important;
 }

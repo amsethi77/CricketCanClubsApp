@@ -245,6 +245,42 @@ body.quick-score-page .qs-btn.ghost {
   letter-spacing: 0.08em;
 }
 
+.qs-live.qs-edit-badge {
+  background: #f59e0b;
+  color: #451a03;
+}
+
+.qs-live.qs-edit-badge .qs-dot {
+  background: #451a03;
+}
+
+.qs-edit-note {
+  margin: 12px 0 0;
+  padding: 10px 12px;
+  border: 1px solid rgba(253, 230, 138, 0.28);
+  border-radius: 12px;
+  background: rgba(245, 158, 11, 0.12);
+  color: #fde68a;
+  font-size: 0.84rem;
+  line-height: 1.45;
+}
+
+.qs-edit-innings {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 14px 0 0;
+}
+
+.qs-edit-innings .qs-btn {
+  min-height: 40px;
+}
+
+.qs-edit-card {
+  display: grid;
+  gap: 10px;
+}
+
 .qs-dot {
   width: 7px;
   height: 7px;

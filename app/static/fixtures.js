@@ -33,6 +33,23 @@
     return `${left} · ${right}`;
   }
 
+  function hasRecordedScore(fixture) {
+    const scorecard = fixture?.scorecard || {};
+    const innings = fixture?.scorebook?.innings || [];
+    return (
+      innings.some((inning) => (Array.isArray(inning?.balls) && inning.balls.length > 0) || Number(inning?.summary?.runs || 0) > 0) ||
+      [
+        scorecard.heartlake_runs,
+        scorecard.opponent_runs,
+        fixture?.heartlake_score,
+        fixture?.opponent_score,
+      ].some((value) => {
+        const score = String(value ?? "").trim();
+        return score !== "" && score !== "--" && score.toUpperCase() !== "TBD";
+      })
+    );
+  }
+
   function fixtureCard(fixture, modeLabel) {
     const link = fixture?.id ? `/live/${encodeURIComponent(fixture.id)}` : "#";
     return `
@@ -117,6 +134,7 @@
               String(fixture.date || "").slice(0, 10) >= todayIso ||
               String(fixture.status || "").toLowerCase() === "completed" ||
               fixture.scorecard_url ||
+              hasRecordedScore(fixture) ||
               !["", "TBD"].includes(String(fixture.result || fixture.scorecard?.result || "TBD").trim().toUpperCase())
           );
           const club = dashboard.focus_club || dashboard.club || {};

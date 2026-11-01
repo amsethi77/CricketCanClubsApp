@@ -68,7 +68,7 @@ def _scorebook_is_open(match: dict[str, Any]) -> bool:
 
 
 def _fixture_is_past(match: dict[str, Any]) -> bool:
-    """True when the fixture's date is before today (Toronto time). Past matches are read-only."""
+    """True when the fixture's date is before today (Toronto time). Live match actions are locked."""
     raw_date = str((match or {}).get("date") or "").strip()[:10]
     if not raw_date:
         return False
@@ -76,6 +76,28 @@ def _fixture_is_past(match: dict[str, Any]) -> bool:
         return datetime.fromisoformat(raw_date).date() < _current_local_date()
     except Exception:
         return False
+
+
+def _fixture_is_completed(match: dict[str, Any]) -> bool:
+    status = str((match or {}).get("status") or "").strip().lower()
+    if status in {"complete", "completed", "finished", "final"}:
+        return True
+    results = (
+        (match or {}).get("result"),
+        ((match or {}).get("scorecard") or {}).get("result"),
+    )
+    incomplete_results = {"", "tbd", "to be determined", "pending", "not recorded", "in progress", "ongoing"}
+    if any(str(result or "").strip().lower() not in incomplete_results for result in results):
+        return True
+    innings = ((match or {}).get("scorebook") or {}).get("innings") or []
+    completed_innings = [
+        str(innings_row.get("status") or "").strip().lower()
+        for innings_row in innings
+    ]
+    return len(completed_innings) >= 2 and all(
+        innings_status in {"complete", "completed", "finished"}
+        for innings_status in completed_innings
+    )
 
 
 def _require_not_past(match: dict[str, Any], what: str = "scores and availability") -> None:
@@ -1267,6 +1289,24 @@ def _apply_ball_edit(innings: dict[str, Any], ball: dict[str, Any], ball_id: str
     return True
 
 
+def _reindex_scorebook_innings(innings: dict[str, Any]) -> None:
+    balls = sorted(
+        innings.get("balls", []) or [],
+        key=lambda ball: (
+            int(ball.get("over_number") or 1),
+            int(ball.get("ball_number") or 1),
+            str(ball.get("created_at") or ""),
+        ),
+    )
+    legal_count = 0
+    for ball in balls:
+        ball["over_number"] = legal_count // 6 + 1
+        ball["ball_number"] = legal_count % 6 + 1
+        if str(ball.get("extras_type") or "none") not in {"wide", "no_ball"}:
+            legal_count += 1
+    innings["balls"] = balls
+
+
 class ChatRequest(BaseModel):
     question: str
     session_id: str | None = None
@@ -2409,20 +2449,53 @@ def _require_permission(token: str | None, permission: str) -> tuple[sqlite3.Row
     return user_row, current_club_id
 
 
-def _require_match_scorer(token: str | None, match_id: str) -> tuple[sqlite3.Row, str]:
-    """Captains, club admins and site admins score matches and upload scorecards
-    (permission score_matches). Captains and club admins only for their own club's matches.
-    README: "Scorecards: captains and club admins upload"."""
-    user_row, current_club_id = _require_permission(token, "score_matches")
-    if "superadmin" in _user_role_names(user_row, current_club_id):
-        return user_row, current_club_id
+def _match_scorer_is_authorized(
+    store: dict[str, Any],
+    user_row: sqlite3.Row,
+    current_club_id: str,
+    match: dict[str, Any],
+) -> bool:
+    """Return whether this user may score this club or is its assigned match captain."""
+    club_id = str(match.get("club_id") or "")
+    roles = _user_role_names(user_row, current_club_id)
+    if "superadmin" in roles:
+        return True
+    has_score_permission = "score_matches" in _user_permissions(user_row, current_club_id)
+    user_club_ids = set(_user_club_ids(store, user_row, current_club_id)) | {
+        str(user_row["primary_club_id"] or ""),
+        str(current_club_id or ""),
+    }
+    member = _member_for_user(store, user_row)
+    captain_name = normalize_name(str(match.get("heartlake_captain") or ""))
+    member_names = {
+        normalize_name(str(value or ""))
+        for value in [
+            user_row["display_name"],
+            (member or {}).get("name"),
+            (member or {}).get("full_name"),
+            *((member or {}).get("aliases", []) or []),
+        ]
+        if str(value or "").strip()
+    }
+    captain_member_id = str(match.get("heartlake_captain_member_id") or "").strip()
+    is_assigned_captain = bool(
+        (captain_name and captain_name in member_names)
+        or (captain_member_id and captain_member_id == str(user_row["member_id"] or "").strip())
+    )
+    return bool((has_score_permission and (not club_id or club_id in user_club_ids)) or is_assigned_captain)
+
+
+def _require_match_scorer(token: str | None, match_id: str, expected_club_id: str = "") -> tuple[sqlite3.Row, str]:
+    """Authorize club scorers, superadmins, and the captain assigned to this match."""
+    user_row, current_club_id = _auth_user_from_token(token)
     store = load_store()
     try:
         match = get_match_or_404(store, match_id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
-    club_id = str(match.get("club_id") or "")
-    if club_id and club_id not in set(_user_club_ids(store, user_row, current_club_id)) | {str(user_row["primary_club_id"] or ""), str(current_club_id or "")}:
+    if expected_club_id and str(match.get("club_id") or "") != str(expected_club_id).strip():
+        raise HTTPException(status_code=404, detail="Fixture not found.")
+    if not _match_scorer_is_authorized(store, user_row, current_club_id, match):
         raise HTTPException(status_code=403, detail="You can only score your own club's matches.")
     return user_row, current_club_id
 
@@ -3651,6 +3724,27 @@ def _public_fixture_recent_balls(fixture: dict[str, Any], limit: int = 6) -> lis
     return balls[-limit:]
 
 
+def _fixture_has_recorded_score_data(fixture: dict[str, Any]) -> bool:
+    scorecard = fixture.get("scorecard") or {}
+    score_values = (
+        scorecard.get("heartlake_runs"),
+        scorecard.get("heartlake_wickets"),
+        scorecard.get("opponent_runs"),
+        scorecard.get("opponent_wickets"),
+        fixture.get("heartlake_score"),
+        fixture.get("opponent_score"),
+    )
+    if any(
+        value is not None and str(value).strip().lower() not in {"", "-", "tbd"}
+        for value in score_values
+    ):
+        return True
+    result = str(scorecard.get("result") or fixture.get("result") or "").strip().lower()
+    if result and result not in {"tbd", "to be determined", "pending", "not recorded"}:
+        return True
+    return _fixture_has_balls(fixture)
+
+
 def _public_fixture_card(fixture: dict[str, Any]) -> dict[str, Any]:
     scorecard = dict(fixture.get("scorecard") or {})
     status = str(fixture.get("status") or "Scheduled").strip() or "Scheduled"
@@ -3705,7 +3799,9 @@ def _public_live_page_payload(store: dict[str, Any]) -> dict[str, Any]:
             continue
         parsed_date = _parse_public_fixture_date(card.get("date"))
         status_key = card.get("status_key") or ""
-        if status_key == "completed":
+        if status_key == "completed" or (
+            parsed_date and parsed_date < today and _fixture_has_recorded_score_data(fixture)
+        ):
             recent_results.append(card)
             continue
         if parsed_date and parsed_date < today:
@@ -4190,6 +4286,7 @@ def _public_fixtures_page_payload(store: dict[str, Any]) -> dict[str, Any]:
         or str(fixture.get("status_key") or "") == "completed"
         or fixture.get("scorecard_url")
         or str(fixture.get("result") or "TBD").strip().upper() not in {"", "TBD"}
+        or _fixture_has_recorded_score_data(fixture)
     ]
     fixtures.sort(
         key=lambda item: (
@@ -6664,7 +6761,7 @@ def create_season_fixture(request: SeasonFixtureRequest, x_auth_token: str | Non
     )
     if request.notify:
         _announce_new_fixture(new_fixture)
-    return season_setup_data(x_auth_token)
+    return season_setup_data(x_auth_token, str(club.get("id") or ""))
 
 
 @app.put("/api/admin/clubs/{club_id}/fixtures/{fixture_id}")
@@ -6772,7 +6869,7 @@ def update_season_fixture(
     changes = [label for label, old, new in zip(("date", "time", "ground"), before, after) if old != new]
     if changes:
         _announce_fixture_change(fixture, " and ".join(changes))
-    return season_setup_data(x_auth_token)
+    return season_setup_data(x_auth_token, club_id)
 
 
 @app.delete("/api/admin/clubs/{club_id}/fixtures/{fixture_id}")
@@ -6781,7 +6878,7 @@ def delete_season_fixture(
     fixture_id: str,
     x_auth_token: str | None = Header(default=None),
 ) -> dict[str, Any]:
-    user_row, _ = _require_permission(x_auth_token, "manage_fixtures")
+    user_row, _ = _require_match_scorer(x_auth_token, fixture_id, club_id)
     store = load_store()
     club = _selected_club(store, club_id)
     fixture = next(
@@ -6793,6 +6890,10 @@ def delete_season_fixture(
         ),
         None,
     )
+    if fixture is None:
+        raise HTTPException(status_code=404, detail="Fixture not found.")
+    if _fixture_is_completed(fixture):
+        raise HTTPException(status_code=409, detail="Completed matches cannot be deleted.")
     before = len(store.get("fixtures", []))
     store["fixtures"] = [
         item
@@ -6818,7 +6919,7 @@ def delete_season_fixture(
         },
         source="api",
     )
-    return season_setup_data(x_auth_token)
+    return season_setup_data(x_auth_token, club_id)
 
 
 @app.get("/api/player/availability-data")
@@ -7825,15 +7926,19 @@ def update_playing_xi(match_id: str, request: PlayingXiUpdateRequest, x_auth_tok
 
 @app.post("/api/matches/{match_id}/scorecard")
 def update_scorecard(match_id: str, request: ScorecardUpdateRequest, x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
-    user_row, _ = _require_match_scorer(x_auth_token, match_id)
+    user_row, current_club_id = _require_match_scorer(x_auth_token, match_id)
     store = load_store()
     try:
         match = get_match_or_404(store, match_id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
-    _require_not_past(match, "scores")
 
     updates = request.model_dump(exclude_none=True)
+    if _fixture_is_past(match) and "status" in updates:
+        current_status = str(match.get("status") or "").strip().lower()
+        requested_status = str(updates["status"] or "").strip().lower()
+        if requested_status != current_status:
+            raise HTTPException(status_code=400, detail="A past match's status cannot be changed while editing its scorecard.")
     for key, value in updates.items():
         if key == "status":
             match["status"] = value
@@ -7841,7 +7946,7 @@ def update_scorecard(match_id: str, request: ScorecardUpdateRequest, x_auth_toke
             match["scorecard"][key] = value
     _touch_fixture_audit(match, user_row)
     save_store(store)
-    return current_dashboard(load_store())
+    return current_dashboard(load_store(), str(match.get("club_id") or current_club_id or ""))
 
 
 @app.post("/api/matches/{match_id}/performances")
@@ -7900,15 +8005,21 @@ def add_commentary(match_id: str, request: CommentaryRequest, x_auth_token: str 
 
 @app.post("/api/matches/{match_id}/scorebook/setup")
 @_scoring_locked
-def update_scorebook_setup(match_id: str, request: ScorebookSetupRequest, x_auth_token: str | None = Header(default=None), x_lite_response: str | None = Header(default=None)) -> dict[str, Any]:
+def update_scorebook_setup(
+    match_id: str,
+    request: ScorebookSetupRequest,
+    edit_mode: bool = False,
+    x_auth_token: str | None = Header(default=None),
+    x_lite_response: str | None = Header(default=None),
+) -> dict[str, Any]:
     user_row, _ = _require_match_scorer(x_auth_token, match_id)
     store = load_store()
     try:
         match = get_match_or_404(store, match_id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
-    if not _scorebook_is_open(match):
-        raise HTTPException(status_code=400, detail="Live scoring is locked for this fixture. Past matches are read only and should be handled through Archives or scorecard uploads.")
+    if not _scorebook_is_open(match) and not (edit_mode and (_fixture_is_past(match) or _fixture_is_completed(match))):
+        raise HTTPException(status_code=400, detail="Live scoring is locked for this fixture. Use authorized edit mode to correct a past scorebook.")
 
     scorebook = _match_scorebook(match)
     innings_index = max(1, min(2, int(request.innings_number or 1))) - 1
@@ -7948,15 +8059,21 @@ def update_scorebook_setup(match_id: str, request: ScorebookSetupRequest, x_auth
 
 @app.post("/api/matches/{match_id}/scorebook/ball")
 @_scoring_locked
-def add_scorebook_ball(match_id: str, request: ScorebookBallRequest, x_auth_token: str | None = Header(default=None), x_lite_response: str | None = Header(default=None)) -> dict[str, Any]:
+def add_scorebook_ball(
+    match_id: str,
+    request: ScorebookBallRequest,
+    edit_mode: bool = False,
+    x_auth_token: str | None = Header(default=None),
+    x_lite_response: str | None = Header(default=None),
+) -> dict[str, Any]:
     user_row, _ = _require_match_scorer(x_auth_token, match_id)
     store = load_store()
     try:
         match = get_match_or_404(store, match_id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
-    if not _scorebook_is_open(match):
-        raise HTTPException(status_code=400, detail="Live scoring is locked for this fixture. Past matches are read only and should be handled through Archives or scorecard uploads.")
+    if not _scorebook_is_open(match) and not (edit_mode and (_fixture_is_past(match) or _fixture_is_completed(match))):
+        raise HTTPException(status_code=400, detail="Live scoring is locked for this fixture. Use authorized edit mode to correct a past scorebook.")
 
     scorebook = _match_scorebook(match)
     innings_index = max(1, min(2, int(request.innings_number or 1))) - 1
@@ -7983,11 +8100,14 @@ def add_scorebook_ball(match_id: str, request: ScorebookBallRequest, x_auth_toke
     editing = _apply_ball_edit(innings, ball, request.id)
     if not editing and _innings_is_over(match, innings, _match_lineups(match_id)):
         raise HTTPException(status_code=400, detail="This innings is over. To change the last ball, tap Undo.")
+    previous_status = str(innings.get("status") or "")
     before_summary = summarize_innings_scorebook(innings)
     before_summary["status"] = str(innings.get("status") or "")
     innings["balls"] = [item for item in innings.get("balls", []) if item.get("id") != ball["id"]]
     innings["balls"].append(ball)
     innings["balls"].sort(key=lambda item: (int(item.get("over_number", 1) or 1), int(item.get("ball_number", 1) or 1), str(item.get("created_at", ""))))
+    if edit_mode:
+        _reindex_scorebook_innings(innings)
 
     for collection_name, player_name in [
         ("batters", ball.get("striker", "")),
@@ -8006,16 +8126,19 @@ def add_scorebook_ball(match_id: str, request: ScorebookBallRequest, x_auth_toke
 
     summary = summarize_innings_scorebook(innings)
     lineups = _grow_lineups_with_new_players(match_id, match, innings, ball, _match_lineups(match_id), request.new_batter)
-    if summary["runs"] or summary["wickets"] or summary["legal_balls"]:
-        innings["status"] = "Live"
-    if summary["wickets"] >= _all_out_at(match, innings, lineups) or summary["legal_balls"] >= int(innings.get("overs_limit", 20) or 20) * 6:
-        innings["status"] = "Completed"
+    if not (edit_mode and editing):
+        if summary["runs"] or summary["wickets"] or summary["legal_balls"]:
+            innings["status"] = "Live"
+        if summary["wickets"] >= _all_out_at(match, innings, lineups) or summary["legal_balls"] >= int(innings.get("overs_limit", 20) or 20) * 6:
+            innings["status"] = "Completed"
+    else:
+        innings["status"] = previous_status or "Completed"
     sync_fixture_scorecard_from_scorebook(match)
     _settle_scorebook_result(match, lineups)
     _touch_fixture_audit(match, user_row)
     save_store(store)
-    if editing:
-        # a fixed ball sends no new alerts
+    if editing or edit_mode:
+        # Historical corrections and appended balls must not send live alerts.
         return {"ok": True, "status": innings.get("status")} if x_lite_response else current_dashboard(load_store())
     # Live score alerts (bell icon): match start, wickets, 50s/100s, end of innings
     try:
@@ -8034,21 +8157,28 @@ def add_scorebook_ball(match_id: str, request: ScorebookBallRequest, x_auth_toke
 
 @app.delete("/api/matches/{match_id}/scorebook/ball")
 @_scoring_locked
-def delete_scorebook_ball(match_id: str, x_auth_token: str | None = Header(default=None), x_lite_response: str | None = Header(default=None)) -> dict[str, Any]:
+def delete_scorebook_ball(
+    match_id: str,
+    edit_mode: bool = False,
+    innings_number: int | None = None,
+    ball_id: str = "",
+    x_auth_token: str | None = Header(default=None),
+    x_lite_response: str | None = Header(default=None),
+) -> dict[str, Any]:
     user_row, _ = _require_match_scorer(x_auth_token, match_id)
     store = load_store()
     try:
         match = get_match_or_404(store, match_id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
-    if not _scorebook_is_open(match):
-        raise HTTPException(status_code=400, detail="Live scoring is locked for this fixture. Past matches are read only and should be handled through Archives or scorecard uploads.")
+    if not _scorebook_is_open(match) and not (edit_mode and (_fixture_is_past(match) or _fixture_is_completed(match))):
+        raise HTTPException(status_code=400, detail="Live scoring is locked for this fixture. Use authorized edit mode to correct a past scorebook.")
 
     scorebook = _match_scorebook(match)
     balls_by_innings: list[tuple[dict[str, Any], dict[str, Any]]] = []
     for innings in scorebook.get("innings", []):
-      for ball in innings.get("balls", []):
-        balls_by_innings.append((innings, ball))
+        for ball in innings.get("balls", []):
+            balls_by_innings.append((innings, ball))
     if not balls_by_innings:
         raise HTTPException(status_code=400, detail="No scorebook delivery to undo.")
 
@@ -8061,11 +8191,56 @@ def delete_scorebook_ball(match_id: str, x_auth_token: str | None = Header(defau
             str(ball.get("id") or ""),
         )
 
-    target_innings, target_ball = sorted(balls_by_innings, key=_ball_sort_key)[-1]
+    target_innings = None
+    target_ball = None
+    if edit_mode and ball_id:
+        target_innings = next(
+            (
+                innings
+                for innings, ball in balls_by_innings
+                if str(ball.get("id") or "") == ball_id
+                and (innings_number is None or int(innings.get("inning_number") or 1) == innings_number)
+            ),
+            None,
+        )
+        if target_innings:
+            target_ball = next(
+                ball
+                for innings, ball in balls_by_innings
+                if innings is target_innings and str(ball.get("id") or "") == ball_id
+            )
+        else:
+            raise HTTPException(status_code=404, detail="That ball isn't in this innings any more. Refresh the page.")
+    elif edit_mode and innings_number is not None:
+        selected = next(
+            (innings for innings in scorebook.get("innings", []) if int(innings.get("inning_number") or 1) == innings_number),
+            None,
+        )
+        if selected and selected.get("balls"):
+            target_innings = selected
+            target_ball = max(
+                selected["balls"],
+                key=lambda ball: (
+                    int(ball.get("over_number") or 1) * 10 + int(ball.get("ball_number") or 1),
+                    str(ball.get("created_at") or ""),
+                    str(ball.get("id") or ""),
+                ),
+            )
+        else:
+            raise HTTPException(status_code=400, detail="No scorebook delivery to undo in this innings.")
+    else:
+        target_innings, target_ball = sorted(balls_by_innings, key=_ball_sort_key)[-1]
+    previous_status = str(target_innings.get("status") or "")
     target_innings["balls"] = [ball for ball in target_innings.get("balls", []) if ball.get("id") != target_ball.get("id")]
-    # Undoing the last ball of a finished innings opens it again (as guest matches already did).
     summary = summarize_innings_scorebook(target_innings)
-    target_innings["status"] = "Live"
+    if not target_innings["balls"]:
+        target_innings["status"] = "Not started"
+    elif edit_mode and previous_status.lower() in {"complete", "completed", "finished"}:
+        target_innings["status"] = previous_status
+    else:
+        target_innings["status"] = "Live"
+    if edit_mode:
+        _reindex_scorebook_innings(target_innings)
     if summary["wickets"] >= _all_out_at(match, target_innings, _match_lineups(match_id)) or summary["legal_balls"] >= int(target_innings.get("overs_limit", 20) or 20) * 6:
         target_innings["status"] = "Completed"
     sync_fixture_scorecard_from_scorebook(match)
@@ -9044,7 +9219,9 @@ def quick_score_fixtures(x_auth_token: str | None = Header(default=None)) -> dic
     items = []
     for fixture in _club_fixtures(store, str(club.get("id") or "")):
         open_now = _scorebook_is_open(fixture)
-        if not open_now and str(fixture.get("date") or "") < today:
+        can_edit = _match_scorer_is_authorized(store, user_row, current_club_id, fixture)
+        edit_existing = can_edit and _fixture_has_balls(fixture) and (_fixture_is_past(fixture) or _fixture_is_completed(fixture))
+        if not open_now and str(fixture.get("date") or "") < today and not edit_existing:
             continue
         items.append(
             {
@@ -9055,6 +9232,7 @@ def quick_score_fixtures(x_auth_token: str | None = Header(default=None)) -> dic
                 "status": fixture.get("status"),
                 "overs": (fixture.get("details") or {}).get("overs") or "20",
                 "open": open_now,
+                "can_edit_scorebook": edit_existing,
                 # Oct 29 2026: two matches vs the same team on one day need telling apart
                 "time": str((fixture.get("details") or {}).get("scheduled_time") or ""),
                 "started": _fixture_has_balls(fixture),
@@ -9142,7 +9320,6 @@ def quick_score_start(request: QuickStartRequest, x_auth_token: str | None = Hea
 @app.get("/api/quick-score/{match_id}")
 def quick_score_state(match_id: str, x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
     user_row, current_club_id = _auth_user_from_token(x_auth_token)
-    permissions = _user_permissions(user_row, current_club_id)
     store = load_store()
     try:
         fixture = get_match_or_404(store, match_id)
@@ -9152,10 +9329,12 @@ def quick_score_state(match_id: str, x_auth_token: str | None = Header(default=N
     club = _selected_club(store, str(fixture.get("club_id") or current_club_id))
     lineups = _match_lineups(match_id)
     started = any((innings.get("balls") or []) for innings in (fixture.get("scorebook") or {}).get("innings", []) or [])
+    can_edit_scorebook = _match_scorer_is_authorized(store, user_row, current_club_id, fixture)
     return {
         "match": payload,
         "open": _scorebook_is_open(fixture),
-        "can_score": "score_matches" in permissions,
+        "can_score": can_edit_scorebook,
+        "can_edit_scorebook": can_edit_scorebook,
         "roster": _club_member_names(store, club),
         "lineups": lineups,
         # Matches already being scored before line-ups were required carry on without them.

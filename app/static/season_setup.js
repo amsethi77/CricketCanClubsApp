@@ -1,4 +1,4 @@
-const { requireAuth, postJson, setPrimaryClubId } = window.CricketClubAppPages;
+const { requireAuth, postJson, deleteJson, setPrimaryClubId } = window.CricketClubAppPages;
 
 const title = document.getElementById("seasonSetupTitle");
 const summary = document.getElementById("seasonSetupSummary");
@@ -14,6 +14,7 @@ const fixtureCancelEditButton = document.getElementById("fixtureCancelEditButton
 const MIN_SEASON_YEAR = 2026;
 
 let payload = null;
+let canDeleteIncomplete = false;
 
 function debug(...args) {
   if (typeof console !== "undefined" && console.debug) {
@@ -36,6 +37,20 @@ function isPastFixture(fixture) {
   const fixtureDate = String(fixture?.date || "").trim();
   if (!fixtureDate) return false;
   return fixtureDate < todayIso();
+}
+
+function isCompletedFixture(fixture) {
+  const status = String(fixture?.status || "").trim().toLowerCase();
+  const results = [fixture?.result, fixture?.scorecard?.result].map((value) => String(value || "").trim().toLowerCase());
+  if (
+    ["complete", "completed", "finished", "final"].includes(status) ||
+    results.some((result) => result && !["tbd", "to be determined", "pending", "not recorded", "in progress", "ongoing"].includes(result))
+  ) {
+    return true;
+  }
+  const innings = fixture?.scorebook?.innings || [];
+  const completedInnings = innings.map((inning) => String(inning?.status || "").trim().toLowerCase());
+  return completedInnings.length >= 2 && completedInnings.every((inningsStatus) => ["complete", "completed", "finished"].includes(inningsStatus));
 }
 
 function resetEditMode() {
@@ -83,6 +98,7 @@ function renderFixtures() {
     .map(
       (fixture) => {
         const locked = isPastFixture(fixture);
+        const canDelete = canDeleteIncomplete && !isCompletedFixture(fixture);
         return `
         <article class="detail-card">
           <strong>${fixture.date_label} vs ${fixture.opponent}</strong>
@@ -90,6 +106,7 @@ function renderFixtures() {
           <small>${fixture.season || `${fixture.season_year || ""} Season`} · ${fixture.status}</small>
           <div class="inline-actions">
             <button class="secondary-button" type="button" data-fixture-edit="${fixture.id}" ${locked ? "disabled" : ""}>${locked ? "Locked" : "Edit"}</button>
+            <button class="secondary-button" type="button" data-fixture-delete="${fixture.id}" ${canDelete ? "" : "disabled"}>${isCompletedFixture(fixture) ? "Completed game" : "Delete incomplete game"}</button>
           </div>
         </article>
       `;
@@ -175,6 +192,30 @@ form.addEventListener("submit", async (event) => {
 
 seasonFilter.addEventListener("change", renderFixtures);
 fixturesList.addEventListener("click", (event) => {
+  const deleteButton = event.target.closest("[data-fixture-delete]");
+  if (deleteButton) {
+    const fixture = (payload?.fixtures || []).find((item) => item.id === deleteButton.dataset.fixtureDelete);
+    if (!fixture || !canDeleteIncomplete || isCompletedFixture(fixture)) {
+      setStatus("Only captains and club admins can delete incomplete games.", "error");
+      return;
+    }
+    if (!window.confirm(`Delete incomplete game ${fixture.date_label || fixture.date} vs ${fixture.opponent}?`)) return;
+    deleteJson(
+      `/api/admin/clubs/${encodeURIComponent(payload.club.id)}/fixtures/${encodeURIComponent(fixture.id)}`,
+      true
+    )
+      .then((result) => {
+        payload = result;
+        form.reset();
+        resetEditMode();
+        renderSeasonFilter();
+        renderFixtures();
+        summary.textContent = `Club default season ${result.club.season || "TBD"} · ${result.fixtures.length} fixture(s) stored`;
+        setStatus("Incomplete game deleted.", "success");
+      })
+      .catch((error) => setStatus(error.message, "error"));
+    return;
+  }
   const button = event.target.closest("[data-fixture-edit]");
   if (!button) return;
   const fixture = (payload?.fixtures || []).find((item) => item.id === button.dataset.fixtureEdit);
@@ -210,6 +251,7 @@ requireAuth()
     debug("Loading season setup data.", { clubId });
     setStatus("Loading season setup...", "info");
     payload = await window.CricketClubAppPages.getJson(`/api/season-setup/data${clubId ? `?club_id=${encodeURIComponent(clubId)}` : ""}`, true);
+    canDeleteIncomplete = (payload.user?.permissions || []).includes("score_matches");
     setPrimaryClubId(payload.club.id || clubId);
     title.textContent = `${payload.club.name} season setup`;
     summary.textContent = `Club default season ${payload.club.season || "TBD"} · ${payload.fixtures.length} fixture(s) stored`;

@@ -72,6 +72,23 @@
     return myClubPromise;
   }
 
+  async function canEditScorebook(matchId) {
+    try {
+      const response = await fetch(`/api/quick-score/${encodeURIComponent(matchId)}`, {
+        headers: {
+          Accept: "application/json",
+          "X-Auth-Token": localStorage.getItem("cricketClubAppAuthToken") || "",
+        },
+      });
+      if (!response.ok) return false;
+      const payload = await response.json();
+      return Boolean(payload.can_edit_scorebook);
+    } catch (error) {
+      console.error("Could not check match scorebook permissions.", error);
+      return false;
+    }
+  }
+
   // "Heartlake Cricket Club", "HEARTLAKE CC" and "Heart Lake" are the same club.
   function teamKey(name) {
     return String(name || "")
@@ -147,6 +164,7 @@
   const row = strip.querySelector(".home-strip-row");
   let items = [];
   let filter = "all";
+  let viewerClubId = "";
 
   function fromFixture(f, kindOverride) {
     const status = String(f.status_key || f.status || "").toLowerCase();
@@ -179,19 +197,27 @@
   }
 
   function card(m) {
-    const mine = m.club && m.club === currentClubId();
+    const mine = m.club && m.club === viewerClubId;
+    const canEdit = m.canEditScorebook && m.kind === "result";
     const badge =
       m.kind === "live"
         ? `<span class="home-badge live"><span class="home-dot"></span>LIVE</span>`
         : m.kind === "result"
           ? `<span class="home-badge result">RESULT</span>`
           : `<span class="home-badge upcoming">${esc(shortDate(m.date))}</span>`;
-    return `
+    const scorecard = `
       <a class="home-strip-card is-${m.kind}${mine ? " is-mine" : ""}" href="${m.href}">
         <div class="home-strip-top">${badge}<span class="home-strip-meta">${esc(m.kind === "upcoming" ? m.meta : shortDate(m.date))}</span></div>
         ${m.teams.map((t) => `<div class="home-strip-team"><span>${esc(t.name)}</span><strong>${esc(t.score)}</strong></div>`).join("")}
         <p class="home-strip-note">${esc(m.note)}</p>
       </a>`;
+    if (!canEdit) return scorecard;
+    const editHref = `/dashboard/widgets/match-center?focus_club_id=${encodeURIComponent(m.club)}&match_id=${encodeURIComponent(m.id)}#selectedAvailabilityTitle`;
+    const ballEditHref = `/score?match=${encodeURIComponent(m.id)}&edit=1`;
+    return `<div class="home-match-card-wrap">${scorecard}<div class="home-match-actions">
+      <a class="home-match-edit-link" href="${esc(editHref)}">Edit scorecard</a>
+      <a class="home-match-edit-link" href="${esc(ballEditHref)}">Edit ball-by-ball</a>
+    </div></div>`;
   }
 
   function updateNav() {
@@ -324,6 +350,7 @@
     ]);
     const club = await myClub();
     const clubId = club.id;
+    viewerClubId = clubId;
     const clubKey = teamKey(club.name);
     const mineFirst = (a, b) => Number(b.club === clubId) - Number(a.club === clubId);
     // A member's Home shows their own club's matches and scorecards only (Amit, Oct 26: Heartlake's Home
@@ -343,6 +370,9 @@
       .map((f) => fromFixture(f))
       .filter((m) => !liveIds.has(m.id) && isMine(m.club, m.teams.map((t) => t.name)));
     const results = all.filter((m) => m.kind === "result").sort((a, b) => String(b.date).localeCompare(String(a.date)));
+    await Promise.all(results.slice(0, 8).map(async (match) => {
+      match.canEditScorebook = await canEditScorebook(match.id);
+    }));
     const today = todayIso();
     const upcoming = all
       .filter((m) => m.kind === "upcoming" && String(m.date) >= today)

@@ -564,6 +564,11 @@ class FunctionalQATests(LocalQATestCase):
         created = next((item for item in create_result.get("fixtures", []) if item.get("opponent") == "Scorebook Team"), None)
         self.assertIsNotNone(created)
         fixture_id = created["id"]
+        store = self.main.load_store()
+        stored = next(item for item in store["fixtures"] if item["id"] == fixture_id)
+        stored["date"] = datetime.utcnow().date().isoformat()
+        stored["status"] = "Live"
+        self.main.save_store(store)
         superadmin_auth = self.signin("14164508695")
         setup_response = self.client.post(
             f"/api/matches/{fixture_id}/scorebook/setup",
@@ -575,7 +580,7 @@ class FunctionalQATests(LocalQATestCase):
                 "target_runs": 0,
                 "status": "Not started",
                 "batters": ["player1", "captain1", "clubadmin1", "", "", "", "", "", "", "", ""],
-                "bowlers": ["clubadmin1", "", "", "", "", "", "", "", "", "", ""],
+                "bowlers": ["player2", "player3", "", "", "", "", "", "", "", "", ""],
             },
             headers=self.auth_headers(superadmin_auth["token"]),
         )
@@ -588,7 +593,7 @@ class FunctionalQATests(LocalQATestCase):
                 "ball_number": 1,
                 "striker": "player1",
                 "non_striker": "captain1",
-                "bowler": "clubadmin1",
+                "bowler": "player2",
                 "runs_bat": 1,
                 "commentary": "QA ball",
             },
@@ -661,7 +666,424 @@ class FunctionalQATests(LocalQATestCase):
         self.assertEqual(response.status_code, 400, response.text)
         self.assertEqual(response.json()["detail"], "Past fixtures cannot be edited.")
 
-    def test_f11_signout_invalidates_session(self) -> None:
+    def test_f11_captain_can_correct_past_scorecard_summary(self) -> None:
+        captain = self.signin("2222222222")
+        yesterday = (datetime.utcnow().date() - timedelta(days=1)).isoformat()
+        self.create_fixture(
+            captain["token"],
+            date=yesterday,
+            date_label=yesterday,
+            season_year=int(yesterday[:4]),
+            opponent="Past Scorecard Team",
+        )
+        fixture = next(item for item in self.main.load_store()["fixtures"] if item["opponent"] == "Past Scorecard Team")
+        user_row, _ = self.main._auth_user_from_token(captain["token"])
+        store = self.main.load_store()
+        stored_fixture = next(item for item in store["fixtures"] if item["id"] == fixture["id"])
+        stored_fixture["heartlake_captain"] = user_row["display_name"]
+        self.main.save_store(store)
+        response = self.client.post(
+            f"/api/matches/{fixture['id']}/scorecard",
+            json={
+                "heartlake_runs": "120",
+                "heartlake_wickets": "4",
+                "opponent_runs": "98",
+                "opponent_wickets": "8",
+                "result": "Club won",
+                "status": fixture["status"],
+            },
+            headers=self.auth_headers(captain["token"]),
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        updated = next(item for item in self.main.load_store()["fixtures"] if item["id"] == fixture["id"])
+        self.assertEqual(updated["scorecard"]["heartlake_runs"], "120")
+        self.assertEqual(updated["scorecard"]["result"], "Club won")
+
+    def test_f12_players_cannot_edit_past_scorecard_summary(self) -> None:
+        captain = self.signin("2222222222")
+        yesterday = (datetime.utcnow().date() - timedelta(days=1)).isoformat()
+        self.create_fixture(
+            captain["token"],
+            date=yesterday,
+            date_label=yesterday,
+            season_year=int(yesterday[:4]),
+            opponent="Past Scorecard Permission Team",
+        )
+        fixture = next(item for item in self.main.load_store()["fixtures"] if item["opponent"] == "Past Scorecard Permission Team")
+        player = self.signin("1111111111")
+        response = self.client.post(
+            f"/api/matches/{fixture['id']}/scorecard",
+            json={"heartlake_runs": "120"},
+            headers=self.auth_headers(player["token"]),
+        )
+        self.assertEqual(response.status_code, 403, response.text)
+
+    def test_f13_assigned_game_captain_can_correct_past_scorecard_summary(self) -> None:
+        organizer = self.signin("2222222222")
+        yesterday = (datetime.utcnow().date() - timedelta(days=1)).isoformat()
+        self.create_fixture(
+            organizer["token"],
+            date=yesterday,
+            date_label=yesterday,
+            season_year=int(yesterday[:4]),
+            opponent="Assigned Captain Scorecard Team",
+        )
+        store = self.main.load_store()
+        fixture = next(item for item in store["fixtures"] if item["opponent"] == "Assigned Captain Scorecard Team")
+        captain = self.signin("1111111111")
+        user_row, _ = self.main._auth_user_from_token(captain["token"])
+        fixture["heartlake_captain"] = user_row["display_name"]
+        self.main.save_store(store)
+        response = self.client.post(
+            f"/api/matches/{fixture['id']}/scorecard",
+            json={"heartlake_runs": "120"},
+            headers=self.auth_headers(captain["token"]),
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+
+    def test_f14_only_incomplete_fixtures_can_be_deleted_by_captains(self) -> None:
+        captain = self.signin("2222222222")
+        self.create_fixture(captain["token"], opponent="Incomplete Delete Team")
+        store = self.main.load_store()
+        fixture = next(item for item in store["fixtures"] if item["opponent"] == "Incomplete Delete Team")
+        user_row, _ = self.main._auth_user_from_token(captain["token"])
+        fixture["heartlake_captain"] = user_row["display_name"]
+        self.main.save_store(store)
+        deleted = self.client.delete(
+            f"/api/admin/clubs/{fixture['club_id']}/fixtures/{fixture['id']}",
+            headers=self.auth_headers(captain["token"]),
+        )
+        self.assertEqual(deleted.status_code, 200, deleted.text)
+        self.assertNotIn(fixture["id"], {item["id"] for item in self.main.load_store()["fixtures"]})
+
+        self.create_fixture(captain["token"], opponent="Completed Keep Team")
+        store = self.main.load_store()
+        completed = next(item for item in store["fixtures"] if item["opponent"] == "Completed Keep Team")
+        stored_fixture = next(item for item in store["fixtures"] if item["id"] == completed["id"])
+        stored_fixture["status"] = "Completed"
+        stored_fixture["heartlake_captain"] = user_row["display_name"]
+        self.main.save_store(store)
+        rejected = self.client.delete(
+            f"/api/admin/clubs/{completed['club_id']}/fixtures/{completed['id']}",
+            headers=self.auth_headers(captain["token"]),
+        )
+        self.assertEqual(rejected.status_code, 409, rejected.text)
+        self.assertIn(completed["id"], {item["id"] for item in self.main.load_store()["fixtures"]})
+
+        self.create_fixture(captain["token"], opponent="Completed Innings Keep Team")
+        store = self.main.load_store()
+        completed_innings_fixture = next(item for item in store["fixtures"] if item["opponent"] == "Completed Innings Keep Team")
+        completed_innings_fixture["scorebook"] = {
+            "innings": [{"status": "Completed"}, {"status": "Finished"}],
+        }
+        completed_innings_fixture["heartlake_captain"] = user_row["display_name"]
+        self.main.save_store(store)
+        rejected_completed_innings = self.client.delete(
+            f"/api/admin/clubs/{completed_innings_fixture['club_id']}/fixtures/{completed_innings_fixture['id']}",
+            headers=self.auth_headers(captain["token"]),
+        )
+        self.assertEqual(rejected_completed_innings.status_code, 409, rejected_completed_innings.text)
+        self.assertIn(completed_innings_fixture["id"], {item["id"] for item in self.main.load_store()["fixtures"]})
+
+        self.create_fixture(captain["token"], opponent="Assigned Captain Delete Team")
+        store = self.main.load_store()
+        assigned_captain_fixture = next(item for item in store["fixtures"] if item["opponent"] == "Assigned Captain Delete Team")
+        assigned_captain_auth = self.signin("1111111111")
+        assigned_captain_user, _ = self.main._auth_user_from_token(assigned_captain_auth["token"])
+        assigned_captain_fixture["heartlake_captain"] = assigned_captain_user["display_name"]
+        self.main.save_store(store)
+        deleted_by_assigned_captain = self.client.delete(
+            f"/api/admin/clubs/{assigned_captain_fixture['club_id']}/fixtures/{assigned_captain_fixture['id']}",
+            headers=self.auth_headers(assigned_captain_auth["token"]),
+        )
+        self.assertEqual(deleted_by_assigned_captain.status_code, 200, deleted_by_assigned_captain.text)
+        self.assertNotIn(
+            assigned_captain_fixture["id"],
+            {item["id"] for item in self.main.load_store()["fixtures"]},
+        )
+
+    def test_f27_past_fixture_with_recorded_scores_appears_in_recent_results(self) -> None:
+        captain = self.signin("2222222222")
+        yesterday = (datetime.utcnow().date() - timedelta(days=1)).isoformat()
+        self.create_fixture(
+            captain["token"],
+            date=yesterday,
+            date_label=yesterday,
+            season_year=int(yesterday[:4]),
+            opponent="Past Scored Recent Team",
+        )
+        store = self.main.load_store()
+        fixture = next(item for item in store["fixtures"] if item["opponent"] == "Past Scored Recent Team")
+        fixture["heartlake_score"] = "106/3"
+        fixture["opponent_score"] = "205/7"
+        fixture["scorecard"] = {
+            "heartlake_runs": "106",
+            "heartlake_wickets": "3",
+            "opponent_runs": "205",
+            "opponent_wickets": "7",
+            "result": "TBD",
+        }
+        fixture["scorebook"]["innings"][0]["balls"] = [{"runs_bat": 1, "extras_type": "none"}]
+        self.main.save_store(store)
+
+        fixtures_response = self.client.get("/api/public/fixtures-page")
+        self.assertEqual(fixtures_response.status_code, 200, fixtures_response.text)
+        fixture_card = next(
+            item for item in fixtures_response.json()["fixtures"] if item["id"] == fixture["id"]
+        )
+        self.assertTrue(fixture_card["is_past"])
+        self.assertTrue(fixture_card["heartlake_score"])
+
+        recent_response = self.client.get("/api/public/live-page")
+        self.assertEqual(recent_response.status_code, 200, recent_response.text)
+        recent_ids = {item["id"] for item in recent_response.json()["recent_results"]}
+        self.assertIn(fixture["id"], recent_ids)
+
+    def test_f28_authorized_edit_mode_corrects_and_deletes_past_deliveries(self) -> None:
+        captain = self.signin("2222222222")
+        created = self.create_fixture(captain["token"], opponent="Past Ball Edit Team")
+        fixture = next(item for item in created["fixtures"] if item["opponent"] == "Past Ball Edit Team")
+        fixture_id = fixture["id"]
+        store = self.main.load_store()
+        stored = next(item for item in store["fixtures"] if item["id"] == fixture_id)
+        stored["date"] = datetime.utcnow().date().isoformat()
+        stored["status"] = "Live"
+        self.main.save_store(store)
+
+        scorer = self.signin("14164508695")
+        setup_response = self.client.post(
+            f"/api/matches/{fixture_id}/scorebook/setup",
+            json={
+                "innings_number": 1,
+                "batting_team": "TestClub",
+                "bowling_team": "Past Ball Edit Team",
+                "overs_limit": 20,
+                "target_runs": None,
+                "status": "Live",
+                "batters": ["Club Player 1", "Club Player 2"],
+                "bowlers": ["Opponent Player 1", "Opponent Player 2"],
+            },
+            headers=self.auth_headers(scorer["token"]),
+        )
+        self.assertEqual(setup_response.status_code, 200, setup_response.text)
+        for ball_number, runs in ((1, 1), (2, 2)):
+            response = self.client.post(
+                f"/api/matches/{fixture_id}/scorebook/ball",
+                json={
+                    "innings_number": 1,
+                    "over_number": 1,
+                    "ball_number": ball_number,
+                    "striker": "Club Player 1",
+                    "non_striker": "Club Player 2",
+                    "bowler": "Opponent Player 1",
+                    "runs_bat": runs,
+                },
+                headers=self.auth_headers(scorer["token"]),
+            )
+            self.assertEqual(response.status_code, 200, response.text)
+        store = self.main.load_store()
+        stored = next(item for item in store["fixtures"] if item["id"] == fixture_id)
+        first_ball, second_ball = stored["scorebook"]["innings"][0]["balls"]
+        second_ball_id = second_ball["id"]
+        stored["date"] = (datetime.utcnow().date() - timedelta(days=1)).isoformat()
+        stored["status"] = "Completed"
+        self.main.save_store(store)
+
+        normal_write = self.client.post(
+            f"/api/matches/{fixture_id}/scorebook/ball",
+            json={
+                "id": first_ball["id"],
+                "innings_number": 1,
+                "over_number": 1,
+                "ball_number": 1,
+                "striker": "Club Player 1",
+                "non_striker": "Club Player 2",
+                "bowler": "Opponent Player 1",
+                "runs_bat": 4,
+            },
+            headers=self.auth_headers(scorer["token"]),
+        )
+        self.assertEqual(normal_write.status_code, 400, normal_write.text)
+
+        state = self.client.get(
+            f"/api/quick-score/{fixture_id}",
+            headers=self.auth_headers(scorer["token"]),
+        )
+        self.assertEqual(state.status_code, 200, state.text)
+        self.assertTrue(state.json()["can_edit_scorebook"])
+
+        correction = self.client.post(
+            f"/api/matches/{fixture_id}/scorebook/ball?edit_mode=true",
+            json={
+                "id": first_ball["id"],
+                "innings_number": 1,
+                "over_number": 1,
+                "ball_number": 1,
+                "striker": "Club Player 1",
+                "non_striker": "Club Player 2",
+                "bowler": "Opponent Player 1",
+                "runs_bat": 4,
+            },
+            headers=self.auth_headers(scorer["token"]),
+        )
+        self.assertEqual(correction.status_code, 200, correction.text)
+        store = self.main.load_store()
+        stored = next(item for item in store["fixtures"] if item["id"] == fixture_id)
+        self.assertEqual(len(stored["scorebook"]["innings"][0]["balls"]), 2)
+        self.assertEqual(stored["scorebook"]["innings"][0]["balls"][0]["runs_bat"], 4)
+
+        with (
+            patch.object(self.main.muse, "live_score_events") as live_events,
+            patch.object(self.main, "_notify") as notify,
+        ):
+            appended = self.client.post(
+                f"/api/matches/{fixture_id}/scorebook/ball?edit_mode=true",
+                json={
+                    "innings_number": 1,
+                    "over_number": 1,
+                    "ball_number": 3,
+                    "striker": "Club Player 1",
+                    "non_striker": "Club Player 2",
+                    "bowler": "Opponent Player 1",
+                    "runs_bat": 4,
+                },
+                headers=self.auth_headers(scorer["token"]),
+            )
+        self.assertEqual(appended.status_code, 200, appended.text)
+        live_events.assert_not_called()
+        notify.assert_not_called()
+        store = self.main.load_store()
+        stored = next(item for item in store["fixtures"] if item["id"] == fixture_id)
+        appended_balls = stored["scorebook"]["innings"][0]["balls"]
+        self.assertEqual(len(appended_balls), 3)
+        self.assertEqual(self.main.summarize_innings_scorebook(stored["scorebook"]["innings"][0])["runs"], 10)
+        self.assertEqual(stored["scorebook"]["innings"][0]["status"], "Live")
+        appended_ball_id = appended_balls[-1]["id"]
+
+        wide_run_out = self.client.post(
+            f"/api/matches/{fixture_id}/scorebook/ball?edit_mode=true",
+            json={
+                "innings_number": 1,
+                "over_number": 1,
+                "ball_number": 4,
+                "striker": "Club Player 1",
+                "non_striker": "Club Player 2",
+                "bowler": "Opponent Player 1",
+                "extras_type": "wide",
+                "extras_runs": 3,
+                "wicket": True,
+                "wicket_type": "run_out",
+                "wicket_player": "Club Player 1",
+                "fielder": "Opponent Player 2",
+            },
+            headers=self.auth_headers(scorer["token"]),
+        )
+        self.assertEqual(wide_run_out.status_code, 200, wide_run_out.text)
+        store = self.main.load_store()
+        stored = next(item for item in store["fixtures"] if item["id"] == fixture_id)
+        first_innings = stored["scorebook"]["innings"][0]
+        self.assertEqual(self.main.summarize_innings_scorebook(first_innings)["runs"], 13)
+        self.assertEqual(self.main.summarize_innings_scorebook(first_innings)["wickets"], 1)
+        self.assertEqual(first_innings["status"], "Completed")
+        wide_run_out_id = first_innings["balls"][-1]["id"]
+
+        second_setup = self.client.post(
+            f"/api/matches/{fixture_id}/scorebook/setup?edit_mode=true",
+            json={
+                "innings_number": 2,
+                "batting_team": "Past Ball Edit Team",
+                "bowling_team": "TestClub",
+                "overs_limit": 20,
+                "target_runs": 13,
+                "status": "Live",
+                "batters": ["Opponent Player 1", "Opponent Player 2"],
+                "bowlers": ["Club Player 1", "Club Player 2"],
+            },
+            headers=self.auth_headers(scorer["token"]),
+        )
+        self.assertEqual(second_setup.status_code, 200, second_setup.text)
+        second_innings_ball = self.client.post(
+            f"/api/matches/{fixture_id}/scorebook/ball?edit_mode=true",
+            json={
+                "innings_number": 2,
+                "over_number": 1,
+                "ball_number": 1,
+                "striker": "Opponent Player 1",
+                "non_striker": "Opponent Player 2",
+                "bowler": "Club Player 1",
+                "runs_bat": 1,
+            },
+            headers=self.auth_headers(scorer["token"]),
+        )
+        self.assertEqual(second_innings_ball.status_code, 200, second_innings_ball.text)
+        updated_fixture = next(item for item in self.main.load_store()["fixtures"] if item["id"] == fixture_id)
+        self.assertEqual(updated_fixture["result"], "TBD")
+
+        no_ball_run_out = self.client.post(
+            f"/api/matches/{fixture_id}/scorebook/ball?edit_mode=true",
+            json={
+                "innings_number": 2,
+                "over_number": 1,
+                "ball_number": 2,
+                "striker": "Opponent Player 1",
+                "non_striker": "Opponent Player 2",
+                "bowler": "Club Player 1",
+                "runs_bat": 2,
+                "extras_type": "no_ball",
+                "extras_runs": 1,
+                "wicket": True,
+                "wicket_type": "run_out",
+                "wicket_player": "Opponent Player 1",
+                "fielder": "Club Player 2",
+            },
+            headers=self.auth_headers(scorer["token"]),
+        )
+        self.assertEqual(no_ball_run_out.status_code, 200, no_ball_run_out.text)
+        updated_fixture = next(item for item in self.main.load_store()["fixtures"] if item["id"] == fixture_id)
+        self.assertNotEqual(updated_fixture["result"], "TBD")
+
+        store = self.main.load_store()
+        stored = next(item for item in store["fixtures"] if item["id"] == fixture_id)
+        stored["heartlake_captain"] = "Unassigned test captain"
+        stored["heartlake_captain_member_id"] = ""
+        self.main.save_store(store)
+        player = self.signin("1111111111")
+        with self.main._auth_connection() as connection:
+            player_row = connection.execute(
+                "SELECT id FROM app_users WHERE mobile = ?",
+                ("1111111111",),
+            ).fetchone()
+            self.assertIsNotNone(player_row)
+            connection.execute("UPDATE app_users SET role = 'player' WHERE id = ?", (player_row["id"],))
+            connection.execute("DELETE FROM app_user_club_roles WHERE user_id = ?", (player_row["id"],))
+        denied = self.client.post(
+            f"/api/matches/{fixture_id}/scorebook/ball?edit_mode=true",
+            json={
+                "innings_number": 2,
+                "over_number": 1,
+                "ball_number": 3,
+                "striker": "Opponent Player 1",
+                "non_striker": "Opponent Player 2",
+                "bowler": "Club Player 1",
+                "runs_bat": 6,
+            },
+            headers=self.auth_headers(player["token"]),
+        )
+        self.assertEqual(denied.status_code, 403, denied.text)
+
+        removed = self.client.delete(
+            f"/api/matches/{fixture_id}/scorebook/ball?edit_mode=true&innings_number=1&ball_id={first_ball['id']}",
+            headers=self.auth_headers(scorer["token"]),
+        )
+        self.assertEqual(removed.status_code, 200, removed.text)
+        updated = next(item for item in self.main.load_store()["fixtures"] if item["id"] == fixture_id)
+        remaining = updated["scorebook"]["innings"][0]["balls"]
+        self.assertEqual(
+            [ball["id"] for ball in remaining],
+            [second_ball_id, appended_ball_id, wide_run_out_id],
+        )
+
+    def test_f15_signout_invalidates_session(self) -> None:
         auth = self.signin("1111111111")
         token = auth["token"]
         me_before = self.client.get("/api/auth/me", headers={"x-auth-token": token})

@@ -90,6 +90,28 @@ This section captures the user requirements in the order they were given and ref
 ### October 2026 latest Azure deployment request
 - Deploy the latest code on `main` to the existing Azure App Service without packaging runtime data, uploads, or secrets.
 
+### October 2026 match-management bug reports
+- Show Heartlake's played 2026 fixtures after sign-in, even when a past match's scorebook has not been marked complete.
+- Let a captain, club admin, or superadmin correct the match scorecard summary after match day without reopening past ball-by-ball scoring.
+- Let the same authorized roles delete incomplete games, while preventing deletion of completed matches.
+
+### October 2026 Azure refresh and redeploy request
+- Refresh the latest code from `main` and deploy it to the existing Azure App Service.
+
+### November 2026 Azure deployment request
+- Deploy the latest local match-management fixes to Azure while preserving production data and the Key Vault Gemini configuration; keep local runtime data and secrets out of the deployment package.
+
+### November 2026 Heartlake Recent match and RBAC editing request
+- Show the Heartlake–Afghan Eagles match in the signed-in Heartlake Home Recent results even though it has recorded scores/scorebook balls but still says Scheduled and TBD.
+- Let users with the `score_matches` permission open that match in the editor from Recent; keep other users on the read-only public scorecard and enforce edits through the existing server-side RBAC checks.
+
+### November 2026 post-match ball-by-ball correction request
+- Let the assigned game captain, club admin, and superadmin correct or remove individual saved deliveries after match day.
+- Use the same phone-first Quick Score scoreboard and delivery correction controls as a live match; keep all normal past-match views read-only and continue enforcing RBAC on the server.
+- Keep the authorized Home and match-center entry points visible after refreshed assets and a local app restart; do not expose them to other users.
+- Allow the authorized scorer to continue scoring an incomplete past innings with the standard live buttons, extras, wicket, batter/bowler selection, strike rotation, and save/retry flow.
+- Keep the authorized live-style scoring workflow available through the active innings until the match has completed both innings; wide choices must include Wide through Wide +4 and allow a run out on wides and no-balls.
+
 ### September 2026 requests
 - Navbar: no More on laptop unless links don't fit; on phone More sits at the edge. Profile and Admin live inside the account (initials) button; Assistant sits at the bottom right.
 - Signed-out visitors can open a public Clubs page, search the site and switch dark/light mode.
@@ -793,12 +815,18 @@ Bugs found and fixed:
 ### Easier live scoring (Oct 29 2026)
 - Request (Amit, Oct 29): manual scoring was tedious; make live scoring really easy and interesting. Dhruvika picked: tap names instead of typing, fewer pop-ups, quicker line-ups, fixing mistakes, and celebrations.
 - Tap, don't type: on "Who's batting?" the openers and the bowler are big name buttons from the line-ups (a name already picked is greyed out in the other box); "Someone else?" types a name that isn't in the line-up.
-- One-tap pop-ups (no Save button; `openSheet` in `quick_score.js`): next bowler at the end of an over (shows the over's runs / wickets / "maiden!" and each bowler's figures; the bowler who just bowled is greyed out), byes / leg byes (1 2 3 4) and no balls (No runs, +1 ... +6). Wide still records 1 wide straight away.
+- One-tap pop-ups (no Save button; `openSheet` in `quick_score.js`): next bowler at the end of an over (shows the over's runs / wickets / "maiden!" and each bowler's figures; the bowler who just bowled is greyed out), byes / leg byes (1 2 3 4), no balls (No runs, +1 ... +6), and wides (Wide through Wide +4). Wides and no-balls can also be recorded as run-outs.
 - Wicket in 2-3 taps: How out (Bowled, Caught, LBW, Run out, Stumped, Hit wicket) -> fielder for caught / stumped / run out (the bowler is marked, "Don't know · skip"), for a run out also who is out and runs completed -> next batter (only players still to bat; "No more batters (all out)").
 - Fix any ball: tap a ball in "This over" -> pick what really happened (runs, wides, no balls, byes, leg byes). The ball is replaced in place (`POST /api/matches/{id}/scorebook/ball` or `/api/guest/matches/{id}/ball` with the ball's `id`; `_apply_ball_edit` in `main.py` keeps its over, ball number and time; a fixed ball sends no new alerts; a finished innings opens again if the fix means it isn't finished). For the last ball there are also "It was a wicket" and "Delete this ball". Strike is worked out again when the last ball is fixed.
 - Line-ups: "Select all" / "Clear" for the club's players, "Use Player 1-11" when the other team's names aren't known, and lists pasted from WhatsApp are cleaned ("1. Ravi (c)" -> "Ravi"; also for guest matches).
 - Celebrations (`static/celebrate.js`): FOUR!, SIX!, WICKET!, FIFTY! and HUNDRED! pop up with confetti and a short phone buzz on the Score page, and on the public live page (`/live/{id}`), which now refreshes by itself every 15 seconds while the match is live (the first load never celebrates old balls). The banner never blocks taps; reduced-motion phones get a plain banner.
 - Tested in the cloud workspace on a copy of the database at phone size (412 x 915): a full guest match (pasted line-up, picking openers, four, byes, caught, next bowler, fixing a 2 into a 4, no ball +4, run out of the non-striker) gave the right totals and strike, the public page celebrated a six from another phone, and fixing a club match ball kept its place.
+
+### Post-match ball-by-ball correction (Nov 1 2026)
+- Authorized match scorers can open `/score?match={id}&edit=1` from Home's Recent results or the match-center scorebook lock message. This opens the same phone-first scoreboard, all-overs view, and tap-to-fix flow used for live scoring.
+- The assigned game captain, club-scoped users with `score_matches` (including club admins), and superadmins are checked server-side through `_require_match_scorer`; unauthorized users cannot use the `edit_mode=true` scorebook write routes.
+- Edit mode follows the active innings with live scoring controls until both innings complete; after the first innings ends, the scorer can start the second innings without leaving edit mode. The authorized scorer can select either innings to fix or remove saved deliveries, undo the last ball, and append deliveries to an unfinished innings. Wide offers Wide and Wide +1 through Wide +4, and both wide and no-ball dialogs support a run out with the usual batter, completed-runs, and fielder choices. Extras and completed runs update totals and strike correctly. Saved edits recalculate summaries/results and reindex deliveries; historical changes do not send live alerts. AI Scorer is not offered in edit mode. Regular past-match routes remain locked.
+- How to test: sign in as the assigned captain, club admin with scoring access, or superadmin; open an unfinished past match with `?edit=1`, append runs/extras or a wicket, refresh and verify the saved score and innings state; confirm an ordinary past-match write remains refused and unauthorized edit-mode writes return 403. Check the scoring controls at 390px and laptop width.
 
 ### Saving only what changed (Oct 28 2026)
 - Request (Amit + Dhruvika, Oct 28): the app should move to a cloud database later (Azure SQL / Turso etc.), and whichever one is chosen, a save must first write only the rows that changed.
@@ -824,6 +852,7 @@ Bugs found and fixed:
 ### Amit's Azure check: own club on Home, one menu, next match (Oct 27 2026)
 - Request (Amit, Oct 26, after deploying to Azure): (1) Heartlake's Home showed other clubs' scorecards under Latest scorecards; (2) menus are not consistent; (3) Next match showed an old, past game - it should show nothing when no game is scheduled; (4) Plans are not showing.
 - (1) `dashboard_home.js`: Home asks `/api/auth/me` for the member's club (the old code read the club from localStorage, but it is kept in sessionStorage, so it was always empty and every club's cards showed). Latest scorecards, Live, Results and Coming up now show only the member's club: cards owned by the club, or where the club is one of the teams ("Heartlake Cricket Club" = "HEARTLAKE CC" = "Heart Lake"). A superadmin with no club still sees all.
+- (Nov 2) Past fixtures with saved scorecard values or scorebook balls are included in public fixture data and Recent results even if their status/result fields are stale. Signed-in Home shows an **Edit scorecard** link only when `/api/auth/me` grants `score_matches` for the member's current club; the editor's existing server checks remain authoritative.
 - (2) One menu when signed in: public pages (Live, Fixtures, Scorecards, Rankings, a scorecard, Upload) showed the public menu (Live scores · Fixtures · Scorecards · Rankings · My dashboard) even when signed in. Now `public_header.js` checks the sign-in first and a signed-in member gets the same signed-in menu, bottom bar and assistant as on Home (it loads `multipage.js`). Signed out, the public menu is unchanged. The signed-in menu (`shared_header.html`) now also has Live scores and Rankings, so nothing is lost.
 - (3) Next match: `app.js` shows only a match still to be played (today or later, not completed) in the "Next" label, the Next Match panel and the upcoming list; with none it says "No upcoming match scheduled" with an Add a fixture button (it used to show the last played game). `cricket_store.py`: `landing_upcoming_matches` no longer falls back to completed matches.
 - (4) Plans: hidden on purpose - Amit's launch decision (Oct 24) is everyone on Pro with no subscriptions, so Plans / Upgrade are hidden and /pricing goes to Home. Turn them back on with `CRICKETCLUBAPP_SUBSCRIPTIONS=on`.
@@ -962,17 +991,20 @@ Bugs found and fixed:
 3. Signed out, open `/score` → fill both teams and line-ups → Create → note the code banner → score a few balls → open `/live` in another browser: the guest match is listed.
 4. Home (signed in): check Live now / Recent results / Coming up.
 
-### Past matches are locked (Oct 2026)
-- A match whose date is before today (Toronto time, `_current_local_date`) is read-only for everyone: scores (`/scorecard`, `/performances`, `/commentary`, ball-by-ball), availability (`/api/matches/{id}/availability`, `/api/player/availability`), the playing XI (`/lineup`) and AI Assistant score/availability tasks all answer **403 "This match was on … Past matches are locked"** (`_require_not_past` in `main.py`). Old scores are added by uploading the scorecard photo to Archives for admin review.
-- The match centre disables the score, performance and commentary forms for a past match and shows a note (`applyPastMatchLock` in `app.js`).
-- Past games are no longer shown as upcoming: the Availability page and `/api/player/availability-data` list only today's and future fixtures; the Fixtures widget shows upcoming fixtures only (past ones are folded under "Past fixtures" in the fixture manager); the public and signed-in Fixtures pages hide past games that were never played or scored (played games stay as results); Home strips never show an earlier day's game as Live or Upcoming, and the public live list skips games from earlier days.
-- Admins can still edit or delete a past fixture's details (date, opponent) from the fixture manager.
+### Past matches, scorecard corrections, and incomplete-game deletion (Oct 2026)
+- A match whose date is before today (Toronto time, `_current_local_date`) keeps live ball-by-ball scoring, availability (`/api/matches/{id}/availability`, `/api/player/availability`), the playing XI (`/lineup`), performances, commentary, and AI Assistant score/availability tasks locked. These actions continue to return **403 "This match was on … Past matches are locked"** (`_require_not_past` in `main.py`).
+- The assigned match captain, club captains, club admins, and superadmins may edit the scorecard summary after match day. This does not unlock ball-by-ball scoring or change a past match's status. The match-centre selector keeps an authorized past match selected so its scorecard can be corrected; the performance and commentary forms remain locked.
+- The signed-in Fixtures page retains past matches with scorecard runs or recorded scorebook balls even if their status is still in progress. Past unplayed fixtures remain hidden there, and historical matches are not shown as upcoming.
+- The assigned match captain, club captains, club admins, and superadmins may delete incomplete fixtures from Matches / Season Setup. The API checks the captain assignment or score permission, verifies the fixture's club, and rejects completed games (completed status, a recorded result, or both innings marked complete) with **409**.
+- Past fixture details (date, opponent) remain editable only by club admins and superadmins.
 
 ### How to test (Oct 2026)
 1. Restart the app. Open Availability: only today's and future fixtures are listed. Open Fixtures: no past "Scheduled" games; the fixture manager shows "Past fixtures (N)" folded.
-2. Open a past match in the match centre: the score form is disabled with "This match has been played…". Try saving availability for a past game from another page: you get "Past matches are locked".
-3. Tap **✨ AI Assistant** and try: "Add a match vs Old Boys XI on Saturday at 2pm" → Confirm; "Ask everyone for availability"; "Mark me available for the next match"; "Who is available for the next match?"; "Pick the best XI for the next match"; "We are 85/3 after 12 overs" (needs a match today, e.g. from Quick Score). Each shows a plan with Confirm / Cancel.
-4. Ask a question ("How is Amit S doing?"): it is answered by the LLM (the header says which model) or the built-in data assistant when Ollama is off.
+2. Open an authorized past match in the match centre: scorecard summary fields can be saved, while scorebook, performance, commentary, availability, and playing-XI actions remain locked. A player without `score_matches` must receive **403** if attempting a scorecard edit.
+3. Open Fixtures while signed in: an older match with scorecard runs or scorebook balls stays visible even if its status is not `Completed`; a past unplayed fixture is hidden.
+4. In Matches / Season Setup, delete a scheduled or otherwise incomplete fixture as a captain. A completed match must remain and the API must return **409**.
+5. Tap **✨ AI Assistant** and try: "Add a match vs Old Boys XI on Saturday at 2pm" → Confirm; "Ask everyone for availability"; "Mark me available for the next match"; "Who is available for the next match?"; "Pick the best XI for the next match"; "We are 85/3 after 12 overs" (needs a match today, e.g. from Quick Score). Each shows a plan with Confirm / Cancel.
+6. Ask a question ("How is Amit S doing?"): it is answered by the LLM (the header says which model) or the built-in data assistant when Ollama is off.
 
 ### How to test (September 2026 features)
 1. Restart the app: `python app\main.py` (stop any old copy first: `netstat -ano | findstr :8090`, then `taskkill /PID <id> /F`).
@@ -1069,6 +1101,13 @@ Model (soft launch, Oct 2026): keep the core cricket experience free; one paid p
 
 ## Change log
 
+- 2026-11-01: Kept authorized edit mode in the active live-scoring flow until both innings complete, added the second-innings transition and Wide/Wide +1..+4 choices, and enabled run-outs on wides and no-balls with scorebook regression coverage.
+- 2026-11-01: Enabled authorized live-style ball-by-ball scoring in past-match edit mode, including append persistence, recalculated innings/result state, notification suppression, refreshed assets, and RBAC regression coverage.
+- 2026-11-01: Added RBAC-gated, live-style Quick Score correction mode for fixing or removing any saved past-match delivery in either innings, with refreshed editor asset versions and Home/match-center links.
+- 2026-11-02: Included scored/started past fixtures in Recent results despite stale Scheduled/TBD metadata and added a club-scoped, RBAC-gated Home edit link.
+- 2026-11-01: Kept played 2026 fixtures visible when their scorebook is still in progress; enabled authorized post-match scorecard-summary corrections and added club-scoped, incomplete-only fixture deletion for captains, club admins, and superadmins.
+- 2026-11-01: Deployed the latest match-management code to the Canada Central Azure App Service. Zip deployment and site startup succeeded; production health returned `ok`, the scorecard reader reported Gemini, the Key Vault reference remained configured, and updated Fixtures, Season Setup, and scorecard assets were verified. Runtime data and secrets were excluded.
+- 2026-10-31: Refreshed `main` to `f09f5ae` and deployed the latest lineup and match-scoring fixes to the Canada Central Azure App Service; package excluded runtime databases, uploads, duplicates, and secrets.
 - 2026-10-31: Deployed the latest `main` code to the Canada Central Azure App Service after compile and scorecard-reader checks; package excluded runtime databases, uploads, and secrets.
 - 2026-10-29: Standardized page titles at a smaller, professional size across the shared sports system, Home, Rankings, Sign In, Quick Score, and pricing pages.
 - 2026-10-29: Halved the page-title font sizes across desktop and phone layouts in response to feedback that titles were still too large.

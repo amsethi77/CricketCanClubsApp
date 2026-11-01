@@ -580,6 +580,7 @@ const elements = {
   opponentOversInput: document.getElementById("opponentOversInput"),
   resultInput: document.getElementById("resultInput"),
   liveSummaryInput: document.getElementById("liveSummaryInput"),
+  deleteIncompleteMatchButton: document.getElementById("deleteIncompleteMatchButton"),
   scorebookInningsSelect: document.getElementById("scorebookInningsSelect"),
   scorebookSetupForm: document.getElementById("scorebookSetupForm"),
   scorebookBattingTeamInput: document.getElementById("scorebookBattingTeamInput"),
@@ -1319,6 +1320,38 @@ function canEditPastFixtures() {
   const permissions = effectiveViewerPermissions();
   const roles = effectiveViewerRoles();
   return permissions.includes("manage_club") || roles.includes("club_admin") || roles.includes("superadmin");
+}
+
+function canEditMatchScorecard(match = currentMatch()) {
+  if (effectiveViewerPermissions().includes("score_matches")) {
+    return true;
+  }
+  const memberId = String(state.viewerAuth?.user?.member_id || state.dashboard?.user?.member_id || "").trim();
+  if (memberId && memberId === String(match?.heartlake_captain_member_id || "").trim()) {
+    return true;
+  }
+  const captainName = normalizePlayerName(match?.heartlake_captain || "");
+  const signedInName = normalizePlayerName(
+    viewerMemberName(state.dashboard) ||
+    state.viewerAuth?.user?.display_name ||
+    state.dashboard?.user?.display_name ||
+    ""
+  );
+  return Boolean(captainName && captainName === signedInName);
+}
+
+function isCompletedFixture(match) {
+  const status = String(match?.status || "").trim().toLowerCase();
+  const results = [match?.result, match?.scorecard?.result].map((value) => String(value || "").trim().toLowerCase());
+  if (
+    ["complete", "completed", "finished", "final"].includes(status) ||
+    results.some((result) => result && !["tbd", "to be determined", "pending", "not recorded", "in progress", "ongoing"].includes(result))
+  ) {
+    return true;
+  }
+  const innings = match?.scorebook?.innings || [];
+  const completedInnings = innings.map((inning) => String(inning?.status || "").trim().toLowerCase());
+  return completedInnings.length >= 2 && completedInnings.every((inningsStatus) => ["complete", "completed", "finished"].includes(inningsStatus));
 }
 
 function isPastFixture(match) {
@@ -2270,7 +2303,7 @@ function scorebookMatchLockReason(match) {
   return `Live scoring opens on ${dateLabel}.`;
 }
 
-function setScorebookEditable(enabled, reason = "") {
+function setScorebookEditable(enabled, reason = "", match = null) {
   if (!elements.scorebookBallForm) {
     return;
   }
@@ -2283,11 +2316,15 @@ function setScorebookEditable(enabled, reason = "") {
     });
   elements.scorebookBallForm.classList.toggle("is-locked", !enabled);
   if (!enabled && elements.scorebookDeliveryAssist) {
+    const editLink = match && canEditMatchScorecard(match)
+      ? `<a class="secondary-button" href="/score?match=${encodeURIComponent(match.id)}&edit=1">Open live-style ball-by-ball editor</a>`
+      : "";
     elements.scorebookDeliveryAssist.innerHTML = `
       <article class="detail-card locked-card">
         <strong>Scoring locked</strong>
         <p>${escapeHtml(reason || "Live scoring is only available on match day.")}</p>
-        <small>Set up the lineup anytime, but ball-by-ball logging opens on the match date.</small>
+        <small>${editLink ? "Correct saved deliveries in the authorized editor." : "Ball-by-ball logging opens on the match date."}</small>
+        ${editLink}
       </article>
     `;
   }
@@ -3058,15 +3095,23 @@ function renderFormValues(match) {
   elements.opponentOversInput.value = match.scorecard.opponent_overs || "";
   elements.resultInput.value = match.scorecard.result || "";
   elements.liveSummaryInput.value = match.scorecard.live_summary || "";
+  if (elements.deleteIncompleteMatchButton) {
+    elements.deleteIncompleteMatchButton.hidden = !canEditMatchScorecard(match) || isCompletedFixture(match);
+  }
   applyPastMatchLock(match);
 }
 
-// Past matches are read-only: scores, performances and commentary can't be changed (the server refuses too).
+// Past matches allow authorized scorecard and delivery corrections; other match actions remain locked.
 function applyPastMatchLock(match) {
   const locked = isPastFixture(match);
-  [elements.scoreForm, elements.performanceForm, elements.commentaryForm].filter(Boolean).forEach((form) => {
+  const scorecardLocked = locked && !canEditMatchScorecard(match);
+  [
+    [elements.scoreForm, scorecardLocked],
+    [elements.performanceForm, locked],
+    [elements.commentaryForm, locked],
+  ].filter(([form]) => form).forEach(([form, shouldLock]) => {
     form.querySelectorAll("input, select, textarea, button").forEach((control) => {
-      if (locked) {
+      if (shouldLock) {
         if (!control.dataset.pastLocked) control.dataset.pastLocked = control.disabled ? "keep" : "1";
         control.disabled = true;
       } else if (control.dataset.pastLocked) {
@@ -3075,12 +3120,14 @@ function applyPastMatchLock(match) {
       }
     });
     let note = form.querySelector(".past-lock-note");
-    if (locked && !note) {
+    if (shouldLock && !note) {
       note = document.createElement("p");
       note.className = "mode-note past-lock-note";
-      note.textContent = "This match has been played, so its score is locked. To add an old score, upload the scorecard photo in Archives.";
+      note.textContent = form === elements.scoreForm
+        ? "This match has been played. Authorized scorers can correct the summary or open the live-style ball-by-ball editor."
+        : "This match has been played, so this form is locked.";
       form.prepend(note);
-    } else if (!locked && note) {
+    } else if (!shouldLock && note) {
       note.remove();
     }
   });
@@ -3107,7 +3154,7 @@ function renderScorebook(match) {
   populateScorebookPlayerSelects(match, innings);
   applyScorebookDeliveryDefaults(innings, { force: false });
   renderScorebookDeliveryAssist(innings);
-  setScorebookEditable(matchIsOpenForLiveScoring(match), scorebookMatchLockReason(match));
+  setScorebookEditable(matchIsOpenForLiveScoring(match), scorebookMatchLockReason(match), match);
 
   elements.scorebookBattingTeamInput.value = innings.batting_team || "";
   elements.scorebookBowlingTeamInput.value = innings.bowling_team || "";
@@ -3452,6 +3499,7 @@ function renderScheduleFixtureEditor(fixtures) {
   const fixtureCard = (fixture) => {
           const locked = isPastFixture(fixture);
           const editable = canMutateFixture(fixture);
+          const canDelete = canManageFixtures() && !isCompletedFixture(fixture);
           return `
             <article class="detail-card">
               <strong>${fixture.date_label || fixture.date || "Fixture"}</strong>
@@ -3459,7 +3507,7 @@ function renderScheduleFixtureEditor(fixtures) {
               <small>${fixture.season || `${fixture.season_year || ""} Season`} · ${fixture.status || "Scheduled"}${locked ? " · Past fixture" : ""}</small>
               <div class="inline-actions">
                 <button class="secondary-button" type="button" data-schedule-fixture-edit="${fixture.id}" ${editable ? "" : "disabled"}>${editable ? "Edit" : "Locked"}</button>
-                <button class="secondary-button" type="button" data-schedule-fixture-delete="${fixture.id}" ${editable ? "" : "disabled"}>${editable ? "Delete" : "Locked"}</button>
+                <button class="secondary-button" type="button" data-schedule-fixture-delete="${fixture.id}" ${canDelete ? "" : "disabled"}>${canDelete ? "Delete incomplete game" : "Completed game"}</button>
               </div>
               ${locked && !canEditPastFixtures() ? `<small>Past fixtures are read-only unless you are a club-admin or superadmin.</small>` : ""}
             </article>
@@ -4731,14 +4779,14 @@ function renderDashboard(dashboard) {
     const selectedMatchIsValid = Boolean(selectedMatch);
     const preferredMatch = dashboard.upcoming_match || null;
     const selectedMatchIsPast = Boolean(selectedMatch && isPastFixture(selectedMatch));
-    const selectedMatchIsCompleted = String(selectedMatch?.status || "").trim().toLowerCase() === "completed";
+    const canReviewPastScorecard = selectedMatchIsPast && canEditMatchScorecard(selectedMatch);
+    const selectedMatchIsCompleted = isCompletedFixture(selectedMatch);
     const shouldPreferDashboardMatch =
       preferredMatch?.id &&
       (
         !selectedMatchIsValid ||
-        selectedMatchIsPast ||
-        selectedMatchIsCompleted ||
-        (selectedMatch && preferredMatch.id !== selectedMatch.id && isLaterFixture(preferredMatch, selectedMatch))
+        ((selectedMatchIsPast || selectedMatchIsCompleted) && !canReviewPastScorecard) ||
+        (!canReviewPastScorecard && selectedMatch && preferredMatch.id !== selectedMatch.id && isLaterFixture(preferredMatch, selectedMatch))
       );
     if (shouldPreferDashboardMatch) {
       state.selectedMatchId = dashboard.upcoming_match.id;
@@ -5167,14 +5215,40 @@ elements.scoreForm.addEventListener("submit", async (event) => {
     opponent_overs: elements.opponentOversInput.value,
     result: elements.resultInput.value,
     live_summary: elements.liveSummaryInput.value,
-    status: elements.matchStatusInput.value,
   };
+  if (!isPastFixture(currentMatch())) {
+    payload.status = elements.matchStatusInput.value;
+  }
   const dashboard = await runAction(
     () => postJson(`/api/matches/${state.selectedMatchId}/scorecard`, payload),
     "Online scorecard updated.",
     "save live scorecard"
   );
   if (dashboard) renderDashboard(dashboard);
+});
+
+elements.deleteIncompleteMatchButton?.addEventListener("click", async () => {
+  const match = currentMatch();
+  if (!match?.id || !canEditMatchScorecard(match) || isCompletedFixture(match)) {
+    setStatus("Only the match captain, club admins, and superadmins can delete incomplete games.", "warning");
+    return;
+  }
+  const clubId = String(match.club_id || state.selectedFocusClubId || state.dashboard?.focus_club?.id || state.dashboard?.club?.id || "");
+  if (!clubId) {
+    setStatus("The match's club could not be determined.", "error");
+    return;
+  }
+  if (!window.confirm(`Delete incomplete game ${match.date_label || match.date || "selected"} vs ${match.opponent || "Opponent"}?`)) {
+    return;
+  }
+  const deleted = await runAction(
+    () => deleteJson(`/api/admin/clubs/${encodeURIComponent(clubId)}/fixtures/${encodeURIComponent(match.id)}`, true),
+    "Incomplete game deleted.",
+    "delete incomplete game"
+  );
+  if (deleted) {
+    window.location.assign("/dashboard/widgets/match-center");
+  }
 });
 
 elements.scorebookInningsSelect.addEventListener("change", () => {
@@ -5428,11 +5502,11 @@ document.addEventListener("click", async (event) => {
   if (!fixtureId || !clubId) return;
   const fixture = state.dashboard?.fixtures?.find((item) => item.id === fixtureId);
   if (!fixture) return;
-  if (isPastFixture(fixture) && !canEditPastFixtures()) {
-    setStatus("Past fixtures can only be deleted by club-admins or superadmins.", "warning");
+  if (isCompletedFixture(fixture)) {
+    setStatus("Completed matches cannot be deleted.", "warning");
     return;
   }
-  if (!window.confirm(`Delete fixture ${fixture.date_label || fixture.date || "selected"} vs ${fixture.opponent || "Opponent"}?`)) {
+  if (!window.confirm(`Delete incomplete game ${fixture.date_label || fixture.date || "selected"} vs ${fixture.opponent || "Opponent"}?`)) {
     return;
   }
   const dashboard = await runAction(
@@ -5441,8 +5515,7 @@ document.addEventListener("click", async (event) => {
     "delete fixture"
   );
   if (dashboard) {
-    renderDashboard(dashboard);
-    renderScheduleFixtureEditor(dashboard.fixtures || []);
+    await loadDashboard();
     if (elements.scheduleFixtureForm) {
       elements.scheduleFixtureForm.reset();
     }

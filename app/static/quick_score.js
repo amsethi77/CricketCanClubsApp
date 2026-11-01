@@ -34,6 +34,8 @@
   const modalBody = document.getElementById("qsModalBody");
   const params = new URLSearchParams(location.search);
   const matchId = params.get("match") || "";
+  const editMode = params.get("edit") === "1";
+  const editQuery = editMode ? "?edit_mode=true" : "";
   const guest = document.body.dataset.mode === "guest";
   const guestKey = (id) => `qsGuestCode:${id}`;
   if (guest && matchId && params.get("code")) {
@@ -54,7 +56,11 @@
   const enc = encodeURIComponent;
   const URLS = guest
     ? { state: () => `/api/guest/matches/${enc(matchId)}`, setup: () => `/api/guest/matches/${enc(matchId)}/setup`, ball: () => `/api/guest/matches/${enc(matchId)}/ball` }
-    : { state: () => `/api/quick-score/${enc(matchId)}`, setup: () => `/api/matches/${enc(matchId)}/scorebook/setup`, ball: () => `/api/matches/${enc(matchId)}/scorebook/ball` };
+    : {
+        state: () => `/api/quick-score/${enc(matchId)}`,
+        setup: () => `/api/matches/${enc(matchId)}/scorebook/setup${editQuery}`,
+        ball: () => `/api/matches/${enc(matchId)}/scorebook/ball${editQuery}`,
+      };
   const TOKEN_KEY = "cricketClubAppAuthToken";
 
   let data = null; // /api/quick-score/{id}
@@ -66,6 +72,7 @@
   let aiLast = null; // last AI Scorer result
   let lastResult = null; // match result at the last load ("TBD" while playing)
   let secondChosen = false; // "Start 2nd innings" tapped at the innings break
+  let selectedEditInningsNumber = 0;
 
   const esc = (v) =>
     String(v ?? "")
@@ -142,6 +149,10 @@
   }
   function currentInnings() {
     const list = innings();
+    if (editMode && selectedEditInningsNumber) {
+      const selected = list.find((inn) => Number(inn.inning_number) === selectedEditInningsNumber);
+      if (selected) return selected;
+    }
     const live = list.find((inn) => inn.status === "Live");
     if (live) return live;
     const first = list[0];
@@ -221,8 +232,8 @@
   // ---------- rendering ----------
   function renderFixtureList(list) {
     const fixtures = list.fixtures || [];
-    const open = fixtures.filter((f) => f.open);
-    const later = fixtures.filter((f) => !f.open);
+    const open = fixtures.filter((f) => f.open || f.can_edit_scorebook);
+    const later = fixtures.filter((f) => !f.open && !f.can_edit_scorebook);
     app.innerHTML = `
       <section class="qs-card">
         <p class="qs-kicker">Quick Score</p>
@@ -234,10 +245,15 @@
                 .map(
                   (f) => {
                     // Oct 29 2026: show the start time and whether the match is new, going on or finished
+                    const edit = Boolean(f.can_edit_scorebook && !f.open);
                     const done = f.result && !/^tbd$/i.test(f.result);
-                    const go = done ? "View ›" : f.started ? "Continue ›" : "Score now ›";
-                    const href = done ? `/live/${encodeURIComponent(f.id)}` : `/score?match=${encodeURIComponent(f.id)}`;
-                    const state = done ? `<b class="qs-state done">Finished</b> ${esc(f.result)}` : f.started ? '<b class="qs-state live">Live</b>' : "";
+                    const go = edit ? "Edit ›" : done ? "View ›" : f.started ? "Continue ›" : "Score now ›";
+                    const href = edit
+                      ? `/score?match=${encodeURIComponent(f.id)}&edit=1`
+                      : done ? `/live/${encodeURIComponent(f.id)}` : `/score?match=${encodeURIComponent(f.id)}`;
+                    const state = edit
+                      ? '<b class="qs-state done">Ball-by-ball correction</b>'
+                      : done ? `<b class="qs-state done">Finished</b> ${esc(f.result)}` : f.started ? '<b class="qs-state live">Live</b>' : "";
                     return `<a class="qs-fixture is-open${done ? " is-done" : ""}" href="${href}">
                     <span><strong>vs ${esc(f.opponent)}</strong><small>${esc(f.date_label)}${f.time ? ` · ${esc(f.time)}` : ""} · ${esc(f.overs)} overs</small>${state ? `<small class="qs-fx-state">${state}</small>` : ""}</span>
                     <span class="qs-go">${go}</span></a>`;
@@ -402,12 +418,43 @@
       return String(b.runs_bat || 0);
     };
     const done = inn.status === "Completed" || (target && (sum.runs || 0) >= target);
+    const canContinue = !inningsOver(inn);
+    const secondInnings = innings().find((item) => Number(item.inning_number) === 2);
+    const canStartSecond = inn.inning_number === 1 && secondInnings && !(secondInnings.balls || []).length && secondInnings.status !== "Completed";
+    const scoringControls = () => `<section class="qs-pad" aria-label="Score this ball">
+        ${["0", "1", "2", "3", "4", "6"].map((r) => `<button class="qs-key run${r === "4" ? " four" : r === "6" ? " six" : ""}" data-run="${r}">${r}</button>`).join("")}
+        <button class="qs-key extra" data-extra="wide">Wd</button>
+        <button class="qs-key extra" data-extra="no_ball">Nb</button>
+        <button class="qs-key extra" data-extra="bye">Bye</button>
+        <button class="qs-key extra" data-extra="leg_bye">LB</button>
+        <button class="qs-key wicket" data-act="wicket">W</button>
+        <button class="qs-key util" data-act="undo">↶ Undo</button>
+      </section>
+      <section class="qs-tools">
+        <button class="qs-btn ghost" data-act="swap">⇄ Swap strike</button>
+        <button class="qs-btn ghost" data-act="bowler">🎯 Change bowler</button>
+        <button class="qs-btn ${recognition ? "primary" : "ghost"}" data-act="voice" aria-pressed="${recognition ? "true" : "false"}">🎙️ ${recognition ? "Listening…" : "Voice"}</button>
+        ${guest || editMode ? "" : `<button class="qs-btn ${aiMode ? "primary" : "ghost"} qs-ai-btn" data-act="ai" aria-pressed="${aiMode ? "true" : "false"}">🤖 AI Scorer${hasAi() ? "" : " 🔒"}</button>`}
+      </section>
+      ${aiMode ? aiPanel() : ""}
+      <form id="qsShort" class="qs-short">
+        <input id="qsShortInput" placeholder="Type balls: 1 4 0 wd 6 w" autocomplete="off" />
+        <button class="qs-btn primary" type="submit">Add</button>
+      </form>
+      <p class="qs-help">Voice: say “dot”, “single”, “two”, “four”, “six”, “wide”, “no ball”, “bye”, “leg bye”, “bowled”, “caught”, “LBW”, “run out” or “undo”.</p>`;
+    const editInnings = editMode && innings().length > 1
+      ? `<div class="qs-edit-innings" role="group" aria-label="Choose innings to correct">${innings()
+          .map((item) => `<button type="button" class="qs-btn ${Number(item.inning_number) === Number(inn.inning_number) ? "primary" : "ghost"}" data-edit-innings="${Number(item.inning_number)}">${item.inning_number === 1 ? "1st" : "2nd"} innings</button>`)
+          .join("")}</div>`
+      : "";
     app.innerHTML = `
       <section class="qs-board">
         <div class="qs-board-top">
-          <span class="qs-live"><span class="qs-dot"></span>${done ? "INNINGS OVER" : "LIVE"}</span>
+          <span class="qs-live${editMode ? " qs-edit-badge" : ""}"><span class="qs-dot"></span>${editMode ? "EDIT MODE" : done ? "INNINGS OVER" : "LIVE"}</span>
           <a class="qs-link" href="/live/${encodeURIComponent(matchId)}" target="_blank" rel="noopener">Public scorecard ↗</a>
         </div>
+        ${editInnings}
+        ${editMode ? '<p class="qs-edit-note">Edit mode · score the active innings with the live controls, or tap a saved delivery to correct it.</p>' : ""}
         <p class="qs-team">${esc(inn.batting_team || m.club_name)} <small>${inn.inning_number === 1 ? "1st" : "2nd"} innings</small></p>
         <p class="qs-score">${sum.runs || 0}/${sum.wickets || 0} <small>(${overString(legal)} / ${oversLimit} ov)</small></p>
         <p class="qs-rates">CRR ${legal ? ((sum.runs || 0) / (legal / 6)).toFixed(2) : "0.00"}${
@@ -426,11 +473,20 @@
             })
             .join("") || '<em class="qs-muted">–</em>'
         }</div>
-        ${recent.length ? '<p class="qs-fix-hint">Wrong ball? Tap it to fix it.</p>' : ""}
+        ${recent.length ? `<p class="qs-fix-hint">${editMode ? "Tap a delivery to correct it." : "Wrong ball? Tap it to fix it."}</p>` : ""}
       </section>
 
       ${
-        done
+        editMode
+          ? `<section class="qs-card qs-edit-card">
+              <p class="qs-kicker">Scorebook correction</p>
+              <h2>${esc(inn.batting_team || "Innings")} · ${inn.inning_number === 1 ? "1st" : "2nd"} innings</h2>
+              <p class="qs-muted">Tap a saved ball to correct or remove it. To continue scoring, use the same live scoring buttons below.</p>
+              <button class="qs-btn ghost wide" data-act="undo">↶ Remove last ball in this innings</button>
+              <a class="qs-btn primary wide" href="/live/${encodeURIComponent(matchId)}">Done · view scorecard</a>
+            </section>
+            ${canContinue ? scoringControls() : canStartSecond ? '<button class="qs-btn primary wide" data-act="second">Start 2nd innings</button>' : '<p class="qs-muted">This innings is complete. Select the active innings to continue scoring until the match is complete.</p>'}`
+          : done
           ? `<section class="qs-card qs-done">
               <h2>${inn.inning_number === 1 ? "First innings complete" : "Match complete"}</h2>
               <p class="qs-muted">${esc(inn.batting_team)} scored ${sum.runs || 0}/${sum.wickets || 0} in ${overString(legal)} overs.</p>
@@ -441,27 +497,7 @@
               }
               <button class="qs-btn ghost wide" data-act="undo">↶ Undo last ball</button>
             </section>`
-          : `<section class="qs-pad" aria-label="Score this ball">
-              ${["0", "1", "2", "3", "4", "6"].map((r) => `<button class="qs-key run${r === "4" ? " four" : r === "6" ? " six" : ""}" data-run="${r}">${r}</button>`).join("")}
-              <button class="qs-key extra" data-extra="wide">Wd</button>
-              <button class="qs-key extra" data-extra="no_ball">Nb</button>
-              <button class="qs-key extra" data-extra="bye">Bye</button>
-              <button class="qs-key extra" data-extra="leg_bye">LB</button>
-              <button class="qs-key wicket" data-act="wicket">W</button>
-              <button class="qs-key util" data-act="undo">↶ Undo</button>
-            </section>
-            <section class="qs-tools">
-              <button class="qs-btn ghost" data-act="swap">⇄ Swap strike</button>
-              <button class="qs-btn ghost" data-act="bowler">🎯 Change bowler</button>
-              <button class="qs-btn ${recognition ? "primary" : "ghost"}" data-act="voice" aria-pressed="${recognition ? "true" : "false"}">🎙️ ${recognition ? "Listening…" : "Voice"}</button>
-              ${guest ? "" : `<button class="qs-btn ${aiMode ? "primary" : "ghost"} qs-ai-btn" data-act="ai" aria-pressed="${aiMode ? "true" : "false"}">🤖 AI Scorer${hasAi() ? "" : " 🔒"}</button>`}
-            </section>
-            ${aiMode ? aiPanel() : ""}
-            <form id="qsShort" class="qs-short">
-              <input id="qsShortInput" placeholder="Type balls: 1 4 0 wd 6 w" autocomplete="off" />
-              <button class="qs-btn primary" type="submit">Add</button>
-            </form>
-            <p class="qs-help">Voice: say “dot”, “single”, “two”, “four”, “six”, “wide”, “no ball”, “bye”, “leg bye”, “bowled”, “caught”, “LBW”, “run out” or “undo”.</p>`
+          : scoringControls()
       }`;
     const row = app.querySelector("[data-recent]");
     if (row) row.scrollLeft = row.scrollWidth; // newest ball on the right, always in view
@@ -583,7 +619,12 @@
   function render() {
     const playedInnings = innings().filter((i) => (i.balls || []).length);
     const result = String(data.match?.result || "TBD");
-    if (!data.open && playedInnings.length && result !== "TBD") {
+    if (editMode && !data.can_edit_scorebook) {
+      app.innerHTML = `<section class="qs-card"><h1>Editing not allowed</h1><p class="qs-muted">Only this match's assigned captain, club admins with scoring access, and superadmins can correct its ball-by-ball scorebook.</p>
+        <a class="qs-btn primary" href="/live/${encodeURIComponent(matchId)}">View scorecard</a></section>`;
+      return;
+    }
+    if (!editMode && !data.open && playedInnings.length && result !== "TBD") {
       // A finished match (guest matches close when they end): show the result, not "Scoring is closed".
       app.innerHTML = `<section class="qs-card qs-done">
           <p class="qs-kicker">Match complete</p>
@@ -597,13 +638,13 @@
       if (guest) showGuestBanner();
       return;
     }
-    if (!data.open) {
+    if (!editMode && !data.open) {
       app.innerHTML = `<section class="qs-card"><p class="qs-kicker">Quick Score</p><h1>Scoring is closed</h1>
         <p class="qs-muted">Ball-by-ball scoring opens on the match day. For past matches, use AI Assistant (“Heartlake 145/6, Imran XI 120/9…”) or upload a scorecard photo in Archives.</p>
         <a class="qs-btn primary" href="/score">Back to matches</a></section>`;
       return;
     }
-    if (!data.can_score) {
+    if (!data.can_score && !(editMode && data.can_edit_scorebook)) {
       app.innerHTML = `<section class="qs-card"><h1>Scorers only</h1><p class="qs-muted">Ask a club admin to give you the scorer role. You can follow the match on the public scorecard.</p>
         <a class="qs-btn primary" href="/live/${encodeURIComponent(matchId)}">Follow live</a></section>`;
       return;
@@ -614,7 +655,7 @@
     const hasBalls = (inn.balls || []).length > 0;
     const first = innings()[0];
     // Innings break: show "First innings complete" (with Undo) until the scorer taps "Start 2nd innings".
-    if (inn.inning_number === 2 && !hasBalls && !local.setup && first && (first.balls || []).length && !secondChosen) {
+    if (inn.inning_number === 2 && !hasBalls && !local.setup && first && (first.balls || []).length && !secondChosen && !editMode) {
       renderScoring(first);
       if (guest) showGuestBanner();
       return;
@@ -925,6 +966,10 @@
     ]);
     const before = lastResult;
     data = match;
+    if (editMode && !selectedEditInningsNumber) {
+      const activeInnings = innings().find((inn) => inn.status === "Live" && !inningsOver(inn)) || innings().find((inn) => !inningsOver(inn));
+      if (activeInnings) selectedEditInningsNumber = Number(activeInnings.inning_number);
+    }
     if (me) plan = me.subscription;
     lastResult = String(data?.match?.result || "TBD");
     render();
@@ -1176,17 +1221,31 @@
       toast("Wait for the last balls to save, then undo.");
       return;
     }
+    if (editMode) {
+      const inn = currentInnings();
+      const query = `&innings_number=${encodeURIComponent(inn.inning_number)}`;
+      return removeBall(inn, null, query);
+    }
+    return removeBall(currentInnings());
+  }
+
+  async function removeBall(inn, ball = null, extraQuery = "") {
     if (busy) return;
     busy = true;
     try {
-      const inn = currentInnings();
-      const removed = (inn.balls || [])[(inn.balls || []).length - 1];
-      await api("DELETE", URLS.ball());
+      const removed = ball || (inn.balls || [])[(inn.balls || []).length - 1];
+      let url = URLS.ball();
+      if (editMode) {
+        url += `&innings_number=${encodeURIComponent(inn.inning_number)}`;
+        if (ball?.id) url += `&ball_id=${encodeURIComponent(ball.id)}`;
+      } else if (extraQuery) {
+        url += extraQuery;
+      }
+      await api("DELETE", url);
       await load();
-      const now = currentInnings();
       if (removed) {
-        saveLocal(now.inning_number, {
-          ...loadLocal(now.inning_number),
+        saveLocal(inn.inning_number, {
+          ...loadLocal(inn.inning_number),
           striker: removed.striker,
           nonStriker: removed.non_striker,
           bowler: removed.bowler,
@@ -1316,9 +1375,11 @@
   }
 
   // Wicket in 2-3 taps: How out -> (fielder, and for a run out who / runs) -> next batter.
-  function askWicket(preset = "", fielder = "", runsDone = 0) {
+  function askWicket(preset = "", fielder = "", runsDone = 0, editBall = null, deliveryExtras = null) {
     const inn = currentInnings();
-    const p = players(inn);
+    const p = editBall
+      ? { striker: editBall.striker, nonStriker: editBall.non_striker, bowler: editBall.bowler }
+      : players(inn);
     const batted = new Set((inn.summary?.batting || []).map((b) => b.player_name));
     const remaining = battingRoster(inn).filter((n) => n !== p.striker && n !== p.nonStriker && !batted.has(n));
     const battingSide = battingIsClub(inn) ? "club" : "opponent";
@@ -1335,7 +1396,12 @@
       ["hit_wicket", "Hit wicket"],
     ];
     const needsFielder = (how) => ["caught", "run_out", "stumped"].includes(how);
-    const w = { how: preset, out: p.striker, fielder: fielder || "", runs: Number(runsDone) || 0 };
+    const w = {
+      how: preset,
+      out: editBall?.wicket_player || p.striker,
+      fielder: fielder || editBall?.fielder || "",
+      runs: Number(runsDone) || 0,
+    };
     let step = !preset ? "how" : needsFielder(preset) && !fielder ? "fielder" : "batter";
 
     const draw = () => {
@@ -1381,12 +1447,31 @@
 
     const finish = async (close, newBatter) => {
       close();
+      const extrasType = deliveryExtras?.extras_type || editBall?.extras_type || "none";
+      const baseExtras = Number(deliveryExtras?.extras_runs ?? (extrasType === "wide" ? 1 : editBall?.extras_runs || 0));
+      const runOutRuns = w.how === "run_out" ? w.runs : 0;
+      const extrasRuns = extrasType === "wide" ? baseExtras + runOutRuns : baseExtras;
+      const runsBat = w.how === "run_out" && extrasType !== "wide" ? runOutRuns : 0;
+      if (editBall) {
+        return saveFix(inn, editBall, {
+          runs_bat: runsBat,
+          extras_type: extrasType,
+          extras_runs: extrasRuns,
+          wicket: true,
+          wicket_type: w.how,
+          wicket_player: w.out,
+          fielder: w.fielder,
+          new_batter: newBatter,
+        }, false);
+      }
       await record({
         wicket: true,
         wicket_type: w.how,
         wicket_player: w.out,
         fielder: w.fielder,
-        runs_bat: w.how === "run_out" ? w.runs : 0,
+        runs_bat: runsBat,
+        extras_type: extrasType,
+        extras_runs: extrasRuns,
         new_batter: newBatter,
       });
     };
@@ -1432,21 +1517,27 @@
     draw();
   }
 
-  // Byes, leg byes and no balls: one tap on the number. Wide = 1 straight away (fix it by tapping the ball).
+  // Choose the runs for each extra, or record a run out on a wide/no-ball delivery.
   function askExtra(type) {
     const labels = { wide: "Wide", no_ball: "No ball", bye: "Byes", leg_bye: "Leg byes" };
-    if (type === "wide") return record({ extras_type: "wide", extras_runs: 1 });
+    const wide = type === "wide";
     const nb = type === "no_ball";
-    const options = nb ? [0, 1, 2, 3, 4, 6] : [1, 2, 3, 4];
+    const options = wide ? [0, 1, 2, 3, 4] : nb ? [0, 1, 2, 3, 4, 6] : [1, 2, 3, 4];
     openSheet(
-      nb ? "No ball · runs off the bat?" : `${labels[type]} · how many?`,
-      `<div class="qs-chips big">${options.map((n) => `<button type="button" class="qs-chip" data-x="${n}">${nb ? (n ? `+${n}` : "No runs") : n}</button>`).join("")}</div>
-       ${nb ? '<p class="qs-muted">1 no-ball run is added by itself.</p>' : ""}`,
+      nb ? "No ball · runs off the bat?" : wide ? "Wide · total runs?" : `${labels[type]} · how many?`,
+      `<div class="qs-chips big">${options.map((n) => `<button type="button" class="qs-chip" data-x="${n}">${wide ? (n ? `Wide +${n}` : "Wide") : nb ? (n ? `+${n}` : "No runs") : n}</button>`).join("")}</div>
+       ${nb ? '<p class="qs-muted">1 no-ball run is added by itself.</p>' : ""}
+       ${wide || nb ? '<button type="button" class="qs-btn ghost wide" data-x-runout>Run out on this delivery</button>' : ""}`,
       (target, close) => {
+        if (target.closest("[data-x-runout]")) {
+          close();
+          return askWicket("run_out", "", 0, null, { extras_type: type, extras_runs: 1 });
+        }
         const chip = target.closest("[data-x]");
         if (!chip) return;
         close();
         const n = Number(chip.dataset.x);
+        if (wide) return record({ extras_type: "wide", extras_runs: 1 + n });
         if (nb) record({ extras_type: "no_ball", extras_runs: 1, runs_bat: n });
         else record({ extras_type: type, extras_runs: n });
       }
@@ -1491,9 +1582,13 @@
     ["6", { runs_bat: 6 }],
     ["Wd", { extras_type: "wide", extras_runs: 1 }],
     ["2 wd", { extras_type: "wide", extras_runs: 2 }],
+    ["3 wd", { extras_type: "wide", extras_runs: 3 }],
+    ["4 wd", { extras_type: "wide", extras_runs: 4 }],
     ["5 wd", { extras_type: "wide", extras_runs: 5 }],
     ["Nb", { extras_type: "no_ball", extras_runs: 1, runs_bat: 0 }],
     ["Nb +1", { extras_type: "no_ball", extras_runs: 1, runs_bat: 1 }],
+    ["Nb +2", { extras_type: "no_ball", extras_runs: 1, runs_bat: 2 }],
+    ["Nb +3", { extras_type: "no_ball", extras_runs: 1, runs_bat: 3 }],
     ["Nb +4", { extras_type: "no_ball", extras_runs: 1, runs_bat: 4 }],
     ["Nb +6", { extras_type: "no_ball", extras_runs: 1, runs_bat: 6 }],
     ["1 bye", { extras_type: "bye", extras_runs: 1 }],
@@ -1525,21 +1620,18 @@
        ${b.wicket ? `<p class="qs-muted">Picking a new result below takes the wicket away${isLast ? "" : ". The batter who came in stays in"}.</p>` : ""}
        <p class="qs-step">What really happened?</p>
        <div class="qs-chips">${FIX_CHOICES.map(([label], i) => `<button type="button" class="qs-chip" data-fixto="${i}">${esc(label)}</button>`).join("")}</div>
-       ${
-         isLast
-           ? `<div class="qs-fix-more">
-               ${b.wicket ? "" : '<button type="button" class="qs-btn ghost" data-fix-wicket>It was a wicket</button>'}
-               <button type="button" class="qs-btn ghost" data-fix-delete>Delete this ball</button>
-             </div>`
-           : ""
-       }`,
+       <div class="qs-fix-more">
+         ${b.wicket || (!isLast && !editMode) ? "" : '<button type="button" class="qs-btn ghost" data-fix-wicket>It was a wicket</button>'}
+         ${isLast || editMode ? '<button type="button" class="qs-btn ghost" data-fix-delete>Delete this ball</button>' : ""}
+       </div>`,
       async (target, close) => {
         if (target.closest("[data-fix-delete]")) {
           close();
-          return undo();
+          return editMode ? removeBall(inn, b) : undo();
         }
         if (target.closest("[data-fix-wicket]")) {
           close();
+          if (editMode) return askWicket("", "", 0, b);
           await undo();
           return askWicket();
         }
@@ -1568,10 +1660,18 @@
         extras_type: "none",
         extras_runs: 0,
         wicket: false,
+        wicket_type: "",
+        wicket_player: "",
+        fielder: "",
         commentary: b.commentary || "",
         ...result,
       });
       await load();
+      if (editMode) {
+        render();
+        toast(`Ball fixed: ${ballText({ ...b, ...result })} ✓`);
+        return;
+      }
       if (isLast && !b.wicket) {
         // Work out strike again from the fixed ball
         const now = currentInnings();
@@ -1689,6 +1789,12 @@
 
   // ---------- events ----------
   app.addEventListener("click", async (event) => {
+    const editInnings = event.target.closest("[data-edit-innings]");
+    if (editInnings) {
+      selectedEditInningsNumber = Number(editInnings.dataset.editInnings || 0);
+      render();
+      return;
+    }
     const runKey = event.target.closest("[data-run]");
     if (runKey) return record({ runs_bat: Number(runKey.dataset.run) });
     const extraKey = event.target.closest("[data-extra]");
@@ -1725,7 +1831,10 @@
     if (act === "second") {
       const list = innings();
       secondChosen = true;
-      if (list[1]) renderSetup(list[1]);
+      if (list[1]) {
+        selectedEditInningsNumber = Number(list[1].inning_number);
+        renderSetup(list[1]);
+      }
     }
   });
 
