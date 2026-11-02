@@ -192,6 +192,9 @@ try:
         scorecard_template_from_archive,
         save_store,
         scoped_store_for_club,
+        _club_stat_fixtures,
+        _club_dashboard_fixture_view,
+        _scorebook_is_club_side,
         summarize_innings_scorebook,
         scorebook_match_finished,
         scorebook_wickets_for_all_out,
@@ -252,6 +255,9 @@ except ModuleNotFoundError:
         scorecard_template_from_archive,
         save_store,
         scoped_store_for_club,
+        _club_stat_fixtures,
+        _club_dashboard_fixture_view,
+        _scorebook_is_club_side,
         summarize_innings_scorebook,
         scorebook_match_finished,
         scorebook_wickets_for_all_out,
@@ -1772,6 +1778,12 @@ def current_dashboard(
     return build_dashboard(store, get_llm_status(), focus_club_id or "", requested_season_year or "")
 
 
+def _club_is_disabled(club: dict[str, Any] | None) -> bool:
+    if not club:
+        return False
+    return str(club.get("is_disabled") or "").strip().lower() in {"1", "true", "yes", "disabled"}
+
+
 def _selected_club(store: dict[str, Any], focus_club_id: str | None = None) -> dict[str, Any]:
     requested = str(
         focus_club_id
@@ -2514,18 +2526,22 @@ def _visible_club_choices_for_user(
     except Exception:
         logger.debug("Could not load club-role links for user_id=%s", user_row["id"])
 
+    if "superadmin" in _user_role_names(user_row, current_club_id):
+        return _sorted_club_choices(store, current_club_id, include_disabled=True)
+
     clubs = [
         club
         for club in store.get("clubs", [])
         if str(club.get("id") or "").strip() in set(linked_ids)
+        and not _club_is_disabled(club)
     ]
     if not clubs:
         fallback_club_id = str(current_club_id or user_row["primary_club_id"] or "").strip()
         club = next(
             (item for item in store.get("clubs", []) if str(item.get("id") or "").strip() == fallback_club_id),
-            store.get("club", {}),
+            None,
         )
-        clubs = [club] if club else []
+        clubs = [club] if club and not _club_is_disabled(club) else []
     return _sorted_club_choices({"clubs": clubs}, str(current_club_id or user_row["primary_club_id"] or ""))
 
 def _member_for_user(store: dict[str, Any], user_row: sqlite3.Row) -> dict[str, Any] | None:
@@ -2618,16 +2634,15 @@ def _match_scorer_is_authorized(
     current_club_id: str,
     match: dict[str, Any],
 ) -> bool:
-    """Return whether this user may score this club or is its assigned match captain."""
-    club_id = str(match.get("club_id") or "")
-    roles = _user_role_names(user_row, current_club_id)
-    if "superadmin" in roles:
+    """Allow a signed-in player from either playing club to enter live scores."""
+    participant_clubs = _match_participating_club_ids(store, match)
+    if "superadmin" in _user_role_names(user_row, current_club_id):
         return True
-    has_score_permission = "score_matches" in _user_permissions(user_row, current_club_id)
     user_club_ids = set(_user_club_ids(store, user_row, current_club_id)) | {
-        str(user_row["primary_club_id"] or ""),
-        str(current_club_id or ""),
+        str(user_row["primary_club_id"] or ""), str(current_club_id or "")
     }
+    if participant_clubs.intersection(user_club_ids):
+        return True
     member = _member_for_user(store, user_row)
     captain_name = normalize_name(str(match.get("heartlake_captain") or ""))
     member_names = {
@@ -2645,7 +2660,54 @@ def _match_scorer_is_authorized(
         (captain_name and captain_name in member_names)
         or (captain_member_id and captain_member_id == str(user_row["member_id"] or "").strip())
     )
-    return bool((has_score_permission and (not club_id or club_id in user_club_ids)) or is_assigned_captain)
+    return is_assigned_captain
+
+
+def _match_participating_club_ids(store: dict[str, Any], match: dict[str, Any]) -> set[str]:
+    """Resolve the owner and recognized opponent clubs for this fixture."""
+    ids = {str(match.get("club_id") or "").strip()} - {""}
+    labels = {str(match.get("opponent") or "").strip(), str(match.get("visiting_team") or "").strip()}
+    for innings in (match.get("scorebook") or {}).get("innings", []) or []:
+        labels.update((str(innings.get("batting_team") or "").strip(), str(innings.get("bowling_team") or "").strip()))
+    for label in labels - {""}:
+        opponent = _find_club_by_name(store, label)
+        if opponent and opponent.get("id"):
+            ids.add(str(opponent["id"]))
+    return ids
+
+
+def _match_score_editor_is_authorized(store: dict[str, Any], user_row: sqlite3.Row, current_club_id: str, match: dict[str, Any]) -> bool:
+    """Only a playing-club captain/admin or a superadmin may alter saved scoring."""
+    if "superadmin" in _user_role_names(user_row, current_club_id):
+        return True
+    participant_clubs = _match_participating_club_ids(store, match)
+    linked_clubs = set(_user_club_ids(store, user_row, current_club_id)) | {
+        str(user_row["primary_club_id"] or ""), str(current_club_id or "")
+    }
+    member = _member_for_user(store, user_row)
+    member_names = {normalize_name(str(value or "")) for value in [
+        user_row["display_name"], (member or {}).get("name"), (member or {}).get("full_name"),
+        *((member or {}).get("aliases", []) or []),
+    ] if str(value or "").strip()}
+    assigned = normalize_name(str(match.get("heartlake_captain") or "")) in member_names or (
+        str(match.get("heartlake_captain_member_id") or "").strip() == str(user_row["member_id"] or "").strip()
+    )
+    for club_id in participant_clubs.intersection(linked_clubs):
+        if set(_user_role_names(user_row, club_id)).intersection({"captain", "club_admin"}):
+            return True
+    return bool(assigned and participant_clubs.intersection(linked_clubs))
+
+
+def _require_match_score_editor(token: str | None, match_id: str) -> tuple[sqlite3.Row, str]:
+    user_row, current_club_id = _auth_user_from_token(token)
+    store = load_store()
+    try:
+        match = get_match_or_404(store, match_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    if not _match_score_editor_is_authorized(store, user_row, current_club_id, match):
+        raise HTTPException(status_code=403, detail="Only a playing club captain, club admin, or superadmin can edit saved scores.")
+    return user_row, current_club_id
 
 
 def _match_delete_is_authorized(
@@ -2725,7 +2787,28 @@ def _auth_user_from_token(token: str | None, touch: bool = True) -> tuple[sqlite
                 raise HTTPException(status_code=401, detail="Session expired after 30 minutes of inactivity. Sign in again.")
         if touch:
             _touch_auth_session(connection, token)
-    return row, row["current_club_id"] or row["primary_club_id"] or ""
+    current_club_id = str(row["current_club_id"] or row["primary_club_id"] or "").strip()
+    if current_club_id:
+        store = load_store()
+        current_club = next(
+            (item for item in store.get("clubs", []) if str(item.get("id") or "").strip() == current_club_id),
+            None,
+        )
+        if _club_is_disabled(current_club) and "superadmin" not in _user_role_names(row, current_club_id):
+            active_clubs = _visible_club_choices_for_user(store, row, current_club_id)
+            if not active_clubs:
+                raise HTTPException(status_code=403, detail="Your club is disabled. Contact a superadmin to restore access.")
+            primary_id = str(row["primary_club_id"] or "").strip()
+            current_club_id = next(
+                (str(item.get("id") or "") for item in active_clubs if str(item.get("id") or "") == primary_id),
+                str(active_clubs[0].get("id") or ""),
+            )
+            with _auth_connection() as connection:
+                connection.execute(
+                    "UPDATE app_auth_sessions SET current_club_id = ? WHERE token = ?",
+                    (current_club_id or None, token),
+                )
+    return row, current_club_id
 
 
 def _safe_load_store_for_auth(context: str) -> dict[str, Any]:
@@ -3063,7 +3146,7 @@ def _normalize_gender(value: str) -> str:
     return ""
 
 
-def _club_choices(store: dict[str, Any]) -> list[dict[str, str]]:
+def _club_choices(store: dict[str, Any], include_disabled: bool = False) -> list[dict[str, Any]]:
     return [
         {
             "id": str(club.get("id") or ""),
@@ -3072,14 +3155,18 @@ def _club_choices(store: dict[str, Any]) -> list[dict[str, str]]:
             "city": str(club.get("city") or ""),
             "country": str(club.get("country") or ""),
             "season": str(club.get("season") or ""),
+            "is_disabled": _club_is_disabled(club),
         }
         for club in store.get("clubs", [])
+        if include_disabled or not _club_is_disabled(club)
     ]
 
 
-def _sorted_club_choices(store: dict[str, Any], preferred_club_id: str = "") -> list[dict[str, str]]:
+def _sorted_club_choices(
+    store: dict[str, Any], preferred_club_id: str = "", include_disabled: bool = False
+) -> list[dict[str, Any]]:
     return sorted(
-        _club_choices(store),
+        _club_choices(store, include_disabled),
         key=lambda club: (
             0 if str(club.get("id") or "").strip() == str(preferred_club_id or "").strip() else 1,
             str(club.get("name") or ""),
@@ -5210,6 +5297,11 @@ def _scorecard_from_archive(archive: dict[str, Any]) -> dict[str, Any]:
         "year": game_date[:4],
         "season": _scorecard_text(archive.get("season")),
         "club_id": _scorecard_text(archive.get("club_id")),
+        "club_ids": [
+            str(value).strip()
+            for value in (archive.get("club_ids") if isinstance(archive.get("club_ids"), list) else [])
+            if str(value or "").strip()
+        ],
         "club_name": club_name,
         "title": f"{teams[0]} vs {teams[1]}",
         "teams": teams,
@@ -5411,35 +5503,94 @@ def _scorecard_list_item(card: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _scorecard_involved_club_ids(store: dict[str, Any], card: dict[str, Any]) -> set[str]:
+    ids = {str(card.get("club_id") or "").strip()} - {""}
+    ids.update(str(value).strip() for value in (card.get("club_ids") or []) if str(value or "").strip())
+    if card.get("source") == "fixture":
+        fixture_id = str(card.get("fixture_id") or "")
+        fixture = next((item for item in store.get("fixtures", []) or [] if str(item.get("id") or "") == fixture_id), None)
+        if fixture:
+            ids.update(_match_participating_club_ids(store, fixture))
+    for team in card.get("teams", []) or []:
+        club = _find_club_by_name(store, str(team or ""))
+        if club and club.get("id"):
+            ids.add(str(club["id"]))
+    return ids
+
+
 @app.get("/api/public/scorecards")
-def public_scorecards(date: str = "", club_id: str = "", year: str = "") -> dict[str, Any]:
-    """Approved scorecards, newest first, optionally filtered by game date, club or year."""
+def public_scorecards(
+    date: str = "",
+    club_id: str = "",
+    year: str = "",
+    x_auth_token: str | None = Header(default=None),
+) -> dict[str, Any]:
+    """Approved scorecards; signed-in users are scoped to their club except superadmins."""
     store = load_store()
     cards = _public_scorecards(store)
-    clubs = sorted(
-        {(card["club_id"], card["club_name"]) for card in cards if card["club_id"]},
-        key=lambda item: item[1].lower(),
-    )
+    signed_in = bool(x_auth_token)
+    can_select_club = False
+    selected_club_id = ""
+    clubs: list[dict[str, str]] = []
+    if signed_in:
+        user_row, current_club_id = _auth_user_from_token(x_auth_token)
+        selected_club_id = str(current_club_id or user_row["primary_club_id"] or "").strip()
+        can_select_club = "superadmin" in _user_role_names(user_row, selected_club_id)
+        if can_select_club:
+            clubs = sorted(
+                [
+                    {"id": str(club.get("id") or ""), "name": str(club.get("name") or "")}
+                    for club in store.get("clubs", []) or []
+                    if club.get("id") and club.get("name")
+                ],
+                key=lambda item: item["name"].lower(),
+            )
+            if club_id:
+                cards = [card for card in cards if club_id in _scorecard_involved_club_ids(store, card)]
+        elif selected_club_id:
+            cards = [card for card in cards if selected_club_id in _scorecard_involved_club_ids(store, card)]
+            selected = next(
+                (club for club in store.get("clubs", []) or [] if str(club.get("id") or "") == selected_club_id),
+                None,
+            )
+            if selected:
+                clubs = [{"id": selected_club_id, "name": str(selected.get("name") or "My club")}]
+        else:
+            cards = []
     dates = sorted({card["date"] for card in cards}, reverse=True)
-    if club_id:
-        cards = [card for card in cards if card["club_id"] == club_id]
     if year:
         cards = [card for card in cards if card["year"] == year]
     if date:
         cards = [card for card in cards if card["date"] == date]
+    scorecards = []
+    for card in cards:
+        item = _scorecard_list_item(card)
+        item["club_ids"] = sorted(_scorecard_involved_club_ids(store, card))
+        scorecards.append(item)
     return {
-        "scorecards": [_scorecard_list_item(card) for card in cards],
+        "scorecards": scorecards,
         "dates": dates,
-        "clubs": [{"id": club, "name": name} for club, name in clubs],
+        "clubs": clubs,
+        "can_select_club": can_select_club,
+        "selected_club_id": selected_club_id,
         "generated_at": now_iso(),
     }
 
 
 @app.get("/api/public/scorecards/{scorecard_id}")
-def public_scorecard_detail(scorecard_id: str) -> dict[str, Any]:
+def public_scorecard_detail(
+    scorecard_id: str,
+    x_auth_token: str | None = Header(default=None),
+) -> dict[str, Any]:
     store = load_store()
     for card in _public_scorecards(store):
         if card["id"] == scorecard_id:
+            if x_auth_token:
+                user_row, current_club_id = _auth_user_from_token(x_auth_token)
+                if "superadmin" not in _user_role_names(user_row, current_club_id):
+                    allowed_club_id = str(current_club_id or user_row["primary_club_id"] or "").strip()
+                    if not allowed_club_id or allowed_club_id not in _scorecard_involved_club_ids(store, card):
+                        raise HTTPException(status_code=404, detail="Scorecard not found.")
             return {"scorecard": card, "generated_at": now_iso()}
     raise HTTPException(status_code=404, detail="Scorecard not found.")
 
@@ -5678,7 +5829,7 @@ def _admin_center_html(request: Request) -> HTMLResponse:
         )
     club_options = "\n".join(
         f'<option value="{html.escape(item["id"])}"{" selected" if item["id"] == selected_club_id else ""}>{html.escape(item["name"])} · {html.escape(item["season"] or "Season TBD")}</option>'
-        for item in _sorted_club_choices(store, selected_club_id)
+        for item in _sorted_club_choices(store, selected_club_id, include_disabled=True)
     )
     review_groups: dict[str, list[dict[str, Any]]] = {}
     for upload in review_uploads:
@@ -5704,12 +5855,29 @@ def _admin_center_html(request: Request) -> HTMLResponse:
             and str(team.get("club_name") or "").strip().lower() in {club_name_value, club_short_name_value}
         )
     ]
+    club_status_html = (
+        '<p class="status-banner error">Disabled · members cannot access this club.</p>'
+        if _club_is_disabled(club)
+        else '<p class="status-banner success">Active</p>'
+    )
+    club_toggle_html = (
+        f'<form method="post" action="/api/admin/clubs/{html.escape(str(club.get("id") or ""))}/enable"><button class="secondary-button" type="submit">Re-enable club</button></form>'
+        if _club_is_disabled(club)
+        else f'''<form method="post" action="/api/admin/clubs/{html.escape(str(club.get("id") or ""))}/disable">
+            <label class="stack-label">Type the exact club name to confirm disabling
+              <input name="confirmation" type="text" placeholder="{html.escape(club.get('name') or '')}" autocomplete="off" required />
+            </label>
+            <button class="secondary-button" type="submit">Disable club</button>
+          </form>'''
+    )
     club_detail_html = (
         f"""
         <article class="detail-card admin-club-card" data-admin-club="{html.escape(str(club.get('id') or ''))}">
           <strong>{html.escape(club.get('name') or 'Selected club')}</strong>
           <p>{html.escape(club.get('short_name') or '')} · {html.escape(club.get('season') or 'Season TBD')}</p>
+          {club_status_html}
           <small>{len(club_members)} players · {len(club_teams)} teams · {html.escape(club.get('city') or 'City TBD')} · {html.escape(club.get('country') or 'Country TBD')}</small>
+          {club_toggle_html}
           <form class="admin-delete-form" method="post" action="/api/admin/clubs/{html.escape(str(club.get('id') or ''))}/delete">
             <label class="stack-label">
               Type the exact club name to confirm deletion
@@ -5922,10 +6090,10 @@ def _admin_center_html(request: Request) -> HTMLResponse:
                 <div class="panel-head compact-head">
                   <div>
                     <p class="section-kicker">Club Controls</p>
-                    <h2>Delete club and unlink players</h2>
+                    <h2>Disable, re-enable, or delete clubs</h2>
                   </div>
                 </div>
-                <p class="lede">Superadmin only. Select a club first, then remove the club or remove players from that club’s roster.</p>
+                <p class="lede">Superadmin only. Disabling preserves club history and blocks member access. Re-enable it here. Permanent deletion and roster cleanup are also available.</p>
                 <form id="adminClubForm" class="toolbar-actions" method="get" action="/admin-center">
                   <select id="adminClubSelect" name="club_id">{club_options}</select>
                   <button id="adminLoadClubButton" class="secondary-button" type="submit">Load club</button>
@@ -6132,6 +6300,8 @@ def clubs_select(request: Request, club_id: str = Form(...), search: str = Form(
     clubs_user_row, _ = _auth_user_from_token(token)
     store = load_store()
     selected_club = _selected_club(store, club_id)
+    if _club_is_disabled(selected_club) and "superadmin" not in _user_role_names(clubs_user_row, str(selected_club.get("id") or "")):
+        return HTMLResponse("This club is disabled. Contact a superadmin to restore access.", status_code=403)
     try:
         _require_multi_club(clubs_user_row, str(selected_club.get("id") or ""))
     except HTTPException:
@@ -7360,6 +7530,8 @@ def select_club(request: SelectClubRequest, x_auth_token: str | None = Header(de
     user_row, _ = _auth_user_from_token(x_auth_token)
     store = load_store()
     selected_club = _selected_club(store, request.club_id)
+    if _club_is_disabled(selected_club) and "superadmin" not in _user_role_names(user_row, str(selected_club.get("id") or "")):
+        raise HTTPException(status_code=403, detail="This club is disabled. Contact a superadmin to restore access.")
     _require_multi_club(user_row, str(selected_club.get("id") or ""))
     logger.debug(
         "Selected club saved. user_id=%s club_id=%s club_name=%s",
@@ -7784,7 +7956,11 @@ def delete_season_fixture(
     return season_setup_data(x_auth_token, club_id)
 
 
-def _member_appeared_in_fixture(member: dict[str, Any] | None, fixture: dict[str, Any]) -> bool:
+def _member_appeared_in_fixture(
+    member: dict[str, Any] | None,
+    fixture: dict[str, Any],
+    club: dict[str, Any] | None = None,
+) -> bool:
     if not member or not _fixture_has_recorded_score_data(fixture):
         return False
     aliases = member.get("aliases") or []
@@ -7792,40 +7968,38 @@ def _member_appeared_in_fixture(member: dict[str, Any] | None, fixture: dict[str
         aliases = [aliases]
     member_names = {
         normalize_name(value)
-        for value in [
-            member.get("name"),
-            member.get("full_name"),
-            *aliases,
-        ]
+        for value in [member.get("name"), member.get("full_name"), *aliases]
         if str(value or "").strip()
     }
     if not member_names:
         return False
-    scorebook = fixture.get("scorebook") or {}
-    for innings in scorebook.get("innings") or []:
-        for ball in innings.get("balls") or []:
-            participants = (
-                ball.get("striker"),
-                ball.get("non_striker"),
-                ball.get("bowler"),
-                ball.get("wicket_player"),
-                ball.get("new_batter"),
-            )
-            if any(normalize_name(name) in member_names for name in participants if str(name or "").strip()):
+    innings_rows = (fixture.get("scorebook") or {}).get("innings") or []
+    if innings_rows:
+        for innings in innings_rows:
+            batting_side = not club or _scorebook_is_club_side(fixture, innings.get("batting_team", ""), club)
+            bowling_side = not club or _scorebook_is_club_side(fixture, innings.get("bowling_team", ""), club)
+            for ball in innings.get("balls") or []:
+                participants = []
+                if batting_side:
+                    participants.extend((ball.get("striker"), ball.get("non_striker"), ball.get("wicket_player"), ball.get("new_batter")))
+                if bowling_side:
+                    participants.extend((ball.get("bowler"), ball.get("fielder")))
+                if any(normalize_name(name) in member_names for name in participants if str(name or "").strip()):
+                    return True
+            summary = summarize_innings_scorebook(innings)
+            if batting_side and any(
+                normalize_name(row.get("player_name")) in member_names
+                for row in summary.get("batting") or []
+                if str(row.get("status") or "").lower() != "not_batted"
+            ):
                 return True
-        summary = summarize_innings_scorebook(innings)
-        appeared_batters = [
-            row.get("player_name")
-            for row in summary.get("batting") or []
-            if str(row.get("status") or "").lower() != "not_batted"
-        ]
-        appeared_bowlers = [
-            row.get("player_name")
-            for row in summary.get("bowling") or []
-            if int(row.get("legal_balls") or 0) > 0 or int(row.get("runs_conceded") or 0) > 0
-        ]
-        if any(normalize_name(name) in member_names for name in [*appeared_batters, *appeared_bowlers]):
-            return True
+            if bowling_side and any(
+                normalize_name(row.get("player_name")) in member_names
+                for row in summary.get("bowling") or []
+                if int(row.get("legal_balls") or 0) > 0 or int(row.get("runs_conceded") or 0) > 0
+            ):
+                return True
+        return False
     return any(
         normalize_name(row.get("player_name")) in member_names
         for row in fixture.get("performances") or []
@@ -7838,14 +8012,14 @@ def player_availability_data(x_auth_token: str | None = Header(default=None)) ->
     user_row, current_club_id = _auth_user_from_token(x_auth_token)
     store = load_store()
     club = _selected_club(store, current_club_id)
-    scoped = scoped_store_for_club(store, club)
     active_year = club_season_year(club)
     member = _member_for_user(store, user_row)
     changed = False
     fixtures = []
-    for fixture in scoped.get("fixtures", []):
-        played = _member_appeared_in_fixture(member, fixture) if member else False
+    for fixture in _club_stat_fixtures(store, club):
+        played = _member_appeared_in_fixture(member, fixture, club) if member else False
         is_past = _fixture_is_past(fixture)
+        fixture_view = _club_dashboard_fixture_view(fixture, club)
         if played:
             statuses = fixture.get("availability_statuses")
             if not isinstance(statuses, dict):
@@ -7854,14 +8028,14 @@ def player_availability_data(x_auth_token: str | None = Header(default=None)) ->
             if statuses.get(member["name"]) != "Available":
                 statuses[member["name"]] = "Available"
                 changed = True
-            fixtures.append({**fixture, "availability_read_only": True})
+            fixtures.append({**fixture_view, "availability_read_only": True})
             continue
         if (
             (not active_year or fixture_season_year(fixture) == active_year)
             and str(fixture.get("status") or "").lower() != "completed"
             and not is_past
         ):
-            fixtures.append({**fixture, "availability_read_only": False})
+            fixtures.append({**fixture_view, "availability_read_only": False})
     if changed:
         save_store(store)
     fixtures.sort(key=lambda fixture: (str(fixture.get("date") or ""), str(fixture.get("opponent") or "")))
@@ -8692,6 +8866,52 @@ def _delete_club_core(club_id: str, token: str | None, confirmation: str = "") -
     }
 
 
+def _set_club_disabled_core(club_id: str, token: str | None, disabled: bool, confirmation: str = "") -> dict[str, Any]:
+    user_row, _ = _auth_user_from_token(token)
+    _require_superadmin(token)
+    store = load_store()
+    club = next((item for item in store.get("clubs", []) if str(item.get("id") or "").strip() == str(club_id or "").strip()), None)
+    if not club:
+        raise HTTPException(status_code=404, detail="Club not found.")
+    club_name = str(club.get("name") or "Club").strip()
+    if disabled and str(confirmation or "").strip() != club_name:
+        raise HTTPException(status_code=400, detail=f'Type "{club_name}" exactly to confirm disabling this club.')
+    club["is_disabled"] = bool(disabled)
+    primary = store.get("club")
+    if isinstance(primary, dict) and str(primary.get("id") or "").strip() == str(club.get("id") or "").strip():
+        primary["is_disabled"] = bool(disabled)
+    save_store(store)
+    _audit_event(
+        "club.disable" if disabled else "club.enable",
+        "club",
+        str(club.get("id") or ""),
+        actor=user_row,
+        club_id=str(club.get("id") or ""),
+        club_name=club_name,
+        details={"is_disabled": bool(disabled)},
+        source="api",
+    )
+    return {"message": f"{club_name} {'disabled' if disabled else 're-enabled'}.", "club_id": str(club.get("id") or ""), "club_name": club_name}
+
+
+@app.post("/api/admin/clubs/{club_id}/disable")
+def disable_club_form(request: Request, club_id: str, confirmation: str = Form(default="")) -> Response:
+    try:
+        result = _set_club_disabled_core(club_id, _auth_token_from_request(request), True, confirmation)
+        return _redirect_to_admin_center(club_id, result["message"], "success")
+    except HTTPException as exc:
+        return _redirect_to_admin_center(club_id, str(exc.detail), "error")
+
+
+@app.post("/api/admin/clubs/{club_id}/enable")
+def enable_club_form(request: Request, club_id: str) -> Response:
+    try:
+        result = _set_club_disabled_core(club_id, _auth_token_from_request(request), False)
+        return _redirect_to_admin_center(club_id, result["message"], "success")
+    except HTTPException as exc:
+        return _redirect_to_admin_center(club_id, str(exc.detail), "error")
+
+
 @app.delete("/api/admin/clubs/{club_id}/members/{member_id}")
 def delete_club_member(
     club_id: str,
@@ -8854,7 +9074,7 @@ def update_playing_xi(match_id: str, request: PlayingXiUpdateRequest, x_auth_tok
 
 @app.post("/api/matches/{match_id}/scorecard")
 def update_scorecard(match_id: str, request: ScorecardUpdateRequest, x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
-    user_row, current_club_id = _require_match_scorer(x_auth_token, match_id)
+    user_row, current_club_id = _require_match_score_editor(x_auth_token, match_id)
     store = load_store()
     try:
         match = get_match_or_404(store, match_id)
@@ -8952,6 +9172,8 @@ def update_scorebook_setup(
     scorebook = _match_scorebook(match)
     innings_index = max(1, min(2, int(request.innings_number or 1))) - 1
     innings = scorebook["innings"][innings_index]
+    if innings.get("balls") or edit_mode:
+        user_row, _ = _require_match_score_editor(x_auth_token, match_id)
     # Both line-ups (2-11 players each) must be set before scoring starts (README: "Line-ups and guest matches").
     already_started = any((item.get("balls") or []) for item in scorebook.get("innings", []))
     if not already_started and not _lineups_ready(_match_lineups(match_id)):
@@ -9006,6 +9228,9 @@ def add_scorebook_ball(
     scorebook = _match_scorebook(match)
     innings_index = max(1, min(2, int(request.innings_number or 1))) - 1
     innings = scorebook["innings"][innings_index]
+    saved_ids = {str(item.get("id") or "") for item in innings.get("balls", [])}
+    if edit_mode or (request.id and str(request.id) in saved_ids):
+        user_row, _ = _require_match_score_editor(x_auth_token, match_id)
     ball = normalize_scorebook_ball(
         {
             "over_number": request.over_number,
@@ -9095,7 +9320,7 @@ def delete_scorebook_ball(
     x_auth_token: str | None = Header(default=None),
     x_lite_response: str | None = Header(default=None),
 ) -> dict[str, Any]:
-    user_row, _ = _require_match_scorer(x_auth_token, match_id)
+    user_row, _ = _require_match_score_editor(x_auth_token, match_id)
     store = load_store()
     try:
         match = get_match_or_404(store, match_id)
@@ -10148,9 +10373,21 @@ def quick_score_fixtures(x_auth_token: str | None = Header(default=None)) -> dic
     club = _selected_club(store, current_club_id)
     today = _current_local_date().isoformat()
     items = []
-    for fixture in _club_fixtures(store, str(club.get("id") or "")):
+    club_fixture_ids = {str(fixture.get("id") or "") for fixture in _club_stat_fixtures(store, club)}
+    club_id = str(club.get("id") or "")
+    club_fixture_ids.update(
+        str(fixture.get("id") or "")
+        for fixture in store.get("fixtures", []) or []
+        if club_id in _match_participating_club_ids(store, fixture)
+    )
+    for source_fixture in store.get("fixtures", []) or []:
+        if str(source_fixture.get("id") or "") not in club_fixture_ids:
+            continue
+        fixture = _club_dashboard_fixture_view(source_fixture, club)
+        if not _match_scorer_is_authorized(store, user_row, current_club_id, source_fixture):
+            continue
         open_now = _scorebook_is_open(fixture)
-        can_edit = _match_scorer_is_authorized(store, user_row, current_club_id, fixture)
+        can_edit = _match_score_editor_is_authorized(store, user_row, current_club_id, source_fixture)
         edit_existing = can_edit and _fixture_has_balls(fixture) and (_fixture_is_past(fixture) or _fixture_is_completed(fixture))
         if not open_now and str(fixture.get("date") or "") < today and not edit_existing:
             continue
@@ -10175,7 +10412,7 @@ def quick_score_fixtures(x_auth_token: str | None = Header(default=None)) -> dic
     return {
         "club": {"id": club.get("id"), "name": club.get("name")},
         "fixtures": items[:12],
-        "can_score": "score_matches" in permissions,
+        "can_score": bool(items),
         "can_create": "manage_fixtures" in permissions,
         "today": today,
     }
@@ -10260,7 +10497,8 @@ def quick_score_state(match_id: str, x_auth_token: str | None = Header(default=N
     club = _selected_club(store, str(fixture.get("club_id") or current_club_id))
     lineups = _match_lineups(match_id)
     started = any((innings.get("balls") or []) for innings in (fixture.get("scorebook") or {}).get("innings", []) or [])
-    can_edit_scorebook = _match_scorer_is_authorized(store, user_row, current_club_id, fixture)
+    can_score = _match_scorer_is_authorized(store, user_row, current_club_id, fixture)
+    can_edit_scorebook = _match_score_editor_is_authorized(store, user_row, current_club_id, fixture)
     can_delete_incomplete = (
         not _fixture_is_completed(fixture)
         and _match_delete_is_authorized(store, user_row, current_club_id, fixture)
@@ -10268,7 +10506,7 @@ def quick_score_state(match_id: str, x_auth_token: str | None = Header(default=N
     return {
         "match": payload,
         "open": _scorebook_is_open(fixture),
-        "can_score": can_edit_scorebook,
+        "can_score": can_score,
         "can_edit_scorebook": can_edit_scorebook,
         "can_delete_incomplete": can_delete_incomplete,
         "roster": _club_member_names(store, club),
@@ -10859,6 +11097,8 @@ def save_match_lineups(match_id: str, request: LineupsRequest, x_auth_token: str
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
     _require_not_past(match, "the line-ups")
+    if _lineups_ready(_match_lineups(match_id)) or _fixture_has_balls(match):
+        user_row, _ = _require_match_score_editor(x_auth_token, match_id)
     club_side, opponent_side = _clean_lineup(request.club), _clean_lineup(request.opponent)
     problem = _lineup_problem(club_side, opponent_side, str(match.get("club_name") or "Your team"), str(match.get("opponent") or "The other team"))
     if problem:

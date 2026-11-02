@@ -14,6 +14,8 @@
   const clearEl = document.getElementById("scClear");
   let all = [];
   let manager = null;
+  let fixedClubId = "";
+  let canSelectClub = false;
 
   const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
   const DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -97,7 +99,7 @@
   function syncUrl() {
     const params = new URLSearchParams();
     if (dateEl.value) params.set("date", dateEl.value);
-    if (clubEl.value) params.set("club", clubEl.value);
+    if (canSelectClub && clubEl.value) params.set("club", clubEl.value);
     if (yearEl.value) params.set("year", yearEl.value);
     const query = params.toString();
     history.replaceState(null, "", query ? `/scorecards?${query}` : "/scorecards");
@@ -107,13 +109,17 @@
     const date = dateEl.value;
     const club = clubEl.value;
     const year = yearEl.value;
-    clearEl.hidden = !(date || club || year);
+    clearEl.hidden = !(date || year || (canSelectClub && club));
     syncUrl();
 
-    const base = all.filter((item) => (!club || item.club_id === club) && (!year || item.year === year));
+    const base = all.filter((item) => {
+      const clubIds = Array.isArray(item.club_ids) ? item.club_ids : [item.club_id];
+      return (!club || clubIds.includes(club)) && (!year || item.year === year);
+    });
     const visible = date ? base.filter((item) => item.date === date) : base;
 
-    titleEl.textContent = date ? longDate(date) : year ? `${year} season` : "All scorecards";
+    const selectedClubName = clubEl.selectedOptions?.[0]?.textContent || "";
+    titleEl.textContent = date ? longDate(date) : year ? `${year} season` : club ? `${selectedClubName} scorecards` : "All scorecards";
     badgeEl.textContent = `${visible.length} scorecard${visible.length === 1 ? "" : "s"}`;
     noticeEl.hidden = true;
 
@@ -158,11 +164,26 @@
 
   async function load() {
     try {
-      const response = await fetch("/api/public/scorecards", { headers: { Accept: "application/json" } });
+      let token = "";
+      try {
+        token = localStorage.getItem("cricketClubAppAuthToken") || "";
+      } catch (error) {
+        token = "";
+      }
+      const headers = { Accept: "application/json" };
+      if (token) headers["X-Auth-Token"] = token;
+      const response = await fetch("/api/public/scorecards", { headers });
       if (!response.ok) throw new Error("Unable to load scorecards.");
       const data = await response.json();
       all = Array.isArray(data.scorecards) ? data.scorecards : [];
+      canSelectClub = Boolean(data.can_select_club);
+      fixedClubId = String(data.selected_club_id || "");
       fillSelect(clubEl, (data.clubs || []).map((club) => [club.id, club.name]));
+      clubEl.parentElement.hidden = !canSelectClub;
+      clubEl.disabled = !canSelectClub;
+      clubEl.value = canSelectClub
+        ? (new URLSearchParams(location.search).get("club") || fixedClubId)
+        : fixedClubId;
       const years = [...new Set(all.map((item) => item.year).filter(Boolean))].sort().reverse();
       fillSelect(yearEl, years.map((y) => [y, y]));
       const dates = all.map((item) => item.date).filter(Boolean).sort();
@@ -173,7 +194,7 @@
 
       const params = new URLSearchParams(location.search);
       dateEl.value = params.get("date") || "";
-      if (params.get("club")) clubEl.value = params.get("club");
+      if (canSelectClub && params.get("club")) clubEl.value = params.get("club");
       if (params.get("year")) yearEl.value = params.get("year");
       render();
     } catch (error) {
@@ -237,7 +258,7 @@
   });
   clearEl.addEventListener("click", () => {
     dateEl.value = "";
-    clubEl.value = "";
+    clubEl.value = canSelectClub ? "" : fixedClubId;
     yearEl.value = "";
     render();
   });

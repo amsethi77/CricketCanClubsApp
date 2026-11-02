@@ -66,7 +66,19 @@ These rules are the source of truth for the current implementation. If older log
 This section captures the user requirements in the order they were given and refined during the build.
 
 ### November 2026 club-specific player statistics
-- Keep player rankings and statistics exclusive to their club. A player should appear for both clubs only when the scorebook shows them playing on each club's side; opponent batting, bowling and fielding figures must not be counted for the selected club.
+- Keep player rankings and statistics exclusive to their club. A player should appear for both clubs only when the scorebook shows them playing on each club's side; opponent batting, bowling and fielding figures must not be counted for the selected club. Include a played match in both clubs' My availability views when the signed-in player participated for that club, and make past-match availability read-only.
+
+### November 2026 match scoring permissions
+- Any signed-in player linked to either club playing a match can enter its live score, including a player on the opponent club when the fixture is owned by the other club. Only a captain of either participating club, a club admin of either participating club, or a superadmin can correct or remove saved balls, change an existing scorecard or line-up, or use scorebook edit mode. Enforce these rules in the APIs and show only the actions the signed-in user can use.
+
+### November 2026 Scorecards club access
+- The Scorecards page should open on the signed-in user's current club and show that club's matches and approved uploads. Only a superadmin may switch to another registered club or All clubs; enforce the club scope in the API as well as the page. Signed-out visitors retain the public scorecard view without a club selector.
+
+### November 2026 unique visitor analytics error
+- Fix the superadmin Unique visitors panel returning an Internal Server Error; hourly, daily, monthly, and annual visitor buckets must use the America/Toronto time zone.
+
+### November 2026 club administration
+- Add a superadmin Admin Center action to disable any club, re-enable it later, or permanently delete it. Disabling must preserve the club and its history while blocking its members from club access.
 
 ### October 2026 Azure infrastructure request
 - Move production persistence from App Service SQLite to one free-tier Azure SQL Database PaaS database in Canada Central; keep test on SQLite; replace the East US Key Vault with a Canada Central vault; create no resources outside Canada Central.
@@ -400,6 +412,7 @@ This section captures the user requirements in the order they were given and ref
 ## Site analytics, player identity, and live audience
 
 - Superadmins can open Admin Center's **Unique visitors** panel for distinct account/browser counts over the last 24 hours, 30 days, 12 months, and five years, with hourly, daily, monthly, and annual breakdowns. Buckets use `APP_TIMEZONE` (default `America/Toronto`); the busiest hour is summarized from the previous 30 days.
+- The `tzdata` dependency supplies IANA zone rules on Windows and other hosts without a system time-zone database, so analytics can resolve `America/Toronto` correctly.
 - Site visits are recorded only for successful HTML page views, with one pseudonymous visitor key per signed-in account or anonymous first-party browser cookie. IP addresses, names, and contact details are not stored in the analytics table. Traffic collection begins after this version is deployed; earlier visits are not backfilled.
 - Every player/member has a four-digit numeric Player ID. The site superadmin is `1000`; other IDs are assigned sequentially starting at `1001`. Linked accounts share their player profile ID. Existing generated IDs are migrated on startup, IDs are retained across restarts and are not reused after deletion, and players found in played scorebooks receive an ID when added to registration options. The `Not linked yet` list displays each ID. Available IDs run through `9999`. Registration can link an unclaimed profile by Player ID or selection, and names entered during linking and profile aliases resolve to that same player. An ID already linked to another sign-in account cannot be claimed by registering again.
 - Date of birth is optional at registration and on the player profile. It is stored as an ISO date, future dates are rejected, and DOB is omitted from public data and club-wide dashboard member lists.
@@ -608,6 +621,8 @@ When reviewing imported historical scorecards, use prompts or pasted review note
 
 ## Admin Center Controls
 
+- Superadmins can disable a club from its Admin Center detail card after typing its exact name. A disabled club remains stored with its match history, is hidden from public and regular-user club choices, and its members cannot select or use it. Superadmins can still select the club in Admin Center and re-enable it. Permanent deletion remains a separate destructive action.
+
 - Superadmin-only Admin Center actions include club cleanup and player cleanup.
 - Delete a player from the selected club only after confirming they should be removed from that club roster.
 - Delete a club only from the superadmin Admin Center, and keep shared archives visible for any remaining clubs they belong to.
@@ -650,6 +665,7 @@ This section documents the work done in September 2026. See "Change log" at the 
 ### Digital scorecards (`/scorecards`)
 - `GET /api/public/scorecards?date=&club_id=&year=` lists approved uploaded scorecards and past played fixtures, newest first; `GET /api/public/scorecards/{id}` returns one Cricinfo-style card (batting, bowling, extras, did-not-bat, match details, original photo URL when uploaded). Year and exact game-date filters include every season represented in the archive.
 - Pages: `static/scorecards.html/js` (list grouped by month, date picker with "closest dates", club and season filters) and `static/scorecard.html/js` (innings tables + "Original scorecard" photo tab). Styles: `static/scorecards.css`.
+- Signed-in players default to their current club and the API returns only scorecards involving that club, including a shared fixture where the scorebook identifies the club as a playing side. Only superadmins can change the club filter or select All clubs; their selector lists every registered club. Signed-out visitors retain the public all-scorecards view without a club selector.
 - Archived scorebook fixtures retain their fixture and roster records in the database; no fixture duplication is created to populate the archive. Captains, club admins, and superadmins can delete incomplete scorebook cards, while completed matches return **409** and remain intact. Those authorized roles can also delete unapproved/incomplete archive uploads from their club; approved scorecard uploads are protected.
 - `GET /api/auth/options` idempotently adds missing clubs from scored fixtures and creates/links members from each innings' batting, bowling, and fielding scorebook records. Upcoming unscored fixtures do not create registration clubs; existing player club memberships are preserved.
 - Archive review uses the same shared `scorecard.js` renderer and `scorecards.css` for a digital snapshot beside the editable extraction JSON; the uploaded original image is rendered directly in the review panel, without displaying its URL. HEIC/HEIF originals are converted to browser-compatible JPEG previews while preserving the original upload; an original-photo tab remains included in the snapshot. The three panels sit side by side on wide screens and stack on phones. Pending previews are returned only from the superadmin-protected Admin Center queue.
@@ -669,6 +685,7 @@ This section documents the work done in September 2026. See "Change log" at the 
 - Captains, club admins, and superadmins can delete unfinished matches, including started scorebooks, from Quick Score. The server verifies role and completion status; after deletion the page offers **Start a new match** and **View fixtures**.
 - Flow: pick today's match (or "Start a match now") → choose batting side, openers and bowler → score with big buttons `0 1 2 3 4 6 / Wd Nb Bye LB / W / Undo`.
 - Strike rotates automatically on odd runs and at the end of each over; after 6 legal balls it asks for the next bowler; W opens a pop-up for how out, fielder and the new batter; 2nd innings shows the target and required rate.
+- Any signed-in player linked to either participating club can enter live balls. Score corrections, undo, saved scorecard changes, line-up changes after initial setup, and historical edit mode require a participating club captain, club admin, or superadmin. The server checks both club memberships and roles; the fixture appears in the opponent club's Quick Score list as well.
 - **Retired out** is a temporary batter departure, not a wicket. It adds no runs, ball faced, legal ball, bowler credit, or team wicket; the batter can return later with their existing figures.
 - The AI Live Scorer recognizes “retired out” and prompts for the batter and replacement without adding a run, ball, or wicket.
 - **Voice scoring** (Chrome/Edge): "dot", "single", "two", "four", "six", "wide", "no ball", "bye", "leg bye", "bowled", "caught", "LBW", "run out", "undo". **Shorthand**: type `1 4 0 wd 6 w`.
@@ -788,7 +805,7 @@ This section documents the work done in September 2026. See "Change log" at the 
 ### Club-specific player stats (Nov 2 2026)
 - Club rankings, selected-year Home rankings, and club Stats are calculated from the scorebook innings for the selected club. Batting counts only when that club is batting; wickets and catches count only when that club is bowling/fielding. Highest scores and milestones use the same team-side filter. The combined fixture performance list contains both teams and must not be used as-is for club rankings.
 - Players with appearances for two clubs retain their stats for each club, based on the side they played on in each scorebook. For old fixtures without scorebook innings, only known club members' manually entered performances are included. A club also receives its players' scorebook stats from an opponent-owned fixture when its team is recorded as batting or bowling; fixture ownership remains with the original club.
-- The dashboard's player summary and season-by-season rows are scoped to the selected club as well. The focused-club snapshot uses the fresh filtered rankings instead of stale materialized top-batter rows. Cross-club history remains available in player profiles, where memberships are shown separately.
+- The dashboard's player summary and season-by-season rows are scoped to the selected club as well. The focused-club snapshot uses the fresh filtered rankings instead of stale materialized top-batter rows. Cross-club history remains available in player profiles, where memberships are shown separately. A club dashboard also includes an opponent-owned match when its scorebook records the focused club playing, while retaining the original fixture owner. Signed-in Rankings uses the focused club roster; public Rankings remains global.
 - Built-in answers (no AI needed): "where are the stats" and the new "switch club" (Clubs in the menu).
 
 ### Availability requests and match reminders (Oct 29 2026)
@@ -1195,8 +1212,15 @@ Model (soft launch, Oct 2026): keep the core cricket experience free; one paid p
 5. Stripe (optional, test mode): fill `.env`, restart, run `stripe listen`, choose Pro monthly on `/pricing` and pay with card `4242 4242 4242 4242`; the plan changes to Pro.
 
 ## Change log
+
+- 2026-11-02: Added superadmin Admin Center controls to disable and re-enable clubs without deleting their match history. Disabled clubs are hidden from regular club choices and blocked for members; superadmins can restore them. Documented the user's request in Prompt And Requirement Log.
+- 2026-11-02: Fixed the Unique visitors Internal Server Error on Windows by adding the missing IANA time-zone database dependency; `America/Toronto` hourly and date grouping now resolves through `tzdata`.
+- 2026-11-02: Scoped Scorecards to the signed-in user's current club by default, included shared scorecards for either playing club, and restricted changing the club filter or viewing All clubs to superadmins. The API enforces the same scope; the superadmin selector lists registered clubs even without scorecards.
+- 2026-11-02: Allowed players from either participating club to enter live match scores. Restricted saved-ball corrections, undo, scorecard edits, lineup changes after initial setup, and historical edit mode to participating-club captains, club admins, and superadmins; opponent-club players can find the shared match in Quick Score.
 - 2026-11-02: Fixed club player stats leaking across teams: Home selected-year rankings, Stats summaries and season trends, highest scores, milestones, and focused-club snapshot leaders now use club-filtered scorebook performance. Stale materialized top-batter rows can no longer override the live selected-club rankings. Afghan Eagles' figures no longer appear as Heartlake stats unless they actually played on Heartlake's side. See "Club-specific player stats".
 - 2026-11-02: Afghan Eagles club stats now include Shahid and other recorded players' batting/bowling figures from their innings in a Heartlake-owned fixture, without moving the fixture out of Heartlake. See "Club-specific player stats".
+- 2026-11-02: Afghan Eagles Home and Matches now include its recorded Heartlake-opponent fixture in Afghan perspective; signed-in Rankings uses only players linked to the focused club, and played-match data feeds the snapshot and player summaries.
+- 2026-11-02: My availability now includes a player's recorded appearance in a match owned by the opponent club, uses scorebook team-side attribution, and presents the past fixture as read-only.
 
 - 2026-11-02: Fixed the remaining Afghan Eagles roster bleed: unmapped primary teams no longer inherit Heartlake as their club, and unrelated team affiliations block fallback to a user-selected club.
 - 2026-11-02: Replaced long hashed Player IDs with persisted four-digit numeric IDs (`1000` for the superadmin; other IDs increment from `1001`) and migrated existing IDs.

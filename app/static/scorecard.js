@@ -693,7 +693,9 @@
       return;
     }
     try {
-      const response = await fetch(`/api/public/scorecards/${encodeURIComponent(id)}`, { headers: { Accept: "application/json" } });
+      const response = await fetch(`/api/public/scorecards/${encodeURIComponent(id)}`, {
+        headers: { Accept: "application/json", "X-Auth-Token": token() },
+      });
       if (response.status === 404) throw new Error("This scorecard isn't available. It may not be approved yet.");
       if (!response.ok) throw new Error("Unable to load this scorecard.");
       const data = await response.json();

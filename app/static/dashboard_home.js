@@ -176,20 +176,25 @@
       return t && t !== "0" ? t : "";
     };
     const result = String(f.result || "").replace(/^result:\s*/i, "").trim();
+    const clubIsOpponent = Boolean(clubKey && teamKey(f.opponent) === clubKey && teamKey(f.club_name) !== clubKey);
+    const ownName = clubIsOpponent ? (f.opponent || "Club") : (f.club_name || "Club");
+    const opponentName = clubIsOpponent ? (f.club_name || "Opponent") : (f.opponent || "Opponent");
+    const ownScore = clubIsOpponent ? f.opponent_score : f.heartlake_score;
+    const otherScore = clubIsOpponent ? f.heartlake_score : f.opponent_score;
     return {
       id: f.id,
-      club: f.club_id,
+      club: clubIsOpponent ? viewerClubId : f.club_id,
       kind,
       date: f.date,
       teams: [
-        { name: f.club_name || "Club", score: sc(f.heartlake_score) },
-        { name: f.opponent || "Opponent", score: sc(f.opponent_score) },
+        { name: ownName, score: sc(ownScore) },
+        { name: opponentName, score: sc(otherScore) },
       ],
       note:
         kind === "upcoming"
           ? [f.scheduled_time !== "Time TBD" ? f.scheduled_time : "", f.venue !== "Venue TBD" ? f.venue : ""].filter(Boolean).join(" · ") || "Time TBD"
           : !result || /^(tbd|club won)$/i.test(result)
-            ? kind === "live" ? "In progress" : sc(f.heartlake_score) || sc(f.opponent_score) ? "Full time" : "Result not recorded"
+            ? kind === "live" ? "In progress" : sc(ownScore) || sc(otherScore) ? "Full time" : "Result not recorded"
             : result,
       meta: [f.match_type, f.overs ? `${f.overs} ov` : ""].filter(Boolean).join(" · "),
       href: kind === "upcoming" ? "/matches" : `/live/${encodeURIComponent(f.id)}`,

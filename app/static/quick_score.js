@@ -242,7 +242,7 @@
   function ballButton(b) {
     const retiredOut = String(b.wicket_type || "").toLowerCase() === "retired_out";
     const cls = b.wicket && !retiredOut ? "w" : b.extras_type === "none" && b.runs_bat === 4 ? "four" : b.extras_type === "none" && b.runs_bat === 6 ? "six" : b.extras_type !== "none" ? "x" : "";
-    const fixable = !String(b.id || "").startsWith("local-");
+    const fixable = data.can_edit_scorebook && !String(b.id || "").startsWith("local-");
     return `<button type="button" class="qs-ball ${cls}"${fixable ? ` data-fix="${esc(b.id)}"` : " disabled"} aria-label="Fix this ball: ${esc(ballText2(b))}">${esc(ballText2(b))}</button>`;
   }
   function battingIsClub(inn) {
@@ -474,7 +474,7 @@
         <button class="qs-key extra" data-extra="bye">Bye</button>
         <button class="qs-key extra" data-extra="leg_bye">LB</button>
         <button class="qs-key wicket" data-act="wicket">W</button>
-        <button class="qs-key util" data-act="undo">↶ Undo</button>
+        ${data.can_edit_scorebook ? '<button class="qs-key util" data-act="undo">↶ Undo</button>' : ""}
       </section>
       <section class="qs-tools">
         <button class="qs-btn ghost" data-act="swap">⇄ Swap strike</button>
@@ -520,7 +520,7 @@
             })
             .join("") || '<em class="qs-muted">–</em>'
         }</div>
-        ${recent.length ? `<p class="qs-fix-hint">${editMode ? "Tap a delivery to correct it." : "Wrong ball? Tap it to fix it."}</p>` : ""}
+        ${recent.length ? `<p class="qs-fix-hint">${editMode ? "Tap a delivery to correct it." : data.can_edit_scorebook ? "Wrong ball? Tap it to fix it." : "Saved balls can be corrected by a captain or club admin."}</p>` : ""}
       </section>
 
       ${
@@ -542,7 +542,7 @@
                   ? `<button class="qs-btn primary wide" data-act="second">Start 2nd innings</button>`
                   : `<a class="qs-btn primary wide" href="/live/${encodeURIComponent(matchId)}">View scorecard</a>`
               }
-              <button class="qs-btn ghost wide" data-act="undo">↶ Undo last ball</button>
+              ${data.can_edit_scorebook ? '<button class="qs-btn ghost wide" data-act="undo">↶ Undo last ball</button>' : ""}
             </section>`
           : scoringControls()
       }`;
@@ -1284,6 +1284,7 @@
   }
 
   async function undo() {
+    if (!guest && !data.can_edit_scorebook) return toast("Only a captain, club admin, or superadmin can edit saved balls.");
     if (queue.length || draining) {
       toast("Wait for the last balls to save, then undo.");
       return;
