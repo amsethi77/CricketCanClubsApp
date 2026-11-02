@@ -158,6 +158,294 @@ class LocalQATestCase(unittest.TestCase):
 
 
 class UnitQATests(LocalQATestCase):
+    def test_registration_options_register_clubs_and_players_from_scored_fixtures(self) -> None:
+        captain = self.signin("2222222222")
+        previous_day = (self.main._current_local_date() - timedelta(days=1)).isoformat()
+        created = self.create_fixture(captain["token"], opponent="Afghan QA Eagles")
+        fixture = next(item for item in created["fixtures"] if item["opponent"] == "Afghan QA Eagles")
+        store = self.main.load_store()
+        stored = next(item for item in store["fixtures"] if item["id"] == fixture["id"])
+        stored["date"] = previous_day
+        stored["status"] = "Completed"
+        stored["scorebook"] = {
+            "innings": [
+                {
+                    "inning_number": 1,
+                    "batting_team": "Afghan QA Eagles",
+                    "bowling_team": stored["club_name"],
+                    "batters": [{"slot_number": 1, "player_name": "Afghan QA Batter"}],
+                    "bowlers": [{"slot_number": 1, "player_name": "Home QA Bowler"}],
+                    "balls": [
+                        {
+                            "striker": "Afghan QA Batter",
+                            "bowler": "Home QA Bowler",
+                            "fielder": "Home QA Fielder",
+                            "wicket": True,
+                            "wicket_type": "caught",
+                            "wicket_player": "Afghan QA Batter",
+                            "runs_bat": 1,
+                        }
+                    ],
+                },
+                {
+                    "inning_number": 2,
+                    "batting_team": stored["club_name"],
+                    "bowling_team": "Afghan QA Eagles",
+                    "batters": [{"slot_number": 1, "player_name": "Home QA Batter"}],
+                    "bowlers": [{"slot_number": 1, "player_name": "Afghan QA Bowler"}],
+                    "balls": [
+                        {
+                            "striker": "Home QA Batter",
+                            "bowler": "Afghan QA Bowler",
+                            "runs_bat": 1,
+                        }
+                    ],
+                },
+            ]
+        }
+        self.main.save_store(store)
+
+        options = self.client.get("/api/auth/options")
+        self.assertEqual(options.status_code, 200, options.text)
+        payload = options.json()
+        afghan_club = next(club for club in payload["clubs"] if club["name"] == "Afghan QA Eagles")
+        members = {member["name"]: member for member in payload["members"]}
+        self.assertIn("Afghan QA Batter", members)
+        self.assertIn("Afghan QA Bowler", members)
+        self.assertIn("Home QA Bowler", members)
+        self.assertIn("Home QA Fielder", members)
+        self.assertIn("Home QA Batter", members)
+
+        saved = self.main.load_store()
+        stored_members = {member["name"]: member for member in saved["members"]}
+        for name in ("Afghan QA Batter", "Afghan QA Bowler"):
+            self.assertTrue(
+                any(item.get("club_id") == afghan_club["id"] for item in stored_members[name]["club_memberships"])
+            )
+        for name in ("Home QA Bowler", "Home QA Fielder", "Home QA Batter"):
+            self.assertFalse(
+                any(item.get("club_id") == afghan_club["id"] for item in stored_members[name]["club_memberships"])
+            )
+
+        self.assertEqual(
+            sum(1 for club in saved["clubs"] if club["name"] == "Afghan QA Eagles"),
+            1,
+        )
+        self.client.get("/api/auth/options")
+        saved_again = self.main.load_store()
+        self.assertEqual(
+            sum(1 for member in saved_again["members"] if member["name"] == "Afghan QA Batter"),
+            1,
+        )
+
+    def test_past_scored_fixture_is_listed_in_the_date_and_season_scorecard_archive(self) -> None:
+        captain = self.signin("2222222222")
+        previous_day = (self.main._current_local_date() - timedelta(days=1)).isoformat()
+        created = self.create_fixture(captain["token"], opponent="Archive Fixture XI")
+        fixture = next(item for item in created["fixtures"] if item["opponent"] == "Archive Fixture XI")
+        store = self.main.load_store()
+        stored = next(item for item in store["fixtures"] if item["id"] == fixture["id"])
+        stored["date"] = previous_day
+        stored["date_label"] = previous_day
+        stored["status"] = "Live"
+        stored["scorebook"] = {
+            "innings": [
+                {
+                    "inning_number": 1,
+                    "batting_team": stored["club_name"],
+                    "bowling_team": stored["opponent"],
+                    "overs_limit": 20,
+                    "batters": [{"slot_number": 1, "player_name": "player1"}],
+                    "bowlers": [{"slot_number": 1, "player_name": "Opponent Bowler"}],
+                    "balls": [
+                        {
+                            "striker": "player1",
+                            "non_striker": "Player Two",
+                            "bowler": "Opponent Bowler",
+                            "runs_bat": 4,
+                            "extras_type": "none",
+                            "extras_runs": 0,
+                        }
+                    ],
+                }
+            ]
+        }
+        self.main.save_store(store)
+
+        response = self.client.get(
+            "/api/public/scorecards",
+            params={"date": previous_day, "club_id": fixture["club_id"], "year": previous_day[:4]},
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        cards = response.json()["scorecards"]
+        archived = next(item for item in cards if item["id"] == f"f-{fixture['id']}")
+        self.assertEqual(archived["source"], "fixture")
+        self.assertEqual(archived["date"], previous_day)
+        self.assertEqual(archived["year"], previous_day[:4])
+        season_setup = self.client.get(
+            "/api/season-setup/data",
+            headers=self.auth_headers(captain["token"]),
+        )
+        self.assertTrue(
+            next(item for item in season_setup.json()["fixtures"] if item["id"] == fixture["id"])["can_delete_incomplete"]
+        )
+
+        detail = self.client.get(f"/api/public/scorecards/{archived['id']}")
+        self.assertEqual(detail.status_code, 200, detail.text)
+        innings = detail.json()["scorecard"]["innings"]
+        self.assertEqual(innings[0]["batting"][0]["runs"], 4)
+        self.assertIn("player1", innings[0]["batting"][0]["name"])
+
+    def test_my_availability_marks_historical_played_fixture_available_and_locked(self) -> None:
+        captain = self.signin("2222222222")
+        previous_day = (self.main._current_local_date() - timedelta(days=1)).isoformat()
+        created = self.create_fixture(captain["token"], opponent="Afghan Eagles")
+        fixture = next(item for item in created["fixtures"] if item["opponent"] == "Afghan Eagles")
+        store = self.main.load_store()
+        stored = next(item for item in store["fixtures"] if item["id"] == fixture["id"])
+        stored["date"] = previous_day
+        stored["date_label"] = previous_day
+        stored["scorebook"] = {
+            "innings": [
+                {
+                    "inning_number": 1,
+                    "batters": [{"slot_number": 1, "player_name": "player1"}],
+                    "bowlers": [],
+                    "balls": [{"striker": "player1", "runs_bat": 1, "extras_type": "none"}],
+                }
+            ]
+        }
+        self.main.save_store(store)
+
+        player = self.signin("1111111111")
+        response = self.client.get("/api/player/availability-data", headers=self.auth_headers(player["token"]))
+        self.assertEqual(response.status_code, 200, response.text)
+        played = next(item for item in response.json()["fixtures"] if item["id"] == fixture["id"])
+        self.assertTrue(played["availability_read_only"])
+        self.assertEqual(played["availability_statuses"]["player1"], "Available")
+        saved = next(item for item in self.main.load_store()["fixtures"] if item["id"] == fixture["id"])
+        self.assertEqual(saved["availability_statuses"]["player1"], "Available")
+
+    def test_captain_can_delete_incomplete_archive_upload_but_not_approved_scorecard(self) -> None:
+        captain = self.signin("2222222222")
+        fixture_data = self.client.get(
+            "/api/season-setup/data",
+            headers=self.auth_headers(captain["token"]),
+        )
+        self.assertEqual(fixture_data.status_code, 200, fixture_data.text)
+        club = fixture_data.json()["club"]
+        store = self.main.load_store()
+        store.setdefault("archive_uploads", []).extend(
+            [
+                {
+                    "id": "qa-pending-delete",
+                    "status": "Pending Review",
+                    "file_name": "pending-scorecard.jpg",
+                    "club_id": club["id"],
+                    "club_name": club["name"],
+                    "uploaded_by_user_id": self.main._auth_user_from_token(captain["token"])[0]["id"],
+                },
+                {
+                    "id": "qa-approved-keep",
+                    "status": "Approved",
+                    "file_name": "approved-scorecard.jpg",
+                    "club_id": club["id"],
+                    "club_name": club["name"],
+                    "uploaded_by_user_id": self.main._auth_user_from_token(captain["token"])[0]["id"],
+                },
+            ]
+        )
+        self.main.save_store(store)
+
+        pending_preview = self.client.get(
+            "/api/scorecards/qa-pending-delete/preview",
+            headers=self.auth_headers(captain["token"]),
+        )
+        self.assertEqual(pending_preview.status_code, 200, pending_preview.text)
+        self.assertTrue(pending_preview.json()["can_delete"])
+        deleted = self.client.delete(
+            "/api/admin/archive/qa-pending-delete",
+            headers=self.auth_headers(captain["token"]),
+        )
+        self.assertEqual(deleted.status_code, 200, deleted.text)
+        pending_ids = {item["id"] for item in self.main.load_store()["archive_uploads"]}
+        self.assertNotIn("qa-pending-delete", pending_ids)
+
+        kept = self.client.delete(
+            "/api/admin/archive/qa-approved-keep",
+            headers=self.auth_headers(captain["token"]),
+        )
+        self.assertEqual(kept.status_code, 409, kept.text)
+        self.assertIn("qa-approved-keep", {item["id"] for item in self.main.load_store()["archive_uploads"]})
+        approved_preview = self.client.get(
+            "/api/scorecards/qa-approved-keep/preview",
+            headers=self.auth_headers(captain["token"]),
+        )
+        self.assertEqual(approved_preview.status_code, 200, approved_preview.text)
+        self.assertFalse(approved_preview.json()["can_delete"])
+
+    def test_public_match_scorecard_pdf_is_a_downloadable_complete_pdf(self) -> None:
+        fixture = {
+            "club_name": "TestClub",
+            "opponent": "PDF Test XI",
+            "date_label": "1 Nov 2026",
+            "venue": "QA Ground",
+            "match_type": "Friendly",
+            "overs": "20",
+            "result": "TestClub won by 3 runs",
+            "scorebook": {
+                "innings": [
+                    {
+                        "inning_number": 1,
+                        "batting_team": "TestClub",
+                        "summary": {
+                            "runs": 120,
+                            "wickets": 1,
+                            "legal_balls": 120,
+                            "overs": "20.0",
+                            "run_rate": 6.0,
+                            "extras": 5,
+                            "byes": 1,
+                            "batting": [
+                                {"player_name": "Batter One", "runs": 65, "balls": 40, "fours": 6, "sixes": 2, "status": "out"},
+                                {"player_name": "Batter Two", "runs": 50, "balls": 35, "fours": 4, "sixes": 1, "status": "batting"},
+                            ],
+                            "bowling": [
+                                {"player_name": "Bowler One", "legal_balls": 24, "overs": "4.0", "maidens": 0, "runs_conceded": 25, "wickets": 1, "economy": 6.25},
+                            ],
+                        },
+                        "balls": [
+                            {"striker": "Batter One", "non_striker": "Batter Two", "runs_bat": 0, "extras_runs": 0, "extras_type": "none"},
+                            {"striker": "Batter One", "non_striker": "Batter Two", "runs_bat": 0, "extras_runs": 0, "extras_type": "none", "wicket": True, "wicket_type": "bowled", "wicket_player": "Batter One", "bowler": "Bowler One"},
+                        ],
+                    }
+                ]
+            },
+        }
+        pdf = self.main.scorecard_pdf.build_scorecard_pdf(fixture)
+        self.assertTrue(pdf.startswith(b"%PDF-"))
+        self.assertGreater(len(pdf), 1000)
+        self.assertEqual(
+            self.main.scorecard_pdf.scorecard_pdf_filename(fixture),
+            "testclub-vs-pdf-test-xi-scorecard.pdf",
+        )
+        self.assertEqual(self.main.scorecard_pdf._pdf_text(0), "0")
+
+        with patch.object(self.main, "load_store", return_value={"fixtures": []}), patch.object(
+            self.main, "_public_match_payload", return_value=fixture
+        ):
+            response = self.client.get("/api/public/match/pdf-test-id/scorecard.pdf")
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.headers["content-type"], "application/pdf")
+        self.assertIn('filename="testclub-vs-pdf-test-xi-scorecard.pdf"', response.headers["content-disposition"])
+        self.assertTrue(response.content.startswith(b"%PDF-"))
+
+        with patch.object(self.main, "load_store", return_value={"fixtures": []}), patch.object(
+            self.main, "_public_match_payload", side_effect=ValueError("Match not found.")
+        ):
+            missing = self.client.get("/api/public/match/missing-pdf-id/scorecard.pdf")
+        self.assertEqual(missing.status_code, 404)
+
     def test_ai_scorer_treats_retired_out_as_temporary_without_wicket_or_ball(self) -> None:
         events = self.main.ai_scorer.interpret("retired out")["events"]
         accepted, problems = self.main.ai_scorer.validate(
@@ -815,6 +1103,55 @@ class FunctionalQATests(LocalQATestCase):
             assigned_captain_fixture["id"],
             {item["id"] for item in self.main.load_store()["fixtures"]},
         )
+
+    def test_live_scorecard_offers_delete_for_started_incomplete_match_only(self) -> None:
+        captain = self.signin("2222222222")
+        self.create_fixture(captain["token"], opponent="Started Incomplete Delete Team")
+        store = self.main.load_store()
+        fixture = next(item for item in store["fixtures"] if item["opponent"] == "Started Incomplete Delete Team")
+        fixture["status"] = "Live"
+        fixture["scorebook"]["innings"][0]["balls"] = [
+            {
+                "striker": "player1",
+                "bowler": "player2",
+                "runs_bat": 1,
+                "extras_type": "none",
+            }
+        ]
+        self.main.save_store(store)
+
+        authorized = self.client.get(
+            f"/api/public/match/{fixture['id']}",
+            headers=self.auth_headers(captain["token"]),
+        )
+        self.assertEqual(authorized.status_code, 200, authorized.text)
+        self.assertTrue(authorized.json()["match"]["can_delete_incomplete"])
+        quick_score = self.client.get(
+            f"/api/quick-score/{fixture['id']}",
+            headers=self.auth_headers(captain["token"]),
+        )
+        self.assertTrue(quick_score.json()["can_delete_incomplete"])
+        self.client.cookies.clear()
+        public = self.client.get(f"/api/public/match/{fixture['id']}")
+        self.assertFalse(public.json()["match"]["can_delete_incomplete"])
+
+        deleted = self.client.delete(
+            f"/api/admin/clubs/{fixture['club_id']}/fixtures/{fixture['id']}",
+            headers=self.auth_headers(captain["token"]),
+        )
+        self.assertEqual(deleted.status_code, 200, deleted.text)
+        self.assertNotIn(fixture["id"], {item["id"] for item in self.main.load_store()["fixtures"]})
+
+        self.create_fixture(captain["token"], opponent="Completed Live Delete Protection Team")
+        store = self.main.load_store()
+        completed = next(item for item in store["fixtures"] if item["opponent"] == "Completed Live Delete Protection Team")
+        completed["status"] = "Completed"
+        self.main.save_store(store)
+        completed_payload = self.client.get(
+            f"/api/public/match/{completed['id']}",
+            headers=self.auth_headers(captain["token"]),
+        )
+        self.assertFalse(completed_payload.json()["match"]["can_delete_incomplete"])
 
     def test_f27_past_fixture_with_recorded_scores_appears_in_recent_results(self) -> None:
         captain = self.signin("2222222222")

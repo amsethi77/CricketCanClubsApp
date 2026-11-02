@@ -171,6 +171,80 @@
 .pm-status.done { color: #1d4ed8; }
 .pm-status.wait { color: #6b7280; font-weight: 500; }
 
+/* ---------- Complete scorecard download ---------- */
+.pm-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  justify-content: flex-end;
+  padding: 8px 12px 0;
+}
+
+.pm-download,
+.pm-delete-match {
+  display: inline-flex;
+  min-height: 36px;
+  align-items: center;
+  justify-content: center;
+  padding: 0 12px;
+  border: 1px solid #087f5b;
+  border-radius: 7px;
+  color: #087f5b;
+  background: #fff;
+  font-size: 12px;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.pm-delete-match {
+  border: 1px solid #b91c1c;
+  border-radius: 7px;
+  color: #b91c1c;
+  background: #fff;
+  font: 700 12px Roboto, Arial, sans-serif;
+  cursor: pointer;
+}
+
+.pm-delete-match:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+
+.pm-download:focus-visible,
+.pm-delete-match:focus-visible,
+.pm-deleted a:focus-visible {
+  outline: 3px solid #86efac;
+  outline-offset: 2px;
+}
+
+.pm-action-status {
+  margin: 4px 12px 0;
+  color: #b91c1c;
+  font-size: 12px;
+}
+
+.pm-deleted {
+  display: grid;
+  justify-items: start;
+  gap: 12px;
+  padding: 24px 16px;
+}
+
+.pm-deleted h1,
+.pm-deleted p {
+  margin: 0;
+}
+
+.pm-deleted h1 {
+  font-size: 20px;
+}
+
+.pm-deleted > a:last-child {
+  color: #047857;
+  font-weight: 700;
+}
+
 /* ---------- Tabs ---------- */
 .pm-tabbar {
   position: sticky;

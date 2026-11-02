@@ -138,6 +138,7 @@ if not logger.handlers:
     logger.propagate = True
 
 try:
+    import scorecard_pdf
     from cricket_brain import answer_question, get_llm_status
     import cricket_insights as cricket_insights
     import muse as muse
@@ -197,6 +198,7 @@ try:
         sync_fixture_scorecard_from_scorebook,
     )
 except ModuleNotFoundError:
+    from app import scorecard_pdf
     from app.cricket_brain import answer_question, get_llm_status
     from app import cricket_insights
     from app import muse
@@ -2510,6 +2512,42 @@ def _match_scorer_is_authorized(
     return bool((has_score_permission and (not club_id or club_id in user_club_ids)) or is_assigned_captain)
 
 
+def _match_delete_is_authorized(
+    store: dict[str, Any],
+    user_row: sqlite3.Row,
+    current_club_id: str,
+    match: dict[str, Any],
+) -> bool:
+    club_id = str(match.get("club_id") or "").strip()
+    if "superadmin" in _user_role_names(user_row, current_club_id):
+        return True
+    member = _member_for_user(store, user_row)
+    if club_id:
+        roles = set(_user_role_names(user_row, club_id))
+        allowed_clubs = set(_user_club_ids(store, user_row, current_club_id)) | {
+            str(user_row["primary_club_id"] or ""),
+            str(current_club_id or ""),
+        }
+        if club_id in allowed_clubs and roles.intersection({"captain", "club_admin"}):
+            return True
+    captain_name = normalize_name(str(match.get("heartlake_captain") or ""))
+    member_names = {
+        normalize_name(str(value or ""))
+        for value in [
+            user_row["display_name"],
+            (member or {}).get("name"),
+            (member or {}).get("full_name"),
+            *((member or {}).get("aliases", []) or []),
+        ]
+        if str(value or "").strip()
+    }
+    captain_member_id = str(match.get("heartlake_captain_member_id") or "").strip()
+    return bool(
+        (captain_name and captain_name in member_names)
+        or (captain_member_id and captain_member_id == str(user_row["member_id"] or "").strip())
+    )
+
+
 def _require_match_scorer(token: str | None, match_id: str, expected_club_id: str = "") -> tuple[sqlite3.Row, str]:
     """Authorize club scorers, superadmins, and the captain assigned to this match."""
     user_row, current_club_id = _auth_user_from_token(token)
@@ -2861,7 +2899,14 @@ def _club_slug(name: str) -> str:
     return slug or "club"
 
 
-def _create_club_record(store: dict[str, Any], name: str, city: str, country: str) -> tuple[dict[str, Any], bool]:
+def _create_club_record(
+    store: dict[str, Any],
+    name: str,
+    city: str,
+    country: str,
+    *,
+    about: str = "Created during registration",
+) -> tuple[dict[str, Any], bool]:
     existing = _find_club_by_name(store, name)
     if existing:
         return existing, False
@@ -2881,7 +2926,7 @@ def _create_club_record(store: dict[str, Any], name: str, city: str, country: st
         "season": f"{datetime.utcnow().year} Season",
         "home_ground": "",
         "whatsapp_number": "",
-        "about": "Created during registration",
+        "about": about,
     }
     store.setdefault("clubs", []).append(club)
     save_store(store)
@@ -4605,6 +4650,10 @@ def _scorecard_date_label(value: str) -> str:
         return value or "Date unknown"
 
 
+def _archive_scorecard_is_published(archive: dict[str, Any]) -> bool:
+    return _scorecard_text(archive.get("status")).lower() in {"approved", "applied to match", "completed", "published"}
+
+
 def _scorecard_photo_url(archive: dict[str, Any]) -> str:
     preview = _scorecard_text(archive.get("preview_url"))
     if not preview.startswith("/uploads/"):
@@ -4961,12 +5010,166 @@ def _scorecard_from_archive(archive: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _scorecard_from_fixture(fixture: dict[str, Any]) -> dict[str, Any]:
+    match = _public_match_payload({"fixtures": [fixture]}, str(fixture.get("id") or ""))
+    raw_innings = sorted(
+        (match.get("scorebook") or {}).get("innings") or [],
+        key=lambda item: int(item.get("inning_number") or 1),
+    )
+    fallback_teams = [
+        _scorecard_text(fixture.get("club_name")) or "Club",
+        _scorecard_text(fixture.get("opponent") or fixture.get("visiting_team")) or "Opponent",
+    ]
+    teams = [
+        _scorecard_text(innings.get("batting_team")) or fallback_teams[index]
+        for index, innings in enumerate(raw_innings[:2])
+    ]
+    while len(teams) < 2:
+        used = {normalize_name(team) for team in teams}
+        teams.append(next((team for team in fallback_teams if normalize_name(team) not in used), fallback_teams[len(teams)]))
+
+    innings_out: list[dict[str, Any]] = []
+    max_overs = 0
+    for index in range(2):
+        source = raw_innings[index] if index < len(raw_innings) else {}
+        summary = source.get("summary") or {}
+        team = teams[index]
+        opponent = teams[1 - index]
+        runs = _scorecard_int(summary.get("runs"))
+        wickets = _scorecard_int(summary.get("wickets"))
+        overs = _scorecard_text(summary.get("overs"))
+        max_overs = max(max_overs, int(source.get("overs_limit") or 0))
+        dismissals: dict[str, str] = {}
+        retired: set[str] = set()
+        for ball in source.get("balls", []) or []:
+            for name in (ball.get("striker"), ball.get("non_striker"), ball.get("new_batter")):
+                key = normalize_name(name)
+                if key in retired:
+                    dismissals.pop(key, None)
+                    retired.discard(key)
+            player = _scorecard_text(ball.get("wicket_player"))
+            kind = _scorecard_text(ball.get("wicket_type")).lower()
+            if not player or not (ball.get("wicket") or kind == "retired_out"):
+                continue
+            dismissal, _, _ = _scorecard_dismissal(kind, ball.get("fielder"), ball.get("bowler"))
+            dismissals[normalize_name(player)] = dismissal
+            if kind == "retired_out":
+                retired.add(normalize_name(player))
+
+        batting: list[dict[str, Any]] = []
+        did_not_bat: list[str] = []
+        for batter in summary.get("batting") or []:
+            name = _scorecard_text(batter.get("player_name"))
+            if not name:
+                continue
+            status = _scorecard_text(batter.get("status")).lower()
+            if status == "not_batted":
+                did_not_bat.append(name)
+                continue
+            dismissal = dismissals.get(normalize_name(name), "")
+            if not dismissal:
+                dismissal = "retired" if status == "retired" else "not out" if status in {"batting", "not_out"} else "out" if status == "out" else ""
+            _, not_out, _ = _scorecard_dismissal(dismissal)
+            batter_runs = _scorecard_int(batter.get("runs"))
+            batter_balls = _scorecard_int(batter.get("balls"))
+            batting.append(
+                {
+                    "name": name,
+                    "dismissal": dismissal,
+                    "not_out": not_out,
+                    "runs": batter_runs,
+                    "balls": batter_balls,
+                    "fours": _scorecard_int(batter.get("fours")),
+                    "sixes": _scorecard_int(batter.get("sixes")),
+                    "strike_rate": _scorecard_strike_rate(batter_runs, batter_balls),
+                }
+            )
+
+        bowling = [
+            {
+                "name": _scorecard_text(bowler.get("player_name")),
+                "overs": _scorecard_text(bowler.get("overs")),
+                "maidens": _scorecard_int(bowler.get("maidens")),
+                "runs": _scorecard_int(bowler.get("runs_conceded")),
+                "wickets": _scorecard_int(bowler.get("wickets")),
+                "economy": f"{float(bowler.get('economy') or 0):.2f}",
+            }
+            for bowler in summary.get("bowling") or []
+            if _scorecard_text(bowler.get("player_name"))
+            and (int(bowler.get("legal_balls") or 0) > 0 or int(bowler.get("runs_conceded") or 0) > 0)
+        ]
+        extras_detail = ", ".join(
+            f"{label} {int(summary.get(key) or 0)}"
+            for key, label in (("byes", "b"), ("legByes", "lb"), ("wides", "w"), ("noBalls", "nb"))
+            if int(summary.get(key) or 0)
+        )
+        score = f"{runs}" if runs is not None else ""
+        if runs is not None and wickets is not None:
+            score += f"/{wickets}"
+        innings_out.append(
+            {
+                "number": index + 1,
+                "team": team,
+                "bowling_team": opponent,
+                "runs": runs,
+                "wickets": wickets,
+                "overs": overs,
+                "score": score,
+                "extras": _scorecard_int(summary.get("extras")),
+                "extras_detail": extras_detail,
+                "batting": batting,
+                "did_not_bat": did_not_bat,
+                "bowling": bowling,
+                "has_data": bool(batting or bowling or runs is not None),
+            }
+        )
+
+    date_text = str(fixture.get("date") or "").strip()[:10]
+    scorecard = fixture.get("scorecard") or {}
+    result = _scorecard_clean_result(scorecard.get("result") or fixture.get("result"))
+    return {
+        "id": f"f-{_scorecard_text(fixture.get('id'))}",
+        "source": "fixture",
+        "fixture_id": _scorecard_text(fixture.get("id")),
+        "is_incomplete": not _fixture_is_completed(fixture),
+        "date": date_text,
+        "date_label": _scorecard_text(fixture.get("date_label")) or _scorecard_date_label(date_text),
+        "year": date_text[:4],
+        "season": _scorecard_text(fixture.get("season") or fixture.get("season_year") or date_text[:4]),
+        "club_id": _scorecard_text(fixture.get("club_id")),
+        "club_name": _scorecard_text(fixture.get("club_name")) or "Club",
+        "title": f"{teams[0]} vs {teams[1]}",
+        "teams": teams,
+        "venue": _scorecard_text((fixture.get("details") or {}).get("venue")),
+        "toss": "",
+        "match_type": _scorecard_text((fixture.get("details") or {}).get("match_type")) or "Club match",
+        "overs_limit": max_overs or _scorecard_int((fixture.get("details") or {}).get("overs")),
+        "result": result,
+        "innings": innings_out,
+        "has_details": any(item["batting"] or item["bowling"] for item in innings_out),
+        "photo_url": "",
+    }
+
+
 def _public_scorecards(store: dict[str, Any]) -> list[dict[str, Any]]:
     cards = [
         _scorecard_from_archive(archive)
         for archive in store.get("archive_uploads", []) or []
         if isinstance(archive, dict) and _scorecard_text(archive.get("status")).lower() == "approved"
     ]
+    for fixture in store.get("fixtures", []) or []:
+        if not isinstance(fixture, dict) or not _fixture_is_past(fixture) or not _fixture_has_recorded_score_data(fixture):
+            continue
+        card = _scorecard_from_fixture(fixture)
+        card_teams = {normalize_name(team) for team in card["teams"]}
+        already_archived = any(
+            existing["date"] == card["date"]
+            and existing["club_id"] == card["club_id"]
+            and len(card_teams & {normalize_name(team) for team in existing["teams"]}) >= 2
+            for existing in cards
+        )
+        if not already_archived:
+            cards.append(card)
     cards = [card for card in cards if card["date"]]
     cards.sort(key=lambda card: (card["date"], card["id"]), reverse=True)
     return cards
@@ -4975,6 +5178,9 @@ def _public_scorecards(store: dict[str, Any]) -> list[dict[str, Any]]:
 def _scorecard_list_item(card: dict[str, Any]) -> dict[str, Any]:
     return {
         "id": card["id"],
+        "source": card.get("source") or "archive",
+        "fixture_id": card.get("fixture_id") or "",
+        "is_incomplete": bool(card.get("is_incomplete")),
         "date": card["date"],
         "date_label": card["date_label"],
         "year": card["year"],
@@ -5044,9 +5250,14 @@ def scorecard_page(scorecard_id: str) -> FileResponse:
 
 
 @app.get("/api/public/match/{match_id}")
-def public_match(match_id: str) -> dict[str, Any]:
+def public_match(
+    match_id: str,
+    request: Request,
+    x_auth_token: str | None = Header(default=None),
+) -> dict[str, Any]:
     logger.debug("Public scorecard requested. match_id=%s", match_id)
     store = load_store()
+    fixture: dict[str, Any] | None = None
     try:
         if str(match_id).startswith("guest-"):
             guest = _guest_load(match_id)
@@ -5056,10 +5267,26 @@ def public_match(match_id: str) -> dict[str, Any]:
             match = _public_match_payload({"fixtures": [guest]}, match_id)
             lineups = guest.get("lineups") or {}
         else:
+            fixture = get_match_or_404(store, match_id)
             match = _public_match_payload(store, match_id)
             lineups = _match_lineups(match_id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
+    can_delete_incomplete = False
+    token = _auth_token_from_request(request, x_auth_token)
+    if token and fixture and not _fixture_is_completed(fixture):
+        try:
+            user_row, current_club_id = _auth_user_from_token(token, touch=False)
+        except HTTPException:
+            pass
+        else:
+            can_delete_incomplete = _match_delete_is_authorized(
+                store,
+                user_row,
+                current_club_id,
+                fixture,
+            )
+    match["can_delete_incomplete"] = can_delete_incomplete
     # Player names only, for "Yet to bat" on the public scorecard (README "Public scorecard (Oct 29 2026)").
     match["lineups"] = {
         "club": list(lineups.get("club") or []),
@@ -5070,6 +5297,29 @@ def public_match(match_id: str) -> dict[str, Any]:
         "match": match,
         "generated_at": now_iso(),
     }
+
+
+@app.get("/api/public/match/{match_id}/scorecard.pdf")
+def public_match_scorecard_pdf(match_id: str) -> Response:
+    store = load_store()
+    try:
+        if str(match_id).startswith("guest-"):
+            guest = _guest_load(match_id)
+            if not guest:
+                raise ValueError("Match not found.")
+            guest.pop("_code", None)
+            match = _public_match_payload({"fixtures": [guest]}, match_id)
+        else:
+            match = _public_match_payload(store, match_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    pdf = scorecard_pdf.build_scorecard_pdf(match)
+    filename = scorecard_pdf.scorecard_pdf_filename(match)
+    return Response(
+        content=pdf,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @app.get("/public/match/{match_id}")
@@ -5890,6 +6140,7 @@ def dashboard(
 @app.get("/api/auth/options")
 def auth_options() -> dict[str, Any]:
     store = load_store()
+    _register_played_fixture_teams(store)
     linked_member_ids: set[str] = set()
     linked_member_name_keys: set[str] = set()
     with _auth_connection() as connection:
@@ -5910,6 +6161,21 @@ def auth_options() -> dict[str, Any]:
             normalized = normalize_name(str(value or ""))
             if normalized:
                 linked_member_name_keys.add(normalized)
+
+    def member_club_names(member: dict[str, Any]) -> list[str]:
+        names = {
+            str(item.get("club_name") or "").strip()
+            for item in member.get("club_memberships", []) or []
+            if isinstance(item, dict) and str(item.get("club_name") or "").strip()
+        }
+        names.update(
+            str(item.get("club_name") or item.get("display_name") or "").strip()
+            for item in member.get("team_memberships", []) or []
+            if isinstance(item, dict)
+            and str(item.get("club_name") or item.get("display_name") or "").strip()
+        )
+        return sorted(names, key=str.casefold)
+
     return {
         "clubs": _sorted_club_choices(store, str(store.get("viewer_profile", {}).get("primary_club_id") or "")),
         "members": [
@@ -5918,6 +6184,7 @@ def auth_options() -> dict[str, Any]:
                 "name": member.get("name", ""),
                 "full_name": member.get("full_name", ""),
                 "team_name": member.get("team_name", ""),
+                "club_names": member_club_names(member),
             }
             for member in store.get("members", [])
             if str(member.get("id") or "").strip() not in linked_member_ids
@@ -5926,6 +6193,263 @@ def auth_options() -> dict[str, Any]:
         ],
         "roles": roles,
     }
+
+
+def _register_played_fixture_teams(store: dict[str, Any]) -> bool:
+    """Make clubs and players from scored fixtures available in registration."""
+    changed = False
+
+    def club_for_team(team_name: str, fallback: dict[str, Any]) -> dict[str, Any]:
+        clean_name = re.sub(r"\s+", " ", str(team_name or "").strip())
+        key = normalize_name(clean_name)
+        if key in home_team_keys:
+            return home_club
+        if key in opponent_team_keys:
+            return opponent_club
+        return _find_club_by_name(store, clean_name) or fallback
+
+    for fixture in store.get("fixtures", []) or []:
+        if not isinstance(fixture, dict) or not _fixture_has_recorded_score_data(fixture):
+            continue
+
+        home_name = str(fixture.get("club_name") or fixture.get("team_name") or "").strip()
+        opponent_name = str(fixture.get("visiting_team") or fixture.get("opponent") or "").strip()
+        if not home_name or not opponent_name or normalize_name(home_name) == normalize_name(opponent_name):
+            continue
+
+        home_club = _find_club_by_name(store, str(fixture.get("club_id") or "")) or _find_club_by_name(store, home_name)
+        if not home_club:
+            home_club, created = _create_club_record(
+                store,
+                home_name,
+                "",
+                "",
+                about="Automatically registered from a played fixture.",
+            )
+            changed = changed or created
+
+        opponent_club = _find_club_by_name(store, opponent_name)
+        if not opponent_club:
+            opponent_club, created = _create_club_record(
+                store,
+                opponent_name,
+                "",
+                "",
+                about="Automatically registered from a played fixture.",
+            )
+            changed = changed or created
+
+        home_club_name = str(home_club.get("name") or home_name).strip()
+        opponent_club_name = str(opponent_club.get("name") or opponent_name).strip()
+        home_team_keys = {
+            normalize_name(value)
+            for value in (
+                home_name,
+                home_club_name,
+                home_club.get("short_name"),
+                home_club.get("id"),
+                "club",
+                "heartlake",
+            )
+            if normalize_name(str(value or ""))
+        }
+        opponent_team_keys = {
+            normalize_name(value)
+            for value in (
+                opponent_name,
+                opponent_club_name,
+                opponent_club.get("short_name"),
+                opponent_club.get("id"),
+                "opponent",
+                "visiting team",
+            )
+            if normalize_name(str(value or ""))
+        }
+
+        team_rows = store.setdefault("teams", [])
+        for club in (home_club, opponent_club):
+            club_id = str(club.get("id") or "").strip()
+            team_name = str(club.get("short_name") or club.get("name") or "").strip()
+            if not any(
+                str(team.get("club_id") or "").strip() == club_id
+                or (
+                    not team.get("club_id")
+                    and normalize_name(str(team.get("name") or "")) == normalize_name(team_name)
+                )
+                for team in team_rows
+                if isinstance(team, dict)
+            ):
+                team_rows.append(
+                    {
+                        "name": team_name,
+                        "type": "club",
+                        "display_name": str(club.get("name") or team_name),
+                        "club_id": club_id,
+                        "club_name": str(club.get("name") or team_name),
+                    }
+                )
+                changed = True
+
+        players_by_club: dict[str, set[str]] = {
+            str(home_club.get("id") or ""): set(),
+            str(opponent_club.get("id") or ""): set(),
+        }
+        scorebook = fixture.get("scorebook") or {}
+        innings_list = scorebook.get("innings", []) if isinstance(scorebook, dict) else []
+        for index, innings in enumerate(innings_list):
+            if not isinstance(innings, dict):
+                continue
+            default_batting_club = home_club if index % 2 == 0 else opponent_club
+            default_bowling_club = opponent_club if default_batting_club is home_club else home_club
+            batting_club = club_for_team(
+                str(innings.get("batting_team") or ""),
+                default_batting_club,
+            )
+            bowling_club = club_for_team(
+                str(innings.get("bowling_team") or ""),
+                default_bowling_club,
+            )
+            summary = summarize_innings_scorebook(innings)
+            for row in summary.get("batting", []):
+                name = re.sub(r"\s+", " ", str(row.get("player_name") or "").strip())
+                if name:
+                    players_by_club.setdefault(str(batting_club.get("id") or ""), set()).add(name)
+            for row in summary.get("bowling", []):
+                name = re.sub(r"\s+", " ", str(row.get("player_name") or "").strip())
+                if name:
+                    players_by_club.setdefault(str(bowling_club.get("id") or ""), set()).add(name)
+            for ball in innings.get("balls", []) or []:
+                if not isinstance(ball, dict):
+                    continue
+                fielder = re.sub(r"\s+", " ", str(ball.get("fielder") or "").strip())
+                if fielder:
+                    players_by_club.setdefault(str(bowling_club.get("id") or ""), set()).add(fielder)
+
+        lineups = _match_lineups(str(fixture.get("id") or ""))
+        for name in lineups.get("club", []):
+            clean_name = re.sub(r"\s+", " ", str(name or "").strip())
+            if clean_name:
+                players_by_club.setdefault(str(home_club.get("id") or ""), set()).add(clean_name)
+        for name in lineups.get("opponent", []):
+            clean_name = re.sub(r"\s+", " ", str(name or "").strip())
+            if clean_name:
+                players_by_club.setdefault(str(opponent_club.get("id") or ""), set()).add(clean_name)
+
+        for club in (home_club, opponent_club):
+            club_id = str(club.get("id") or "").strip()
+            club_name = str(club.get("name") or "").strip()
+            team_name = str(club.get("short_name") or club_name).strip()
+            for player_name in sorted(players_by_club.get(club_id, set()), key=str.casefold):
+                member = next(
+                    (item for item in store.get("members", []) if _member_matches_name(item, player_name)),
+                    None,
+                )
+                if member is None:
+                    member = {
+                        "id": str(uuid.uuid4()),
+                        "name": player_name,
+                        "full_name": player_name,
+                        "team_name": team_name,
+                        "aliases": [],
+                        "age": 0,
+                        "role": "Player",
+                        "batting_style": "",
+                        "bowling_style": "",
+                        "notes": "Auto-added from a played scorebook.",
+                        "picture": member_initials(player_name),
+                        "picture_url": "",
+                        "phone": "",
+                        "email": "",
+                        "jersey_number": "",
+                        "primary_club_id": club_id,
+                        "primary_club_name": club_name,
+                        "team_memberships": [],
+                        "club_memberships": [],
+                    }
+                    store.setdefault("members", []).append(member)
+                    changed = True
+
+                memberships = member.get("team_memberships", [])
+                if isinstance(memberships, str):
+                    memberships = [item.strip() for item in memberships.split(",") if item.strip()]
+                elif not isinstance(memberships, list):
+                    memberships = []
+                member["team_memberships"] = memberships
+                matching_membership = next(
+                    (
+                        item
+                        for item in memberships
+                        if isinstance(item, dict)
+                        and (
+                            str(item.get("club_id") or "").strip() == club_id
+                            or (
+                                not str(item.get("club_id") or "").strip()
+                                and normalize_name(
+                                    str(item.get("club_name") or item.get("team_name") or item.get("display_name") or "")
+                                )
+                                == normalize_name(club_name)
+                            )
+                        )
+                    ),
+                    None,
+                )
+                if matching_membership is None:
+                    existing_team_name = normalize_name(str(member.get("team_name") or ""))
+                    has_primary_club = (
+                        bool(str(member.get("primary_club_id") or "").strip())
+                        or any(
+                            isinstance(item, dict) and item.get("is_primary") and item.get("club_id")
+                            for item in memberships
+                        )
+                        or existing_team_name not in {"", "club"}
+                    )
+                    memberships.append(
+                        {
+                            "team_name": team_name,
+                            "display_name": club_name or team_name,
+                            "club_id": club_id,
+                            "club_name": club_name,
+                            "team_type": "club",
+                            "is_primary": not has_primary_club,
+                        }
+                    )
+                    if not has_primary_club:
+                        member["team_name"] = team_name
+                        member["primary_club_id"] = club_id
+                        member["primary_club_name"] = club_name
+                    changed = True
+                else:
+                    for field, value in (
+                        ("team_name", team_name),
+                        ("display_name", club_name or team_name),
+                        ("club_id", club_id),
+                        ("club_name", club_name),
+                        ("team_type", "club"),
+                    ):
+                        if str(matching_membership.get(field) or "").strip() != value:
+                            matching_membership[field] = value
+                            changed = True
+
+                club_memberships = member.setdefault("club_memberships", [])
+                if not isinstance(club_memberships, list):
+                    club_memberships = []
+                    member["club_memberships"] = club_memberships
+                if not any(
+                    isinstance(item, dict)
+                    and (
+                        str(item.get("club_id") or "").strip() == club_id
+                        or normalize_name(str(item.get("club_name") or "")) == normalize_name(club_name)
+                    )
+                    for item in club_memberships
+                ):
+                    club_memberships.append(
+                        {"club_id": club_id, "club_name": club_name, "teams": [team_name]}
+                    )
+                    changed = True
+
+    if changed:
+        save_store(store)
+    return changed
 
 
 @app.get("/api/auth/roles")
@@ -6645,6 +7169,16 @@ def season_setup_data(
     )
     if selected_year not in season_years:
         season_years = sorted({*season_years, selected_year}, reverse=True)
+    fixtures = [
+        {
+            **fixture,
+            "can_delete_incomplete": bool(
+                not _fixture_is_completed(fixture)
+                and _match_delete_is_authorized(store, user_row, current_club_id, fixture)
+            ),
+        }
+        for fixture in fixtures
+    ]
     return {
         "user": _auth_user_payload(user_row, current_club_id),
         "club": club,
@@ -6903,8 +7437,16 @@ def delete_season_fixture(
     fixture_id: str,
     x_auth_token: str | None = Header(default=None),
 ) -> dict[str, Any]:
-    user_row, _ = _require_match_scorer(x_auth_token, fixture_id, club_id)
+    user_row, current_club_id = _auth_user_from_token(x_auth_token)
     store = load_store()
+    try:
+        match = get_match_or_404(store, fixture_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    if str(match.get("club_id") or "").strip() != str(club_id).strip():
+        raise HTTPException(status_code=404, detail="Fixture not found.")
+    if not _match_delete_is_authorized(store, user_row, current_club_id, match):
+        raise HTTPException(status_code=403, detail="Only the club captain, club admin, or superadmin can delete this fixture.")
     club = _selected_club(store, club_id)
     fixture = next(
         (
@@ -6947,6 +7489,55 @@ def delete_season_fixture(
     return season_setup_data(x_auth_token, club_id)
 
 
+def _member_appeared_in_fixture(member: dict[str, Any] | None, fixture: dict[str, Any]) -> bool:
+    if not member or not _fixture_has_recorded_score_data(fixture):
+        return False
+    aliases = member.get("aliases") or []
+    if not isinstance(aliases, list):
+        aliases = [aliases]
+    member_names = {
+        normalize_name(value)
+        for value in [
+            member.get("name"),
+            member.get("full_name"),
+            *aliases,
+        ]
+        if str(value or "").strip()
+    }
+    if not member_names:
+        return False
+    scorebook = fixture.get("scorebook") or {}
+    for innings in scorebook.get("innings") or []:
+        for ball in innings.get("balls") or []:
+            participants = (
+                ball.get("striker"),
+                ball.get("non_striker"),
+                ball.get("bowler"),
+                ball.get("wicket_player"),
+                ball.get("new_batter"),
+            )
+            if any(normalize_name(name) in member_names for name in participants if str(name or "").strip()):
+                return True
+        summary = summarize_innings_scorebook(innings)
+        appeared_batters = [
+            row.get("player_name")
+            for row in summary.get("batting") or []
+            if str(row.get("status") or "").lower() != "not_batted"
+        ]
+        appeared_bowlers = [
+            row.get("player_name")
+            for row in summary.get("bowling") or []
+            if int(row.get("legal_balls") or 0) > 0 or int(row.get("runs_conceded") or 0) > 0
+        ]
+        if any(normalize_name(name) in member_names for name in [*appeared_batters, *appeared_bowlers]):
+            return True
+    return any(
+        normalize_name(row.get("player_name")) in member_names
+        for row in fixture.get("performances") or []
+        if isinstance(row, dict) and str(row.get("player_name") or "").strip()
+    )
+
+
 @app.get("/api/player/availability-data")
 def player_availability_data(x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
     user_row, current_club_id = _auth_user_from_token(x_auth_token)
@@ -6954,15 +7545,31 @@ def player_availability_data(x_auth_token: str | None = Header(default=None)) ->
     club = _selected_club(store, current_club_id)
     scoped = scoped_store_for_club(store, club)
     active_year = club_season_year(club)
-    fixtures = [
-        fixture
-        for fixture in scoped.get("fixtures", [])
-        if (not active_year or fixture_season_year(fixture) == active_year)
-        and fixture.get("status") != "Completed"
-        and not _fixture_is_past(fixture)  # past games are locked and hidden (README: "Past matches are locked")
-    ]
-    fixtures.sort(key=lambda fixture: (str(fixture.get("date") or ""), str(fixture.get("opponent") or "")))
     member = _member_for_user(store, user_row)
+    changed = False
+    fixtures = []
+    for fixture in scoped.get("fixtures", []):
+        played = _member_appeared_in_fixture(member, fixture) if member else False
+        is_past = _fixture_is_past(fixture)
+        if played:
+            statuses = fixture.get("availability_statuses")
+            if not isinstance(statuses, dict):
+                statuses = {}
+                fixture["availability_statuses"] = statuses
+            if statuses.get(member["name"]) != "Available":
+                statuses[member["name"]] = "Available"
+                changed = True
+            fixtures.append({**fixture, "availability_read_only": True})
+            continue
+        if (
+            (not active_year or fixture_season_year(fixture) == active_year)
+            and str(fixture.get("status") or "").lower() != "completed"
+            and not is_past
+        ):
+            fixtures.append({**fixture, "availability_read_only": False})
+    if changed:
+        save_store(store)
+    fixtures.sort(key=lambda fixture: (str(fixture.get("date") or ""), str(fixture.get("opponent") or "")))
     return {
         "user": _auth_user_payload(user_row, current_club_id),
         "club": club,
@@ -9357,11 +9964,16 @@ def quick_score_state(match_id: str, x_auth_token: str | None = Header(default=N
     lineups = _match_lineups(match_id)
     started = any((innings.get("balls") or []) for innings in (fixture.get("scorebook") or {}).get("innings", []) or [])
     can_edit_scorebook = _match_scorer_is_authorized(store, user_row, current_club_id, fixture)
+    can_delete_incomplete = (
+        not _fixture_is_completed(fixture)
+        and _match_delete_is_authorized(store, user_row, current_club_id, fixture)
+    )
     return {
         "match": payload,
         "open": _scorebook_is_open(fixture),
         "can_score": can_edit_scorebook,
         "can_edit_scorebook": can_edit_scorebook,
+        "can_delete_incomplete": can_delete_incomplete,
         "roster": _club_member_names(store, club),
         "lineups": lineups,
         # Matches already being scored before line-ups were required carry on without them.
@@ -11395,6 +12007,7 @@ def scorecard_upload_preview(upload_id: str, x_auth_token: str | None = Header(d
     user_row, preview_club_id, store, upload, is_admin = _scorecard_upload_access(x_auth_token, upload_id)
     status = str(upload.get("status") or "")
     flags = list(upload.get("review_flags") or [])
+    upload_roles = set(_user_role_names(user_row, preview_club_id))
     return {
         "scorecard": _scorecard_from_archive(upload),
         "status": status,
@@ -11403,7 +12016,10 @@ def scorecard_upload_preview(upload_id: str, x_auth_token: str | None = Header(d
         "can_publish": status.lower().startswith("pending") and (is_admin or not flags),
         "can_report": status.lower() not in {"rejected", "duplicate"},
         "can_edit": status.lower() not in {"rejected", "duplicate"},
-        "can_delete": is_admin,
+        "can_delete": bool(
+            not _archive_scorecard_is_published(upload)
+            and upload_roles.intersection({"captain", "club_admin", "superadmin"})
+        ),
         "unreadable": any(word in str(upload.get("ocr_engine") or "").lower() for word in ("unreadable", "fallback"))
         or (
             str(upload.get("ocr_engine") or "").lower() == "tesseract"
@@ -12054,15 +12670,31 @@ def approve_archive_form(
 
 @app.delete("/api/admin/archive/{upload_id}")
 def delete_archive(upload_id: str, x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
-    user_row, current_club_id = _require_permission(x_auth_token, "manage_scorecards")
+    user_row, current_club_id = _auth_user_from_token(x_auth_token)
+    if upload_id.startswith("a-"):
+        upload_id = upload_id[2:]
     store = load_store()
     try:
         upload = get_archive_or_404(store, upload_id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
-    club = _selected_club(store, current_club_id)
-    is_site_admin = "superadmin" in _user_role_names(user_row, current_club_id)
-    if not is_site_admin and not archive_belongs_to_club(upload, club, store.get("clubs", []), store.get("members", []), store.get("fixtures", [])):
+    upload_club_id = str(upload.get("club_id") or "").strip()
+    roles = set(_user_role_names(user_row, current_club_id))
+    upload_roles = set(_user_role_names(user_row, upload_club_id)) if upload_club_id else set()
+    if not roles.union(upload_roles).intersection({"captain", "club_admin", "superadmin"}):
+        raise HTTPException(status_code=403, detail="Only captains, club admins, or superadmins can delete incomplete scorecards.")
+    if _archive_scorecard_is_published(upload):
+        raise HTTPException(status_code=409, detail="Published scorecards cannot be deleted here.")
+    is_site_admin = "superadmin" in roles or "superadmin" in upload_roles
+    upload_club = _selected_club(store, upload_club_id or current_club_id)
+    if not is_site_admin:
+        allowed_clubs = set(_user_club_ids(store, user_row, current_club_id)) | {
+            str(user_row["primary_club_id"] or ""),
+            str(current_club_id or ""),
+        }
+        if upload_club_id not in allowed_clubs or not upload_roles.intersection({"captain", "club_admin"}):
+            raise HTTPException(status_code=403, detail="This incomplete scorecard belongs to a different club.")
+    if not is_site_admin and not archive_belongs_to_club(upload, upload_club, store.get("clubs", []), store.get("members", []), store.get("fixtures", [])):
         raise HTTPException(status_code=403, detail="This archive belongs to a different club.")
     file_path = str(upload.get("file_path") or "").strip()
     if file_path:
@@ -12088,7 +12720,7 @@ def delete_archive(upload_id: str, x_auth_token: str | None = Header(default=Non
     refreshed = load_store()
     return {
         "message": f"{upload['file_name']} removed from archives.",
-        "dashboard": current_dashboard(refreshed, club.get("id", "")),
+        "dashboard": current_dashboard(refreshed, upload_club.get("id", "")),
     }
 
 

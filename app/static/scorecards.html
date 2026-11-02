@@ -14,7 +14,7 @@
     <link rel="stylesheet" href="/assets/tailwind.css" />
     <link rel="stylesheet" href="/assets/styles.css?v=20261030m" />
     <link rel="stylesheet" href="/assets/live.css?v=20261030m" />
-    <link rel="stylesheet" href="/assets/scorecards.css?v=20261030m" />
+    <link rel="stylesheet" href="/assets/scorecards.css?v=20261101a" />
     <link rel="stylesheet" href="/assets/sports-system.css?v=20261030m" />
   </head>
   <body class="public-fixtures-page scorecards-page">
@@ -27,7 +27,7 @@
             <div>
               <p class="section-kicker">Scorecard archive</p>
               <h1 class="fixtures-title">Match scorecards</h1>
-              <p class="lede">Full digital scorecards from approved archive uploads. Pick a game date or browse the list.</p>
+              <p class="lede">Digital scorecards from past played fixtures and approved uploads. Pick a game date or browse by season.</p>
               <a id="scUploadCta" class="sc-btn primary sc-upload-cta" href="/scorecards/upload" hidden>📷 Upload a scorecard</a>
               <a id="scChecksCta" class="sc-btn sc-upload-cta" href="/admin/scorecards" hidden>🔎 Scorecard checks (uploads waiting for review)</a>
             </div>
@@ -60,11 +60,12 @@
             <span id="scBadge" class="signin-widget-pill">Loading</span>
           </div>
           <div id="scNotice" class="sc-notice" hidden></div>
+          <p id="scActionStatus" class="sc-action-status" role="status" aria-live="polite"></p>
           <div id="scList" class="sc-list"></div>
         </div>
       </section>
     </main>
     <script src="/assets/public_header.js?v=20261030f"></script>
-    <script src="/assets/scorecards.js?v=20261012a"></script>
+    <script src="/assets/scorecards.js?v=20261101a"></script>
   </body>
 </html>

@@ -126,6 +126,42 @@
     el._t = setTimeout(() => (el.hidden = true), tone === "error" ? 6000 : 2200);
   }
 
+  function deleteMatchControl() {
+    return !guest && data?.can_delete_incomplete
+      ? `<button type="button" class="qs-btn danger wide" data-act="delete-match">Delete incomplete match</button>`
+      : "";
+  }
+
+  async function deleteCurrentMatch() {
+    const match = data?.match;
+    if (!match || !data.can_delete_incomplete) return;
+    const queued = queue.length;
+    const warning = queued
+      ? ` This also discards ${queued} unsaved queued ball${queued === 1 ? "" : "s"}.`
+      : "";
+    if (!window.confirm(`Delete the incomplete match against ${match.opponent || "this opponent"}? Its saved scorebook will be removed.${warning} Completed matches are protected.`)) return;
+    try {
+      await api("DELETE", `/api/admin/clubs/${enc(match.club_id)}/fixtures/${enc(match.id)}`);
+      queue.length = 0;
+      storeQueue();
+      try {
+        localStorage.removeItem(stateKey(1));
+        localStorage.removeItem(stateKey(2));
+      } catch (e) {
+        /* Storage cleanup is best effort after the server has deleted the match. */
+      }
+      app.innerHTML = `<section class="qs-card qs-done" role="status" aria-live="polite">
+        <p class="qs-kicker">Match removed</p>
+        <h1>Incomplete match deleted</h1>
+        <p class="qs-muted">The match and its unfinished scorebook have been removed.</p>
+        <a class="qs-btn primary wide" href="/score">Start a new match</a>
+        <a class="qs-btn ghost wide" href="/fixtures">View fixtures</a>
+      </section>`;
+    } catch (error) {
+      toast(error.message || "The match could not be deleted.", "error");
+    }
+  }
+
   // ---------- local memory of who is on strike / bowling (per match + innings) ----------
   const stateKey = (inn) => `qs:${matchId}:${inn}`;
   function loadLocal(inn) {
@@ -332,6 +368,7 @@
           <div id="qsPickers" class="qs-pickers"></div>
           <button class="qs-btn primary wide" type="submit">Start scoring</button>
         </form>
+        ${deleteMatchControl()}
       </section>`;
     const pickers = document.getElementById("qsPickers");
     const sideOf = () => (isSecond ? document.getElementById("qsBat").value : app.querySelector('input[name="bat"]:checked').value);
@@ -462,6 +499,7 @@
           <span class="qs-live${editMode ? " qs-edit-badge" : ""}"><span class="qs-dot"></span>${editMode ? "EDIT MODE" : done ? "INNINGS OVER" : "LIVE"}</span>
           <a class="qs-link" href="/live/${encodeURIComponent(matchId)}" target="_blank" rel="noopener">Public scorecard ↗</a>
         </div>
+        ${deleteMatchControl()}
         ${editInnings}
         ${editMode ? '<p class="qs-edit-note">Edit mode · score the active innings with the live controls, or tap a saved delivery to correct it.</p>' : ""}
         <p class="qs-team">${esc(inn.batting_team || m.club_name)} <small>${inn.inning_number === 1 ? "1st" : "2nd"} innings</small></p>
@@ -630,6 +668,7 @@
     const result = String(data.match?.result || "TBD");
     if (editMode && !data.can_edit_scorebook) {
       app.innerHTML = `<section class="qs-card"><h1>Editing not allowed</h1><p class="qs-muted">Only this match's assigned captain, club admins with scoring access, and superadmins can correct its ball-by-ball scorebook.</p>
+        ${deleteMatchControl()}
         <a class="qs-btn primary" href="/live/${encodeURIComponent(matchId)}">View scorecard</a></section>`;
       return;
     }
@@ -650,11 +689,13 @@
     if (!editMode && !data.open) {
       app.innerHTML = `<section class="qs-card"><p class="qs-kicker">Quick Score</p><h1>Scoring is closed</h1>
         <p class="qs-muted">Ball-by-ball scoring opens on the match day. For past matches, use AI Assistant (“Heartlake 145/6, Imran XI 120/9…”) or upload a scorecard photo in Archives.</p>
+        ${deleteMatchControl()}
         <a class="qs-btn primary" href="/score">Back to matches</a></section>`;
       return;
     }
     if (!data.can_score && !(editMode && data.can_edit_scorebook)) {
       app.innerHTML = `<section class="qs-card"><h1>Scorers only</h1><p class="qs-muted">Ask a club admin to give you the scorer role. You can follow the match on the public scorecard.</p>
+        ${deleteMatchControl()}
         <a class="qs-btn primary" href="/live/${encodeURIComponent(matchId)}">Follow live</a></section>`;
       return;
     }
@@ -757,6 +798,7 @@
           </fieldset>
           <button class="qs-btn primary wide" type="submit">Save line-ups</button>
         </form>
+        ${deleteMatchControl()}
       </section>`;
     const form = document.getElementById("qsLineups");
     // A name ticked AND typed / pasted again counts once (Amit, Oct 31: "needs 2 to 11 players (now 21)" after
@@ -1871,6 +1913,7 @@
     if (fixKey) return askFix(fixKey.dataset.fix);
     const act = event.target.closest("[data-act]")?.dataset.act;
     if (!act) return;
+    if (act === "delete-match") return deleteCurrentMatch();
     if (act === "wicket") return askWicket();
     if (act === "undo") return undo();
     if (act === "voice") {

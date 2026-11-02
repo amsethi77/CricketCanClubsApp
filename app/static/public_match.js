@@ -621,6 +621,13 @@
     const updated = document.getElementById("pmUpdated")?.textContent || "";
     root.innerHTML = `
       ${renderHeader(match, state)}
+      <div class="pm-actions">
+        <a class="pm-download" href="/api/public/match/${encodeURIComponent(match.id)}/scorecard.pdf" download>
+          Download complete scorecard (PDF)
+        </a>
+        ${match.can_delete_incomplete ? `<button class="pm-delete-match" type="button" data-delete-match="${esc(match.id)}">Delete incomplete match</button>` : ""}
+      </div>
+      <p class="pm-action-status" data-delete-status role="status" aria-live="polite"></p>
       ${renderTabs(state.done)}
       <section class="pm-body" role="tabpanel">${body}</section>
       <p class="pm-foot">Read-only scorecard.${state.isLive ? " Updates by itself every 10 seconds." : ""}</p>`;
@@ -630,6 +637,14 @@
 
   root?.addEventListener("click", (event) => {
     if (!lastData) return;
+    const deleteButton = event.target.closest("[data-delete-match]");
+    if (deleteButton) {
+      if (!lastData.can_delete_incomplete) return;
+      const opponent = lastData.opponent || "this match";
+      if (!window.confirm(`Delete the incomplete match against ${opponent}? Started scoring will be removed. Completed matches are protected.`)) return;
+      deleteIncompleteMatch(lastData, deleteButton);
+      return;
+    }
     const tab = event.target.closest("[data-tab]");
     if (tab) {
       activeTab = tab.dataset.tab;
@@ -653,6 +668,35 @@
       render(lastData);
     }
   });
+
+  async function deleteIncompleteMatch(match, button) {
+    const status = root.querySelector("[data-delete-status]");
+    button.disabled = true;
+    if (status) status.textContent = "Deleting incomplete match…";
+    try {
+      const token = localStorage.getItem("cricketClubAppAuthToken") || "";
+      const response = await fetch(
+        `/api/admin/clubs/${encodeURIComponent(match.club_id)}/fixtures/${encodeURIComponent(match.id)}`,
+        {
+          method: "DELETE",
+          headers: { Accept: "application/json", "X-Auth-Token": token },
+        }
+      );
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.detail || "The match could not be deleted.");
+      clearTimeout(refreshTimer);
+      root.innerHTML = `
+        <section class="pm-deleted" role="status" aria-live="polite">
+          <h1>Incomplete match deleted</h1>
+          <p>The match and its unfinished scorebook have been removed.</p>
+          <a class="pm-download" href="/score">Start a new match</a>
+          <a href="/fixtures">View fixtures</a>
+        </section>`;
+    } catch (error) {
+      button.disabled = false;
+      if (status) status.textContent = error.message || "The match could not be deleted.";
+    }
+  }
 
   // ---------- celebrations for new balls (README "Easier live scoring") ----------
   const seenBalls = new Set();

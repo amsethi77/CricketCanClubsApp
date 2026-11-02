@@ -7,14 +7,17 @@ const selectedFixtureId = new URLSearchParams(window.location.search).get("fixtu
 let payload = null;
 
 function statusLabel(value) {
-  if (value === "available") return "Available";
-  if (value === "maybe") return "Maybe";
-  if (value === "unavailable") return "Not available";
+  const status = normalizeStatus(value);
+  if (status === "available") return "Available";
+  if (status === "maybe") return "Maybe";
+  if (status === "unavailable") return "Not available";
   return "No response";
 }
 
 function normalizeStatus(value) {
-  if (value === "available" || value === "maybe" || value === "unavailable") return value;
+  const status = String(value || "").trim().toLowerCase();
+  if (status === "available" || status === "maybe" || status === "unavailable") return status;
+  if (status === "not available") return "unavailable";
   return "no response";
 }
 
@@ -49,13 +52,14 @@ function renderFixtures() {
       const currentStatus = fixture.availability_statuses?.[payload.member.name] || "no response";
       const selectedStatus = normalizeStatus(currentStatus);
       const highlighted = selectedFixtureId && String(fixture.id) === String(selectedFixtureId);
+      const readOnly = Boolean(fixture.availability_read_only);
       return `
         <article class="detail-card availability-card ${highlighted ? "active-card" : ""}" data-fixture-availability="${fixture.id}">
           <strong>${fixture.date_label} vs ${fixture.opponent}</strong>
           <p>${fixture.details?.venue || "Venue TBD"} · ${fixture.details?.scheduled_time || "Time TBD"}</p>
           <small>${fixture.date || "Date TBD"}</small>
           <small class="availability-current-status">Current status: <span class="status-pill ${selectedStatus === "available" ? "yes" : selectedStatus === "maybe" ? "maybe" : selectedStatus === "unavailable" ? "no" : "neutral"}">${statusLabel(selectedStatus)}</span></small>
-          <div class="availability-slider" role="group" aria-label="Availability selection">
+          ${readOnly ? `<small>Past match · participation recorded</small>` : `<div class="availability-slider" role="group" aria-label="Availability selection">
             <form class="inline-actions" data-fixture-form="${fixture.id}">
               <div class="availability-quick-actions">
                 <button class="status-toggle available ${selectedStatus === "available" ? "is-selected" : ""}" type="button" data-set-availability="available" aria-pressed="${selectedStatus === "available"}">Available</button>
@@ -63,7 +67,7 @@ function renderFixtures() {
                 <button class="status-toggle unavailable ${selectedStatus === "unavailable" ? "is-selected" : ""}" type="button" data-set-availability="unavailable" aria-pressed="${selectedStatus === "unavailable"}">Not available</button>
               </div>
             </form>
-          </div>
+          </div>`}
         </article>
       `;
     })

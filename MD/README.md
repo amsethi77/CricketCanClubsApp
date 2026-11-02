@@ -130,6 +130,20 @@ This section captures the user requirements in the order they were given and ref
 ### November 2026 retired-out clarification
 - Treat retired out as a temporary batter departure, not a wicket: do not increase the team wicket total, include it in fall-of-wickets, or count it toward all-out. The batter may return and continue with their existing figures as a normal batter.
 
+### November 2026 complete scorecard PDF request
+- Add a direct PDF download for the complete public match scorecard, including batting and bowling details for all innings.
+
+### November 2026 historical scorecard and availability request
+- Let captains, club admins, and superadmins delete incomplete scorecards, but never completed match records.
+- Keep played matches registered as fixtures, record a player's availability as Available when the scorebook confirms they played, and show historical scored matches in the scorecard archive with year and exact-date filters.
+- Keep player and club records persisted in the database; do not turn completed historical matches back into upcoming fixtures.
+
+### November 2026 played-club registration request
+- Explain why Afghan Eagles is missing from player registration, and automatically register clubs and their recorded players from played games so they can be selected during registration.
+
+### November 2026 incomplete live-match deletion request
+- Show captains and admins a delete action in live scoring and on the live scorecard for an incomplete match, including one that has started but cannot be completed, while protecting completed matches and offering a path to start another match.
+
 ### September 2026 requests
 - Navbar: no More on laptop unless links don't fit; on phone More sits at the edge. Profile and Admin live inside the account (initials) button; Assistant sits at the bottom right.
 - Signed-out visitors can open a public Clubs page, search the site and switch dark/light mode.
@@ -368,7 +382,7 @@ This section captures the user requirements in the order they were given and ref
 - Club selection shows the selected or primary club first and keeps the rest selectable.
 - The club dashboard is now club-focused and removes the in-page club picker so it reflects the selected club only.
 - Season setup stores fixtures with their own season year so `2026` and `2027` schedules can coexist.
-- Player availability is shown against the selected club's active season fixtures after login.
+- Player availability is shown against the selected club's active season fixtures after login. Historical scorebook appearances are persisted as Available and displayed read-only in My availability.
 - The clubs page now shows a player snapshot plus year-wise and club-wise summary tables using cached SQLite stats.
 - The clubs page Player Snapshot is resolved from the signed-in player's canonical `member_id`, and it should not fall back to another roster member.
 - Player profile club memberships are deduplicated before display so the same club does not appear multiple times.
@@ -394,6 +408,7 @@ This section captures the user requirements in the order they were given and ref
 - Single-club archives no longer bleed into another club's review queue when the second team is missing.
 - Complete JSON imports are auto-approved; partial scorecards and non-JSON uploads remain reviewable until manually confirmed.
 - Registration can create a new club when the search does not find a match, and the new club owner becomes that club's default admin.
+- Registration options also reconcile clubs and players from scored fixtures, so an opponent and its recorded scorebook players can be selected without a separate manual club setup.
 - Captains and club admins can now notify players through WhatsApp reminders and build a selectable playing XI from the club's available players.
 - Players can now carry multiple club roles, and the auth layer unions those roles when calculating permissions.
 - The local UI is designed as the web baseline before a later native iPhone app conversion.
@@ -588,11 +603,15 @@ This section documents the work done in September 2026. See "Change log" at the 
 - **Public Clubs page** for signed-out visitors: `GET /clubs` serves `public_clubs.html` (`GET /api/public/clubs`).
 
 ### Digital scorecards (`/scorecards`)
-- `GET /api/public/scorecards?date=&club_id=&year=` lists **approved** archive scorecards, newest first; `GET /api/public/scorecards/{id}` returns one Cricinfo-style card (batting, bowling, extras, did-not-bat, match details, original photo URL).
+- `GET /api/public/scorecards?date=&club_id=&year=` lists approved uploaded scorecards and past played fixtures, newest first; `GET /api/public/scorecards/{id}` returns one Cricinfo-style card (batting, bowling, extras, did-not-bat, match details, original photo URL when uploaded). Year and exact game-date filters include every season represented in the archive.
 - Pages: `static/scorecards.html/js` (list grouped by month, date picker with "closest dates", club and season filters) and `static/scorecard.html/js` (innings tables + "Original scorecard" photo tab). Styles: `static/scorecards.css`.
+- Archived scorebook fixtures retain their fixture and roster records in the database; no fixture duplication is created to populate the archive. Captains, club admins, and superadmins can delete incomplete scorebook cards, while completed matches return **409** and remain intact. Those authorized roles can also delete unapproved/incomplete archive uploads from their club; approved scorecard uploads are protected.
+- `GET /api/auth/options` idempotently adds missing clubs from scored fixtures and creates/links members from each innings' batting, bowling, and fielding scorebook records. Upcoming unscored fixtures do not create registration clubs; existing player club memberships are preserved.
 - Archive review uses the same shared `scorecard.js` renderer and `scorecards.css` for a digital snapshot beside the editable extraction JSON; the uploaded original image is rendered directly in the review panel, without displaying its URL. HEIC/HEIF originals are converted to browser-compatible JPEG previews while preserving the original upload; an original-photo tab remains included in the snapshot. The three panels sit side by side on wide screens and stack on phones. Pending previews are returned only from the superadmin-protected Admin Center queue.
 - Scorecard image extraction uses local Ollama vision when a supported model is installed. It submits the full page plus enhanced header, batting-table, and bowling-table crops and writes the model's innings, batting, bowling, dismissal, extras, and match fields into the review JSON. Vision models are auto-detected (including tagged Ollama names); `ARCHIVE_VISION_MODEL` can select one explicitly. On Windows, install Ollama, pull `qwen3-vl:8b`, verify it appears in `http://127.0.0.1:11434/api/tags`, then use **Re-extract** on a pending archive. Re-extraction clears stale extraction JSON before regenerating it. If no local vision model or OCR tool can read the image, the review summary says so and keeps the item pending; all AI-generated figures still require admin verification.
 - Data comes from the best available copy of each archive's extraction (reviewed JSON, template, imported performances, draft scorecard). Missing figures show as "–".
+- Public match scorecards (`/live/{id}` and `/public/match/{id}`) provide a **Download complete scorecard (PDF)** action. The generated PDF includes each scored innings' full batting and bowling tables, extras, totals, did-not-bat list, and fall of wickets. It downloads directly without a browser print dialog. Test the PDF builder, download response, content headers, and missing-match response with `python -m unittest tests.test_local_qa.UnitQATests.test_public_match_scorecard_pdf_is_a_downloadable_complete_pdf`; check the action at 390px and laptop width.
+- Captains, club admins, and superadmins see **Delete incomplete match** on a started or unstarted unfinished `/live/{id}` scorecard. It uses the fixture deletion API's role checks and completed-match protection, then offers a direct link to start another match.
 
 ### Home pages
 - **Public home** `/live` (`static/home.js`, `static/home.css`): match strip (Live / Results / Upcoming), off-white banner with featured match, latest scorecards, recent results, coming up, join banner.
@@ -602,6 +621,7 @@ This section documents the work done in September 2026. See "Change log" at the 
 
 ### Quick Score (`/score`)
 - Files: `static/quick_score.html/js/css`. APIs: `GET /api/quick-score/fixtures`, `GET /api/quick-score/{match_id}`, `POST /api/quick-score/start` (creates today's fixture), plus the existing `POST /api/matches/{id}/scorebook/setup`, `POST .../scorebook/ball` and `DELETE .../scorebook/ball` (undo).
+- Captains, club admins, and superadmins can delete unfinished matches, including started scorebooks, from Quick Score. The server verifies role and completion status; after deletion the page offers **Start a new match** and **View fixtures**.
 - Flow: pick today's match (or "Start a match now") → choose batting side, openers and bowler → score with big buttons `0 1 2 3 4 6 / Wd Nb Bye LB / W / Undo`.
 - Strike rotates automatically on odd runs and at the end of each over; after 6 legal balls it asks for the next bowler; W opens a pop-up for how out, fielder and the new batter; 2nd innings shows the target and required rate.
 - **Retired out** is a temporary batter departure, not a wicket. It adds no runs, ball faced, legal ball, bowler credit, or team wicket; the batter can return later with their existing figures.
@@ -1017,17 +1037,19 @@ Bugs found and fixed:
 ### Past matches, scorecard corrections, and incomplete-game deletion (Oct 2026)
 - A match whose date is before today (Toronto time, `_current_local_date`) keeps live ball-by-ball scoring, availability (`/api/matches/{id}/availability`, `/api/player/availability`), the playing XI (`/lineup`), performances, commentary, and AI Assistant score/availability tasks locked. These actions continue to return **403 "This match was on … Past matches are locked"** (`_require_not_past` in `main.py`).
 - The assigned match captain, club captains, club admins, and superadmins may edit the scorecard summary after match day. This does not unlock ball-by-ball scoring or change a past match's status. The match-centre selector keeps an authorized past match selected so its scorecard can be corrected; the performance and commentary forms remain locked.
-- The signed-in Fixtures page retains past matches with scorecard runs or recorded scorebook balls even if their status is still in progress. Past unplayed fixtures remain hidden there, and historical matches are not shown as upcoming.
-- The assigned match captain, club captains, club admins, and superadmins may delete incomplete fixtures from Matches / Season Setup. The API checks the captain assignment or score permission, verifies the fixture's club, and rejects completed games (completed status, a recorded result, or both innings marked complete) with **409**.
+- The signed-in Fixtures page retains past matches with scorecard runs or recorded scorebook balls even if their status is still in progress. Past unplayed fixtures remain hidden there, and historical matches are not shown as upcoming. Scored past fixtures also appear in the digital scorecard archive with date and season filters.
+- Club captains, club admins, and superadmins can open Matches / Season Setup to delete incomplete fixtures even when they cannot create or edit schedules. Fixture-scoped permissions are returned by the API; completed games are protected and return **409**.
+- When a scorebook confirms a linked member batted or bowled in a past match, My availability records that member as **Available** and shows the historical fixture read-only. This corrects historical availability from the match record without making it editable after match day.
 - Past fixture details (date, opponent) remain editable only by club admins and superadmins.
 
 ### How to test (Oct 2026)
-1. Restart the app. Open Availability: only today's and future fixtures are listed. Open Fixtures: no past "Scheduled" games; the fixture manager shows "Past fixtures (N)" folded.
+1. Restart the app. Open Availability: today's/future fixtures can be updated; a past scored match the signed-in player appeared in shows read-only as Available. Open Fixtures: no past "Scheduled" games; the fixture manager shows "Past fixtures (N)" folded.
 2. Open an authorized past match in the match centre: scorecard summary fields can be saved, while scorebook, performance, commentary, availability, and playing-XI actions remain locked. A player without `score_matches` must receive **403** if attempting a scorecard edit.
 3. Open Fixtures while signed in: an older match with scorecard runs or scorebook balls stays visible even if its status is not `Completed`; a past unplayed fixture is hidden.
-4. In Matches / Season Setup, delete a scheduled or otherwise incomplete fixture as a captain. A completed match must remain and the API must return **409**.
-5. Tap **✨ AI Assistant** and try: "Add a match vs Old Boys XI on Saturday at 2pm" → Confirm; "Ask everyone for availability"; "Mark me available for the next match"; "Who is available for the next match?"; "Pick the best XI for the next match"; "We are 85/3 after 12 overs" (needs a match today, e.g. from Quick Score). Each shows a plan with Confirm / Cancel.
-6. Ask a question ("How is Amit S doing?"): it is answered by the LLM (the header says which model) or the built-in data assistant when Ollama is off.
+4. In Matches / Season Setup, delete an incomplete fixture as a captain, club admin, and superadmin. A completed match must remain and the API must return **409**.
+5. Open `/scorecards`: verify past scorebook matches appear alongside approved uploads. Filter by a historical season and an exact date; delete an incomplete scorecard as an authorized role and verify a completed scorecard has no delete action.
+6. Tap **✨ AI Assistant** and try: "Add a match vs Old Boys XI on Saturday at 2pm" → Confirm; "Ask everyone for availability"; "Mark me available for the next match"; "Who is available for the next match?"; "Pick the best XI for the next match"; "We are 85/3 after 12 overs" (needs a match today, e.g. from Quick Score). Each shows a plan with Confirm / Cancel.
+7. Ask a question ("How is Amit S doing?"): it is answered by the LLM (the header says which model) or the built-in data assistant when Ollama is off.
 
 ### How to test (September 2026 features)
 1. Restart the app: `python app\main.py` (stop any old copy first: `netstat -ano | findstr :8090`, then `taskkill /PID <id> /F`).
@@ -1134,6 +1156,10 @@ Model (soft launch, Oct 2026): keep the core cricket experience free; one paid p
 - 2026-11-01: Clarified retired out as a temporary departure, not a wicket. Persist it with no wicket flag, and exclude it from team wicket totals, fall-of-wickets, over wicket counts, all-out calculations, and wicket celebrations; retained a distinct retirement alert and return flow.
 - 2026-11-01: Applied the no-wicket rule to the legacy delivery assistant and AI Live Scorer, including retired-out interpretation, projected score, and batter replacement. Added an AI scorer regression.
 - 2026-11-01: Clear a returning batter's retired-out tag on the public scorecard when they reappear in the batting pair, with or without an explicit incoming-batter marker.
+- 2026-11-01: Added a direct PDF download to public match scorecards. The PDF includes full innings batting/bowling tables, extras, totals, did-not-bat players, and fall of wickets; added a ReportLab dependency and PDF regression coverage.
+- 2026-11-01: Fixed role-based deletion for incomplete fixtures and scorecard uploads, protected completed match records, archived past scored fixtures with season/date filtering, and persisted Available for members confirmed in a past scorebook. Updated the read-only historical availability view and added regression coverage.
+- 2026-11-01: Registered missing clubs and scorebook players from played fixtures in the player-registration options, preserving existing memberships and ignoring unscored fixtures; added idempotency and team-attribution regression coverage.
+- 2026-11-01: Added authorized incomplete-match deletion to Quick Score and public live scorecards, including started scorebooks; retained the completed-match safeguard and linked successful deletion to start another match.
 - 2026-11-01: Deployed the retired-out clarification and returning-batter scorecard fix to `cricketcanclubs-web` in Canada Central. Production health returned `ok`, the scorecard reader reported Gemini, all updated assets returned HTTP 200, and `GEMINI_API_KEY` remained a Key Vault reference. The verified ZIP excluded runtime data, uploads, caches, and secrets.
 - 2026-11-01: Kept authorized edit mode in the active live-scoring flow until both innings complete, added the second-innings transition and Wide/Wide +1..+4 choices, and enabled run-outs on wides and no-balls with scorebook regression coverage.
 - 2026-11-01: Enabled authorized live-style ball-by-ball scoring in past-match edit mode, including append persistence, recalculated innings/result state, notification suppression, refreshed assets, and RBAC regression coverage.

@@ -1,5 +1,5 @@
 /*
- * Public scorecard archive: approved scorecards grouped by game date.
+ * Public scorecard archive: approved uploads and played fixture scorebooks grouped by game date.
  * Filters: game date (date picker), club, season. Filters are kept in the URL (?date=&club=&year=).
  */
 (() => {
@@ -7,11 +7,13 @@
   const badgeEl = document.getElementById("scBadge");
   const titleEl = document.getElementById("scListTitle");
   const noticeEl = document.getElementById("scNotice");
+  const actionStatusEl = document.getElementById("scActionStatus");
   const dateEl = document.getElementById("scDate");
   const clubEl = document.getElementById("scClub");
   const yearEl = document.getElementById("scYear");
   const clearEl = document.getElementById("scClear");
   let all = [];
+  let manager = null;
 
   const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
   const DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -45,26 +47,39 @@
 
   function card(item) {
     const p = parts(item.date);
+    const canDelete = Boolean(
+      manager &&
+      item.source === "fixture" &&
+      item.is_incomplete &&
+      (manager.role === "superadmin" || (
+        ["captain", "club_admin"].includes(manager.role) &&
+        String(item.club_id || "") === manager.clubId
+      ))
+    );
     const tags = [
       item.club_name ? `<span class="sc-tag">${escapeHtml(item.club_name)}</span>` : "",
       item.venue ? `<span class="sc-tag">📍 ${escapeHtml(item.venue)}</span>` : "",
       item.has_photo ? `<span class="sc-tag sc-tag-photo">📷 Photo</span>` : "",
+      item.source === "fixture" && item.is_incomplete ? `<span class="sc-tag sc-tag-muted">Incomplete</span>` : "",
       !item.has_details ? `<span class="sc-tag sc-tag-muted">Totals only</span>` : "",
     ].join("");
     return `
-      <a class="sc-card" href="/scorecards/${encodeURIComponent(item.id)}">
-        <div class="sc-card-date" aria-hidden="true">
-          <span>${escapeHtml(p.day)}</span>
-          <strong>${p.d}</strong>
-          <span>${escapeHtml(p.month.slice(0, 3))}</span>
-        </div>
-        <div class="sc-card-body">
-          <div class="sc-card-teams">${(item.teams || []).map(teamRow).join("")}</div>
-          <p class="sc-card-result">${escapeHtml(item.result || "Result not recorded")}</p>
-          <div class="sc-card-tags">${tags}</div>
-        </div>
-        <span class="sc-card-go" aria-hidden="true">›</span>
-      </a>`;
+      <article class="sc-card-wrap">
+        <a class="sc-card" href="/scorecards/${encodeURIComponent(item.id)}">
+          <div class="sc-card-date" aria-hidden="true">
+            <span>${escapeHtml(p.day)}</span>
+            <strong>${p.d}</strong>
+            <span>${escapeHtml(p.month.slice(0, 3))}</span>
+          </div>
+          <div class="sc-card-body">
+            <div class="sc-card-teams">${(item.teams || []).map(teamRow).join("")}</div>
+            <p class="sc-card-result">${escapeHtml(item.result || "Result not recorded")}</p>
+            <div class="sc-card-tags">${tags}</div>
+          </div>
+          <span class="sc-card-go" aria-hidden="true">›</span>
+        </a>
+        ${canDelete ? `<button type="button" class="sc-delete-incomplete" data-delete-fixture="${escapeHtml(item.fixture_id)}" data-club-id="${escapeHtml(item.club_id)}">Delete incomplete scorecard</button>` : ""}
+      </article>`;
   }
 
   function nearestDates(target, pool, count = 3) {
@@ -107,11 +122,11 @@
         const near = nearestDates(date, base);
         noticeEl.hidden = false;
         noticeEl.innerHTML =
-          `No approved scorecard on ${escapeHtml(longDate(date))}. Closest game dates: ` +
+          `No scorecard on ${escapeHtml(longDate(date))}. Closest game dates: ` +
           near.map((d) => `<button type="button" class="sc-chip" data-date="${d}">${escapeHtml(longDate(d))}</button>`).join(" ");
         listEl.innerHTML = "";
       } else {
-        listEl.innerHTML = `<div class="live-empty">No approved scorecards yet. Scorecards appear here once an archive upload is approved.</div>`;
+        listEl.innerHTML = `<div class="live-empty">No scorecards match these filters. Scored past fixtures and approved uploads appear here.</div>`;
       }
       return;
     }
@@ -155,6 +170,7 @@
         dateEl.min = dates[0];
         dateEl.max = dates[dates.length - 1];
       }
+
       const params = new URLSearchParams(location.search);
       dateEl.value = params.get("date") || "";
       if (params.get("club")) clubEl.value = params.get("club");
@@ -165,6 +181,53 @@
       listEl.innerHTML = `<div class="live-empty">${escapeHtml(error.message || "Unable to load scorecards.")}</div>`;
     }
   }
+
+  async function loadManager() {
+    let token = "";
+    try {
+      token = localStorage.getItem("cricketClubAppAuthToken") || "";
+    } catch (error) {
+      return;
+    }
+    if (!token) return;
+    try {
+      const response = await fetch("/api/auth/me", { headers: { "X-Auth-Token": token } });
+      if (!response.ok) return;
+      const data = await response.json();
+      const user = data.user || {};
+      manager = {
+        role: String(user.effective_role || user.role || ""),
+        clubId: String(user.current_club_id || user.primary_club_id || ""),
+      };
+      render();
+    } catch (error) {
+      manager = null;
+    }
+  }
+
+  listEl.addEventListener("click", async (event) => {
+    const button = event.target.closest("[data-delete-fixture]");
+    if (!button) return;
+    const fixtureId = button.dataset.deleteFixture;
+    const clubId = button.dataset.clubId;
+    if (!window.confirm("Delete this incomplete scorecard and its fixture? Completed matches cannot be deleted.")) return;
+    button.disabled = true;
+    try {
+      const token = localStorage.getItem("cricketClubAppAuthToken") || "";
+      const response = await fetch(`/api/admin/clubs/${encodeURIComponent(clubId)}/fixtures/${encodeURIComponent(fixtureId)}`, {
+        method: "DELETE",
+        headers: { "X-Auth-Token": token },
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.detail || "Couldn't delete this incomplete scorecard.");
+      all = all.filter((item) => String(item.fixture_id || "") !== fixtureId);
+      render();
+      actionStatusEl.textContent = "Incomplete scorecard deleted.";
+    } catch (error) {
+      actionStatusEl.textContent = error.message || "Couldn't delete this incomplete scorecard.";
+      button.disabled = false;
+    }
+  });
 
   dateEl.addEventListener("change", render);
   clubEl.addEventListener("change", render);
@@ -186,6 +249,7 @@
   });
 
   load();
+  loadManager();
   // Captains, club admins and site admins see "Upload a scorecard" (README: "Scorecard uploads: checks, review and duplicates").
   (async () => {
     let token = "";

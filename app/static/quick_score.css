@@ -197,6 +197,17 @@ body.quick-score-page .qs-btn.ghost {
   border: 1.5px solid #e2e8f0 !important;
 }
 
+body.quick-score-page .qs-btn.danger {
+  background: #fff !important;
+  color: #b91c1c !important;
+  border: 1.5px solid #fecaca !important;
+}
+
+body.quick-score-page .qs-btn.danger:focus-visible {
+  outline: 3px solid #fca5a5;
+  outline-offset: 2px;
+}
+
 .qs-btn.wide {
   width: 100%;
   margin-top: 8px;

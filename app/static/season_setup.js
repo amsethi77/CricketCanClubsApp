@@ -14,7 +14,7 @@ const fixtureCancelEditButton = document.getElementById("fixtureCancelEditButton
 const MIN_SEASON_YEAR = 2026;
 
 let payload = null;
-let canDeleteIncomplete = false;
+let canManageFixtures = false;
 
 function debug(...args) {
   if (typeof console !== "undefined" && console.debug) {
@@ -98,15 +98,16 @@ function renderFixtures() {
     .map(
       (fixture) => {
         const locked = isPastFixture(fixture);
-        const canDelete = canDeleteIncomplete && !isCompletedFixture(fixture);
+        const completed = isCompletedFixture(fixture);
+        const canDelete = Boolean(fixture.can_delete_incomplete) && !completed;
         return `
         <article class="detail-card">
           <strong>${fixture.date_label} vs ${fixture.opponent}</strong>
           <p>${fixture.details?.venue || "Venue TBD"} · ${fixture.details?.scheduled_time || "Time TBD"}</p>
           <small>${fixture.season || `${fixture.season_year || ""} Season`} · ${fixture.status}</small>
           <div class="inline-actions">
-            <button class="secondary-button" type="button" data-fixture-edit="${fixture.id}" ${locked ? "disabled" : ""}>${locked ? "Locked" : "Edit"}</button>
-            <button class="secondary-button" type="button" data-fixture-delete="${fixture.id}" ${canDelete ? "" : "disabled"}>${isCompletedFixture(fixture) ? "Completed game" : "Delete incomplete game"}</button>
+            ${canManageFixtures ? `<button class="secondary-button" type="button" data-fixture-edit="${fixture.id}" ${locked ? "disabled" : ""}>${locked ? "Locked" : "Edit"}</button>` : ""}
+            ${canDelete ? `<button class="secondary-button" type="button" data-fixture-delete="${fixture.id}">Delete incomplete game</button>` : completed ? `<span>Completed game — kept in scorecards</span>` : ""}
           </div>
         </article>
       `;
@@ -195,8 +196,8 @@ fixturesList.addEventListener("click", (event) => {
   const deleteButton = event.target.closest("[data-fixture-delete]");
   if (deleteButton) {
     const fixture = (payload?.fixtures || []).find((item) => item.id === deleteButton.dataset.fixtureDelete);
-    if (!fixture || !canDeleteIncomplete || isCompletedFixture(fixture)) {
-      setStatus("Only captains and club admins can delete incomplete games.", "error");
+    if (!fixture || !fixture.can_delete_incomplete || isCompletedFixture(fixture)) {
+      setStatus("Only a club captain, club admin, or superadmin can delete an incomplete game in their club.", "error");
       return;
     }
     if (!window.confirm(`Delete incomplete game ${fixture.date_label || fixture.date} vs ${fixture.opponent}?`)) return;
@@ -239,19 +240,19 @@ requireAuth()
   .then(async (auth) => {
     if (!auth) return;
     const permissions = auth.user.permissions || [];
-    if (!permissions.includes("manage_fixtures") && !permissions.includes("manage_club")) {
-      setStatus("Only club administrators can set schedules.", "error");
-      form.querySelectorAll("input, button").forEach((element) => {
-        element.disabled = true;
-      });
+    canManageFixtures = permissions.includes("manage_fixtures") || permissions.includes("manage_club");
+    const canViewAndDelete = canManageFixtures || permissions.includes("score_matches");
+    if (!canViewAndDelete) {
+      form.hidden = true;
+      setStatus("Only club captains, club admins, or superadmins can manage incomplete fixtures.", "error");
       return;
     }
+    form.hidden = !canManageFixtures;
     const clubId = auth.user.current_club_id || auth.user.primary_club_id || "";
     setPrimaryClubId(clubId);
     debug("Loading season setup data.", { clubId });
     setStatus("Loading season setup...", "info");
     payload = await window.CricketClubAppPages.getJson(`/api/season-setup/data${clubId ? `?club_id=${encodeURIComponent(clubId)}` : ""}`, true);
-    canDeleteIncomplete = (payload.user?.permissions || []).includes("score_matches");
     setPrimaryClubId(payload.club.id || clubId);
     title.textContent = `${payload.club.name} season setup`;
     summary.textContent = `Club default season ${payload.club.season || "TBD"} · ${payload.fixtures.length} fixture(s) stored`;

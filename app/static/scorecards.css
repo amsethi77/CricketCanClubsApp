@@ -89,6 +89,40 @@
   gap: 10px;
 }
 
+.sc-card-wrap {
+  display: grid;
+  gap: 7px;
+}
+
+.sc-delete-incomplete {
+  justify-self: end;
+  min-height: 36px;
+  padding: 0 12px;
+  border: 1px solid #b91c1c;
+  border-radius: 10px;
+  background: #fff;
+  color: #b91c1c;
+  font: inherit;
+  font-size: 0.82rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.sc-delete-incomplete:focus-visible {
+  outline: 3px solid rgba(185, 28, 28, 0.25);
+  outline-offset: 2px;
+}
+
+.sc-action-status:empty {
+  display: none;
+}
+
+.sc-action-status {
+  margin: 0 0 12px;
+  color: var(--sc-muted);
+  font-size: 0.9rem;
+}
+
 .sc-card {
   display: grid;
   grid-template-columns: 64px minmax(0, 1fr) 20px;

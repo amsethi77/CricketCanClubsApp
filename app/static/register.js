@@ -95,7 +95,10 @@ document.addEventListener("DOMContentLoaded", () => {
           optionMarkup(
             data.members,
             "name",
-            (member) => `${member.full_name || member.name} · ${member.team_name || "No team"}`
+            (member) =>
+              `${member.full_name || member.name} · ${
+                (member.club_names || []).join(", ") || member.team_name || "No team"
+              }`
           );
       }
 
