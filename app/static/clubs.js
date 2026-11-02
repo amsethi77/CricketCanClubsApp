@@ -54,6 +54,11 @@ function currentMemberName() {
   return match?.name || "";
 }
 
+function isSuperadminUser(user) {
+  const roles = [user?.effective_role, user?.role, ...(Array.isArray(user?.roles) ? user.roles : [])];
+  return roles.some((role) => String(role || "").trim().toLowerCase() === "superadmin");
+}
+
 function memberKey(member) {
   return String(member?.name || member?.full_name || "").trim().toLowerCase();
 }
@@ -522,6 +527,10 @@ function renderClubs() {
     .then((data) => {
       if (!data) return;
       authData = data;
+      if (isSuperadminUser(authData.user)) {
+        const currentClubId = String(authData.user.current_club_id || authData.user.primary_club_id || "").trim();
+        authData.clubs = (authData.clubs || []).filter((club) => String(club.id || "").trim() === currentClubId);
+      }
       const nextAuthSignature = [
         authData?.user?.member_id || "",
         authData?.user?.viewer_member_name || "",
@@ -539,6 +548,12 @@ function renderClubs() {
         greeting.textContent = `Welcome, ${signedInName}`;
       }
       if (!Array.isArray(authData.clubs) || !authData.clubs.length) {
+        if (isSuperadminUser(authData.user)) {
+          renderClubs();
+          refreshLinks();
+          loadDashboardSnapshot();
+          return;
+        }
         return loadClubDirectoryFallback().then((clubs) => {
           authData.clubs = clubs;
           renderClubs();

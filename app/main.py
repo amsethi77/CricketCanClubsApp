@@ -678,6 +678,7 @@ def _clubs_page_html(request: Request, search: str = "", focus_club_id: str = ""
     current_club_id = focus_club_id or str(store.get("viewer_profile", {}).get("primary_club_id") or "")
     dashboard = current_dashboard(store, current_club_id)
     member_club_ids: list[str] = []
+    is_superadmin = False
     viewer_display_name = "Signed in"
     snapshot_title = "No player selected"
     snapshot_details = "Sign in with your player profile to see your totals here."
@@ -724,6 +725,7 @@ def _clubs_page_html(request: Request, search: str = "", focus_club_id: str = ""
     if token:
         try:
             user_row, current_club_id = _auth_user_from_token(token)
+            is_superadmin = _effective_role_name(user_row, current_club_id) == "superadmin"
             dashboard = current_dashboard(store, current_club_id)
             viewer_display_name = str(user_row["display_name"] or user_row["email"] or user_row["mobile"] or "Signed in")
             member_id = str(user_row["member_id"] or "")
@@ -941,6 +943,8 @@ def _clubs_page_html(request: Request, search: str = "", focus_club_id: str = ""
         except HTTPException:
             member_club_ids = []
     clubs = _sorted_club_choices(store, current_club_id)
+    if token and is_superadmin:
+        clubs = [club for club in clubs if str(club.get("id") or "").strip() == str(current_club_id or "").strip()]
     query = search.strip().lower()
     linked_only = [club for club in clubs if str(club.get("id") or "").strip() in set(member_club_ids)]
     if not linked_only:
@@ -1027,7 +1031,7 @@ def _clubs_page_html(request: Request, search: str = "", focus_club_id: str = ""
             <div class="stack-card">
               <p class="section-kicker">Club Selection</p>
               <h1 id="clubsGreeting">Welcome, {html.escape(viewer_display_name)}</h1>
-              <p id="selectedClubSummary" class="lede">Choose your current club. Your primary club is the default.</p>
+              <p id="selectedClubSummary" class="lede">{"Your current club is shown here. Use Admin Center to manage other clubs." if is_superadmin else "Choose your current club. Your primary club is the default."}</p>
               <div id="clubsStatus" class="status-banner" hidden></div>
               <form class="toolbar-actions" method="get" action="/clubs">
                 <input id="clubSearchInput" name="search" type="search" value="{search_value}" placeholder="Search clubs by name, short name, or season" />
@@ -1104,7 +1108,7 @@ def _clubs_page_html(request: Request, search: str = "", focus_club_id: str = ""
           </section>
         </div>
         <script src="/assets/multipage.js?v=20261025a"></script>
-        <script src="/assets/clubs.js?v=20260509c"></script>
+        <script src="/assets/clubs.js?v=20261102a"></script>
       </body>
     </html>
     """
@@ -1817,6 +1821,7 @@ def _club_by_identifier(clubs: list[dict[str, Any]], identifier: str) -> dict[st
             str(club.get("id") or "").strip().lower(),
             str(club.get("name") or "").strip().lower(),
             str(club.get("short_name") or "").strip().lower(),
+            *(str(alias or "").strip().lower() for alias in club.get("aliases", []) or []),
         }
         if clean in {item for item in identifiers if item}:
             return club
@@ -2923,16 +2928,14 @@ def admin_traffic(x_auth_token: str | None = Header(default=None)) -> dict[str, 
 
 
 def _club_matches_removed_club(club_id: str, club_name: str, removed_club: dict[str, Any]) -> bool:
-    removed_id = str(removed_club.get("id") or "").strip().lower()
-    removed_name = str(removed_club.get("name") or "").strip().lower()
-    removed_short_name = str(removed_club.get("short_name") or "").strip().lower()
+    removed_names = {
+        str(value or "").strip().lower()
+        for value in [removed_club.get("id"), removed_club.get("name"), removed_club.get("short_name"), *(removed_club.get("aliases") or [])]
+        if str(value or "").strip()
+    }
     candidate_id = str(club_id or "").strip().lower()
     candidate_name = str(club_name or "").strip().lower()
-    return any(
-        candidate
-        and candidate in {removed_id, removed_name, removed_short_name}
-        for candidate in [candidate_id, candidate_name]
-    )
+    return any(candidate and candidate in removed_names for candidate in [candidate_id, candidate_name])
 
 
 def _prune_member_references(
@@ -3092,6 +3095,7 @@ def _retarget_member_team_memberships(member: dict[str, Any], removed_club: dict
         str(removed_club.get("id") or "").strip().lower(),
         str(removed_club.get("name") or "").strip().lower(),
         str(removed_club.get("short_name") or "").strip().lower(),
+        *(str(alias or "").strip().lower() for alias in removed_club.get("aliases", []) or []),
     }
     updated_memberships: list[dict[str, Any]] = []
     for raw_membership in list(member.get("team_memberships", []) or []):
@@ -3183,6 +3187,7 @@ def _club_identity_keys(club: dict[str, Any]) -> set[str]:
         _club_match_key(club.get("id") or ""),
         _club_match_key(club.get("name") or ""),
         _club_match_key(club.get("short_name") or ""),
+        *(_club_match_key(alias) for alias in club.get("aliases", []) or []),
     }
     return {key for key in keys if key}
 
@@ -6006,7 +6011,7 @@ def _admin_center_html(request: Request) -> HTMLResponse:
         <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, viewport-fit=cover" />
         <script src="/assets/zoom_lock.js?v=20261014a"></script>
         <title>Admin center · CricketClubApp</title>
-        <link rel="stylesheet" href="/assets/styles.css?v=20261016g" />
+        <link rel="stylesheet" href="/assets/styles.css?v=20261102a" />
         <link rel="stylesheet" href="/assets/app_polish.css?v=20261006a" />
         <link rel="stylesheet" href="/assets/sports-system.css?v=20260926a" />
         <link rel="stylesheet" href="/assets/scorecards.css?v=20261015b" />
@@ -6019,12 +6024,35 @@ def _admin_center_html(request: Request) -> HTMLResponse:
               <p class="section-kicker">Admin center</p>
               <h1>{html.escape(club.get('name', 'Selected club'))} control room</h1>
               <div id="adminRoleBadge" class="hero-badge admin-role-badge">Loading role...</div>
-              <p class="lede">Select a club, review that club’s data, edit fixtures, and manage archives from one place.</p>
+              <p class="lede">Manage a club, then use the section menu to open visitor analytics, scorecards, archives, audit history, or fixtures.</p>
               <div id="adminCenterStatus" class="status-banner {notice_tone}"{" hidden" if not notice else ""}>{notice}</div>
-              <div class="summary-grid compact-summary-grid" id="adminClubStats"></div>
             </div>
 
             <div class="detail-stack">
+              <nav class="admin-section-nav" aria-label="Admin Center sections" role="tablist">
+                <button class="secondary-button is-active" type="button" role="tab" aria-selected="true" aria-controls="adminSectionClubMaintenance" data-admin-section="club-maintenance">Club Maintenance</button>
+                <button class="secondary-button" type="button" role="tab" aria-selected="false" aria-controls="adminSectionOverview" data-admin-section="overview">Overview</button>
+                <button class="secondary-button" type="button" role="tab" aria-selected="false" aria-controls="adminSectionVisitors" data-admin-section="visitors">Unique Visitors</button>
+                <button class="secondary-button" type="button" role="tab" aria-selected="false" aria-controls="adminSectionScorecards" data-admin-section="scorecards">Scorecard Tools</button>
+                <button class="secondary-button" type="button" role="tab" aria-selected="false" aria-controls="adminSectionArchives" data-admin-section="archives">Archives</button>
+                <button class="secondary-button" type="button" role="tab" aria-selected="false" aria-controls="adminSectionAudit" data-admin-section="audit">Audit Log</button>
+                <button class="secondary-button" type="button" role="tab" aria-selected="false" aria-controls="adminSectionFixtures" data-admin-section="fixtures">Fixtures</button>
+              </nav>
+              <section class="admin-section" id="adminSectionClubMaintenance" data-admin-section-panel="club-maintenance" role="tabpanel">
+                <div class="stack-card admin-controls-panel">
+                  <div class="panel-head compact-head"><div><p class="section-kicker">Club Maintenance</p><h2>Manage clubs and rosters</h2></div></div>
+                  <p class="lede">Superadmin only. Disable a club to preserve its history while blocking member access, re-enable it later, or permanently delete it.</p>
+                  <form id="adminClubForm" class="toolbar-actions" method="get" action="/admin-center">
+                    <select id="adminClubSelect" name="club_id">{club_options}</select>
+                    <button id="adminLoadClubButton" class="secondary-button" type="submit">Load club</button>
+                  </form>
+                  <div id="adminClubDetail" class="detail-stack">{club_detail_html}</div>
+                </div>
+              </section>
+              <section class="admin-section" id="adminSectionOverview" data-admin-section-panel="overview" role="tabpanel" hidden>
+                <div class="stack-card"><div class="panel-head compact-head"><div><p class="section-kicker">Overview</p><h2>Club snapshot</h2></div></div><div class="summary-grid compact-summary-grid" id="adminClubStats"></div></div>
+              </section>
+              <section class="admin-section" id="adminSectionVisitors" data-admin-section-panel="visitors" role="tabpanel" hidden>
               <div class="stack-card" id="adminTrafficCard">
                 <div class="panel-head compact-head">
                   <div>
@@ -6044,6 +6072,8 @@ def _admin_center_html(request: Request) -> HTMLResponse:
                 </div>
                 <div id="adminTrafficSeries" class="archive-list"><p class="empty-state">Traffic will load after the page finishes loading.</p></div>
               </div>
+              </section>
+              <section class="admin-section" id="adminSectionScorecards" data-admin-section-panel="scorecards" role="tabpanel" hidden>
               <div class="stack-card" id="adminRereadCard" hidden>
                 <div class="panel-head compact-head">
                   <div>
@@ -6058,6 +6088,8 @@ def _admin_center_html(request: Request) -> HTMLResponse:
                 <div class="toolbar-actions"><button id="adminRereadButton" class="primary-button" type="button">🤖 Re-read all scorecards</button></div>
                 <div id="adminRereadStatus" class="status-banner info" hidden></div>
               </div>
+              </section>
+              <section class="admin-section" id="adminSectionArchives" data-admin-section-panel="archives" role="tabpanel" hidden>
               <div class="stack-card">
                 <div class="panel-head compact-head">
                   <div>
@@ -6071,6 +6103,8 @@ def _admin_center_html(request: Request) -> HTMLResponse:
                 </div>
                 <div id="adminReviewQueue" class="detail-stack">{review_queue_html}</div>
               </div>
+              </section>
+              <section class="admin-section" id="adminSectionAudit" data-admin-section-panel="audit" role="tabpanel" hidden>
               <div class="stack-card">
                 <div class="panel-head compact-head">
                   <div>
@@ -6086,20 +6120,8 @@ def _admin_center_html(request: Request) -> HTMLResponse:
                   <p class="empty-state">Audit log will load after the page finishes loading.</p>
                 </div>
               </div>
-              <div class="stack-card admin-controls-panel">
-                <div class="panel-head compact-head">
-                  <div>
-                    <p class="section-kicker">Club Controls</p>
-                    <h2>Disable, re-enable, or delete clubs</h2>
-                  </div>
-                </div>
-                <p class="lede">Superadmin only. Disabling preserves club history and blocks member access. Re-enable it here. Permanent deletion and roster cleanup are also available.</p>
-                <form id="adminClubForm" class="toolbar-actions" method="get" action="/admin-center">
-                  <select id="adminClubSelect" name="club_id">{club_options}</select>
-                  <button id="adminLoadClubButton" class="secondary-button" type="submit">Load club</button>
-                </form>
-                <div id="adminClubDetail" class="detail-stack">{club_detail_html}</div>
-              </div>
+              </section>
+              <section class="admin-section" id="adminSectionFixtures" data-admin-section-panel="fixtures" role="tabpanel" hidden>
               <div class="stack-card">
                 <div class="panel-head compact-head">
                   <div>
@@ -6121,12 +6143,13 @@ def _admin_center_html(request: Request) -> HTMLResponse:
                 </form>
                 <div id="adminFixtureList" class="detail-stack"></div>
               </div>
+              </section>
             </div>
           </section>
         </div>
         <script src="/assets/multipage.js?v=20261025a"></script>
         <script src="/assets/scorecard.js?v=20261019a"></script>
-        <script src="/assets/admin_center.js?v=20261102a"></script>
+        <script src="/assets/admin_center.js?v=20261102c"></script>
         <script src="/assets/admin_reread.js?v=20261024a"></script>
       </body>
     </html>

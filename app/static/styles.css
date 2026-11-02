@@ -4464,6 +4464,40 @@ button:hover,
     linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(244, 249, 255, 0.94));
 }
 
+.admin-section[hidden] {
+  display: none !important;
+}
+
+.admin-section-nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid rgba(90, 167, 255, 0.14);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.94);
+}
+
+.admin-section-nav button {
+  min-height: 44px;
+  white-space: nowrap;
+}
+
+.admin-section-nav button.is-active {
+  color: #fff;
+  background: #174a86;
+  border-color: #174a86;
+}
+
+@media (max-width: 600px) {
+  .admin-section-nav {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    overscroll-behavior-inline: contain;
+    padding: 8px;
+  }
+}
+
 .admin-member-card {
   display: grid;
   gap: 8px;

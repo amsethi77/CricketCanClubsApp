@@ -165,6 +165,25 @@ function reviewRawOutput(upload) {
   return String(upload?.review_llm_notes || "").trim();
 }
 
+function activateAdminSection(sectionName, updateHash = true) {
+  const panels = [...document.querySelectorAll("[data-admin-section-panel]")];
+  if (!panels.length) return;
+  const available = panels.map((panel) => panel.dataset.adminSectionPanel);
+  const active = available.includes(sectionName) ? sectionName : "club-maintenance";
+  document.querySelectorAll("[data-admin-section]").forEach((button) => {
+    const selected = button.dataset.adminSection === active;
+    button.classList.toggle("is-active", selected);
+    button.setAttribute("aria-selected", String(selected));
+    button.tabIndex = selected ? 0 : -1;
+  });
+  panels.forEach((panel) => {
+    panel.hidden = panel.dataset.adminSectionPanel !== active;
+  });
+  if (updateHash && window.location.hash !== `#${active}`) {
+    window.history.replaceState(null, "", `#${active}`);
+  }
+}
+
 function bootstrapAdminCenter() {
   const pages = window.CricketClubAppPages;
   if (!pages) {
@@ -738,6 +757,18 @@ function renderClubDetail(dashboard) {
   const club = focusedClub(dashboard);
   const members = Array.isArray(dashboard?.members) ? dashboard.members : [];
   const teams = Array.isArray(dashboard?.teams) ? dashboard.teams : [];
+  const isDisabled = club.is_disabled === true || ["1", "true", "yes", "disabled"].includes(String(club.is_disabled || "").trim().toLowerCase());
+  const clubStatus = isDisabled
+    ? '<p class="status-banner error">Disabled · members cannot access this club.</p>'
+    : '<p class="status-banner success">Active</p>';
+  const clubToggleAction = isDisabled
+    ? `<form method="post" action="/api/admin/clubs/${encodeURIComponent(club.id || "")}/enable"><button class="secondary-button" type="submit">Re-enable club</button></form>`
+    : `<form method="post" action="/api/admin/clubs/${encodeURIComponent(club.id || "")}/disable">
+        <label class="stack-label">Type the exact club name to confirm disabling
+          <input name="confirmation" type="text" placeholder="${escapeHtml(club.name || "")}" autocomplete="off" required />
+        </label>
+        <button class="secondary-button" type="submit">Disable club</button>
+      </form>`;
   const memberCards = members.length
     ? members
         .map(
@@ -763,7 +794,9 @@ function renderClubDetail(dashboard) {
     <article class="detail-card admin-club-card" data-admin-club="${escapeHtml(club.id || "")}">
       <strong>${escapeHtml(club.name || "Selected club")}</strong>
       <p>${escapeHtml(club.short_name || "")} · ${escapeHtml(club.season || "Season TBD")}</p>
+      ${clubStatus}
       <small>${members.length} players · ${teams.length} teams · ${escapeHtml(club.city || "City TBD")} · ${escapeHtml(club.country || "Country TBD")}</small>
+      ${clubToggleAction}
       <form class="admin-delete-form" method="post" action="/api/admin/clubs/${encodeURIComponent(club.id || "")}/delete">
         <label class="stack-label">
           Type the exact club name to confirm deletion
@@ -1110,6 +1143,22 @@ let adminCenterHandlersBound = false;
 function bindAdminCenterHandlers() {
   if (adminCenterHandlersBound) return;
   adminCenterHandlersBound = true;
+
+  const sectionNav = document.querySelector(".admin-section-nav");
+  sectionNav?.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-admin-section]");
+    if (button) activateAdminSection(button.dataset.adminSection);
+  });
+  sectionNav?.addEventListener("keydown", (event) => {
+    const buttons = [...sectionNav.querySelectorAll("[data-admin-section]")];
+    const current = buttons.indexOf(document.activeElement);
+    if (current < 0 || !["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+    event.preventDefault();
+    const next = event.key === "Home" ? 0 : event.key === "End" ? buttons.length - 1 : (current + (event.key === "ArrowRight" ? 1 : buttons.length - 1)) % buttons.length;
+    buttons[next]?.focus();
+    buttons[next]?.click();
+  });
+  activateAdminSection(window.location.hash.slice(1) || "club-maintenance", false);
 
   trafficCard?.addEventListener("click", async (event) => {
     const periodButton = event.target.closest("[data-traffic-period]");

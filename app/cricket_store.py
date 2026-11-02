@@ -987,6 +987,7 @@ def _scorebook_is_club_side(match: dict[str, Any], team_name: str, club: dict[st
     names = {
         str(club.get("name") or "").strip().casefold(),
         str(club.get("short_name") or "").strip().casefold(),
+        *(str(alias or "").strip().casefold() for alias in club.get("aliases", []) or []),
     }
     names.discard("")
     return bool(team and (team in names or any(name in team or team in name for name in names)))
@@ -3618,10 +3619,12 @@ def normalize_store(store: dict[str, Any]) -> dict[str, Any]:
     club.setdefault("whatsapp_number", "14165550123")
     club.setdefault("about", "Club cricket operations")
     club["is_disabled"] = str(club.get("is_disabled") or "").strip().lower() in {"1", "true", "yes", "disabled"}
+    club["aliases"] = _normalize_club_aliases(club.get("aliases"))
     normalized["club"] = club
     clubs = [dict(item) for item in normalized.get("clubs", []) if isinstance(item, dict)]
     for item in clubs:
         item["is_disabled"] = str(item.get("is_disabled") or "").strip().lower() in {"1", "true", "yes", "disabled"}
+        item["aliases"] = _normalize_club_aliases(item.get("aliases"))
     if not any(str(item.get("id") or "").strip() == club["id"] for item in clubs):
         clubs.insert(0, dict(club))
     normalized["clubs"] = clubs
@@ -3889,6 +3892,21 @@ def _club_row_id(club: dict[str, Any]) -> str:
     return f"club-{_slug_token(club.get('short_name') or club.get('name') or 'heartlake', 'club')}"
 
 
+def _normalize_club_aliases(value: Any) -> list[str]:
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except (TypeError, ValueError):
+            parsed = re.split(r"[,;\n]", value)
+        values = parsed if isinstance(parsed, list) else [parsed]
+    elif isinstance(value, (list, tuple, set)):
+        values = list(value)
+    else:
+        values = []
+    aliases = [str(item or "").strip()[:120] for item in values if str(item or "").strip()]
+    return _dedupe_nonempty_strings(aliases)[:50]
+
+
 def _team_row_id(team: dict[str, Any], club_id: str = "") -> str:
     explicit = str(team.get("id", "") or "").strip()
     if explicit:
@@ -4012,7 +4030,8 @@ def _schema_tables() -> str:
       home_ground TEXT,
       whatsapp_number TEXT,
       about TEXT,
-      is_disabled INTEGER NOT NULL DEFAULT 0
+      is_disabled INTEGER NOT NULL DEFAULT 0,
+      aliases TEXT NOT NULL DEFAULT '[]'
     );
 
     CREATE TABLE IF NOT EXISTS teams (
@@ -4568,6 +4587,7 @@ def _normalized_clubs(store: dict[str, Any]) -> tuple[list[dict[str, Any]], str]
             "whatsapp_number": candidate.get("whatsapp_number") or primary.get("whatsapp_number") or "",
             "about": candidate.get("about") or primary.get("about") or "",
             "is_disabled": 1 if candidate.get("is_disabled") else 0,
+            "aliases": json.dumps(_normalize_club_aliases(candidate.get("aliases")), ensure_ascii=False),
         }
         if row["id"] in seen:
             continue
@@ -4659,8 +4679,8 @@ def _write_relational_state(connection: sqlite3.Connection, store: dict[str, Any
 
         connection.executemany(
             """
-            INSERT INTO clubs (id, name, short_name, city, country, season, home_ground, whatsapp_number, about, is_disabled)
-            VALUES (:id, :name, :short_name, :city, :country, :season, :home_ground, :whatsapp_number, :about, :is_disabled)
+            INSERT INTO clubs (id, name, short_name, city, country, season, home_ground, whatsapp_number, about, is_disabled, aliases)
+            VALUES (:id, :name, :short_name, :city, :country, :season, :home_ground, :whatsapp_number, :about, :is_disabled, :aliases)
             """,
             clubs,
         )
@@ -5287,6 +5307,9 @@ def _read_relational_state(connection: sqlite3.Connection) -> dict[str, Any]:
     llm_query_cache_rows = connection.execute("SELECT * FROM llm_query_cache ORDER BY created_at DESC, id DESC").fetchall()
 
     club_dicts = [dict(row) for row in clubs_rows]
+    for club in club_dicts:
+        club["aliases"] = _normalize_club_aliases(club.get("aliases"))
+        club["is_disabled"] = str(club.get("is_disabled") or "").strip().lower() in {"1", "true", "yes", "disabled"}
     club_by_id = {str(club["id"]): club for club in club_dicts if str(club.get("id") or "").strip()}
     primary_club = next(
         (
@@ -5733,9 +5756,9 @@ def _read_relational_state(connection: sqlite3.Connection) -> dict[str, Any]:
     llm_query_cache = [dict(row) for row in llm_query_cache_rows]
 
     store = {
-        "club": {key: primary_club.get(key, "") for key in ["id", "name", "short_name", "city", "country", "season", "home_ground", "whatsapp_number", "about"]},
+        "club": {key: primary_club.get(key, "") for key in ["id", "name", "short_name", "city", "country", "season", "home_ground", "whatsapp_number", "about", "is_disabled", "aliases"]},
         "clubs": [
-            {key: club.get(key, "") for key in ["id", "name", "short_name", "city", "country", "season", "home_ground", "whatsapp_number", "about"]}
+            {key: club.get(key, "") for key in ["id", "name", "short_name", "city", "country", "season", "home_ground", "whatsapp_number", "about", "is_disabled", "aliases"]}
             for club in club_dicts
         ],
         "members": members,
@@ -6174,6 +6197,12 @@ def ensure_database() -> None:
         if "is_disabled" not in existing_club_columns:
             try:
                 connection.execute("ALTER TABLE clubs ADD COLUMN is_disabled INTEGER NOT NULL DEFAULT 0")
+            except sqlite3.OperationalError as exc:
+                if "duplicate column name" not in str(exc).lower():
+                    raise
+        if "aliases" not in existing_club_columns:
+            try:
+                connection.execute("ALTER TABLE clubs ADD COLUMN aliases TEXT NOT NULL DEFAULT '[]'")
             except sqlite3.OperationalError as exc:
                 if "duplicate column name" not in str(exc).lower():
                     raise
@@ -7839,6 +7868,7 @@ def resolve_focus_club(store: dict[str, Any], focus_club_id: str = "") -> dict[s
                 str(club.get("id") or "").strip().lower(),
                 str(club.get("name") or "").strip().lower(),
                 str(club.get("short_name") or "").strip().lower(),
+                *(str(alias or "").strip().lower() for alias in club.get("aliases", []) or []),
             }
             if requested in identifiers:
                 return club
@@ -8053,19 +8083,18 @@ def _resolve_archive_club(archive: dict[str, Any], clubs: list[dict[str, Any]]) 
         club_id = str(club.get("id") or "").strip().lower()
         club_name = str(club.get("name") or "").strip().lower()
         club_short_name = str(club.get("short_name") or "").strip().lower()
+        club_aliases = {str(alias or "").strip().lower() for alias in club.get("aliases", []) or [] if str(alias or "").strip()}
+        identifiers = {club_name, club_short_name, *club_aliases}
         if club_id and club_id in current_ids:
             return True
-        if club_name and club_name in current_names:
+        if identifiers.intersection(current_names):
             return True
-        if club_short_name and club_short_name in current_names:
-            return True
-        if batting_team and batting_team in {club_name, club_short_name}:
+        if batting_team and batting_team in identifiers:
             return True
         if current_id and current_id == club_id and not batting_team:
             return True
-        if current_name and current_name in {club_name, club_short_name} and not batting_team:
+        if current_name and current_name in identifiers and not batting_team:
             return True
-        identifiers = {club_name, club_short_name}
         return any(identifier and identifier in summary_text for identifier in identifiers)
 
     matched = [club for club in clubs if club_matches(club)]

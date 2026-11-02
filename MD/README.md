@@ -47,7 +47,7 @@ These rules are the source of truth for the current implementation. If older log
 - The signed-in identity must come from the backend auth session and `app_users` row, not from the first matching player shown in the UI.
 - `member_id` is the canonical player link for the logged-in account. Display names, short names, and aliases are presentation-only labels.
 - The dashboard, clubs page, season fixtures page, and availability page must all use the logged-in user and active club from the backend payload first.
-- The clubs page may show only clubs linked to the signed-in identity. It must not show every club by default after login.
+- The signed-in Clubs page shows only the current club to superadmins and keeps the full registered-club list in Admin Center. Other signed-in users see only clubs linked to their identity; never show every club by default after login.
 - The dashboard player snapshot must default to the authenticated member linked to the account. It must not fall back to another roster member just because that member appears earlier in the list.
 - If a player belongs to multiple clubs, the player profile may show cross-club career history, but each club dashboard remains club-local.
 - Sign out must invalidate the server session and clear the browser auth state.
@@ -78,7 +78,10 @@ This section captures the user requirements in the order they were given and ref
 - Fix the superadmin Unique visitors panel returning an Internal Server Error; hourly, daily, monthly, and annual visitor buckets must use the America/Toronto time zone.
 
 ### November 2026 club administration
-- Add a superadmin Admin Center action to disable any club, re-enable it later, or permanently delete it. Disabling must preserve the club and its history while blocking its members from club access.
+- Add a dedicated Club Maintenance section in Admin Center to disable any club, re-enable it later, or permanently delete it. Keep disable/re-enable actions visible after the club details refresh. Put the other Admin Center tools in separate menu sections instead of displaying everything together. Disabling must preserve the club and its history while blocking its members from club access.
+
+### November 2026 Clubs page visibility
+- On the signed-in Clubs page, show a superadmin only their current club. Keep the full registered-club list available in Admin Center.
 
 ### October 2026 Azure infrastructure request
 - Move production persistence from App Service SQLite to one free-tier Azure SQL Database PaaS database in Canada Central; keep test on SQLite; replace the East US Key Vault with a Canada Central vault; create no resources outside Canada Central.
@@ -428,6 +431,7 @@ This section captures the user requirements in the order they were given and ref
 - The selected primary club drives the landing-page focus for upcoming events, upcoming matches, and club stats.
 - The app now includes dedicated multi-page flows for `Registration`, `Sign In`, `Club Selection`, `Season Setup`, `Player Availability`, and the club `Dashboard`.
 - Club selection shows the selected or primary club first and keeps the rest selectable.
+- The signed-in `/clubs` page limits superadmins to their current club; they manage and select other registered clubs through Admin Center. The Admin Center club selector continues to include all registered clubs.
 - The club dashboard is now club-focused and removes the in-page club picker so it reflects the selected club only.
 - Season setup stores fixtures with their own season year so `2026` and `2027` schedules can coexist.
 - Player availability is shown against the selected club's active season fixtures after login. Historical scorebook appearances are persisted as Available and displayed read-only in My availability.
@@ -621,7 +625,9 @@ When reviewing imported historical scorecards, use prompts or pasted review note
 
 ## Admin Center Controls
 
+- Admin Center uses a section menu for Club Maintenance, Overview, Unique Visitors, Scorecard Tools, Archives, Audit Log, and Fixtures. Club Maintenance opens by default and holds the club selector, disable/re-enable actions, permanent deletion, and roster cleanup.
 - Superadmins can disable a club from its Admin Center detail card after typing its exact name. A disabled club remains stored with its match history, is hidden from public and regular-user club choices, and its members cannot select or use it. Superadmins can still select the club in Admin Center and re-enable it. Permanent deletion remains a separate destructive action.
+- The client-rendered Club Maintenance card must show the club's active/disabled status and the matching Disable club or Re-enable club form after each club load, alongside the permanent-delete form.
 
 - Superadmin-only Admin Center actions include club cleanup and player cleanup.
 - Delete a player from the selected club only after confirming they should be removed from that club roster.
@@ -1214,6 +1220,10 @@ Model (soft launch, Oct 2026): keep the core cricket experience free; one paid p
 ## Change log
 
 - 2026-11-02: Added superadmin Admin Center controls to disable and re-enable clubs without deleting their match history. Disabled clubs are hidden from regular club choices and blocked for members; superadmins can restore them. Documented the user's request in Prompt And Requirement Log.
+- 2026-11-02: Restarted the local app on port 8090 and deployed the current ZIP package to the Canada Central Azure App Service. Azure reported `RuntimeSuccessful`; production `/api/health` returned HTTP 200. The full local QA suite was interrupted during external AI checks and did not complete.
+- 2026-11-02: Reorganized Admin Center into a section menu with a dedicated Club Maintenance panel and separate Overview, Unique Visitors, Scorecard Tools, Archives, Audit Log, and Fixtures panels. Added keyboard navigation and mobile-friendly menu scrolling.
+- 2026-11-02: Limited the signed-in Clubs page for superadmins to their current club. The full club directory remains available in Admin Center; refreshed the Clubs page script cache key.
+- 2026-11-02: Restored Disable club and Re-enable club controls in the client-rendered Club Maintenance card, which replaces the initial server-rendered details after loading. The card now shows active/disabled status and retains permanent deletion.
 - 2026-11-02: Fixed the Unique visitors Internal Server Error on Windows by adding the missing IANA time-zone database dependency; `America/Toronto` hourly and date grouping now resolves through `tzdata`.
 - 2026-11-02: Scoped Scorecards to the signed-in user's current club by default, included shared scorecards for either playing club, and restricted changing the club filter or viewing All clubs to superadmins. The API enforces the same scope; the superadmin selector lists registered clubs even without scorecards.
 - 2026-11-02: Allowed players from either participating club to enter live match scores. Restricted saved-ball corrections, undo, scorecard edits, lineup changes after initial setup, and historical edit mode to participating-club captains, club admins, and superadmins; opponent-club players can find the shared match in Quick Score.
