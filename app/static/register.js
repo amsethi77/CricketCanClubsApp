@@ -42,8 +42,8 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   function syncRoleVisibility() {
-    if (!memberRow || !roleSelect) return;
-    memberRow.hidden = roleSelect.value !== "player";
+    if (!memberRow) return;
+    memberRow.hidden = false;
   }
 
   function normalizeMobile(value) {
@@ -94,11 +94,9 @@ document.addEventListener("DOMContentLoaded", () => {
           `<option value="">Not linked yet</option>` +
           optionMarkup(
             data.members,
-            "name",
+            "id",
             (member) =>
-              `${member.full_name || member.name} · ${
-                (member.club_names || []).join(", ") || member.team_name || "No team"
-              }`
+              `${member.full_name || member.name} · ${member.player_id || "No Player ID"} · ${(member.club_names || []).join(", ") || member.team_name || "No team"}`
           );
       }
 
@@ -139,7 +137,11 @@ document.addEventListener("DOMContentLoaded", () => {
     password: document.getElementById("registerPassword")?.value || "",
     role: roleSelect?.value || "player",
     primary_club_id: clubSelect?.value || "",
-    member_name: memberSelect?.value || "",
+    member_name: displayNameInput?.value.trim() || "",
+    member_id: memberSelect?.value || "",
+    player_id: document.getElementById("registerPlayerId")?.value.trim() || "",
+    aliases: document.getElementById("registerAliases")?.value.trim() || "",
+    date_of_birth: document.getElementById("registerDateOfBirth")?.value || "",
     club_name: newClubNameInput?.value.trim() || "",
     club_city: newClubCityInput?.value.trim() || "",
     club_country: newClubCountryInput?.value.trim() || ""

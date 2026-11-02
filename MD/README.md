@@ -65,6 +65,9 @@ These rules are the source of truth for the current implementation. If older log
 
 This section captures the user requirements in the order they were given and refined during the build.
 
+### November 2026 club-specific player statistics
+- Keep player rankings and statistics exclusive to their club. A player should appear for both clubs only when the scorebook shows them playing on each club's side; opponent batting, bowling and fielding figures must not be counted for the selected club.
+
 ### October 2026 Azure infrastructure request
 - Move production persistence from App Service SQLite to one free-tier Azure SQL Database PaaS database in Canada Central; keep test on SQLite; replace the East US Key Vault with a Canada Central vault; create no resources outside Canada Central.
 - Delete the existing East US Key Vault named `testkeyvault179`.
@@ -143,6 +146,30 @@ This section captures the user requirements in the order they were given and ref
 
 ### November 2026 incomplete live-match deletion request
 - Show captains and admins a delete action in live scoring and on the live scorecard for an incomplete match, including one that has started but cannot be completed, while protecting completed matches and offering a path to start another match.
+
+### November 2026 traffic, player identity, birth date, and audience request
+- Give superadmins hourly, daily, monthly, and yearly visitor counts with the busiest time; show how many people are currently watching a live score.
+- Give every registered user/player a stable unique Player ID that can link different display names and aliases to the same profile; let users optionally provide their date of birth at registration and edit it on their profile.
+- Keep this README current, and confirm that `scripts/deploy_azure.sh` supports a manual ZIP deployment.
+
+### November 2026 Afghan Eagles roster isolation correction
+- Remove the false Heartlake memberships generated for Afghan Eagles players and prevent an unmapped primary team from inheriting the Heartlake club name.
+
+### November 2026 numeric Player ID sequence request
+- Use four-digit numeric Player IDs, assign `1000` to the superadmin, and increment other IDs from `1001`.
+
+### November 2026 local restart script request
+- Restart the local app so the current changes load, and add a reusable script for manual restarts.
+
+### November 2026 neutral Player ID and registration list request
+- Remove the CricketCanClubs brand prefix from Player IDs so IDs are globally neutral.
+- Create a Player ID when a player is discovered in a played game and show it in registration's Not linked yet list.
+
+### November 2026 club roster and stats isolation request
+- Keep Afghan Eagles players and statistics out of Heartlake screens unless those players are explicitly members of Heartlake or their records come from Heartlake matches.
+
+### November 2026 latest-code ZIP deployment request
+- Review the Markdown documentation and current code, then deploy the latest `main` code to Azure App Service using `scripts/deploy_azure.sh`.
 
 ### September 2026 requests
 - Navbar: no More on laptop unless links don't fit; on phone More sits at the edge. Profile and Admin live inside the account (initials) button; Assistant sits at the bottom right.
@@ -370,6 +397,14 @@ This section captures the user requirements in the order they were given and ref
 175. (Amit / Dhruvika, Oct 31, Afghan Eagles match on Azure) In the 2nd innings the Score page showed the 1st innings players, the same bowler was typed twice (Parvez / Parwez) and the scorecard was wrong.
 131. Find duplicate scorecards smartly with AI (Gemini, or Ollama offline), not only exact matches.
 
+## Site analytics, player identity, and live audience
+
+- Superadmins can open Admin Center's **Unique visitors** panel for distinct account/browser counts over the last 24 hours, 30 days, 12 months, and five years, with hourly, daily, monthly, and annual breakdowns. Buckets use `APP_TIMEZONE` (default `America/Toronto`); the busiest hour is summarized from the previous 30 days.
+- Site visits are recorded only for successful HTML page views, with one pseudonymous visitor key per signed-in account or anonymous first-party browser cookie. IP addresses, names, and contact details are not stored in the analytics table. Traffic collection begins after this version is deployed; earlier visits are not backfilled.
+- Every player/member has a four-digit numeric Player ID. The site superadmin is `1000`; other IDs are assigned sequentially starting at `1001`. Linked accounts share their player profile ID. Existing generated IDs are migrated on startup, IDs are retained across restarts and are not reused after deletion, and players found in played scorebooks receive an ID when added to registration options. The `Not linked yet` list displays each ID. Available IDs run through `9999`. Registration can link an unclaimed profile by Player ID or selection, and names entered during linking and profile aliases resolve to that same player. An ID already linked to another sign-in account cannot be claimed by registering again.
+- Date of birth is optional at registration and on the player profile. It is stored as an ISO date, future dates are rejected, and DOB is omitted from public data and club-wide dashboard member lists.
+- The public match page shows the current distinct viewer count while an innings is in progress. A viewer remains active for 45 seconds after their last scorecard poll; completed matches do not show a live count.
+
 ## Current behavior summary
 
 - `2026 Summer Season` is the running CricketClubApp season shown in the site header.
@@ -389,6 +424,7 @@ This section captures the user requirements in the order they were given and ref
 - Summary milestone counts use `25+`, `50+`, and `100+` bands.
 - Player availability is now set per scheduled game, not as one season-wide toggle.
 - The player profile is the cross-club career view, while the club dashboard stays club-local.
+- Club rosters use explicit club/team affiliations as the source of truth; an account's selected club cannot add someone with an unrelated saved team to that club. A primary team with no club mapping is not assigned to Heartlake by default. Club scorebook selectors use the focused club roster and current match lineup, not the global player directory.
 - TestClub now lives in the normal local runtime on `8090` with a two-innings scorebook fixture and a separate uploaded-image scorecard fixture.
 - The sign-in page now uses a split layout with the login form on the left and leader widgets on the right.
 - The sign-in page renders batting, bowling, and club leaderboards server-side so it stays visible even before the client script hydrates.
@@ -436,6 +472,13 @@ The server uses `app\data\cricketclubapp.db` by default and listens on port `809
 ```
 
 Open `http://127.0.0.1:8090`.
+
+To restart the local app and wait for its health endpoint, run:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\restart_local_app.ps1
+```
+The script checks that the port listener is this app before stopping it. Set `CRICKET_APP_PYTHON` to override the interpreter; logs are written under `%TEMP%`.
 
 ## Project shape
 
@@ -582,6 +625,8 @@ When reviewing imported historical scorecards, use prompts or pasted review note
 - Test locally first before any Azure deploy.
 - Azure deploys are manual and require explicit approval by setting `DEPLOY_APPROVED=yes`.
 - The deploy script packages the current working tree directly to Azure App Service, so GitHub commits are not required for deployment.
+- The ZIP includes the product and LLM documentation from `MD/`; on systems without `rsync` or `zip`, the script uses `cp` and Python's ZIP module. Set `PYTHON_BIN` when the default `python3` command is unavailable.
+- Manual ZIP deploy command: `DEPLOY_APPROVED=yes PYTHON_BIN=python3 bash scripts/deploy_azure.sh` (use the installed Python executable for `PYTHON_BIN` where needed). The script builds the ZIP, deploys it with Azure CLI, and restarts the App Service.
 
 ## Name Resolution
 
@@ -739,6 +784,11 @@ This section documents the work done in September 2026. See "Change log" at the 
 - Request: "train AI assistant to do better".
 - Every question answered by Gemini now gets a short club snapshot (`_assistant_club_snapshot` in `main.py`): club, season, today's date, who is asking, player names, upcoming matches, recent results, the latest published scorecards (scores, top scorer, best bowling), the top 5 run scorers and wicket takers for the last two seasons with numbers, and the asker's own season numbers. Names and cricket numbers only, never phone, email or age.
 - Better instructions (`APP_GUIDE` in `app/ai_chat.py`): the new menu (Clubs and Stats), give real names and numbers straight away, "me / my" means the person asking, follow-ups use the earlier messages, ask one short question when unclear, reply in the person's language, bold names and numbers.
+
+### Club-specific player stats (Nov 2 2026)
+- Club rankings, selected-year Home rankings, and club Stats are calculated from the scorebook innings for the selected club. Batting counts only when that club is batting; wickets and catches count only when that club is bowling/fielding. Highest scores and milestones use the same team-side filter. The combined fixture performance list contains both teams and must not be used as-is for club rankings.
+- Players with appearances for two clubs retain their stats for each club, based on the side they played on in each scorebook. For old fixtures without scorebook innings, only known club members' manually entered performances are included. A club also receives its players' scorebook stats from an opponent-owned fixture when its team is recorded as batting or bowling; fixture ownership remains with the original club.
+- The dashboard's player summary and season-by-season rows are scoped to the selected club as well. The focused-club snapshot uses the fresh filtered rankings instead of stale materialized top-batter rows. Cross-club history remains available in player profiles, where memberships are shown separately.
 - Built-in answers (no AI needed): "where are the stats" and the new "switch club" (Clubs in the menu).
 
 ### Availability requests and match reminders (Oct 29 2026)
@@ -1145,7 +1195,17 @@ Model (soft launch, Oct 2026): keep the core cricket experience free; one paid p
 5. Stripe (optional, test mode): fill `.env`, restart, run `stripe listen`, choose Pro monthly on `/pricing` and pay with card `4242 4242 4242 4242`; the plan changes to Pro.
 
 ## Change log
+- 2026-11-02: Fixed club player stats leaking across teams: Home selected-year rankings, Stats summaries and season trends, highest scores, milestones, and focused-club snapshot leaders now use club-filtered scorebook performance. Stale materialized top-batter rows can no longer override the live selected-club rankings. Afghan Eagles' figures no longer appear as Heartlake stats unless they actually played on Heartlake's side. See "Club-specific player stats".
+- 2026-11-02: Afghan Eagles club stats now include Shahid and other recorded players' batting/bowling figures from their innings in a Heartlake-owned fixture, without moving the fixture out of Heartlake. See "Club-specific player stats".
 
+- 2026-11-02: Fixed the remaining Afghan Eagles roster bleed: unmapped primary teams no longer inherit Heartlake as their club, and unrelated team affiliations block fallback to a user-selected club.
+- 2026-11-02: Replaced long hashed Player IDs with persisted four-digit numeric IDs (`1000` for the superadmin; other IDs increment from `1001`) and migrated existing IDs.
+- 2026-11-02: Added `scripts/restart_local_app.ps1` to safely stop the app on port 8090, relaunch it hidden, and wait for `/api/health`; documented manual use.
+- 2026-11-02: Changed generated Player IDs to globally neutral `P-` IDs with 128 hash bits, migrated legacy `CCP-` IDs, assigned IDs as played-game players enter the directory, and surfaced those IDs in registration's Not linked yet list.
+- 2026-11-02: Prevented account-selected clubs from overwriting explicit player-club memberships; kept club rosters club-specific and removed global players from focused club scorebook selectors, so Afghan Eagles players and stats do not appear under Heartlake without Heartlake membership or match records.
+- 2026-11-02: Added superadmin unique-visitor analytics with hourly/daily/monthly/yearly reports and peak hour; stable Player IDs for accounts and profiles with name/alias linking; optional date of birth at registration and on the player profile; and a live scorecard viewer count. Updated the manual ZIP deployment instructions.
+- 2026-11-01: Prepared `scripts/deploy_azure.sh` for this repository and Windows Git Bash: stage `MD/README.md` and `MD/READMELLM.md` under the expected names, use `cp` / Python ZIP fallbacks when `rsync` / `zip` are unavailable, and support an explicit `PYTHON_BIN`. Verified the local app health endpoint and `/score` before deployment.
+- 2026-11-01: Deployed `main` (`7b8238b`) to `cricketcanclubs-web` in Canada Central with `scripts/deploy_azure.sh`. Azure reported `RuntimeSuccessful`; `/api/health`, `/api/scorecards/reader`, and `/score` returned HTTP 200. Confirmed the Gemini setting remains a Key Vault reference, and the ZIP had no runtime data, uploads, duplicates, database files, or `.env` entries.
 - 2026-11-01: Completed retired-out scoring and return changes: record RO without runs, a legal ball, bowler credit, or a team wicket; show temporary retired status until the batter returns; clear it and resume their figures on return; persist incoming batters; and keep returned batters scoreable. Added migration and regression coverage. The initial return-picker release was deployed to Azure with the Gemini Key Vault reference intact and runtime data/secrets excluded.
 - 2026-11-01: Fixed innings completion and scorecard presentation for retired-out returns. Exclude temporary retirements from team wicket totals and all-out status, while preserving the retirement event to support replacement and later return. Added regression coverage for two retired-out batters returning and scoring; updated return labels and Azure deployment notes.
 - 2026-11-01: Deployed the retired-out return option to the Canada Central Azure App Service. Production returned HTTP 200, the scorecard reader reported Gemini, and Quick Score served the cache-busted bundle with the return picker. Confirmed the Gemini Key Vault reference remained configured; the package excluded runtime data and secrets.

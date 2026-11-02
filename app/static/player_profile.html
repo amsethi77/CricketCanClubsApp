@@ -26,6 +26,8 @@
           <div id="playerProfileStatus" class="status-banner" hidden></div>
           <form id="playerProfileForm" class="form-grid profile-form">
             <label class="profile-field"><span>Full name</span><input id="profileFullName" type="text" placeholder="Full name" /></label>
+            <label class="profile-field"><span>Player ID</span><input id="profilePlayerId" type="text" readonly aria-describedby="profilePlayerIdHint" /><small id="profilePlayerIdHint">Permanent ID for this player profile; share it to link another account.</small></label>
+            <label class="profile-field"><span>Date of birth <small>(optional)</small></span><input id="profileDateOfBirth" type="date" autocomplete="bday" /></label>
             <label class="profile-field"><span>Gender</span>
               <select id="profileGender">
                 <option value="">Gender</option>
@@ -77,7 +79,7 @@
       </section>
     </div>
     <script src="/assets/multipage.js?v=20261030f"></script>
-    <script src="/assets/player_profile.js?v=20260510a"></script>
+    <script src="/assets/player_profile.js?v=20261102a"></script>
     <script src="/assets/account_delete.js?v=20261027a"></script>
   </body>
 </html>

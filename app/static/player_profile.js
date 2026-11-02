@@ -72,7 +72,9 @@ function renderSnapshot() {
     .filter(Boolean)
     .join(", ") || "No teams stored";
   snapshot.innerHTML = [
+    summaryCard("Player ID", member.player_id || "Pending"),
     summaryCard("Full Name", member.full_name || member.name || "Player"),
+    summaryCard("Date of Birth", member.date_of_birth || "Not provided"),
     summaryCard("Mobile", member.phone || "No mobile stored"),
     summaryCard("Email", member.email || "No email stored"),
     summaryCard("Age", member.age || "TBD"),
@@ -136,6 +138,8 @@ function fillForm() {
   summary.textContent = `Selected club: ${payload?.club?.name || "Selected club"} · ${member.role || "Player"} · ${member.phone || "No mobile stored"}`;
   summary.hidden = false;
   document.getElementById("profileFullName").value = member.full_name || "";
+  document.getElementById("profilePlayerId").value = member.player_id || "";
+  document.getElementById("profileDateOfBirth").value = member.date_of_birth || "";
   genderSelect.value = member.gender || "";
   document.getElementById("profileAge").value = member.age || "";
   document.getElementById("profilePhone").value = member.phone || "";
@@ -190,6 +194,7 @@ form.addEventListener("submit", async (event) => {
         full_name: document.getElementById("profileFullName").value.trim(),
         gender: genderSelect.value,
         age: Number(document.getElementById("profileAge").value || 0),
+        date_of_birth: document.getElementById("profileDateOfBirth").value || "",
         phone: document.getElementById("profilePhone").value.trim(),
         email: document.getElementById("profileEmail").value.trim(),
         role: document.getElementById("profileRole").value.trim(),

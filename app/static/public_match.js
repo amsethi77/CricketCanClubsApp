@@ -298,6 +298,11 @@
       })
       .join("");
     const status = statusLine(match, state);
+    const showViewerCount = !done && (isLive || inBreak || Number(match.live_viewers || 0) > 0);
+    const viewerCount = Math.max(0, Number(match.live_viewers || 0));
+    const viewerBadge = showViewerCount
+      ? `<span class="pm-watch-count" aria-label="${viewerCount} watching live">${viewerCount} watching</span>`
+      : "";
     // CRR / RRR / last 5 overs right under the situation, like Cricbuzz
     let rates = "";
     if (current && !done && state.facts) {
@@ -322,7 +327,7 @@
       .map(esc)
       .join(", ");
     return `<section class="pm-head">
-      <div class="pm-head-top">${pill}<span class="pm-updated" id="pmUpdated"></span></div>
+      <div class="pm-head-top">${pill}${viewerBadge}<span class="pm-updated" id="pmUpdated"></span></div>
       <div class="pm-teams">${rows}</div>
       <p class="pm-status ${status.cls}">${esc(status.text)}${status.cls === "live" || status.cls === "break" ? "." : ""}</p>
       ${rates}

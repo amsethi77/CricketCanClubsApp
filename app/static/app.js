@@ -1949,38 +1949,32 @@ function fillSelectOptions(select, values, placeholder, selectedValue = "") {
 
 function populateScorebookPlayerSelects(match, innings) {
   const clubMembers = Array.isArray(state.dashboard?.members) ? state.dashboard.members : [];
-  const allMembers = Array.isArray(state.dashboard?.all_members) ? state.dashboard.all_members : clubMembers;
   const selectedXi = selectedPlayingXiNames(match)
     .map((name) => String(name || "").trim())
     .filter(Boolean);
   const inningBatters = Array.isArray(innings?.batters) ? innings.batters.map((item) => item?.player_name || "") : [];
   const inningBowlers = Array.isArray(innings?.bowlers) ? innings.bowlers.map((item) => item?.player_name || "") : [];
   const clubNames = clubMembers.map((member) => member?.name || "");
-  const allNames = allMembers.map((member) => member?.name || "");
   const battingPool = uniqueNonEmptyStrings([
     ...(selectedXi.length ? selectedXi : []),
     ...inningBatters,
     ...clubNames,
-    ...allNames,
     state.selectedPlayerName || "",
   ]);
   const bowlingPool = uniqueNonEmptyStrings([
     ...(selectedXi.length ? selectedXi : []),
     ...inningBowlers,
     ...clubNames,
-    ...allNames,
     state.selectedPlayerName || "",
   ]);
   const wicketPool = uniqueNonEmptyStrings([
     ...(selectedXi.length ? selectedXi : []),
     ...inningBatters,
     ...clubNames,
-    ...allNames,
   ]);
   const fielderPool = uniqueNonEmptyStrings([
     ...(selectedXi.length ? selectedXi : []),
     ...clubNames,
-    ...allNames,
   ]);
   fillSelectOptions(elements.scorebookStrikerInput, battingPool, "Select striker", elements.scorebookStrikerInput.value || innings?.state?.current_striker || "");
   fillSelectOptions(elements.scorebookNonStrikerInput, battingPool, "Select non-striker", elements.scorebookNonStrikerInput.value || innings?.state?.current_non_striker || "");

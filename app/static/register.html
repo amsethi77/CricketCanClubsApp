@@ -37,6 +37,16 @@
                   <span class="si-input"><span class="si-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 4-6 8-6s8 2 8 6"/></svg></span><input id="registerDisplayName" type="text" placeholder="e.g. Amit Sethi" autocomplete="name" required /></span>
                 </label>
                 <div class="rg-row">
+                  <label class="si-field" for="registerDateOfBirth">
+                    <span class="si-label">Date of birth <small>(optional)</small></span>
+                    <span class="si-input rg-plain"><input id="registerDateOfBirth" type="date" autocomplete="bday" /></span>
+                  </label>
+                  <label class="si-field" for="registerAliases">
+                    <span class="si-label">Other names / aliases <small>(optional)</small></span>
+                    <span class="si-input rg-plain"><input id="registerAliases" type="text" placeholder="Comma separated" /></span>
+                  </label>
+                </div>
+                <div class="rg-row">
                   <label class="si-field" for="registerMobile">
                     <span class="si-label">Mobile</span>
                     <span class="si-input"><span class="si-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="7" y="2" width="10" height="20" rx="2"/><path d="M11 18h2"/></svg></span><input id="registerMobile" type="tel" placeholder="4165550123" autocomplete="tel" /></span>
@@ -72,8 +82,12 @@
                   <select id="registerClub" class="rg-select"></select>
                 </label>
                 <div id="registerMemberRow" class="wide rg-full">
+                  <label class="si-field" for="registerPlayerId">
+                    <span class="si-label">Existing Player ID <small>(optional)</small></span>
+                    <span class="si-input rg-plain"><input id="registerPlayerId" type="text" placeholder="1001" autocomplete="off" /></span>
+                  </label>
                   <label class="si-field" for="registerMember">
-                    <span class="si-label">Link to your player profile <small>(if your club already added you)</small></span>
+                    <span class="si-label">Or select your existing player profile</span>
                     <select id="registerMember" class="rg-select"></select>
                   </label>
                 </div>
@@ -142,6 +156,6 @@
         }
       })();
     </script>
-    <script src="/assets/register.js?v=20260511j"></script>
+    <script src="/assets/register.js?v=20261102a"></script>
   </body>
 </html>

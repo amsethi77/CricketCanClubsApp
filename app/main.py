@@ -10,6 +10,7 @@ import shutil
 import threading
 import time as time_module
 import httpx
+from collections import Counter, defaultdict
 from copy import deepcopy
 from urllib import request
 from urllib.parse import urlencode
@@ -322,6 +323,11 @@ async def _log_http_requests(request: Request, call_next):
     start = datetime.utcnow()
     path = request.url.path
     query = request.url.query
+    visitor_cookie = str(request.cookies.get("ccVisitorId") or "").strip().lower()
+    issue_visitor_cookie = not re.fullmatch(r"[a-f0-9]{32}", visitor_cookie)
+    visitor_id = uuid.uuid4().hex if issue_visitor_cookie else visitor_cookie
+    request.state.cc_visitor_id = visitor_id
+    audience_poll = request.method == "GET" and path.startswith("/api/public/match/") and not path.endswith(".pdf")
     if logger.isEnabledFor(logging.DEBUG):
         logger.debug(
             "HTTP request started. method=%s path=%s query=%s auth_cookie=%s",
@@ -361,6 +367,26 @@ async def _log_http_requests(request: Request, call_next):
         )
     if path.startswith("/assets/"):
         response.headers["Cache-Control"] = "no-cache"
+    is_html_page = (
+        request.method == "GET"
+        and getattr(response, "status_code", 500) < 400
+        and response.headers.get("content-type", "").lower().startswith("text/html")
+    )
+    if is_html_page:
+        try:
+            _record_site_visit(request, visitor_id, path)
+        except Exception:
+            logger.exception("Could not record site visit.")
+    if issue_visitor_cookie and (is_html_page or audience_poll):
+        response.set_cookie(
+            "ccVisitorId",
+            visitor_id,
+            max_age=60 * 60 * 24 * 365,
+            httponly=True,
+            secure=request.url.scheme == "https",
+            samesite="lax",
+            path="/",
+        )
     return response
 
 app.mount("/assets", StaticFiles(directory=STATIC_DIR), name="assets")
@@ -523,6 +549,66 @@ def _require_page_session(request: Request) -> tuple[sqlite3.Row, str] | Redirec
         return _auth_user_from_token(token)
     except HTTPException:
         return _redirect_to_signin()
+
+
+def _site_visitor_key(request: Request, visitor_id: str | None = None) -> str:
+    ensure_auth_schema()
+    token = _auth_token_from_request(request)
+    if token:
+        with _auth_connection() as connection:
+            row = connection.execute(
+                "SELECT user_id FROM app_auth_sessions WHERE token = ? AND ended_at IS NULL",
+                (token,),
+            ).fetchone()
+        if row:
+            return f"user:{int(row['user_id'])}"
+    clean_id = str(visitor_id or getattr(request.state, "cc_visitor_id", "") or "").strip()
+    return "visitor:" + hashlib.sha256(clean_id.encode("utf-8")).hexdigest()
+
+
+def _record_site_visit(request: Request, visitor_id: str, page_path: str) -> None:
+    ensure_auth_schema()
+    now = datetime.now(timezone.utc).replace(microsecond=0)
+    timestamp = now.isoformat().replace("+00:00", "Z")
+    bucket = now.replace(minute=0, second=0).isoformat().replace("+00:00", "Z")
+    visitor_key = _site_visitor_key(request, visitor_id)
+    with _auth_connection() as connection:
+        connection.execute(
+            """
+            INSERT INTO app_analytics_visits(visitor_key, bucket_hour, visited_at, page_path)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(visitor_key, bucket_hour) DO UPDATE SET
+              visited_at = excluded.visited_at,
+              page_path = excluded.page_path
+            """,
+            (visitor_key, bucket, timestamp, page_path[:300]),
+        )
+
+
+def _touch_live_match_viewer(match_id: str, request: Request) -> int:
+    ensure_auth_schema()
+    now = datetime.now(timezone.utc).replace(microsecond=0)
+    timestamp = now.isoformat().replace("+00:00", "Z")
+    active_since = (now - timedelta(seconds=45)).isoformat().replace("+00:00", "Z")
+    visitor_key = _site_visitor_key(request)
+    with _auth_connection() as connection:
+        connection.execute(
+            """
+            INSERT INTO app_live_match_viewers(match_id, visitor_key, last_seen_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(match_id, visitor_key) DO UPDATE SET last_seen_at = excluded.last_seen_at
+            """,
+            (str(match_id), visitor_key, timestamp),
+        )
+        connection.execute(
+            "DELETE FROM app_live_match_viewers WHERE last_seen_at < ?",
+            ((now - timedelta(days=1)).isoformat().replace("+00:00", "Z"),),
+        )
+        row = connection.execute(
+            "SELECT COUNT(*) FROM app_live_match_viewers WHERE match_id = ? AND last_seen_at >= ?",
+            (str(match_id), active_since),
+        ).fetchone()
+    return int(row[0] or 0)
 
 def normalize_name(name: str) -> str:
     return (name or "").strip().lower()
@@ -1175,6 +1261,7 @@ def _grow_lineups_with_new_players(match_id: str, match: dict[str, Any], innings
         lineups[side] = current
     if changed:
         try:
+            load_store()
             with _auth_connection() as connection:
                 _ensure_extra_match_tables(connection)
                 connection.execute(
@@ -1615,6 +1702,10 @@ class RegisterRequest(BaseModel):
     roles: list[str] | str | None = None
     primary_club_id: str = ""
     member_name: str = ""
+    member_id: str = ""
+    player_id: str = ""
+    aliases: list[str] | str = []
+    date_of_birth: str = ""
     club_name: str = ""
     club_city: str = ""
     club_country: str = ""
@@ -1661,6 +1752,7 @@ class PlayerSelfProfileRequest(BaseModel):
     full_name: str = ""
     gender: str = ""
     age: int = 0
+    date_of_birth: str = ""
     role: str = ""
     batting_style: str = ""
     bowling_style: str = ""
@@ -1864,6 +1956,7 @@ def ensure_auth_schema() -> None:
         if _AUTH_SCHEMA_BOOTSTRAP_DONE:
             return
         try:
+            load_store()
             with _auth_connection() as connection:
                 connection.executescript(
                     """
@@ -1875,6 +1968,7 @@ def ensure_auth_schema() -> None:
               password_hash TEXT NOT NULL,
               role TEXT NOT NULL,
               member_id TEXT,
+              player_id TEXT,
               primary_club_id TEXT,
               created_at TEXT NOT NULL,
               FOREIGN KEY (member_id) REFERENCES members(id) ON DELETE SET NULL,
@@ -1945,13 +2039,37 @@ def ensure_auth_schema() -> None:
               source TEXT,
               FOREIGN KEY (actor_user_id) REFERENCES app_users(id) ON DELETE SET NULL
             );
+
+                    CREATE TABLE IF NOT EXISTS app_analytics_visits (
+              visitor_key TEXT NOT NULL,
+              bucket_hour TEXT NOT NULL,
+              visited_at TEXT NOT NULL,
+              page_path TEXT NOT NULL,
+              PRIMARY KEY (visitor_key, bucket_hour)
+            );
+
+                    CREATE TABLE IF NOT EXISTS app_live_match_viewers (
+              match_id TEXT NOT NULL,
+              visitor_key TEXT NOT NULL,
+              last_seen_at TEXT NOT NULL,
+              PRIMARY KEY (match_id, visitor_key)
+            );
+
+                    CREATE INDEX IF NOT EXISTS idx_analytics_visits_time ON app_analytics_visits(visited_at);
+                    CREATE INDEX IF NOT EXISTS idx_live_match_viewers_time ON app_live_match_viewers(match_id, last_seen_at);
                     """
                 )
+                user_columns = {str(row[1]) for row in connection.execute("PRAGMA table_info(app_users)").fetchall()}
+                if "player_id" not in user_columns:
+                    connection.execute("ALTER TABLE app_users ADD COLUMN player_id TEXT")
+
+                connection.execute("CREATE INDEX IF NOT EXISTS idx_app_users_player_id ON app_users(player_id)")
                 _seed_role_catalog(connection)
                 _sync_role_permissions(connection)
                 _migrate_multi_role_assignments(connection)
                 _migrate_auth_sessions(connection)
                 subscriptions.ensure_schema(connection)
+            load_store()
         except sqlite3.OperationalError as exc:
             if "locked" not in str(exc).lower():
                 raise
@@ -2295,6 +2413,7 @@ def _auth_user_payload(user_row: sqlite3.Row, current_club_id: str = "") -> dict
         "effective_role": effective_role,
         "permissions": permissions,
         "member_id": user_row["member_id"] or "",
+        "player_id": str(user_row["player_id"] or (member.get("player_id") if member else "") or ("1000" if str(user_row["role"] or "").lower() == "superadmin" else "")),
         "viewer_member_name": member_name,
         "viewer_member_full_name": member_full_name,
         "primary_club_id": user_row["primary_club_id"] or "",
@@ -2435,6 +2554,7 @@ def _member_for_user(store: dict[str, Any], user_row: sqlite3.Row) -> dict[str, 
 def _member_identity_keys(member: dict[str, Any]) -> set[str]:
     keys: set[str] = set()
     for value in [
+        member.get("player_id"),
         member.get("normalized_name"),
         member.get("name"),
         member.get("full_name"),
@@ -2451,6 +2571,22 @@ def _member_matches_name(member: dict[str, Any], candidate: str) -> bool:
     if not normalized_candidate:
         return False
     return normalized_candidate in _member_identity_keys(member)
+
+
+def _validated_date_of_birth(value: str | None) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    try:
+        parsed = date.fromisoformat(text)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Enter a valid date of birth.") from exc
+    if parsed > _current_local_date():
+        raise HTTPException(status_code=400, detail="Date of birth cannot be in the future.")
+    return parsed.isoformat()
+
+
+
 
 
 def _existing_user_for_member(connection: sqlite3.Connection, member_id: str) -> sqlite3.Row | None:
@@ -2623,6 +2759,84 @@ def _require_superadmin(token: str | None) -> tuple[sqlite3.Row, str]:
     if _effective_role_name(user_row, current_club_id) != "superadmin":
         raise HTTPException(status_code=403, detail="Only superadmin can perform this action.")
     return user_row, current_club_id
+
+
+@app.get("/api/admin/traffic")
+def admin_traffic(x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
+    _require_superadmin(x_auth_token)
+    zone = ZoneInfo(APP_TIMEZONE)
+    now_utc = datetime.now(timezone.utc)
+    now_local = now_utc.astimezone(zone)
+    cutoff = (now_utc - timedelta(days=366 * 5 + 5)).isoformat(timespec="seconds").replace("+00:00", "Z")
+    ensure_auth_schema()
+    with _auth_connection() as connection:
+        rows = connection.execute(
+            "SELECT visitor_key, visited_at FROM app_analytics_visits WHERE visited_at >= ?",
+            (cutoff,),
+        ).fetchall()
+
+    hourly_visitors: dict[str, set[str]] = defaultdict(set)
+    daily_visitors: dict[str, set[str]] = defaultdict(set)
+    monthly_visitors: dict[str, set[str]] = defaultdict(set)
+    annual_visitors: dict[str, set[str]] = defaultdict(set)
+    peak_counts: Counter[int] = Counter()
+    parsed_rows: list[tuple[str, datetime]] = []
+    for row in rows:
+        try:
+            visited = datetime.fromisoformat(str(row["visited_at"]).replace("Z", "+00:00")).astimezone(zone)
+        except (TypeError, ValueError):
+            continue
+        visitor_key = str(row["visitor_key"] or "")
+        parsed_rows.append((visitor_key, visited))
+        hour_key = visited.strftime("%Y-%m-%dT%H:00")
+        day_key = visited.date().isoformat()
+        month_key = visited.strftime("%Y-%m")
+        year_key = visited.strftime("%Y")
+        hourly_visitors[hour_key].add(visitor_key)
+        daily_visitors[day_key].add(visitor_key)
+        monthly_visitors[month_key].add(visitor_key)
+        annual_visitors[year_key].add(visitor_key)
+        if visited >= now_local - timedelta(days=30):
+            peak_counts[visited.hour] += 1
+
+    hour_start = now_local.replace(minute=0, second=0, microsecond=0) - timedelta(hours=23)
+    hourly_buckets = [hour_start + timedelta(hours=index) for index in range(24)]
+    day_start = now_local.date() - timedelta(days=29)
+    daily_buckets = [day_start + timedelta(days=index) for index in range(30)]
+    month_total = now_local.year * 12 + now_local.month - 1
+    monthly_buckets = [
+        (month_total - offset) for offset in range(11, -1, -1)
+    ]
+    annual_buckets = list(range(now_local.year - 4, now_local.year + 1))
+
+    def month_label(value: int) -> str:
+        year, month_index = divmod(value, 12)
+        return f"{year:04d}-{month_index + 1:02d}"
+
+    def series(buckets: list[Any], source: dict[str, set[str]], key_fn: Any, label_fn: Any) -> list[dict[str, Any]]:
+        output = []
+        for bucket_value in buckets:
+            key = key_fn(bucket_value)
+            output.append({"bucket": key, "label": label_fn(bucket_value), "visitors": len(source.get(key, set()))})
+        return output
+
+    totals = {
+        "hourly": len({visitor for visitor, visited in parsed_rows if visited >= now_local - timedelta(hours=24)}),
+        "daily": len({visitor for visitor, visited in parsed_rows if visited >= now_local - timedelta(days=30)}),
+        "monthly": len({visitor for visitor, visited in parsed_rows if visited >= now_local - timedelta(days=366)}),
+        "annually": len({visitor for visitor, visited in parsed_rows if visited >= now_local - timedelta(days=366 * 5)}),
+    }
+    peak_hour = max(range(24), key=lambda hour: (peak_counts[hour], -hour))
+    return {
+        "timezone": APP_TIMEZONE,
+        "generated_at": now_iso(),
+        "totals": totals,
+        "peak_time": {"hour": peak_hour, "label": f"{peak_hour:02d}:00–{(peak_hour + 1) % 24:02d}:00", "visitors": peak_counts[peak_hour], "window_days": 30},
+        "hourly": series(hourly_buckets, hourly_visitors, lambda value: value.strftime("%Y-%m-%dT%H:00"), lambda value: value.strftime("%b %d, %I %p").replace(" 0", " ")),
+        "daily": series(daily_buckets, daily_visitors, lambda value: value.isoformat(), lambda value: value.strftime("%b %d").replace(" 0", " ")),
+        "monthly": series(monthly_buckets, monthly_visitors, lambda value: month_label(value), lambda value: month_label(value)),
+        "annually": series(annual_buckets, annual_visitors, lambda value: str(value), lambda value: str(value)),
+    }
 
 
 def _club_matches_removed_club(club_id: str, club_name: str, removed_club: dict[str, Any]) -> bool:
@@ -5272,6 +5486,16 @@ def public_match(
             lineups = _match_lineups(match_id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
+    scorebook = match.get("scorebook") if isinstance(match.get("scorebook"), dict) else {}
+    innings = scorebook.get("innings") if isinstance(scorebook.get("innings"), list) else []
+    has_started = str(match.get("status") or "").strip().lower() == "live" or any(
+        isinstance(inning, dict) and bool(inning.get("balls")) for inning in innings
+    )
+    is_completed = _fixture_is_completed(fixture) if fixture else (
+        str(match.get("status") or "").strip().lower() == "completed"
+        or str(match.get("result") or "").strip().lower() not in {"", "tbd"}
+    )
+    match["live_viewers"] = _touch_live_match_viewer(match_id, request) if has_started and not is_completed else 0
     can_delete_incomplete = False
     token = _auth_token_from_request(request, x_auth_token)
     if token and fixture and not _fixture_is_completed(fixture):
@@ -5633,6 +5857,25 @@ def _admin_center_html(request: Request) -> HTMLResponse:
             </div>
 
             <div class="detail-stack">
+              <div class="stack-card" id="adminTrafficCard">
+                <div class="panel-head compact-head">
+                  <div>
+                    <p class="section-kicker">Site audience</p>
+                    <h2>Unique visitors</h2>
+                  </div>
+                  <button id="adminTrafficRefreshButton" class="secondary-button" type="button">Refresh</button>
+                </div>
+                <p class="lede">Distinct signed-in accounts or anonymous browsers, grouped in the {html.escape(APP_TIMEZONE)} time zone.</p>
+                <div id="adminTrafficSummary" class="summary-grid compact-summary-grid"><p class="empty-state">Loading traffic...</p></div>
+                <p id="adminTrafficPeak" class="lede"></p>
+                <div class="toolbar-actions" role="group" aria-label="Visitor reporting period">
+                  <button class="secondary-button" type="button" data-traffic-period="hourly">Hourly</button>
+                  <button class="secondary-button" type="button" data-traffic-period="daily">Daily</button>
+                  <button class="secondary-button" type="button" data-traffic-period="monthly">Monthly</button>
+                  <button class="secondary-button" type="button" data-traffic-period="annually">Yearly</button>
+                </div>
+                <div id="adminTrafficSeries" class="archive-list"><p class="empty-state">Traffic will load after the page finishes loading.</p></div>
+              </div>
               <div class="stack-card" id="adminRereadCard" hidden>
                 <div class="panel-head compact-head">
                   <div>
@@ -5715,7 +5958,7 @@ def _admin_center_html(request: Request) -> HTMLResponse:
         </div>
         <script src="/assets/multipage.js?v=20261025a"></script>
         <script src="/assets/scorecard.js?v=20261019a"></script>
-        <script src="/assets/admin_center.js?v=20261017a"></script>
+        <script src="/assets/admin_center.js?v=20261102a"></script>
         <script src="/assets/admin_reread.js?v=20261024a"></script>
       </body>
     </html>
@@ -5910,6 +6153,7 @@ def signout_page(request: Request) -> HTMLResponse:
     token = _auth_token_from_request(request)
     if token:
         try:
+            load_store()
             with _auth_connection() as connection:
                 _end_auth_session(connection, token)
         except Exception:
@@ -6132,6 +6376,13 @@ def dashboard(
             current_club_id = ""
     resolved_focus_club_id = current_club_id or resolved_focus_club_id
     dashboard_data = current_dashboard(store, resolved_focus_club_id, requested_season_year)
+    for member_list_key in ("members", "all_members"):
+        if isinstance(dashboard_data.get(member_list_key), list):
+            dashboard_data[member_list_key] = [
+                {key: value for key, value in member.items() if key != "date_of_birth"}
+                for member in dashboard_data[member_list_key]
+                if isinstance(member, dict)
+            ]
     if user_row:
         dashboard_data["user"] = _auth_user_payload(user_row, current_club_id or resolved_focus_club_id or "")
     return dashboard_data
@@ -6181,6 +6432,7 @@ def auth_options() -> dict[str, Any]:
         "members": [
             {
                 "id": member.get("id", ""),
+                "player_id": member.get("player_id", ""),
                 "name": member.get("name", ""),
                 "full_name": member.get("full_name", ""),
                 "team_name": member.get("team_name", ""),
@@ -6369,6 +6621,10 @@ def _register_played_fixture_teams(store: dict[str, Any]) -> bool:
                     store.setdefault("members", []).append(member)
                     changed = True
 
+                current_player_id = str(member.get("player_id") or "").strip()
+                if len(current_player_id) != 4 or not current_player_id.isdigit():
+                    member["player_id"] = ""
+                    changed = True
                 memberships = member.get("team_memberships", [])
                 if isinstance(memberships, str):
                     memberships = [item.strip() for item in memberships.split(",") if item.strip()]
@@ -6449,6 +6705,10 @@ def _register_played_fixture_teams(store: dict[str, Any]) -> bool:
 
     if changed:
         save_store(store)
+        saved_ids = {str(item.get("id") or ""): str(item.get("player_id") or "") for item in load_store().get("members", [])}
+        for item in store.get("members", []):
+            if str(item.get("id") or "") in saved_ids:
+                item["player_id"] = saved_ids[str(item.get("id") or "")]
     return changed
 
 
@@ -6495,7 +6755,6 @@ def register(request: RegisterRequest, response: Response) -> dict[str, Any]:
         if not requested_roles:
             requested_roles = ["player"]
         role = requested_roles[0]
-        member_roles = {"player", "captain", "club_admin", "admin"}
         if role == "superadmin":
             raise HTTPException(status_code=403, detail="Superadmin registration is reserved for Amit S / Amit Sethi.")
 
@@ -6544,10 +6803,22 @@ def register(request: RegisterRequest, response: Response) -> dict[str, Any]:
         member_id = None
         member_to_create = None  # 🔥 IMPORTANT
 
-        # -----------------------------
-        # ✅ MEMBER LOOKUP ONLY (NO CREATE)
-        # -----------------------------
-        if input_name:
+        requested_member_key = str(request.member_id or request.player_id or "").strip().lower()
+        if requested_member_key:
+            member = next(
+                (
+                    item for item in store.get("members", [])
+                    if requested_member_key in {
+                        str(item.get("id") or "").strip().lower(),
+                        str(item.get("player_id") or "").strip().lower(),
+                    }
+                ),
+                None,
+            )
+            if not member:
+                raise HTTPException(status_code=404, detail="Player ID not found. Check the ID or create a new player profile.")
+
+        if input_name and not member:
             resolved_name = resolve_member_name(store, input_name)
             member = next(
                 (
@@ -6559,26 +6830,39 @@ def register(request: RegisterRequest, response: Response) -> dict[str, Any]:
                 None,
             )
 
-            if member and normalize_name(input_name) != normalize_name(str(member.get("name") or "")):
-                aliases = [str(alias or "").strip() for alias in (member.get("aliases") or []) if str(alias or "").strip()]
-                if input_name not in aliases:
-                    aliases.append(input_name)
-                    member["aliases"] = aliases
-                    save_store(store)
+        if member:
+            aliases = [str(alias or "").strip() for alias in (member.get("aliases") or []) if str(alias or "").strip()]
+            requested_aliases = request.aliases.split(",") if isinstance(request.aliases, str) else request.aliases
+            known_aliases = {normalize_name(str(member.get("name") or "")), *(normalize_name(alias) for alias in aliases)}
+            for alias in [input_name, *(str(item or "").strip() for item in requested_aliases or [])]:
+                if alias and normalize_name(alias) not in known_aliases:
+                    aliases.append(alias)
+                    known_aliases.add(normalize_name(alias))
+            if aliases != member.get("aliases", []):
+                member["aliases"] = aliases
+                save_store(store)
 
         # -----------------------------
         # ✅ PREPARE MEMBER (DO NOT SAVE YET)
         # -----------------------------
-        if role in member_roles and not member:
+        if not member:
             display_name = request.display_name.strip() or input_name or "Player"
             normalized_display = normalize_name(display_name)
+            requested_aliases = request.aliases.split(",") if isinstance(request.aliases, str) else request.aliases
+            aliases = [str(item or "").strip() for item in requested_aliases or [] if str(item or "").strip()]
+            if input_name and normalize_name(input_name) != normalized_display:
+                aliases.append(input_name)
 
+            new_member_id = str(uuid.uuid4())
             member_to_create = {
-                "id": str(uuid.uuid4()),
+                "id": new_member_id,
+                "player_id": "",
                 "name": display_name,
                 "normalized_name": normalized_display,
                 "full_name": display_name,
-                "aliases": [],
+                "aliases": aliases,
+                "role": role,
+                "date_of_birth": _validated_date_of_birth(request.date_of_birth),
                 "created_at": now_iso(),
             }
 
@@ -6602,7 +6886,7 @@ def register(request: RegisterRequest, response: Response) -> dict[str, Any]:
 
             # check existing user
             existing = connection.execute(
-                "SELECT id FROM app_users WHERE mobile = ? OR email = ?",
+                "SELECT * FROM app_users WHERE mobile = ? OR email = ?",
                 (mobile or None, email or None),
             ).fetchone()
 
@@ -6617,18 +6901,25 @@ def register(request: RegisterRequest, response: Response) -> dict[str, Any]:
             if member_to_create:
                 store.setdefault("members", []).append(member_to_create)
                 save_store(store)
-
+                saved_member = next((item for item in load_store().get("members", []) if str(item.get("id") or "") == str(member_to_create.get("id") or "")), None)
+                if saved_member:
+                    member_to_create.update(saved_member)
                 member = member_to_create
                 logger.info("Member created during registration. member=%s", member["name"])
 
             if member:
                 member_id = member.get("id")
+                if request.date_of_birth.strip():
+                    member["date_of_birth"] = _validated_date_of_birth(request.date_of_birth)
+                    save_store(store)
 
             if created_club and member:
                 _attach_creator_to_club(store, selected_club, member)
                 save_store(store)
 
             existing_user_for_member = reusable_existing_user or _existing_user_for_member(connection, member_id or "")
+            if existing_user_for_member and not reusable_existing_user:
+                raise HTTPException(status_code=409, detail="This Player ID is already linked to an account. Sign in to use that profile.")
 
             # -----------------------------
             # ✅ CREATE OR REUSE USER
@@ -6638,7 +6929,7 @@ def register(request: RegisterRequest, response: Response) -> dict[str, Any]:
                 connection.execute(
                     """
                     UPDATE app_users
-                    SET display_name = ?, mobile = ?, email = ?, role = ?, member_id = ?, primary_club_id = ?
+                    SET display_name = ?, mobile = ?, email = ?, role = ?, member_id = ?, player_id = ?, primary_club_id = ?
                     WHERE id = ?
                     """,
                     (
@@ -6647,6 +6938,7 @@ def register(request: RegisterRequest, response: Response) -> dict[str, Any]:
                         email or None,
                         effective_role,
                         member_id,
+                        str(member.get("player_id") or ""),
                         requested_club_id or None,
                         user_id,
                     ),
@@ -6655,8 +6947,8 @@ def register(request: RegisterRequest, response: Response) -> dict[str, Any]:
                 cursor = connection.execute(
                     """
                     INSERT INTO app_users (
-                      display_name, mobile, email, password_hash, role, member_id, primary_club_id, created_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                      display_name, mobile, email, password_hash, role, member_id, player_id, primary_club_id, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         request.display_name.strip() or input_name or "User",
@@ -6665,6 +6957,7 @@ def register(request: RegisterRequest, response: Response) -> dict[str, Any]:
                         _password_hash(request.password.strip()),
                         effective_role,
                         member_id,
+                        str(member.get("player_id") or ""),
                         requested_club_id or None,
                         now_iso(),
                     ),
@@ -6861,8 +7154,8 @@ def signin(request: SignInRequest, response: Response) -> dict[str, Any]:
                     cursor = connection.execute(
                         """
                     INSERT INTO app_users (
-                          display_name, mobile, email, password_hash, role, member_id, primary_club_id, created_at
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                          display_name, mobile, email, password_hash, role, member_id, player_id, primary_club_id, created_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """,
                         (
                             member.get("full_name") or member.get("name"),
@@ -6871,6 +7164,7 @@ def signin(request: SignInRequest, response: Response) -> dict[str, Any]:
                             _password_hash(secrets.token_urlsafe(24)),
                             "player",
                             member.get("id"),
+                            str(member.get("player_id") or ""),
                             primary_club.get("id") if primary_club else None,
                             now_iso(),
                         ),
@@ -7049,6 +7343,7 @@ def auth_signout(request: Request, x_auth_token: str | None = Header(default=Non
     token = _auth_token_from_request(request, x_auth_token)
     if token:
         try:
+            load_store()
             with _auth_connection() as connection:
                 _end_auth_session(connection, token)
         except Exception:
@@ -7873,6 +8168,7 @@ def save_player_profile(request: PlayerSelfProfileRequest, x_auth_token: str | N
     updates["email"] = str(updates.get("email", "") or "").strip()
     updates["full_name"] = str(updates.get("full_name", "") or "").strip()
     updates["gender"] = _normalize_gender(updates.get("gender", ""))
+    updates["date_of_birth"] = _validated_date_of_birth(updates.get("date_of_birth", ""))
     updates["role"] = str(updates.get("role", "") or "").strip()
     updates["batting_style"] = str(updates.get("batting_style", "") or "").strip()
     updates["bowling_style"] = str(updates.get("bowling_style", "") or "").strip()
@@ -9406,6 +9702,7 @@ def _muse_require_plan(ctx: dict[str, Any], tool: str, match_id: str = "", *, cl
     if not match_id and not claim and not _has_feature(ctx["user"], ctx["current_club_id"], "ai_assistant"):
         # Planning a task before the match is known: allow it while the free AI match is still to come.
         try:
+            load_store()
             with _auth_connection() as connection:
                 trial_match = subscriptions.ai_trial_match(connection, int(ctx["user"]["id"]))
         except Exception:
@@ -12322,6 +12619,7 @@ def admin_scorecard_decision(upload_id: str, request: ScorecardDecisionRequest, 
     uploader = int(upload.get("uploaded_by_user_id") or 0)
     if uploader:
         try:
+            load_store()
             with _auth_connection() as connection:
                 muse.create_notification(connection, club_id="", kind="scorecard_decision", title=f"{title}: {'published' if decision == 'approve' else 'not published'}", body=str(request.note or ""), link=f"/scorecards/a-{upload_id}" if decision == "approve" else "/scorecards", target_user_id=uploader, created_by=str(admin_row["display_name"] or ""))
         except Exception:

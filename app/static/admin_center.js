@@ -29,6 +29,12 @@ let archiveQueue;
 let auditRefreshButton;
 let auditLog;
 let roleBadge;
+let trafficCard;
+let trafficSummary;
+let trafficPeak;
+let trafficSeries;
+let trafficPeriod = "daily";
+let trafficData = null;
 
 let payload = null;
 let auth = null;
@@ -198,6 +204,10 @@ function bootstrapAdminCenter() {
   auditRefreshButton = document.getElementById("adminAuditRefreshButton");
   auditLog = document.getElementById("adminAuditLog");
   roleBadge = document.getElementById("adminRoleBadge");
+  trafficCard = document.getElementById("adminTrafficCard");
+  trafficSummary = document.getElementById("adminTrafficSummary");
+  trafficPeak = document.getElementById("adminTrafficPeak");
+  trafficSeries = document.getElementById("adminTrafficSeries");
   adminDebug("Admin Center ready.", {
     hasClubForm: !!clubForm,
     hasClubSelect: !!clubSelect,
@@ -1050,6 +1060,39 @@ async function loadAuditLog(targetClubId = "") {
   return data?.entries || [];
 }
 
+function renderTraffic(period = trafficPeriod) {
+  if (!trafficData || !trafficSummary || !trafficSeries) return;
+  trafficPeriod = period;
+  const labels = { hourly: "Last 24 hours", daily: "Last 30 days", monthly: "Last 12 months", annually: "Last 5 years" };
+  const totals = trafficData.totals || {};
+  trafficSummary.innerHTML = Object.entries(labels).map(([key, label]) => `
+    <article class="summary-card"><span>${label}</span><strong>${Number(totals[key] || 0).toLocaleString()}</strong><p>unique visitors</p></article>
+  `).join("");
+  const peak = trafficData.peak_time || {};
+  trafficPeak.textContent = Number(peak.visitors || 0)
+    ? `Peak time in the last ${Number(peak.window_days || 30)} days: ${peak.label} (${Number(peak.visitors).toLocaleString()} visitor-hours, ${trafficData.timezone || "local time"}).`
+    : `No peak time recorded yet (${trafficData.timezone || "local time"}).`;
+  trafficCard?.querySelectorAll("[data-traffic-period]").forEach((button) => {
+    button.setAttribute("aria-pressed", String(button.dataset.trafficPeriod === period));
+  });
+  const rows = Array.isArray(trafficData[period]) ? trafficData[period] : [];
+  trafficSeries.innerHTML = rows.length ? rows.slice().reverse().map((row) => `
+    <article class="detail-card"><strong>${escapeHtml(row.label || row.bucket || "")}</strong><p>${Number(row.visitors || 0).toLocaleString()} unique visitors</p></article>
+  `).join("") : `<p class="empty-state">No visitor activity recorded for this period.</p>`;
+}
+
+async function loadTraffic() {
+  if (!trafficSummary) return null;
+  try {
+    trafficData = await getJson("/api/admin/traffic", true);
+    renderTraffic(trafficPeriod);
+    return trafficData;
+  } catch (error) {
+    trafficSummary.innerHTML = `<p class="empty-state">Visitor data could not be loaded: ${escapeHtml(error.message || "Request failed")}</p>`;
+    return null;
+  }
+}
+
 async function refreshAll() {
   adminDebug("Refreshing Admin Center.");
   auth = await getJson("/api/auth/me", true);
@@ -1058,6 +1101,7 @@ async function refreshAll() {
   const queue = await loadReviewQueue();
   await loadClubView(targetClubId, queue);
   await loadAuditLog(targetClubId);
+  await loadTraffic();
   adminDebug("Admin Center refreshed.", { targetClubId, queueCount: queue.length });
 }
 
@@ -1066,6 +1110,25 @@ let adminCenterHandlersBound = false;
 function bindAdminCenterHandlers() {
   if (adminCenterHandlersBound) return;
   adminCenterHandlersBound = true;
+
+  trafficCard?.addEventListener("click", async (event) => {
+    const periodButton = event.target.closest("[data-traffic-period]");
+    const refreshButton = event.target.closest("#adminTrafficRefreshButton");
+    if (periodButton) {
+      renderTraffic(periodButton.dataset.trafficPeriod);
+      return;
+    }
+    if (refreshButton) {
+      refreshButton.disabled = true;
+      try {
+        await loadTraffic();
+      } catch (error) {
+        adminError("Visitor analytics refresh failed.", error);
+      } finally {
+        refreshButton.disabled = false;
+      }
+    }
+  });
 
   fixtureForm?.addEventListener("submit", async (event) => {
     event.preventDefault();
