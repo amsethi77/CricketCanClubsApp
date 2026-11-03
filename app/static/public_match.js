@@ -332,7 +332,25 @@
       <p class="pm-status ${status.cls}">${esc(status.text)}${status.cls === "live" || status.cls === "break" ? "." : ""}</p>
       ${rates}
       <p class="pm-info">${info}</p>
+      ${matchIds(match, state)}
     </section>`;
+  }
+
+  // Nov 3 2026 (Amit): the Match ID (parent) and one innings ID per innings (children), the same IDs as on
+  // Scorecards: M-XXXXXXXX, M-XXXXXXXX-I1 / -I2 (a Test match: -I1 to -I4). An innings not played yet is "to come".
+  function matchIds(match, state) {
+    const code = "M-" + String(match.id || "").replace(/[^0-9a-z]/gi, "").slice(0, 8).toUpperCase();
+    if (code === "M-") return "";
+    const test = /\btest\b|multi-day|two-day|2-day/i.test(String(match.match_type || ""));
+    const slots = Math.max(test ? 4 : 2, state.played.length);
+    const chips = [];
+    for (let n = 1; n <= slots; n += 1) {
+      const inn = state.played.find((i) => Number(i.inning_number) === n);
+      const team = inn ? inn.batting_team : n % 2 === 1 ? state.teams[0] : state.teams[1];
+      const f = inn ? (inn === state.current ? state.facts : inningsFacts(inn)) : null;
+      chips.push(`<li class="${inn ? "ok" : "missing"}"><b>${esc(code)}-I${n}</b> ${esc(team || `Innings ${n}`)} · ${f ? `${f.runs}/${f.wickets}` : state.done ? "<em>missing</em>" : "<em>to come</em>"}</li>`);
+    }
+    return `<p class="pm-info pm-match-id">Match ID <b>${esc(code)}</b></p><ul class="pm-innings-ids" aria-label="Innings of this match">${chips.join("")}</ul>`;
   }
 
   // A finished match has no Live tab (Dhruvika, Oct 31): just Scorecard and Commentary, opening on the Scorecard.
@@ -631,6 +649,7 @@
           Download complete scorecard (PDF)
         </a>
         ${match.can_delete_incomplete ? `<button class="pm-delete-match" type="button" data-delete-match="${esc(match.id)}">Delete incomplete match</button>` : ""}
+        ${match.can_delete_completed ? `<button class="pm-delete-match" type="button" data-delete-match="${esc(match.id)}">Delete this wrong scorecard</button>` : ""}
       </div>
       <p class="pm-action-status" data-delete-status role="status" aria-live="polite"></p>
       ${renderTabs(state.done)}
@@ -644,9 +663,12 @@
     if (!lastData) return;
     const deleteButton = event.target.closest("[data-delete-match]");
     if (deleteButton) {
-      if (!lastData.can_delete_incomplete) return;
+      if (!lastData.can_delete_incomplete && !lastData.can_delete_completed) return;
       const opponent = lastData.opponent || "this match";
-      if (!window.confirm(`Delete the incomplete match against ${opponent}? Started scoring will be removed. Completed matches are protected.`)) return;
+      const ask = lastData.can_delete_incomplete
+        ? `Delete the incomplete match against ${opponent}? Started scoring will be removed.`
+        : `The match against ${opponent} is FINISHED. Delete it and its whole scorecard for everyone? This can't be undone.`;
+      if (!window.confirm(ask)) return;
       deleteIncompleteMatch(lastData, deleteButton);
       return;
     }
@@ -681,7 +703,7 @@
     try {
       const token = localStorage.getItem("cricketClubAppAuthToken") || "";
       const response = await fetch(
-        `/api/admin/clubs/${encodeURIComponent(match.club_id)}/fixtures/${encodeURIComponent(match.id)}`,
+        `/api/admin/clubs/${encodeURIComponent(match.club_id)}/fixtures/${encodeURIComponent(match.id)}${match.can_delete_incomplete ? "" : "?finished=1"}`,
         {
           method: "DELETE",
           headers: { Accept: "application/json", "X-Auth-Token": token },
@@ -692,8 +714,8 @@
       clearTimeout(refreshTimer);
       root.innerHTML = `
         <section class="pm-deleted" role="status" aria-live="polite">
-          <h1>Incomplete match deleted</h1>
-          <p>The match and its unfinished scorebook have been removed.</p>
+          <h1>Match deleted</h1>
+          <p>The match and its scorebook have been removed.</p>
           <a class="pm-download" href="/score">Start a new match</a>
           <a href="/fixtures">View fixtures</a>
         </section>`;

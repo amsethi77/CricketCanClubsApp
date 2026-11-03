@@ -79,7 +79,11 @@
       <div class="pm-head-top">${sc.result ? '<span class="pm-state done">RESULT</span>' : '<span class="pm-state">SCORECARD</span>'}</div>
       <div class="pm-teams">${row(first)}${row(second)}</div>
       <p class="pm-status done">${escapeHtml(sc.result || "Result not recorded")}</p>
-      <p class="pm-info">${info}</p>`;
+      <p class="pm-info">${info}</p>
+      ${sc.match_code ? `<p class="pm-info sc-match-id">Match ID <b>${escapeHtml(sc.match_code)}</b></p>` : ""}
+      ${(sc.innings_ids || []).length ? `<ul class="sc-innings-ids" aria-label="Innings of this match">${sc.innings_ids
+        .map((i) => `<li class="${i.status === "missing" ? "missing" : "ok"}"><b>${escapeHtml(i.id)}</b> ${escapeHtml(i.team || `Innings ${i.number}`)} ${i.status === "missing" ? "· <em>missing</em>" : `· ${escapeHtml(i.score || "")}`}</li>`)
+        .join("")}</ul>` : ""}`;
   }
 
   function renderHeader(sc) {
@@ -184,15 +188,20 @@
   }
 
   function photoMarkup(sc) {
-    return sc.photo_url
-      ? `
+    // Nov 2 2026: a card photographed on two pages has two photos (1st innings, 2nd innings)
+    const urls = (Array.isArray(sc.photo_urls) && sc.photo_urls.length ? sc.photo_urls : [sc.photo_url]).filter(Boolean);
+    if (!urls.length) return `<div class="live-empty">The original scorecard photo isn't available for this match.</div>`;
+    return urls
+      .map(
+        (url, index) => `
         <figure class="sc-photo">
-          <a href="${escapeHtml(sc.photo_url)}" target="_blank" rel="noopener">
-            <img src="${escapeHtml(sc.photo_url)}" alt="Original scorecard photo for ${escapeHtml(sc.title)}, ${escapeHtml(sc.date_label)}" loading="lazy" />
+          <a href="${escapeHtml(url)}" target="_blank" rel="noopener">
+            <img src="${escapeHtml(url)}" alt="Original scorecard photo${urls.length > 1 ? ` ${index + 1}` : ""} for ${escapeHtml(sc.title)}, ${escapeHtml(sc.date_label)}" loading="lazy" />
           </a>
-          <figcaption>Uploaded scorecard photo · tap to open full size</figcaption>
+          <figcaption>${urls.length > 1 ? `${index === 0 ? "1st" : "2nd"} innings photo` : "Uploaded scorecard photo"} · tap to open full size</figcaption>
         </figure>`
-      : `<div class="live-empty">The original scorecard photo isn't available for this match.</div>`;
+      )
+      .join("");
   }
 
   function render(sc) {
@@ -566,6 +575,26 @@
         ${data.ai_read ? `<p class="sc-check-lede">🤖 Read from the photo by AI. Compare it with the <button type="button" class="sc-link" data-go-photo>original scorecard</button> before publishing.</p>` : ""}
         ${data.unreadable && !data.ai_available && data.is_site_admin ? `<p class="sc-check-lede">Tip: handwriting can be read automatically. Add a free <strong>GEMINI_API_KEY</strong> to the .env file (see README "Reading handwritten scorecards automatically").</p>` : ""}
         ${flags.length ? `<ul class="sc-check-list">${flags.map((f) => `<li>${escapeHtml(f)}</li>`).join("")}</ul>` : ""}
+        ${new URLSearchParams(location.search).get("joined") === "1" ? `<p class="sc-check-lede sc-joined-note">🔗 This photo was the other innings of a match already uploaded, so both innings are now one scorecard.</p>` : ""}
+        ${data.match_code ? `<p class="sc-check-lede">Match ID <b>${escapeHtml(data.match_code)}</b>${data.innings_count < 2 ? " · if the other team has their innings, give them this ID so they can link it" : ""}.</p>` : ""}
+        ${(data.link_candidates || []).length && !data.other_half ? `<div class="sc-second-photo">
+          <p class="sc-check-lede"><strong>Is one of these the other team's innings of the same match?</strong> Link it and the match gets both innings.</p>
+          ${data.link_candidates.map((c) => `<button type="button" class="sc-btn" data-sc="link" data-code="${escapeHtml(c.match_code)}">🔗 Link with ${escapeHtml(c.match_code)}${c.file_name ? ` (${escapeHtml(c.file_name)})` : ""}</button>`).join(" ")}
+        </div>` : ""}
+        ${data.innings_count < 2 && data.can_edit ? `<form class="sc-link-form" data-sc-link>
+          <label for="scLinkCode">Other team already uploaded their innings? Enter their Match ID</label>
+          <div class="sc-link-row"><input id="scLinkCode" placeholder="e.g. M-8A311D9B" autocomplete="off" /><button type="submit" class="sc-btn">🔗 Link</button></div>
+        </form>` : ""}
+        ${data.other_half ? `<div class="sc-second-photo">
+          <p class="sc-check-lede"><strong>The other innings of this match was uploaded separately</strong> ('${escapeHtml(data.other_half.file_name)}'${data.other_half.uploaded_by ? ` by ${escapeHtml(data.other_half.uploaded_by)}` : ""}): same date and teams. Join them into one scorecard?</p>
+          <button type="button" class="sc-btn primary" data-sc="join" data-other="${escapeHtml(data.other_half.id)}">🔗 Join the two innings</button>
+        </div>` : ""}
+        ${data.can_add_second_photo && !data.other_half ? `<div class="sc-second-photo">
+          <p class="sc-check-lede"><strong>Only ${data.innings_count === 1 ? "one innings" : "part of the match"} is on this photo.</strong> Is the other team's batting on a second page? Add its photo and it is joined to this scorecard.</p>
+          <label class="sc-btn primary sc-second-btn">📷 Add the 2nd innings photo
+            <input type="file" accept="image/*,.jpg,.jpeg,.png,.webp,.heic,.heif" data-sc-second hidden />
+          </label>
+        </div>` : ""}
         <div class="sc-check-actions">
           ${data.can_publish ? `<button type="button" class="sc-btn primary" data-sc="publish">✓ Looks right, publish</button>` : ""}
           ${data.can_edit && data.ai_available ? `<button type="button" class="sc-btn${data.unreadable ? " primary" : ""}" data-sc="ai-read">🤖 ${data.ai_read ? "Read again with AI" : "Read with AI"}</button>` : ""}
@@ -573,7 +602,7 @@
           ${data.can_edit ? `<button type="button" class="sc-btn${data.unreadable && !data.ai_available ? " primary" : ""}" data-sc="edit-open">✏️ ${data.unreadable ? "Type in the scorecard" : "Edit scorecard"}</button>` : ""}
           ${data.can_report ? `<button type="button" class="sc-btn" data-sc="report-open">Something's wrong</button>` : ""}
           <a class="sc-btn ghost" href="/scorecards/upload">Upload another</a>
-          ${data.can_delete ? `<button type="button" class="sc-btn sc-danger" data-sc="delete">🗑 Delete this upload</button>` : ""}
+          ${data.can_delete ? `<button type="button" class="sc-btn sc-danger" data-sc="delete">🗑 ${data.is_published ? "Delete this scorecard" : "Delete this upload"}</button>` : ""}
         </div>
         <form class="sc-report" data-sc-report hidden>
           <label for="scReportNote">What's wrong?</label>
@@ -616,10 +645,14 @@
     if (!button || !checkEl || !checkEl.contains(button)) return;
     const msg = checkEl.querySelector(".sc-check-msg");
     if (button.dataset.sc === "delete") {
-      if (!window.confirm("Delete this upload and its photo? This can't be undone. You can upload the photo again afterwards.")) return;
+      const isPublished = Boolean(lastPreview && lastPreview.is_published);
+      const ask = isPublished
+        ? "This scorecard is PUBLISHED and everyone can see it. Delete it and its photo for everyone? This can't be undone. You can upload the photo again afterwards."
+        : "Delete this upload and its photo? This can't be undone. You can upload the photo again afterwards.";
+      if (!window.confirm(ask)) return;
       button.disabled = true;
       try {
-        const response = await fetch(`/api/admin/archive/${encodeURIComponent(id.replace(/^a-/, ""))}`, { method: "DELETE", headers: { "X-Auth-Token": token() } });
+        const response = await fetch(`/api/admin/archive/${encodeURIComponent(id.replace(/^a-/, ""))}${isPublished ? "?published=1" : ""}`, { method: "DELETE", headers: { "X-Auth-Token": token() } });
         const data = await response.json().catch(() => ({}));
         if (!response.ok) throw new Error(data.detail || "Couldn't delete it.");
         location.href = "/scorecards/upload";
@@ -641,6 +674,29 @@
         checkEl.querySelector(".sc-check-msg").textContent = error.message;
         button.disabled = false;
         button.textContent = "🤖 Read with AI";
+      }
+      return;
+    }
+    if (button.dataset.sc === "link") {
+      linkTo(button.dataset.code, button);
+      return;
+    }
+    if (button.dataset.sc === "join") {
+      button.disabled = true;
+      button.textContent = "🔗 Joining…";
+      try {
+        const data = await previewAction(`/api/scorecards/${encodeURIComponent(id.replace(/^a-/, ""))}/join/${encodeURIComponent(button.dataset.other)}`);
+        if (data.preview_url && !data.preview_url.startsWith(location.pathname)) {
+          location.href = data.preview_url;
+          return;
+        }
+        document.getElementById("scEditor")?.remove();
+        await loadPreview();
+        checkEl.querySelector(".sc-check-msg").textContent = data.message || "Joined.";
+      } catch (error) {
+        msg.textContent = error.message;
+        button.disabled = false;
+        button.textContent = "🔗 Join the two innings";
       }
       return;
     }
@@ -667,6 +723,67 @@
     }
   });
 
+  // "Add the 2nd innings photo" (POST /api/scorecards/{id}/second-photo)
+  document.addEventListener("change", async (event) => {
+    const input = event.target.closest("[data-sc-second]");
+    if (!input || !checkEl || !checkEl.contains(input) || !input.files[0]) return;
+    const msg = checkEl.querySelector(".sc-check-msg");
+    const label = input.closest("label");
+    label.classList.add("is-busy");
+    const started = Date.now();
+    const tick = () => {
+      msg.textContent = `📤 Adding the 2nd innings photo and reading it… ${Math.round((Date.now() - started) / 1000)}s. Keep this page open.`;
+    };
+    tick();
+    const timer = setInterval(tick, 1000);
+    const body = new FormData();
+    body.append("file", input.files[0]);
+    try {
+      const response = await fetch(`/api/scorecards/${encodeURIComponent(id.replace(/^a-/, ""))}/second-photo`, { method: "POST", headers: { "X-Auth-Token": token() }, body });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.detail || "Couldn't add the photo.");
+      clearInterval(timer);
+      document.getElementById("scEditor")?.remove();
+      editorShown = false;
+      await loadPreview();
+      checkEl.querySelector(".sc-check-msg").textContent = data.message || "2nd innings photo added.";
+    } catch (error) {
+      clearInterval(timer);
+      msg.textContent = error.message;
+      label.classList.remove("is-busy");
+      input.value = "";
+    }
+  });
+
+  // Link by Match ID (POST /api/scorecards/{id}/link)
+  async function linkTo(code, button) {
+    const msg = checkEl.querySelector(".sc-check-msg");
+    if (button) button.disabled = true;
+    msg.textContent = "🔗 Linking…";
+    try {
+      const data = await previewAction(`/api/scorecards/${encodeURIComponent(id.replace(/^a-/, ""))}/link`, { match_code: code });
+      if (data.preview_url && !data.preview_url.startsWith(location.pathname)) {
+        location.href = data.preview_url;
+        return;
+      }
+      document.getElementById("scEditor")?.remove();
+      await loadPreview();
+      checkEl.querySelector(".sc-check-msg").textContent = data.message || "Linked.";
+    } catch (error) {
+      msg.textContent = error.message;
+      if (button) button.disabled = false;
+    }
+  }
+
+  document.addEventListener("submit", (event) => {
+    const form = event.target.closest("[data-sc-link]");
+    if (!form) return;
+    event.preventDefault();
+    const code = form.querySelector("input").value.trim();
+    if (!code) return;
+    linkTo(code, form.querySelector("button"));
+  });
+
   document.addEventListener("submit", async (event) => {
     const form = event.target.closest("[data-sc-report]");
     if (!form) return;
@@ -679,6 +796,23 @@
       checkEl.querySelector(".sc-check-msg").textContent = error.message;
     }
   });
+
+  // Nov 2 2026 (Amit): captains, club admins and superadmins can fix or delete a published uploaded scorecard
+  async function offerFix() {
+    if (!token() || !/^a-/.test(id)) return;
+    try {
+      const response = await fetch(`/api/scorecards/${encodeURIComponent(id.replace(/^a-/, ""))}/preview`, { headers: { Accept: "application/json", "X-Auth-Token": token() } });
+      if (!response.ok) return;
+      const data = await response.json();
+      if (!data.can_edit && !data.can_delete) return;
+      const bar = document.createElement("p");
+      bar.className = "sc-fix-bar";
+      bar.innerHTML = `<a class="sc-btn" href="/scorecards/${encodeURIComponent(id.replace(/^a-/, ""))}?preview=1">✏️ Fix or delete this scorecard</a>`;
+      headerEl.after(bar);
+    } catch (error) {
+      /* signed out or not allowed: no button */
+    }
+  }
 
   (async () => {
     if (!onScorecardPage) return;
@@ -700,6 +834,7 @@
       if (!response.ok) throw new Error("Unable to load this scorecard.");
       const data = await response.json();
       render(data.scorecard);
+      offerFix();
     } catch (error) {
       headerEl.innerHTML = `<p class="sc-meta">Scorecard</p><h1 class="sc-title">Not found</h1>`;
       cardPanel.innerHTML = `<div class="live-empty">${escapeHtml(error.message)}</div>`;

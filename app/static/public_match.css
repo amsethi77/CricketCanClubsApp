@@ -1115,3 +1115,32 @@
   min-width: 0;
   max-width: 100%;
 }
+
+/* Nov 3 2026: Match ID + innings IDs (same as Scorecards) */
+.pm-match-id b {
+  letter-spacing: 0.04em;
+}
+
+.pm-innings-ids {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  font-size: 0.82rem;
+}
+
+.pm-innings-ids li {
+  padding: 3px 9px;
+  border-radius: 999px;
+  border: 1px solid #cbd5e1;
+  background: #f8fafc;
+  color: #334155;
+}
+
+.pm-innings-ids li.missing {
+  border-color: #f59e0b;
+  background: #fffbeb;
+  color: #92400e;
+}

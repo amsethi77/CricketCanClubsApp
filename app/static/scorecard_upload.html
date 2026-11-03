@@ -14,7 +14,7 @@
     <link rel="stylesheet" href="/assets/tailwind.css" />
     <link rel="stylesheet" href="/assets/styles.css?v=20261030m" />
     <link rel="stylesheet" href="/assets/live.css?v=20261030m" />
-    <link rel="stylesheet" href="/assets/scorecards.css?v=20261030m" />
+    <link rel="stylesheet" href="/assets/scorecards.css?v=20261103a" />
     <link rel="stylesheet" href="/assets/sports-system.css?v=20261030m" />
   </head>
   <body class="public-fixtures-page scorecards-page scorecard-upload-page">
@@ -39,7 +39,15 @@
             <label class="scu-drop" for="scuFile">
               <span id="scuDropText">📷 Tap to take or choose a photo</span>
               <img id="scuPreview" alt="" hidden />
-              <input id="scuFile" type="file" accept="image/*,.jpg,.jpeg,.png,.webp,.heic,.heif" capture="environment" required />
+              <input id="scuFile" type="file" accept="image/*,.jpg,.jpeg,.png,.webp,.heic,.heif" required />
+            </label>
+            <label class="scu-drop scu-drop-second" for="scuFile2">
+              <span id="scuDropText2">📷 2nd innings photo <small>(optional - if the card is on two pages)</small></span>
+              <img id="scuPreview2" alt="" hidden />
+              <input id="scuFile2" type="file" accept="image/*,.jpg,.jpeg,.png,.webp,.heic,.heif" />
+            </label>
+            <label>Other team's Match ID <small>(optional - if they already uploaded the other innings)</small>
+              <input id="scuLink" type="text" placeholder="e.g. M-8A311D9B" autocomplete="off" />
             </label>
             <label>Season <small>(optional)</small>
               <input id="scuSeason" type="text" placeholder="e.g. 2026 Season" autocomplete="off" />
@@ -51,6 +59,6 @@
       </section>
     </main>
     <script src="/assets/public_header.js?v=20261030f"></script>
-    <script src="/assets/scorecard_upload.js?v=20261020a"></script>
+    <script src="/assets/scorecard_upload.js?v=20261103a"></script>
   </body>
 </html>

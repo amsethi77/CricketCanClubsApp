@@ -127,21 +127,27 @@
   }
 
   function deleteMatchControl() {
-    return !guest && data?.can_delete_incomplete
-      ? `<button type="button" class="qs-btn danger wide" data-act="delete-match">Delete incomplete match</button>`
-      : "";
+    if (guest) return "";
+    if (data?.can_delete_incomplete) return `<button type="button" class="qs-btn danger wide" data-act="delete-match">Delete incomplete match</button>`;
+    // Nov 2 2026 (Amit): a finished but wrong scorecard can be deleted by the same people
+    if (data?.can_delete_completed) return `<button type="button" class="qs-btn danger wide" data-act="delete-match">Delete this wrong scorecard</button>`;
+    return "";
   }
 
   async function deleteCurrentMatch() {
     const match = data?.match;
-    if (!match || !data.can_delete_incomplete) return;
+    if (!match || !(data.can_delete_incomplete || data.can_delete_completed)) return;
+    const finished = !data.can_delete_incomplete && data.can_delete_completed;
     const queued = queue.length;
     const warning = queued
       ? ` This also discards ${queued} unsaved queued ball${queued === 1 ? "" : "s"}.`
       : "";
-    if (!window.confirm(`Delete the incomplete match against ${match.opponent || "this opponent"}? Its saved scorebook will be removed.${warning} Completed matches are protected.`)) return;
+    const ask = finished
+      ? `This match against ${match.opponent || "this opponent"} is FINISHED. Delete it and its whole scorecard for everyone? This can't be undone.`
+      : `Delete the incomplete match against ${match.opponent || "this opponent"}? Its saved scorebook will be removed.${warning}`;
+    if (!window.confirm(ask)) return;
     try {
-      await api("DELETE", `/api/admin/clubs/${enc(match.club_id)}/fixtures/${enc(match.id)}`);
+      await api("DELETE", `/api/admin/clubs/${enc(match.club_id)}/fixtures/${enc(match.id)}${finished ? "?finished=1" : ""}`);
       queue.length = 0;
       storeQueue();
       try {
@@ -152,8 +158,8 @@
       }
       app.innerHTML = `<section class="qs-card qs-done" role="status" aria-live="polite">
         <p class="qs-kicker">Match removed</p>
-        <h1>Incomplete match deleted</h1>
-        <p class="qs-muted">The match and its unfinished scorebook have been removed.</p>
+        <h1>${finished ? "Match deleted" : "Incomplete match deleted"}</h1>
+        <p class="qs-muted">The match and its scorebook have been removed.</p>
         <a class="qs-btn primary wide" href="/score">Start a new match</a>
         <a class="qs-btn ghost wide" href="/fixtures">View fixtures</a>
       </section>`;
@@ -368,6 +374,7 @@
           <div id="qsPickers" class="qs-pickers"></div>
           <button class="qs-btn primary wide" type="submit">Start scoring</button>
         </form>
+        ${editMatchControl()}
         ${deleteMatchControl()}
       </section>`;
     const pickers = document.getElementById("qsPickers");
@@ -499,6 +506,7 @@
           <span class="qs-live${editMode ? " qs-edit-badge" : ""}"><span class="qs-dot"></span>${editMode ? "EDIT MODE" : done ? "INNINGS OVER" : "LIVE"}</span>
           <a class="qs-link" href="/live/${encodeURIComponent(matchId)}" target="_blank" rel="noopener">Public scorecard ↗</a>
         </div>
+        ${editMatchControl()}
         ${deleteMatchControl()}
         ${editInnings}
         ${editMode ? '<p class="qs-edit-note">Edit mode · score the active innings with the live controls, or tap a saved delivery to correct it.</p>' : ""}
@@ -668,6 +676,7 @@
     const result = String(data.match?.result || "TBD");
     if (editMode && !data.can_edit_scorebook) {
       app.innerHTML = `<section class="qs-card"><h1>Editing not allowed</h1><p class="qs-muted">Only this match's assigned captain, club admins with scoring access, and superadmins can correct its ball-by-ball scorebook.</p>
+        ${editMatchControl()}
         ${deleteMatchControl()}
         <a class="qs-btn primary" href="/live/${encodeURIComponent(matchId)}">View scorecard</a></section>`;
       return;
@@ -689,12 +698,14 @@
     if (!editMode && !data.open) {
       app.innerHTML = `<section class="qs-card"><p class="qs-kicker">Quick Score</p><h1>Scoring is closed</h1>
         <p class="qs-muted">Ball-by-ball scoring opens on the match day. For past matches, use AI Assistant (“Heartlake 145/6, Imran XI 120/9…”) or upload a scorecard photo in Archives.</p>
+        ${editMatchControl()}
         ${deleteMatchControl()}
         <a class="qs-btn primary" href="/score">Back to matches</a></section>`;
       return;
     }
     if (!data.can_score && !(editMode && data.can_edit_scorebook)) {
       app.innerHTML = `<section class="qs-card"><h1>Scorers only</h1><p class="qs-muted">Ask a club admin to give you the scorer role. You can follow the match on the public scorecard.</p>
+        ${editMatchControl()}
         ${deleteMatchControl()}
         <a class="qs-btn primary" href="/live/${encodeURIComponent(matchId)}">Follow live</a></section>`;
       return;
@@ -798,6 +809,7 @@
           </fieldset>
           <button class="qs-btn primary wide" type="submit">Save line-ups</button>
         </form>
+        ${editMatchControl()}
         ${deleteMatchControl()}
       </section>`;
     const form = document.getElementById("qsLineups");
@@ -1408,6 +1420,128 @@
     return "";
   }
 
+  // "✎ Edit names & teams" (Nov 2 2026, Amit): who batted first, a player's name everywhere (or two spellings
+  // joined), the bowler of an over. Captains, club admins and superadmins (POST /api/matches/{id}/scorebook/edit).
+  function editMatchControl() {
+    const scored = innings().some((inn) => (inn.balls || []).length);
+    return !guest && data?.can_edit_scorebook && scored
+      ? `<button type="button" class="qs-btn ghost wide" data-act="edit-match">✎ Edit names &amp; teams</button>`
+      : "";
+  }
+
+  function openEditMatch() {
+    const m = data.match;
+    const clubName = data.club?.name || m.club_name;
+    const list = innings();
+    const allNames = () => {
+      const names = new Set();
+      list.forEach((inn) => (inn.balls || []).forEach((b) => ["striker", "non_striker", "bowler", "fielder", "wicket_player"].forEach((k) => b[k] && names.add(b[k]))));
+      ["club", "opponent"].forEach((side) => ((data.lineups || {})[side] || []).forEach((n) => names.add(n)));
+      return [...names].sort((a, b) => a.localeCompare(b));
+    };
+    const send = async (body, close) => {
+      try {
+        const res = await api("POST", `/api/matches/${enc(matchId)}/scorebook/edit`, body);
+        close();
+        if (body.action === "rename") {
+          list.forEach((inn) => {
+            const local = loadLocal(inn.inning_number);
+            const fix = (n) => (String(n || "").toLowerCase() === body.from_name.toLowerCase() ? body.to_name : n);
+            if (local && local.setup) saveLocal(inn.inning_number, { ...local, striker: fix(local.striker), nonStriker: fix(local.nonStriker), bowler: fix(local.bowler) });
+          });
+        }
+        toast(`${res.message || "Saved"} ✓`);
+        await load();
+      } catch (e) {
+        toast(e.message, "error");
+      }
+    };
+    const first = list[0] || {};
+    const step = { name: "menu", from: "", innings: currentInnings()?.inning_number || 1, over: 0 };
+    const draw = () => {
+      if (step.name === "menu") {
+        modalTitle.textContent = "Edit match";
+        modalBody.innerHTML = `<p class="qs-sheet-note">Fix mistakes in this match. Everyone sees the change straight away.</p>
+          <div class="qs-chips big">
+            <button type="button" class="qs-chip" data-edit="teams">Who batted first?<small>now: ${esc(first.batting_team || "–")}</small></button>
+            <button type="button" class="qs-chip" data-edit="rename">Fix a player's name<small>or join two spellings</small></button>
+            <button type="button" class="qs-chip" data-edit="over">Change the bowler of an over</button>
+          </div>`;
+      } else if (step.name === "teams") {
+        modalTitle.textContent = "Who batted first?";
+        modalBody.innerHTML = `<p class="qs-sheet-note">The other team batted second.</p>
+          <div class="qs-chips big"><button type="button" class="qs-chip${first.batting_team === clubName ? " on" : ""}" data-bat="club">${esc(clubName)}</button>
+          <button type="button" class="qs-chip${first.batting_team === m.opponent ? " on" : ""}" data-bat="opponent">${esc(m.opponent)}</button></div>`;
+      } else if (step.name === "rename") {
+        modalTitle.textContent = "Which name is wrong?";
+        modalBody.innerHTML = chipList(allNames());
+      } else if (step.name === "rename-to") {
+        modalTitle.textContent = `Change "${step.from}" to…`;
+        modalBody.innerHTML = `<p class="qs-sheet-note">Tap the right name if the player is already listed (the two spellings become one), or type it.</p>
+          ${chipList(allNames().filter((n) => n !== step.from))}${otherName("qsRenameTo", "Right name", true)}`;
+      } else if (step.name === "over") {
+        const inn = list.find((i) => i.inning_number === step.innings) || {};
+        const overs = [];
+        (inn.balls || []).forEach((b) => {
+          const o = Number(b.over_number);
+          if (!overs.some((x) => x.n === o)) overs.push({ n: o, bowler: b.bowler });
+        });
+        modalTitle.textContent = "Which over?";
+        modalBody.innerHTML = `${list.filter((i) => (i.balls || []).length).length > 1 ? `<div class="qs-chips">${list.filter((i) => (i.balls || []).length).map((i) => `<button type="button" class="qs-chip${i.inning_number === step.innings ? " on" : ""}" data-inn="${i.inning_number}">${esc(i.batting_team)} batting</button>`).join("")}</div>` : ""}
+          ${overs.length ? `<div class="qs-chips">${overs.map((o) => `<button type="button" class="qs-chip" data-over="${o.n}">Over ${o.n}<small>${esc(o.bowler || "–")}</small></button>`).join("")}</div>` : '<p class="qs-muted">No balls yet in this innings.</p>'}`;
+      } else if (step.name === "over-bowler") {
+        const inn = list.find((i) => i.inning_number === step.innings) || {};
+        modalTitle.textContent = `Over ${step.over} was bowled by…`;
+        modalBody.innerHTML = `${chipList(bowlingRoster(inn))}${otherName("qsOverBowler", "Bowler's name", bowlingRoster(inn).length === 0)}`;
+      }
+    };
+    openSheet("Edit match", "", (target, close) => {
+      const edit = target.closest("[data-edit]")?.dataset.edit;
+      if (edit) {
+        step.name = edit;
+        return draw();
+      }
+      if (step.name === "teams") {
+        const bat = target.closest("[data-bat]")?.dataset.bat;
+        if (bat) send({ action: "teams", innings_number: 1, batting: bat }, close);
+        return;
+      }
+      if (step.name === "rename") {
+        const name = tappedName(target);
+        if (name) {
+          step.from = name;
+          step.name = "rename-to";
+          draw();
+        }
+        return;
+      }
+      if (step.name === "rename-to") {
+        const name = tappedName(target);
+        if (name && name !== step.from) send({ action: "rename", from_name: step.from, to_name: name }, close);
+        return;
+      }
+      if (step.name === "over") {
+        const inn = target.closest("[data-inn]")?.dataset.inn;
+        if (inn) {
+          step.innings = Number(inn);
+          return draw();
+        }
+        const over = target.closest("[data-over]")?.dataset.over;
+        if (over) {
+          step.over = Number(over);
+          step.name = "over-bowler";
+          draw();
+        }
+        return;
+      }
+      if (step.name === "over-bowler") {
+        const name = tappedName(target);
+        if (name) send({ action: "over_bowler", innings_number: step.innings, over_number: step.over, bowler: name }, close);
+      }
+    });
+    draw();
+  }
+
   function bowlingRoster(inn) {
     return rosterFor(battingIsClub(inn) ? "opp" : "club");
   }
@@ -1915,6 +2049,7 @@
     const act = event.target.closest("[data-act]")?.dataset.act;
     if (!act) return;
     if (act === "delete-match") return deleteCurrentMatch();
+    if (act === "edit-match") return openEditMatch();
     if (act === "wicket") return askWicket();
     if (act === "undo") return undo();
     if (act === "voice") {

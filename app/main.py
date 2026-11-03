@@ -4994,7 +4994,7 @@ def _scorecard_photo_url(archive: dict[str, Any]) -> str:
         return ""
 
 
-def _scorecard_from_archive(archive: dict[str, Any]) -> dict[str, Any]:
+def _scorecard_from_archive_base(archive: dict[str, Any]) -> dict[str, Any]:
     template = _scorecard_pick_template(archive)
     template_match = template.get("match") if isinstance(template.get("match"), dict) else {}
     template_teams = template_match.get("teams") if isinstance(template_match.get("teams"), dict) else {}
@@ -5266,6 +5266,7 @@ def _scorecard_from_archive(archive: dict[str, Any]) -> dict[str, Any]:
         innings_out.append(
             {
                 "number": position + 1,
+                "written_inning_number": _scorecard_int(innings.get("inning_number")),
                 "team": team,
                 "bowling_team": opponent,
                 "runs": runs,
@@ -5317,11 +5318,14 @@ def _scorecard_from_archive(archive: dict[str, Any]) -> dict[str, Any]:
         "result": result,
         "innings": innings_out,
         "has_details": has_details,
+        "match_code": _match_code(archive.get("id")),
         "photo_url": _scorecard_photo_url(archive),
+        # Nov 2 2026: a card photographed on two pages (1st innings / 2nd innings)
+        "photo_urls": [url for url in (_scorecard_photo_url(archive), _scorecard_photo_url({"preview_url": archive.get("second_preview_url")})) if url],
     }
 
 
-def _scorecard_from_fixture(fixture: dict[str, Any]) -> dict[str, Any]:
+def _scorecard_from_fixture_base(fixture: dict[str, Any]) -> dict[str, Any]:
     match = _public_match_payload({"fixtures": [fixture]}, str(fixture.get("id") or ""))
     raw_innings = sorted(
         (match.get("scorebook") or {}).get("innings") or [],
@@ -5462,6 +5466,64 @@ def _scorecard_from_fixture(fixture: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _is_test_match(card: dict[str, Any]) -> bool:
+    kind = str(card.get("match_type") or "").lower()
+    return "test" in kind.split() or "multi-day" in kind or "two-day" in kind or "2-day" in kind
+
+
+def _innings_ids(card: dict[str, Any]) -> list[dict[str, Any]]:
+    """Nov 3 2026 (Amit): a match (Match ID = parent) has one innings ID per innings as its children:
+    M-XXXXXXXX-I1, M-XXXXXXXX-I2 (a Test match: I1 to I4). An innings with nothing recorded is "missing",
+    so a match with a missing innings scorecard is easy to see and to link."""
+    code = _match_code(card.get("id"))
+    if not code:
+        return []
+    innings = [item for item in card.get("innings") or [] if isinstance(item, dict)]
+    detailed = [item for item in innings if item.get("batting")]
+    recorded = detailed if detailed else [item for item in innings if item.get("has_data")]
+    slots = 4 if _is_test_match(card) else 2
+    slots = max(slots, len(recorded))
+    teams = [str(team or "") for team in card.get("teams") or []]
+    # the innings number written on the card ("Innings of Amit CC (2nd)") puts it in its own slot,
+    # so a page holding only the 2nd innings shows I1 as the missing one
+    written = [item.get("written_inning_number") for item in recorded]
+    if all(isinstance(n, int) and 1 <= n <= slots for n in written) and len(set(written)) == len(written):
+        by_slot = {int(n): item for n, item in zip(written, recorded)}
+    else:
+        by_slot = {index + 1: item for index, item in enumerate(recorded)}
+    out = []
+    for number in range(1, slots + 1):
+        if number in by_slot:
+            item = by_slot[number]
+            out.append({
+                "id": f"{code}-I{number}",
+                "number": number,
+                "team": str(item.get("team") or ""),
+                "score": str(item.get("score") or ""),
+                "overs": item.get("overs"),
+                "status": "recorded",
+            })
+        else:
+            # who should bat: teams take turns (a Test with a follow-on can differ; fixed when it is linked)
+            near = by_slot.get(number - 1) or by_slot.get(number + 1) or {}
+            previous = str(near.get("team") or (out[-1]["team"] if out else ""))
+            other = next((team for team in teams if team and team != previous), "")
+            out.append({"id": f"{code}-I{number}", "number": number, "team": other, "score": "", "overs": None, "status": "missing"})
+    return out
+
+
+def _scorecard_from_archive(archive: dict[str, Any]) -> dict[str, Any]:
+    card = _scorecard_from_archive_base(archive)
+    card["innings_ids"] = _innings_ids(card)
+    return card
+
+
+def _scorecard_from_fixture(fixture: dict[str, Any]) -> dict[str, Any]:
+    card = _scorecard_from_fixture_base(fixture)
+    card["innings_ids"] = _innings_ids(card)
+    return card
+
+
 def _public_scorecards(store: dict[str, Any]) -> list[dict[str, Any]]:
     cards = [
         _scorecard_from_archive(archive)
@@ -5486,9 +5548,34 @@ def _public_scorecards(store: dict[str, Any]) -> list[dict[str, Any]]:
     return cards
 
 
+def _match_code(raw_id: Any) -> str:
+    """Nov 2 2026 (Amit): every match has a Match ID that both teams can quote, e.g. "M-8A311D9B"
+    (from the scorecard / match id, so it never changes; the two innings of a match share it once linked)."""
+    text = str(raw_id or "")
+    if text[:2] in {"a-", "f-"}:
+        text = text[2:]
+    clean = re.sub(r"[^0-9a-zA-Z]", "", text)[:8].upper()
+    return f"M-{clean}" if clean else ""
+
+
+def _upload_by_match_code(store: dict[str, Any], code: str) -> dict[str, Any] | None:
+    wanted = re.sub(r"-I\d+$", "", str(code or "").strip().upper())  # an innings ID links to its match
+    wanted = re.sub(r"[^0-9A-Z]", "", wanted)
+    if wanted.startswith("M") and len(wanted) > 8:
+        wanted = wanted[1:]
+    if not wanted:
+        return None
+    for upload in store.get("archive_uploads", []) or []:
+        if re.sub(r"[^0-9A-Z]", "", _match_code(upload.get("id")).upper())[1:] == wanted:
+            return upload
+    return None
+
+
 def _scorecard_list_item(card: dict[str, Any]) -> dict[str, Any]:
     return {
         "id": card["id"],
+        "match_code": _match_code(card["id"]),
+        "innings_ids": card.get("innings_ids") or [],
         "source": card.get("source") or "archive",
         "fixture_id": card.get("fixture_id") or "",
         "is_incomplete": bool(card.get("is_incomplete")),
@@ -5653,20 +5740,25 @@ def public_match(
     )
     match["live_viewers"] = _touch_live_match_viewer(match_id, request) if has_started and not is_completed else 0
     can_delete_incomplete = False
+    can_delete_completed = False
     token = _auth_token_from_request(request, x_auth_token)
-    if token and fixture and not _fixture_is_completed(fixture):
+    if token and fixture:
         try:
             user_row, current_club_id = _auth_user_from_token(token, touch=False)
         except HTTPException:
             pass
         else:
-            can_delete_incomplete = _match_delete_is_authorized(
+            allowed = _match_delete_is_authorized(
                 store,
                 user_row,
                 current_club_id,
                 fixture,
             )
+            # Nov 2 2026 (Amit): a finished but wrong scorecard can be deleted too, by the same people.
+            can_delete_incomplete = allowed and not _fixture_is_completed(fixture)
+            can_delete_completed = allowed and _fixture_is_completed(fixture)
     match["can_delete_incomplete"] = can_delete_incomplete
+    match["can_delete_completed"] = can_delete_completed
     # Player names only, for "Yet to bat" on the public scorecard (README "Public scorecard (Oct 29 2026)").
     match["lineups"] = {
         "club": list(lineups.get("club") or []),
@@ -6640,6 +6732,59 @@ def auth_options() -> dict[str, Any]:
     }
 
 
+_GENERIC_TEAM_NAMES = {"", "club", "opponent", "opposition", "team", "team 1", "team 2", "home", "away", "visitors", "tbd", "unknown"}
+
+
+def _published_scorecard_matches(store: dict[str, Any]) -> list[dict[str, Any]]:
+    """Nov 3 2026 (Amit): published scorecard uploads register their clubs and players too (e.g. "Amit CC" from
+    a photo), the same way scored fixtures do. Each one becomes a fixture-like row for _register_played_fixture_teams."""
+    rows: list[dict[str, Any]] = []
+    for upload in store.get("archive_uploads", []) or []:
+        if not isinstance(upload, dict) or not _archive_scorecard_is_published(upload):
+            continue
+        try:
+            card = _scorecard_from_archive(upload)
+        except Exception:
+            continue
+        teams = [re.sub(r"\s+", " ", str(team or "").strip()) for team in card.get("teams") or []]
+        teams = [team for team in teams if normalize_name(team) not in _GENERIC_TEAM_NAMES]
+        # "Coca Cola" on a card is the existing "Coca Cola XI" club, not a new one
+        existing = [club for club in store.get("clubs", []) or [] if isinstance(club, dict)]
+        teams = [
+            next(
+                (str(club.get("name")) for club in existing if club.get("name") and (_same_team_name(team, club.get("name")) or _same_team_name(team, club.get("short_name")))),
+                team,
+            )
+            for team in teams
+        ]
+        if len(teams) < 2 or normalize_name(teams[0]) == normalize_name(teams[1]):
+            continue
+        uploader_club = _club_by_identifier(store.get("clubs", []), str(upload.get("club_id") or "")) or {}
+        home, opponent = teams[0], teams[1]
+        if uploader_club and _club_match_key(teams[1]) in _club_identity_keys(uploader_club):
+            home, opponent = teams[1], teams[0]
+        home_is_uploader = bool(uploader_club) and _club_match_key(home) in _club_identity_keys(uploader_club)
+        innings = []
+        for item in card.get("innings") or []:
+            innings.append({
+                "batting_team": str(item.get("team") or ""),
+                "bowling_team": str(item.get("bowling_team") or ""),
+                "_players": {
+                    "batting": [{"player_name": row.get("name")} for row in item.get("batting") or [] if row.get("name")],
+                    "bowling": [{"player_name": row.get("name")} for row in item.get("bowling") or [] if row.get("name")],
+                },
+            })
+        rows.append({
+            "id": f"scorecard-{upload.get('id')}",
+            "club_id": str(uploader_club.get("id") or "") if home_is_uploader else "",
+            "club_name": home,
+            "opponent": opponent,
+            "scorebook": {"innings": innings},
+            "_from_scorecard": True,
+        })
+    return rows
+
+
 def _register_played_fixture_teams(store: dict[str, Any]) -> bool:
     """Make clubs and players from scored fixtures available in registration."""
     changed = False
@@ -6653,8 +6798,8 @@ def _register_played_fixture_teams(store: dict[str, Any]) -> bool:
             return opponent_club
         return _find_club_by_name(store, clean_name) or fallback
 
-    for fixture in store.get("fixtures", []) or []:
-        if not isinstance(fixture, dict) or not _fixture_has_recorded_score_data(fixture):
+    for fixture in [*(store.get("fixtures", []) or []), *_published_scorecard_matches(store)]:
+        if not isinstance(fixture, dict) or not (fixture.get("_from_scorecard") or _fixture_has_recorded_score_data(fixture)):
             continue
 
         home_name = str(fixture.get("club_name") or fixture.get("team_name") or "").strip()
@@ -6754,7 +6899,7 @@ def _register_played_fixture_teams(store: dict[str, Any]) -> bool:
                 str(innings.get("bowling_team") or ""),
                 default_bowling_club,
             )
-            summary = summarize_innings_scorebook(innings)
+            summary = innings.get("_players") or summarize_innings_scorebook(innings)
             for row in summary.get("batting", []):
                 name = re.sub(r"\s+", " ", str(row.get("player_name") or "").strip())
                 if name:
@@ -6770,7 +6915,7 @@ def _register_played_fixture_teams(store: dict[str, Any]) -> bool:
                 if fielder:
                     players_by_club.setdefault(str(bowling_club.get("id") or ""), set()).add(fielder)
 
-        lineups = _match_lineups(str(fixture.get("id") or ""))
+        lineups = {} if fixture.get("_from_scorecard") else _match_lineups(str(fixture.get("id") or ""))
         for name in lineups.get("club", []):
             clean_name = re.sub(r"\s+", " ", str(name or "").strip())
             if clean_name:
@@ -7925,6 +8070,7 @@ def update_season_fixture(
 def delete_season_fixture(
     club_id: str,
     fixture_id: str,
+    finished: bool = False,
     x_auth_token: str | None = Header(default=None),
 ) -> dict[str, Any]:
     user_row, current_club_id = _auth_user_from_token(x_auth_token)
@@ -7949,8 +8095,9 @@ def delete_season_fixture(
     )
     if fixture is None:
         raise HTTPException(status_code=404, detail="Fixture not found.")
-    if _fixture_is_completed(fixture):
-        raise HTTPException(status_code=409, detail="Completed matches cannot be deleted.")
+    if _fixture_is_completed(fixture) and not finished:
+        # Nov 2 2026 (Amit): wrong finished scorecards can be removed too, but only when asked for on purpose.
+        raise HTTPException(status_code=409, detail="This match is finished. Confirm that you want to delete a finished match.")
     before = len(store.get("fixtures", []))
     store["fixtures"] = [
         item
@@ -9333,6 +9480,115 @@ def add_scorebook_ball(
     return current_dashboard(load_store())
 
 
+class ScorebookEditRequest(BaseModel):
+    action: str  # "teams" | "rename" | "over_bowler"
+    innings_number: int = 1
+    batting: str = ""  # teams: "club" or "opponent" bats in innings_number (the other innings is the other team)
+    from_name: str = ""  # rename: every place this name is used in the match ...
+    to_name: str = ""  # ... becomes this name (pick an existing name to merge two spellings)
+    over_number: int = 0  # over_bowler: this over of innings_number ...
+    bowler: str = ""  # ... was bowled by this bowler
+
+
+@app.post("/api/matches/{match_id}/scorebook/edit")
+@_scoring_locked
+def edit_scorebook(match_id: str, request: ScorebookEditRequest, x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
+    """Fix a scored match (README "Edit a scored match", Nov 1 2026): which team batted in each innings, a player's
+    name everywhere in the match (or two spellings of one player merged), the bowler of an over. Captains, club
+    admins and site admins only (the same people who score), today's match or one already scored before."""
+    user_row, _ = _require_match_score_editor(x_auth_token, match_id)
+    store = load_store()
+    try:
+        match = get_match_or_404(store, match_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    if not any((row.get("balls") or []) for row in (_match_scorebook(match).get("innings") or [])):
+        raise HTTPException(status_code=400, detail="This match has no balls scored yet.")
+    scorebook = _match_scorebook(match)
+    innings_list = sorted(scorebook.get("innings", []), key=lambda row: int(row.get("inning_number") or 1))
+    club_name = str(match.get("club_name") or "").strip()
+    opponent = str(match.get("opponent") or "").strip()
+    action = str(request.action or "").strip().lower()
+    lineups = _match_lineups(match_id)
+    message = ""
+    if action == "teams":
+        if request.batting not in {"club", "opponent"} or request.innings_number not in {1, 2}:
+            raise HTTPException(status_code=400, detail="Pick which team batted.")
+        first_bats = (club_name if request.batting == "club" else opponent) if request.innings_number == 1 else (opponent if request.batting == "club" else club_name)
+        second_bats = opponent if first_bats == club_name else club_name
+        for row, bats in zip(innings_list, (first_bats, second_bats)):
+            row["batting_team"] = bats
+            row["bowling_team"] = opponent if bats == club_name else club_name
+        message = f"1st innings: {first_bats} batting. 2nd innings: {second_bats} batting."
+    elif action == "rename":
+        old = " ".join(str(request.from_name or "").split())
+        new = " ".join(str(request.to_name or "").split())
+        if not old or not new or old == new:
+            raise HTTPException(status_code=400, detail="Pick the name to change and type the right name.")
+        count = 0
+        for row in innings_list:
+            for ball in row.get("balls") or []:
+                for key in ("striker", "non_striker", "bowler", "fielder", "wicket_player"):
+                    if str(ball.get(key) or "").strip().lower() == old.lower():
+                        ball[key] = new
+                        count += 1
+            for key in ("batters", "bowlers"):
+                names = [str(slot.get("player_name") or "").strip() for slot in row.get(key) or []]
+                if new.lower() in {n.lower() for n in names}:
+                    for slot in row.get(key) or []:
+                        if str(slot.get("player_name") or "").strip().lower() == old.lower():
+                            slot["player_name"] = ""  # merged into the existing name
+                else:
+                    for slot in row.get(key) or []:
+                        if str(slot.get("player_name") or "").strip().lower() == old.lower():
+                            slot["player_name"] = new
+        if lineups:
+            for side in ("club", "opponent"):
+                names, seen = [], set()
+                for name in lineups.get(side) or []:
+                    name = new if name.strip().lower() == old.lower() else name
+                    if name.lower() not in seen:
+                        seen.add(name.lower())
+                        names.append(name)
+                lineups[side] = names
+                roles = (lineups.get("roles") or {}).get(side) or {}
+                for role, name in list(roles.items()):
+                    if str(name or "").strip().lower() == old.lower():
+                        roles[role] = new
+        message = f"{old} is now {new} everywhere in this match ({count} place{'s' if count != 1 else ''})."
+    elif action == "over_bowler":
+        bowler = " ".join(str(request.bowler or "").split())
+        row = next((r for r in innings_list if int(r.get("inning_number") or 1) == int(request.innings_number or 1)), None)
+        if row is None or not bowler or int(request.over_number or 0) < 1:
+            raise HTTPException(status_code=400, detail="Pick the over and the bowler.")
+        changed = [ball for ball in row.get("balls") or [] if int(ball.get("over_number") or 0) == int(request.over_number)]
+        if not changed:
+            raise HTTPException(status_code=400, detail=f"Over {request.over_number} has no balls yet.")
+        for ball in changed:
+            ball["bowler"] = bowler
+        message = f"Over {request.over_number} is now bowled by {bowler}."
+    else:
+        raise HTTPException(status_code=400, detail="Unknown change.")
+    if lineups and action == "rename":
+        with _auth_connection() as connection:
+            _ensure_extra_match_tables(connection)
+            connection.execute(
+                "UPDATE app_match_lineups SET lineups_json = ?, updated_at = ? WHERE match_id = ?",
+                (json.dumps({"club": lineups.get("club") or [], "opponent": lineups.get("opponent") or [], "roles": lineups.get("roles") or {}}), now_iso(), match_id),
+            )
+    # the result is worked out again (team names may have changed)
+    scorecard = dict(match.get("scorecard") or {})
+    scorecard["result"] = "TBD"
+    match["scorecard"] = scorecard
+    match["result"] = "TBD"
+    sync_fixture_scorecard_from_scorebook(match)
+    _settle_scorebook_result(match, lineups)
+    _touch_fixture_audit(match, user_row)
+    save_store(store)
+    _audit_event("scorebook.edit", "fixture", match_id, actor=user_row, club_id=str(match.get("club_id") or ""), club_name=club_name, details={"action": action, "message": message}, source="api")
+    return {"ok": True, "message": message}
+
+
 @app.delete("/api/matches/{match_id}/scorebook/ball")
 @_scoring_locked
 def delete_scorebook_ball(
@@ -10526,7 +10782,12 @@ def quick_score_state(match_id: str, x_auth_token: str | None = Header(default=N
         not _fixture_is_completed(fixture)
         and _match_delete_is_authorized(store, user_row, current_club_id, fixture)
     )
+    can_delete_completed = bool(
+        _fixture_is_completed(fixture)
+        and _match_delete_is_authorized(store, user_row, current_club_id, fixture)
+    )
     return {
+        "can_delete_completed": can_delete_completed,
         "match": payload,
         "open": _scorebook_is_open(fixture),
         "can_score": can_score,
@@ -12084,6 +12345,7 @@ async def upload_scorecard(
     match_id: str | None = None,
     season: str | None = None,
     focus_club_id: str | None = None,
+    link_match_code: str | None = None,
     x_auth_token: str | None = Header(default=None),
     file: UploadFile = File(...),
 ) -> dict[str, Any]:
@@ -12170,6 +12432,31 @@ async def upload_scorecard(
         if not _is_scorecard_template_payload(record.get("extraction_template")):
             record["extraction_template"] = scorecard_template_from_archive(record)
         record["review_template_json"] = json.dumps(record["extraction_template"], indent=2)
+    # The other innings of a match already uploaded (by this club or the other team): join them into one scorecard.
+    other_half = None
+    if link_match_code:
+        # the other team gave us their Match ID: link to it when it holds the other innings
+        linked = _upload_by_match_code(store, link_match_code)
+        mine, theirs = _single_innings(record), (_single_innings(linked) if linked else None)
+        if linked is not None and mine and theirs and not (
+            mine.get("batting_team") and theirs.get("batting_team") and _same_team_name(mine.get("batting_team"), theirs.get("batting_team"))
+        ):
+            other_half = linked
+    if other_half is None:
+        other_half = _find_other_half(store, record)
+    if other_half is not None:
+        checks = _join_halves(store, other_half, record, user_row)
+        save_store(store)
+        title = (checks.get("scorecard") or {}).get("title") or "this match"
+        return {
+            "message": f"This is the other innings of {title} (same date and teams). Both innings are now one scorecard.",
+            "dashboard": current_dashboard(load_store(), selected_club.get("id", "")),
+            "upload": other_half,
+            "joined": True,
+            "checks": {key: value for key, value in checks.items() if key != "scorecard"},
+            "digital": checks.get("scorecard"),
+            "preview_url": f"/scorecards/{other_half.get('id')}?preview=1&joined=1",
+        }
     checks = _scorecard_upload_checks(store, record)
     save_store(store)
     logger.debug("Scorecard upload saved. archive_id=%s club_id=%s file=%s", record.get("id", ""), record.get("club_id", ""), record.get("file_name", ""))
@@ -12378,6 +12665,253 @@ def _scorecard_ai_read(store: dict[str, Any], record: dict[str, Any], path: Path
     if not template:
         logger.warning("AI scorecard read skipped for %s: %s", record.get("id"), result.get("error"))
         return str(result.get("error") or "AI reading failed.")
+    # A card photographed on two pages (Amit, Nov 2): read the 2nd innings photo too and join them.
+    second = _second_photo_path(record)
+    if second is not None and _template_innings_count(template) < 2:
+        second_result = _read_photo_with_ai(store, record, second, club)
+        if second_result.get("template"):
+            template = _join_innings_photos(template, second_result["template"])
+    return _apply_ai_template(store, record, template, result)
+
+
+def _read_photo_with_ai(store: dict[str, Any], record: dict[str, Any], path: Path, club: dict[str, Any]) -> dict[str, Any]:
+    return ai_vision.read_scorecard(
+        Path(path),
+        roster=_club_member_names(store, club) if club else [],
+        club_name=str((club or {}).get("name") or ""),
+        known_names=_ai_known_names(store, club) if club else [],
+        corrections=_ai_corrections(str((club or {}).get("id") or record.get("club_id") or "")),
+        photo_date=_photo_date(record),
+    )
+
+
+def _innings_has_play(innings: dict[str, Any]) -> bool:
+    summary = innings.get("summary") or {}
+    return bool(innings.get("batting") or innings.get("bowling") or summary.get("runs") not in (None, "", 0))
+
+
+def _innings_has_detail(innings: dict[str, Any]) -> bool:
+    """An innings with its batting written out (not only a total copied from the other team's page)."""
+    def name(row: Any) -> str:
+        if not isinstance(row, dict):
+            return ""
+        player = row.get("player")
+        return str((player.get("name") if isinstance(player, dict) else player) or row.get("name") or row.get("player_name") or row.get("batter") or "").strip()
+
+    return any(name(row) for row in innings.get("batting") or [])
+
+
+def _usable_innings(template: dict[str, Any] | None) -> list[dict[str, Any]]:
+    """The innings that count. Nov 2 2026 (Dhruvika): each team's page often has its own innings written out and
+    only the other team's TOTAL (e.g. "Amit CC 207/7" + "Heartlake 204"); then only the written-out innings count."""
+    played = [item for item in (template or {}).get("innings") or [] if isinstance(item, dict) and _innings_has_play(item)]
+    detailed = [item for item in played if _innings_has_detail(item)]
+    return detailed if detailed else played
+
+
+def _template_innings_count(template: dict[str, Any] | None) -> int:
+    """How many innings a scorecard template really has (an empty 2nd innings block or a copied total doesn't count)."""
+    return len(_usable_innings(template))
+
+
+def _join_innings_photos(first: dict[str, Any], second: dict[str, Any]) -> dict[str, Any]:
+    """Join a card read from two photos: the 1st photo's innings + the other team's innings from the 2nd photo."""
+    joined = deepcopy(first)
+    kept = [deepcopy(item) for item in _usable_innings(joined)]
+    taken = {_team_key_text(item.get("batting_team")) for item in kept}
+    extra = [deepcopy(item) for item in _usable_innings(second)]
+    # the innings of the team that hasn't batted yet; if the reader didn't name the teams, the first one read
+    pick = next((item for item in extra if not any(_same_team_name(item.get("batting_team"), team) for team in taken if team)), None)
+    if pick is None and extra and not all(_team_key_text(item.get("batting_team")) for item in extra):
+        pick = extra[0]
+    if pick is None:
+        return joined
+    teams = (joined.get("match") or {}).get("teams") or {}
+    names = [str(teams.get("team_1") or ""), str(teams.get("team_2") or "")]
+    if kept:
+        first_bat = str(kept[0].get("batting_team") or "")
+        first_bowl = str(kept[0].get("bowling_team") or "")
+        pick["batting_team"] = pick.get("batting_team") or first_bowl or next((n for n in names if n and n != first_bat), "")
+        pick["bowling_team"] = pick.get("bowling_team") or first_bat
+    pick["inning_number"] = len(kept) + 1
+    joined["innings"] = kept + [pick]
+    # fill in match details the 1st photo didn't have (the 2nd page often has the result)
+    match = joined.setdefault("match", {})
+    for key, value in ((second.get("match") or {}).items()):
+        if value not in (None, "", {}, []) and match.get(key) in (None, "", {}, []):
+            match[key] = value
+    # the result is usually written on only one of the two pages
+    validation = joined.setdefault("validation", {}) if isinstance(joined.get("validation"), dict) or "validation" not in joined else {}
+    for key, value in ((second.get("validation") or {}).items() if isinstance(second.get("validation"), dict) else []):
+        if key == "expected_result" and value and not validation.get(key):
+            validation[key] = value
+    if isinstance(validation, dict) and validation:
+        joined["validation"] = validation
+        joined["validation"]["inning_2_total"] = (pick.get("summary") or {}).get("runs")
+    joined.setdefault("meta", {})["second_photo"] = True
+    return joined
+
+
+def _canonical_team_names(store: dict[str, Any], template: dict[str, Any]) -> None:
+    """Use the registered club's name for a team written a little differently ("Hearthlake" -> "Heartlake Cricket Club")."""
+    clubs = [club for club in store.get("clubs", []) or [] if isinstance(club, dict) and club.get("name")]
+
+    def fix(name: Any) -> Any:
+        text = str(name or "").strip()
+        if not text:
+            return name
+        club = next((club for club in clubs if _same_team_name(text, club.get("name")) or _same_team_name(text, club.get("short_name"))), None)
+        return str(club["name"]) if club else name
+
+    teams = (template.get("match") or {}).get("teams")
+    if isinstance(teams, dict):
+        for key in list(teams):
+            teams[key] = fix(teams[key])
+    for innings in template.get("innings") or []:
+        if isinstance(innings, dict):
+            innings["batting_team"] = fix(innings.get("batting_team"))
+            innings["bowling_team"] = fix(innings.get("bowling_team"))
+
+
+def _team_key_text(name: Any) -> str:
+    return re.sub(r"[^a-z0-9]", "", str(name or "").lower())
+
+
+_HALF_STOP_WORDS = {"cricket", "club", "cc", "xi", "the", "and", "of", "team", "community", "sports", "academy"}
+
+
+def _name_words(name: Any) -> set[str]:
+    return {word for word in re.findall(r"[a-z0-9]+", str(name or "").lower()) if word not in _HALF_STOP_WORDS and len(word) > 1}
+
+
+def _same_team_name(a: Any, b: Any) -> bool:
+    if _team_key_text(a) and _team_key_text(a) == _team_key_text(b):
+        return True
+    words_a, words_b = _name_words(a), _name_words(b)
+    if words_a and words_b and (words_a <= words_b or words_b <= words_a):
+        return True
+    # handwriting misreads: "Hearthlake" / "Heartcake" = "Heartlake" (Nov 3 2026)
+    if words_a and words_b:
+        from difflib import SequenceMatcher
+
+        joined_a, joined_b = " ".join(sorted(words_a)), " ".join(sorted(words_b))
+        if min(len(joined_a), len(joined_b)) >= 5 and SequenceMatcher(None, joined_a, joined_b).ratio() >= 0.8:
+            return True
+    return False
+
+
+def _single_innings(upload: dict[str, Any]) -> dict[str, Any] | None:
+    """The one innings of an upload that has exactly one innings (else None)."""
+    usable = _usable_innings(_scorecard_pick_template(upload) or {})
+    return usable[0] if len(usable) == 1 else None
+
+
+def _halves_match(record: dict[str, Any], other: dict[str, Any]) -> bool:
+    """Two uploads that are the two innings of one match: same date, same two teams, the same venue when both
+    name one, and a different batting team in each (the same batting team twice is a duplicate, not a half)."""
+    mine, theirs = _single_innings(record), _single_innings(other)
+    if not mine or not theirs:
+        return False
+    try:
+        card_a, card_b = _scorecard_from_archive(record), _scorecard_from_archive(other)
+    except Exception:
+        return False
+    if not card_a.get("date") or card_a.get("date") != card_b.get("date"):
+        return False
+    teams_a = [team for team in card_a.get("teams") or [] if str(team or "").strip()]
+    teams_b = [team for team in card_b.get("teams") or [] if str(team or "").strip()]
+    if len(teams_a) < 2 or len(teams_b) < 2:
+        return False
+    if not all(any(_same_team_name(a, b) for b in teams_b) for a in teams_a[:2]):
+        return False
+    # the venue is often written differently on the two pages ("Save Max" / "Dixie" for the same ground), so it
+    # doesn't block a join; date + both teams + a different batting side decide (Nov 3 2026, Amit's two pages)
+    bat_a, bat_b = mine.get("batting_team"), theirs.get("batting_team")
+    if bat_a and bat_b and _same_team_name(bat_a, bat_b):
+        return False
+    return True
+
+
+def _find_other_half(store: dict[str, Any], record: dict[str, Any]) -> dict[str, Any] | None:
+    """Amit / Dhruvika, Nov 2 2026: each team may upload its own innings photo (or one team both). Find the
+    upload that holds the other innings of this match, so the two are joined into one scorecard."""
+    if record.get("second_photo_file") or not _single_innings(record):
+        return None
+    def quick_date(upload: dict[str, Any]) -> str:
+        return str(upload.get("scorecard_date") or upload.get("archive_date") or ((_scorecard_pick_template(upload) or {}).get("match") or {}).get("date") or "")[:10]
+
+    my_date = quick_date(record)
+    # newest first: the other team's innings is usually the most recent upload of that match
+    for other in reversed(store.get("archive_uploads", []) or []):
+        if other is record or str(other.get("id")) == str(record.get("id")):
+            continue
+        if str(other.get("status") or "").lower() in {"rejected", "duplicate"} or other.get("second_photo_file"):
+            continue
+        # cheap checks first (the full card is only built for uploads from the same day with one innings)
+        if my_date and quick_date(other) and quick_date(other) != my_date:
+            continue
+        if _halves_match(record, other):
+            return other
+    return None
+
+
+def _join_halves(store: dict[str, Any], keep: dict[str, Any], half: dict[str, Any], user_row: sqlite3.Row | None) -> dict[str, Any]:
+    """Join upload `half` (one innings) into upload `keep` (the other innings): one scorecard with both innings
+    and both photos; `half` is removed. Returns the checks of the joined card."""
+    first_template = _scorecard_pick_template(keep) or {}
+    second_template = _scorecard_pick_template(half) or {}
+    # the innings written as innings 1 on its photo goes first
+    first_no = int((_single_innings(keep) or {}).get("inning_number") or 1)
+    second_no = int((_single_innings(half) or {}).get("inning_number") or 1)
+    if second_no < first_no:
+        joined = _join_innings_photos(second_template, first_template)
+    else:
+        joined = _join_innings_photos(first_template, second_template)
+    _canonical_team_names(store, joined)
+    was_published = _archive_scorecard_is_published(keep)
+    old_status = keep.get("status")
+    _apply_ai_template(
+        store,
+        keep,
+        joined,
+        {"model": keep.get("review_llm_model") or "joined", "notes": list(keep.get("ai_flags") or []) + list(half.get("ai_flags") or [])},
+    )
+    # notes like "Only one innings is on this photo" don't apply to the joined card
+    keep["ai_flags"] = [note for note in keep.get("ai_flags") or [] if "one innings" not in str(note).lower()]
+    keep["second_photo_file"] = Path(str(half.get("file_path") or half.get("file_name") or "").replace("\\", "/")).name
+    keep["second_photo_hash"] = half.get("file_hash") or ""
+    keep["second_photo_name"] = half.get("original_file_name") or half.get("file_name") or ""
+    keep["second_preview_url"] = half.get("preview_url") or (f"/uploads/{keep['second_photo_file']}" if keep["second_photo_file"] else "")
+    keep["second_uploaded_by"] = half.get("uploaded_by") or ""
+    keep["joined_upload_id"] = str(half.get("id") or "")
+    for club_id in half.get("club_ids") or [half.get("club_id")]:
+        if club_id and club_id not in (keep.get("club_ids") or []):
+            keep["club_ids"] = list(keep.get("club_ids") or []) + [club_id]
+    store["archive_uploads"] = [item for item in store.get("archive_uploads", []) or [] if str(item.get("id")) != str(half.get("id"))]
+    checks = _scorecard_upload_checks(store, keep)
+    if was_published and not checks["needs_review"]:
+        keep["status"] = old_status  # stays published with both innings
+    _audit_event(
+        "archive.join_innings",
+        "archive_upload",
+        str(keep.get("id") or ""),
+        actor=user_row,
+        club_id=str(keep.get("club_id") or ""),
+        details={"joined": str(half.get("id") or "")},
+        source="api",
+    )
+    return checks
+
+
+def _second_photo_path(record: dict[str, Any]) -> Path | None:
+    name = Path(str(record.get("second_photo_file") or "").replace("\\", "/")).name
+    if name and (UPLOAD_DIR / name).is_file():
+        return UPLOAD_DIR / name
+    return None
+
+
+def _apply_ai_template(store: dict[str, Any], record: dict[str, Any], template: dict[str, Any], result: dict[str, Any]) -> str:
+    """Save an AI-read template onto the upload record (shared by the 1st photo and the 2nd innings photo)."""
     imported = parse_imported_extraction(store, json.dumps(template))
     record.update(imported)
     # Keep the AI result as THE reviewed copy too, so the Admin Center JSON box, the snapshot and the
@@ -12455,7 +12989,9 @@ def _scorecard_upload_checks(store: dict[str, Any], record: dict[str, Any]) -> d
                     "status": other.get("status"),
                     "reason": f"AI thinks it's the same match ({verdict['reason'] or verdict['model']})",
                 })
-    flags = list(problems) + [f"Possible duplicate of '{item['file_name']}': {item['reason']}." for item in duplicates]
+    for item in duplicates:
+        item["match_code"] = _match_code(item.get("id"))
+    flags = list(problems) + [f"Possible duplicate of '{item['file_name']}' (Match ID {item['match_code']}): {item['reason']}." for item in duplicates]
     record["review_flags"] = flags
     record["review_problems"] = problems
     record["possible_duplicates"] = duplicates
@@ -12542,6 +13078,11 @@ def _mark_archive_approved(store: dict[str, Any], upload: dict[str, Any], user_r
     upload["reviewed_by"] = user_row["display_name"] or user_row["mobile"] or "admin"
     upload["reviewed_at"] = now_iso()
     auto_register_players_from_archive(store, upload, club_id=upload.get("club_id", ""))
+    # the teams on a published scorecard become clubs (with their players) if they aren't yet, e.g. "Amit CC"
+    try:
+        _register_played_fixture_teams(store)
+    except Exception:
+        logger.exception("Club registration from scorecard %s failed", upload.get("id"))
 
 
 class ScorecardReportRequest(BaseModel):
@@ -12576,10 +13117,8 @@ def scorecard_upload_preview(upload_id: str, x_auth_token: str | None = Header(d
         "can_publish": status.lower().startswith("pending") and (is_admin or not flags),
         "can_report": status.lower() not in {"rejected", "duplicate"},
         "can_edit": status.lower() not in {"rejected", "duplicate"},
-        "can_delete": bool(
-            not _archive_scorecard_is_published(upload)
-            and upload_roles.intersection({"captain", "club_admin", "superadmin"})
-        ),
+        "can_delete": bool(upload_roles.intersection({"captain", "club_admin", "superadmin"})),
+        "is_published": _archive_scorecard_is_published(upload),
         "unreadable": any(word in str(upload.get("ocr_engine") or "").lower() for word in ("unreadable", "fallback"))
         or (
             str(upload.get("ocr_engine") or "").lower() == "tesseract"
@@ -12591,6 +13130,22 @@ def scorecard_upload_preview(upload_id: str, x_auth_token: str | None = Header(d
         "ai_locked": ai_vision.enabled() and not _ai_allowed(user_row, preview_club_id, "ai_extraction", f"scorecard:{upload.get('id')}", claim=False),
         "is_site_admin": is_admin,
         "uploaded_by": upload.get("uploaded_by") or "",
+        "match_code": _match_code(upload.get("id")),
+        # possible same matches that are missing this card's other innings: offered as "Link as the other innings"
+        "link_candidates": [
+            {"id": item.get("id"), "match_code": _match_code(item.get("id")), "file_name": item.get("file_name") or ""}
+            for item in (upload.get("possible_duplicates") or [])
+            if isinstance(item, dict) and item.get("id")
+        ] if _template_innings_count(_scorecard_pick_template(upload) or {}) < 2 else [],
+        # Nov 2 2026: the other innings of this match uploaded separately -> offer "Join the two innings"
+        "other_half": (lambda half: {"id": half.get("id"), "file_name": half.get("original_file_name") or half.get("file_name") or "", "uploaded_by": half.get("uploaded_by") or ""} if half else None)(_find_other_half(store, upload)),
+        # Nov 2 2026: only one innings on the photo -> offer "Add the 2nd innings photo"
+        "innings_count": _template_innings_count(_scorecard_pick_template(upload) or {}),
+        "can_add_second_photo": bool(
+            status.lower() not in {"rejected", "duplicate"}
+            and not upload.get("second_photo_file")
+            and _template_innings_count(_scorecard_pick_template(upload) or {}) < 2
+        ),
     }
 
 
@@ -12680,6 +13235,126 @@ def scorecard_upload_ai_read(upload_id: str, x_auth_token: str | None = Header(d
         _scorecard_check_alerts(get_archive_or_404(refreshed, archive_id), checks, user_row)
     return {
         "message": "Read by AI. Check it against the photo." + (" A site admin will look at the points listed." if checks["needs_review"] else " Everything adds up: tap Publish if it matches."),
+        "checks": {key: value for key, value in checks.items() if key != "scorecard"},
+    }
+
+
+@app.post("/api/scorecards/{upload_id}/second-photo")
+async def scorecard_upload_second_photo(
+    upload_id: str,
+    request: Request,
+    x_auth_token: str | None = Header(default=None),
+    file: UploadFile = File(...),
+) -> dict[str, Any]:
+    """Amit, Nov 2 2026: a scorecard photographed on two pages. When the upload has only one innings, the uploader,
+    their club's scorers or a site admin add the 2nd innings photo; it is read and joined to the same scorecard."""
+    token = _auth_token_from_request(request, x_auth_token)
+    user_row, current_club_id, store, upload, _ = _scorecard_upload_access(token, upload_id)
+    status = str(upload.get("status") or "").lower()
+    if status in {"rejected", "duplicate"}:
+        raise HTTPException(status_code=409, detail="This scorecard was rejected. Upload it again instead.")
+    if upload.get("second_photo_file"):
+        raise HTTPException(status_code=409, detail="This scorecard already has a 2nd innings photo.")
+    template = _scorecard_pick_template(upload) or {}
+    if _template_innings_count(template) >= 2:
+        raise HTTPException(status_code=409, detail="This scorecard already has both innings.")
+    content = await file.read()
+    if not content:
+        raise HTTPException(status_code=400, detail="Choose a photo first.")
+    incoming_hash = file_sha256_from_bytes(content)
+    if incoming_hash == upload.get("file_hash"):
+        raise HTTPException(status_code=409, detail="That is the same photo as the 1st innings. Take a photo of the 2nd innings page.")
+    for existing in store.get("archive_uploads", []) or []:
+        if existing.get("file_hash") == incoming_hash or existing.get("second_photo_hash") == incoming_hash:
+            raise HTTPException(status_code=409, detail=f"This photo was already uploaded as '{existing.get('original_file_name') or existing.get('file_name') or 'another scorecard'}'.")
+    suffix = Path(file.filename or "scorecard.jpg").suffix or ".jpg"
+    file_token = f"{uuid.uuid4().hex[:10]}{suffix}"
+    (UPLOAD_DIR / file_token).write_bytes(content)
+    upload["second_photo_file"] = file_token
+    upload["second_photo_hash"] = incoming_hash
+    upload["second_photo_name"] = file.filename or file_token
+    upload["second_preview_url"] = f"/uploads/{file_token}"
+    message = "2nd innings photo added."
+    read = False
+    if ai_vision.enabled() and _ai_allowed(user_row, current_club_id, "ai_extraction", f"scorecard:{upload.get('id')}:2"):
+        club = _selected_club(store, str(upload.get("club_id") or current_club_id or ""))
+        result = _read_photo_with_ai(store, upload, UPLOAD_DIR / file_token, club)
+        if result.get("template"):
+            joined = _join_innings_photos(template, result["template"])
+            if _template_innings_count(joined) > _template_innings_count(template):
+                _apply_ai_template(store, upload, joined, result)
+                read = True
+                message = "2nd innings photo read and added to the scorecard. Check it against the photos."
+            else:
+                message = "2nd innings photo added, but no new innings was found on it. Check it's the other team's batting page, or type the 2nd innings in with ✏️."
+        else:
+            message = f"2nd innings photo added, but it couldn't be read ({result.get('error') or 'AI reading failed'}). Type the 2nd innings in with ✏️."
+    else:
+        message = "2nd innings photo added. Type the 2nd innings in with ✏️ (AI reading isn't available for this account)."
+    upload["status"] = "Pending review"
+    upload["review_flags"] = []
+    save_store(store)
+    refreshed = load_store()
+    archive_id = str(upload.get("id"))
+    checks = _scorecard_upload_checks(refreshed, get_archive_or_404(refreshed, archive_id))
+    save_store(refreshed)
+    _audit_event("archive.second_photo", "archive_upload", archive_id, actor=user_row, club_id=str(upload.get("club_id") or ""), details={"read": read, "file": file_token}, source="api")
+    return {
+        "message": message,
+        "read": read,
+        "preview_url": f"/scorecards/{archive_id}?preview=1",
+        "checks": {key: value for key, value in checks.items() if key != "scorecard"},
+    }
+
+
+class ScorecardLinkRequest(BaseModel):
+    match_code: str
+
+
+@app.post("/api/scorecards/{upload_id}/link")
+def scorecard_upload_link(upload_id: str, request: ScorecardLinkRequest, x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
+    """Nov 2 2026 (Amit): link this upload to the other team's innings by its Match ID, so the match has both
+    innings. Either team's captain / club admin (or a superadmin) can link; the two must be different innings."""
+    user_row, current_club_id, store, upload, _ = _scorecard_upload_access(x_auth_token, upload_id)
+    other = _upload_by_match_code(store, request.match_code)
+    if other is None:
+        raise HTTPException(status_code=404, detail=f"No scorecard has Match ID {request.match_code.strip() or '(empty)'}. Check the ID on the other team's scorecard.")
+    if str(other.get("id")) == str(upload.get("id")):
+        raise HTTPException(status_code=400, detail="That is this scorecard's own Match ID. Enter the other team's Match ID.")
+    mine, theirs = _single_innings(upload), _single_innings(other)
+    if not mine or not theirs:
+        raise HTTPException(status_code=409, detail="Linking needs one innings on each scorecard. One of them already has both innings, or has none.")
+    if mine.get("batting_team") and theirs.get("batting_team") and _same_team_name(mine.get("batting_team"), theirs.get("batting_team")):
+        raise HTTPException(status_code=409, detail="Both scorecards have the same team batting, so they're the same innings (a duplicate), not the two innings of one match.")
+    keep, half = (upload, other) if str(upload.get("created_at") or "") <= str(other.get("created_at") or "") else (other, upload)
+    checks = _join_halves(store, keep, half, user_row)
+    save_store(store)
+    return {
+        "message": f"Linked: both innings are now one match ({_match_code(keep.get('id'))}).",
+        "match_code": _match_code(keep.get("id")),
+        "preview_url": f"/scorecards/{keep.get('id')}?preview=1",
+        "checks": {key: value for key, value in checks.items() if key != "scorecard"},
+    }
+
+
+@app.post("/api/scorecards/{upload_id}/join/{other_id}")
+def scorecard_upload_join(upload_id: str, other_id: str, x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
+    """"🔗 Join the two innings": two uploads that are the two innings of one match become one scorecard."""
+    user_row, current_club_id, store, upload, _ = _scorecard_upload_access(x_auth_token, upload_id)
+    other_id = other_id[2:] if other_id.startswith("a-") else other_id
+    try:
+        other = get_archive_or_404(store, other_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    if not _halves_match(upload, other):
+        raise HTTPException(status_code=409, detail="These two uploads don't look like the two innings of one match (date, teams, venue and batting side must fit).")
+    # the older upload keeps its address; the newer one is joined into it
+    keep, half = (upload, other) if str(upload.get("created_at") or "") <= str(other.get("created_at") or "") else (other, upload)
+    checks = _join_halves(store, keep, half, user_row)
+    save_store(store)
+    return {
+        "message": "Joined: both innings are now one scorecard.",
+        "preview_url": f"/scorecards/{keep.get('id')}?preview=1",
         "checks": {key: value for key, value in checks.items() if key != "scorecard"},
     }
 
@@ -13176,6 +13851,11 @@ def approve_archive(
     upload["reviewed_by"] = user_row["display_name"] or user_row["mobile"] or "admin"
     upload["reviewed_at"] = now_iso()
     auto_register_players_from_archive(store, upload, club_id=upload.get("club_id", ""))
+    # the teams on a published scorecard become clubs (with their players) if they aren't yet, e.g. "Amit CC"
+    try:
+        _register_played_fixture_teams(store)
+    except Exception:
+        logger.exception("Club registration from scorecard %s failed", upload.get("id"))
     save_store(store)
     refreshed = load_store()
     updated = get_archive_or_404(refreshed, upload_id)
@@ -13230,7 +13910,7 @@ def approve_archive_form(
 
 
 @app.delete("/api/admin/archive/{upload_id}")
-def delete_archive(upload_id: str, x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
+def delete_archive(upload_id: str, published: bool = False, x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
     user_row, current_club_id = _auth_user_from_token(x_auth_token)
     if upload_id.startswith("a-"):
         upload_id = upload_id[2:]
@@ -13244,8 +13924,9 @@ def delete_archive(upload_id: str, x_auth_token: str | None = Header(default=Non
     upload_roles = set(_user_role_names(user_row, upload_club_id)) if upload_club_id else set()
     if not roles.union(upload_roles).intersection({"captain", "club_admin", "superadmin"}):
         raise HTTPException(status_code=403, detail="Only captains, club admins, or superadmins can delete incomplete scorecards.")
-    if _archive_scorecard_is_published(upload):
-        raise HTTPException(status_code=409, detail="Published scorecards cannot be deleted here.")
+    if _archive_scorecard_is_published(upload) and not published:
+        # Nov 2 2026 (Amit): a wrong published scorecard can be deleted too, when asked for on purpose.
+        raise HTTPException(status_code=409, detail="This scorecard is published. Confirm that you want to delete a published scorecard.")
     is_site_admin = "superadmin" in roles or "superadmin" in upload_roles
     upload_club = _selected_club(store, upload_club_id or current_club_id)
     if not is_site_admin:

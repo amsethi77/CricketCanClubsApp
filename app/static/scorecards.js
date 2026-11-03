@@ -62,6 +62,10 @@
       item.club_name ? `<span class="sc-tag">${escapeHtml(item.club_name)}</span>` : "",
       item.venue ? `<span class="sc-tag">📍 ${escapeHtml(item.venue)}</span>` : "",
       item.has_photo ? `<span class="sc-tag sc-tag-photo">📷 Photo</span>` : "",
+      item.match_code ? `<span class="sc-tag sc-tag-muted">${escapeHtml(item.match_code)}</span>` : "",
+      (item.innings_ids || []).some((i) => i.status === "missing") && item.source !== "fixture"
+        ? `<span class="sc-tag sc-tag-missing">⚠ ${(item.innings_ids || []).filter((i) => i.status === "missing").map((i) => `Innings ${i.number}`).join(", ")} missing</span>`
+        : "",
       item.source === "fixture" && item.is_incomplete ? `<span class="sc-tag sc-tag-muted">Incomplete</span>` : "",
       !item.has_details ? `<span class="sc-tag sc-tag-muted">Totals only</span>` : "",
     ].join("");
@@ -184,13 +188,13 @@
       clubEl.value = canSelectClub
         ? (new URLSearchParams(location.search).get("club") || fixedClubId)
         : fixedClubId;
-      const years = [...new Set(all.map((item) => item.year).filter(Boolean))].sort().reverse();
+      // Nov 2: the current season is always listed, even before its first scorecard
+      const thisYear = String(new Date().getFullYear());
+      const years = [...new Set([thisYear, ...all.map((item) => item.year).filter(Boolean)])].sort().reverse();
       fillSelect(yearEl, years.map((y) => [y, y]));
-      const dates = all.map((item) => item.date).filter(Boolean).sort();
-      if (dates.length) {
-        dateEl.min = dates[0];
-        dateEl.max = dates[dates.length - 1];
-      }
+      // Nov 2: no from / to limit on the date picker (it stopped at the last uploaded card)
+      dateEl.removeAttribute("min");
+      dateEl.removeAttribute("max");
 
       const params = new URLSearchParams(location.search);
       dateEl.value = params.get("date") || "";
@@ -250,7 +254,16 @@
     }
   });
 
-  dateEl.addEventListener("change", render);
+  const onDate = () => {
+    // keep Season in step with the picked date (a 2026 date while "2025" was picked showed nothing)
+    if (dateEl.value) {
+      const y = dateEl.value.slice(0, 4);
+      if ([...yearEl.options].some((o) => o.value === y)) yearEl.value = y;
+    }
+    render();
+  };
+  dateEl.addEventListener("change", onDate);
+  dateEl.addEventListener("input", onDate);
   clubEl.addEventListener("change", render);
   yearEl.addEventListener("change", () => {
     if (dateEl.value && yearEl.value && !dateEl.value.startsWith(yearEl.value)) dateEl.value = "";

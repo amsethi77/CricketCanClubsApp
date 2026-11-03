@@ -165,6 +165,7 @@
   let items = [];
   let filter = "all";
   let viewerClubId = "";
+  let viewerClubKey = ""; // Nov 2: fromFixture used clubKey before it existed (ReferenceError on Home)
 
   function fromFixture(f, kindOverride) {
     const status = String(f.status_key || f.status || "").toLowerCase();
@@ -176,7 +177,7 @@
       return t && t !== "0" ? t : "";
     };
     const result = String(f.result || "").replace(/^result:\s*/i, "").trim();
-    const clubIsOpponent = Boolean(clubKey && teamKey(f.opponent) === clubKey && teamKey(f.club_name) !== clubKey);
+    const clubIsOpponent = Boolean(viewerClubKey && teamKey(f.opponent) === viewerClubKey && teamKey(f.club_name) !== viewerClubKey);
     const ownName = clubIsOpponent ? (f.opponent || "Club") : (f.club_name || "Club");
     const opponentName = clubIsOpponent ? (f.club_name || "Opponent") : (f.opponent || "Opponent");
     const ownScore = clubIsOpponent ? f.opponent_score : f.heartlake_score;
@@ -357,6 +358,7 @@
     const clubId = club.id;
     viewerClubId = clubId;
     const clubKey = teamKey(club.name);
+    viewerClubKey = clubKey;
     const mineFirst = (a, b) => Number(b.club === clubId) - Number(a.club === clubId);
     // A member's Home shows their own club's matches and scorecards only (Amit, Oct 26: Heartlake's Home
     // showed other clubs' scorecards). The club's own card, or a card where the club is one of the teams.

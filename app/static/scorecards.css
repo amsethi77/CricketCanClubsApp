@@ -1060,3 +1060,97 @@ body.scorecard-detail-page .sc-header h1.sc-title {
     padding-right: 12px;
   }
 }
+
+/* Nov 2 2026: a card photographed on two pages - "Add the 2nd innings photo" */
+.sc-photo + .sc-photo {
+  margin-top: 18px;
+}
+
+.sc-second-photo {
+  margin: 12px 0;
+  padding: 12px 14px;
+  border: 1px dashed var(--sc-line);
+  border-radius: 12px;
+}
+
+.sc-second-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+}
+
+.sc-second-btn.is-busy {
+  opacity: 0.6;
+  pointer-events: none;
+}
+
+.sc-fix-bar {
+  margin: 10px 0 0;
+}
+
+/* Nov 2 2026: link the other team's innings by Match ID */
+.sc-link-form {
+  margin: 10px 0;
+  display: grid;
+  gap: 6px;
+}
+
+.sc-link-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.sc-link-row input {
+  flex: 1 1 160px;
+  min-height: 44px;
+  padding: 0 12px;
+  border-radius: 12px;
+  border: 1.5px solid #cbd5e1;
+  font: inherit;
+  text-transform: uppercase;
+}
+
+.sc-match-id b {
+  letter-spacing: 0.04em;
+}
+
+/* Nov 3 2026: innings IDs under the Match ID; a missing innings stands out */
+.sc-innings-ids {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  font-size: 0.82rem;
+}
+
+.sc-innings-ids li {
+  padding: 3px 9px;
+  border-radius: 999px;
+  border: 1px solid #cbd5e1;
+  background: #f8fafc;
+  color: #334155;
+}
+
+.sc-innings-ids li.missing {
+  border-color: #f59e0b;
+  background: #fffbeb;
+  color: #92400e;
+}
+
+.sc-tag-missing {
+  background: #fffbeb;
+  color: #92400e;
+  border-color: #f59e0b;
+}
+
+/* long file names / Match IDs in the check list must wrap on phones (no sideways scroll) */
+.sc-check,
+.sc-check-list li,
+.sc-check-lede {
+  overflow-wrap: anywhere;
+  min-width: 0;
+}

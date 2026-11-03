@@ -14,6 +14,10 @@
   const dropText = document.getElementById("scuDropText");
   const seasonEl = document.getElementById("scuSeason");
   const msgEl = document.getElementById("scuMsg");
+  // Nov 2 2026 (Amit): a card on two pages - an optional 2nd innings photo, joined to the same scorecard
+  const file2El = document.getElementById("scuFile2");
+  const preview2El = document.getElementById("scuPreview2");
+  const dropText2 = document.getElementById("scuDropText2");
   const token = () => {
     try {
       return localStorage.getItem(TOKEN_KEY) || "";
@@ -60,6 +64,20 @@
     }
   });
 
+  if (file2El) {
+    file2El.addEventListener("change", () => {
+      const file = file2El.files[0];
+      if (!file) return;
+      dropText2.textContent = `2nd innings: ${file.name}`;
+      if (/^image\/(jpeg|png|webp|gif)$/i.test(file.type)) {
+        preview2El.src = URL.createObjectURL(file);
+        preview2El.hidden = false;
+      } else {
+        preview2El.hidden = true;
+      }
+    });
+  }
+
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
     const file = fileEl.files[0];
@@ -79,13 +97,30 @@
     body.append("file", file);
     const qs = new URLSearchParams({ focus_club_id: clubEl.value || "" });
     if (seasonEl.value.trim()) qs.set("season", seasonEl.value.trim());
+    const linkEl = document.getElementById("scuLink");
+    if (linkEl && linkEl.value.trim()) qs.set("link_match_code", linkEl.value.trim());
     try {
       const response = await fetch(`/api/scorecards/upload?${qs}`, { method: "POST", headers: { "X-Auth-Token": token() }, body });
       const data = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(data.detail || "Upload failed.");
+      const previewUrl = data.preview_url || `/scorecards/${encodeURIComponent(data.upload?.id || "")}?preview=1`;
+      const second = file2El && file2El.files[0];
+      if (second && data.upload?.id) {
+        // the 1st photo is saved; now the 2nd innings photo (a problem here doesn't lose the 1st upload)
+        const body2 = new FormData();
+        body2.append("file", second);
+        const response2 = await fetch(`/api/scorecards/${encodeURIComponent(data.upload.id)}/second-photo`, { method: "POST", headers: { "X-Auth-Token": token() }, body: body2 });
+        const data2 = await response2.json().catch(() => ({}));
+        if (!response2.ok && response2.status !== 409) {
+          clearInterval(timer);
+          say(`1st photo uploaded, but the 2nd innings photo wasn't added: ${data2.detail || "please try again"}. Add it from the next page.`, true);
+          setTimeout(() => (location.href = previewUrl), 3500);
+          return;
+        }
+      }
       clearInterval(timer);
       say(data.message || "Uploaded.");
-      location.href = data.preview_url || `/scorecards/${encodeURIComponent(data.upload?.id || "")}?preview=1`;
+      location.href = previewUrl;
     } catch (error) {
       clearInterval(timer);
       say(error.message, true);
