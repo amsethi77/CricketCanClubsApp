@@ -793,7 +793,7 @@
             ${
               roster.length
                 ? `<div class="qs-picks">${roster
-                    .map((n) => `<label class="qs-pick"><input type="checkbox" name="club" value="${esc(n)}"${chosen.has(n) ? " checked" : ""} /> <span>${esc(n)}</span></label>`)
+                    .map((n) => `<label class="qs-pick"><input type="checkbox" name="club" value="${esc(n)}"${chosen.has(n) ? " checked" : ""} /> <span>${esc(n)}${(data.roster_player_ids || {})[n] ? ` <small class="qs-pid">#${esc(data.roster_player_ids[n])}</small>` : ""}</span></label>`)
                     .join("")}</div>`
                 : ""
             }

@@ -718,11 +718,39 @@ function reviewTemplateForUpload(upload) {
   };
 }
 
+// Nov 3 2026 (Amit): the review JSON shows the Match ID (parent) and each innings ID (children), the same IDs
+// as on Scorecards: match.match_code "M-XXXXXXXX", innings[n].innings_id "M-XXXXXXXX-I1" ... (Test: up to -I4).
+function matchCodeForUpload(upload) {
+  const clean = String(upload?.id || "").replace(/^[af]-/, "").replace(/[^0-9a-z]/gi, "").slice(0, 8).toUpperCase();
+  return clean ? `M-${clean}` : "";
+}
+
+function withMatchIds(template, upload) {
+  const code = matchCodeForUpload(upload);
+  if (!code || !template || typeof template !== "object") return template;
+  const out = { ...template, match: { match_code: code, ...(template.match || {}) } };
+  out.match.match_code = code;
+  const innings = Array.isArray(template.innings) ? template.innings : [];
+  const numbers = innings.map((inn) => Number(inn && inn.inning_number) || 0);
+  const useWritten = numbers.every((n) => n >= 1) && new Set(numbers).size === numbers.length;
+  out.innings = innings.map((inn, index) => {
+    const id = `${code}-I${useWritten ? numbers[index] : index + 1}`;
+    return { innings_id: id, ...inn, innings_id: id };
+  });
+  return out;
+}
+
 function reviewTextForUpload(upload) {
   const exact = String(upload?.review_template_json || "").trim();
-  if (exact) return exact;
+  if (exact) {
+    try {
+      return JSON.stringify(withMatchIds(JSON.parse(exact), upload), null, 2);
+    } catch (error) {
+      return exact;
+    }
+  }
   const template = reviewTemplateForUpload(upload);
-  return JSON.stringify(template, null, 2);
+  return JSON.stringify(withMatchIds(template, upload), null, 2);
 }
 
 function renderClubSelect(dashboard = payload) {
@@ -919,6 +947,7 @@ function renderArchives(dashboard) {
                 return `
                   <article class="detail-card" data-admin-upload="${upload.id}">
                     <strong>${escapeHtml(upload.file_name)}</strong>
+                    <p>Match ID <b>${escapeHtml(matchCodeForUpload(upload))}</b></p>
                     <p>${escapeHtml(upload.club_name || upload.resolved_club_name || "Club TBD")} · ${escapeHtml(upload.season || "Season TBD")}</p>
                     <small>${escapeHtml(upload.archive_date || "Date TBD")} · ${escapeHtml(upload.status || "Pending review")}</small>
                     <p>${escapeHtml(upload.extracted_summary || "Review the extracted draft before approving.")}</p>

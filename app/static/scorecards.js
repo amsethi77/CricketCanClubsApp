@@ -54,11 +54,12 @@
       item.source === "fixture" &&
       item.is_incomplete &&
       (manager.role === "superadmin" || (
-        ["captain", "club_admin"].includes(manager.role) &&
+        manager.role === "club_admin" &&
         String(item.club_id || "") === manager.clubId
       ))
     );
     const tags = [
+      item.pending ? `<span class="sc-tag sc-tag-missing">⏳ Waiting for review</span>` : "",
       item.club_name ? `<span class="sc-tag">${escapeHtml(item.club_name)}</span>` : "",
       item.venue ? `<span class="sc-tag">📍 ${escapeHtml(item.venue)}</span>` : "",
       item.has_photo ? `<span class="sc-tag sc-tag-photo">📷 Photo</span>` : "",
@@ -71,7 +72,7 @@
     ].join("");
     return `
       <article class="sc-card-wrap">
-        <a class="sc-card" href="/scorecards/${encodeURIComponent(item.id)}">
+        <a class="sc-card${item.pending ? " sc-card-pending" : ""}" href="${escapeHtml(item.url || `/scorecards/${encodeURIComponent(item.id)}`)}">
           <div class="sc-card-date" aria-hidden="true">
             <span>${escapeHtml(p.day)}</span>
             <strong>${p.d}</strong>

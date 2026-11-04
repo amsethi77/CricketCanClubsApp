@@ -291,7 +291,9 @@ async function renderPlayerBreakdowns() {
   }
 
   const yearRows = [];
-  const mergedYearStats = [...(dashboardData?.member_year_stats || []), ...(overview?.year_stats || [])];
+  // Nov 4 2026: the player's own totals (all clubs) come first; the dashboard's rows only cover the current club
+  // (2024 showed HS 24 with 0 matches because the Heartlake-only row won)
+  const mergedYearStats = [...(overview?.year_stats || []), ...(dashboardData?.member_year_stats || [])];
   const yearStatsByKey = new Map();
   for (const row of mergedYearStats) {
     const key = `${String(row.season_year || "").trim().toLowerCase()}|${String(row.player_name || "").trim().toLowerCase()}`;
@@ -303,7 +305,7 @@ async function renderPlayerBreakdowns() {
   const rankingYears = [...new Set(yearStats.map((item) => item.season_year).filter(Boolean))];
   for (const year of rankingYears) {
     const row = { runs: 0, wickets: 0, catches: 0, matches: 0, batting_innings: 0, outs: 0, batting_average: 0, strike_rate: 0, fours: 0, sixes: 0, highest_score: null };
-    const match = yearStats.find((item) => item.season_year === String(year) && item.player_name === member.name) || row;
+    const match = yearStats.find((item) => item.season_year === String(year) && (item.player_name === member.name || performanceMatchesMember(item.player_name, member))) || row;
     const yearRow = match;
     yearRows.push({
       label: year,
@@ -311,7 +313,7 @@ async function renderPlayerBreakdowns() {
       innings: rowValue(yearRow, "batting_innings"),
       not_outs: Math.max(0, rowValue(yearRow, "batting_innings") - rowValue(yearRow, "outs")),
       runs: rowValue(yearRow, "runs"),
-      hs: rowValue(yearRow, "highest_score") || highestScoreFor(member, { year }) || "—",
+      hs: rowValue(yearRow, "matches") ? rowValue(yearRow, "highest_score") || highestScoreFor(member, { year }) || "—" : "—",
       average: Number(yearRow.batting_average || 0) || 0,
       balls: rowValue(yearRow, "balls"),
       strike_rate: Number(yearRow.strike_rate || 0) || 0,
@@ -330,7 +332,7 @@ async function renderPlayerBreakdowns() {
   const memberships = (member.club_memberships || [])
     .filter((club) => String(club.club_id || "").trim())
     .map((club) => ({ club_id: String(club.club_id || "").trim(), club_name: String(club.club_name || "").trim() || club.club_id }));
-  const mergedClubStats = [...(dashboardData?.member_club_stats || []), ...(overview?.club_stats || [])];
+  const mergedClubStats = [...(overview?.club_stats || []), ...(dashboardData?.member_club_stats || [])];
   const clubStatsByKey = new Map();
   for (const row of mergedClubStats) {
     const key = `${String(row.club_id || "").trim().toLowerCase()}|${String(row.player_name || "").trim().toLowerCase()}`;
@@ -339,8 +341,17 @@ async function renderPlayerBreakdowns() {
     }
   }
   const clubStats = Array.from(clubStatsByKey.values());
+  // Nov 4 2026 (Amit: "club wise shows only Coca Cola with zeros"): every club the player belongs to OR has
+  // stats for, matched by any of their names / aliases (not only the exact profile name)
+  const isMe = (name) => String(name || "").trim() === member.name || performanceMatchesMember(name, member);
+  for (const row of clubStats) {
+    const id = String(row.club_id || "").trim();
+    if (id && isMe(row.player_name) && !memberships.some((club) => club.club_id === id)) {
+      memberships.push({ club_id: id, club_name: String(row.club_name || "").trim() || id });
+    }
+  }
   for (const club of memberships) {
-    const row = clubStats.find((item) => item.club_id === club.club_id && item.player_name === member.name) || {
+    const row = clubStats.find((item) => item.club_id === club.club_id && isMe(item.player_name)) || {
       runs: 0,
       wickets: 0,
       catches: 0,
@@ -358,7 +369,7 @@ async function renderPlayerBreakdowns() {
       innings: rowValue(row, "batting_innings"),
       not_outs: Math.max(0, rowValue(row, "batting_innings") - rowValue(row, "outs")),
       runs: rowValue(row, "runs"),
-      hs: rowValue(row, "highest_score") || highestScoreFor(member, { clubId: club.club_id }) || "—",
+      hs: rowValue(row, "matches") ? rowValue(row, "highest_score") || highestScoreFor(member, { clubId: club.club_id }) || "—" : "—",
       average: Number(row.batting_average || 0) || 0,
       balls: rowValue(row, "balls"),
       strike_rate: Number(row.strike_rate || 0) || 0,
@@ -462,7 +473,8 @@ function refreshLinks() {
 function renderClubs() {
   const selectedId = currentClub()?.id || "";
   const query = clubSearchInput.value.trim().toLowerCase();
-  const visibleClubs = (authData?.clubs || [])
+  const pool = query && isSuperadminUser(authData?.user) ? authData?.allClubs || authData?.clubs || [] : authData?.clubs || [];
+  const visibleClubs = pool
     .slice()
     .sort((left, right) => {
       const leftScore = left.id === selectedId ? 0 : 1;
@@ -527,10 +539,10 @@ function renderClubs() {
     .then((data) => {
       if (!data) return;
       authData = data;
-      if (isSuperadminUser(authData.user)) {
-        const currentClubId = String(authData.user.current_club_id || authData.user.primary_club_id || "").trim();
-        authData.clubs = (authData.clubs || []).filter((club) => String(club.id || "").trim() === currentClubId);
-      }
+      // Nov 4 2026 (Amit): "My clubs" = every club you belong to / played for (Heartlake + Coca Cola + Amit CC),
+      // not only the current one; a superadmin's search also finds every other club.
+      authData.allClubs = authData.clubs || [];
+      if (Array.isArray(authData.my_clubs) && authData.my_clubs.length) authData.clubs = authData.my_clubs;
       const nextAuthSignature = [
         authData?.user?.member_id || "",
         authData?.user?.viewer_member_name || "",

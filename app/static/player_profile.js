@@ -67,10 +67,7 @@ function renderSnapshot() {
   }
   const stats = payload?.summary_stats || {};
   const clubsLabel = (member.club_memberships || []).map((club) => club.club_name).filter(Boolean).join(", ") || "No clubs stored";
-  const teamsLabel = (member.team_memberships || [])
-    .map((item) => item.team_name || item)
-    .filter(Boolean)
-    .join(", ") || "No teams stored";
+  const teamsLabel = [...new Set((member.team_memberships || []).map((item) => item.display_name || item.team_name || item).filter((v) => typeof v === "string" && v))].join(", ") || "No teams stored";
   snapshot.innerHTML = [
     summaryCard("Player ID", member.player_id || "Pending"),
     summaryCard("Full Name", member.full_name || member.name || "Player"),
@@ -148,10 +145,8 @@ function fillForm() {
   document.getElementById("profileBattingStyle").value = member.batting_style || "";
   document.getElementById("profileBowlingStyle").value = member.bowling_style || "";
   document.getElementById("profileAliases").value = (member.aliases || []).join(", ");
-  document.getElementById("profileTeams").value = (member.team_memberships || [])
-    .filter((item) => (item.team_type || "") !== "club")
-    .map((item) => item.team_name || item)
-    .join(", ");
+  // Nov 4 2026: show every club the player belongs to (it used to hide club links and show only typed names)
+  document.getElementById("profileTeams").value = [...new Set((member.club_memberships || []).map((club) => club.club_name).filter(Boolean))].join(", ");
   document.getElementById("profileNotes").value = member.notes || "";
   renderSnapshot();
   renderMatchHistory();

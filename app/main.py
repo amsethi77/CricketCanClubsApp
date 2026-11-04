@@ -943,8 +943,8 @@ def _clubs_page_html(request: Request, search: str = "", focus_club_id: str = ""
         except HTTPException:
             member_club_ids = []
     clubs = _sorted_club_choices(store, current_club_id)
-    if token and is_superadmin:
-        clubs = [club for club in clubs if str(club.get("id") or "").strip() == str(current_club_id or "").strip()]
+    # Nov 4 2026 (Amit): everyone (the superadmin too) sees all the clubs they belong to / played for; a search
+    # looks through every club (it used to show the superadmin only the current club, and search found nothing).
     query = search.strip().lower()
     linked_only = [club for club in clubs if str(club.get("id") or "").strip() in set(member_club_ids)]
     if not linked_only:
@@ -962,7 +962,7 @@ def _clubs_page_html(request: Request, search: str = "", focus_club_id: str = ""
     )
     if not default_clubs:
         default_clubs = clubs[:1]
-    source_clubs = clubs if query else default_clubs[:1]
+    source_clubs = clubs if query else default_clubs
     filtered = [
         club
         for club in source_clubs
@@ -1108,7 +1108,7 @@ def _clubs_page_html(request: Request, search: str = "", focus_club_id: str = ""
           </section>
         </div>
         <script src="/assets/multipage.js?v=20261025a"></script>
-        <script src="/assets/clubs.js?v=20261102a"></script>
+        <script src="/assets/clubs.js?v=20261104c"></script>
       </body>
     </html>
     """
@@ -1897,6 +1897,8 @@ def _auth_connection() -> sqlite3.Connection:
     return connection
 
 
+ROLE_IDS: dict[str, int] = {"superadmin": 1, "club_admin": 2, "captain": 3, "player": 4}
+
 DEFAULT_ROLE_PERMISSIONS: dict[str, dict[str, str]] = {
     "player": {},
     "captain": {
@@ -2082,6 +2084,12 @@ def ensure_auth_schema() -> None:
 
                 connection.execute("CREATE INDEX IF NOT EXISTS idx_app_users_player_id ON app_users(player_id)")
                 _seed_role_catalog(connection)
+                # Nov 4 2026 (Amit): fixed role IDs - 1 superadmin, 2 club admin, 3 captain, 4 player
+                role_columns = {str(row[1]) for row in connection.execute("PRAGMA table_info(app_roles)").fetchall()}
+                if "role_id" not in role_columns:
+                    connection.execute("ALTER TABLE app_roles ADD COLUMN role_id INTEGER")
+                for role_name, role_id in ROLE_IDS.items():
+                    connection.execute("UPDATE app_roles SET role_id = ? WHERE role_name = ?", (role_id, role_name))
                 _sync_role_permissions(connection)
                 _migrate_multi_role_assignments(connection)
                 _migrate_auth_sessions(connection)
@@ -2428,6 +2436,7 @@ def _auth_user_payload(user_row: sqlite3.Row, current_club_id: str = "") -> dict
         "role": user_row["role"] or "player",
         "roles": role_names,
         "effective_role": effective_role,
+        "role_id": ROLE_IDS.get(str(effective_role or ""), 4),
         "permissions": permissions,
         "member_id": user_row["member_id"] or "",
         "player_id": str(user_row["player_id"] or (member.get("player_id") if member else "") or ("1000" if str(user_row["role"] or "").lower() == "superadmin" else "")),
@@ -2500,6 +2509,7 @@ def _visible_club_choices_for_user(
     store: dict[str, Any],
     user_row: sqlite3.Row,
     current_club_id: str = "",
+    all_for_superadmin: bool = True,
 ) -> list[dict[str, str]]:
     linked_ids: list[str] = []
 
@@ -2531,7 +2541,7 @@ def _visible_club_choices_for_user(
     except Exception:
         logger.debug("Could not load club-role links for user_id=%s", user_row["id"])
 
-    if "superadmin" in _user_role_names(user_row, current_club_id):
+    if all_for_superadmin and "superadmin" in _user_role_names(user_row, current_club_id):
         return _sorted_club_choices(store, current_club_id, include_disabled=True)
 
     clubs = [
@@ -2731,24 +2741,11 @@ def _match_delete_is_authorized(
             str(user_row["primary_club_id"] or ""),
             str(current_club_id or ""),
         }
-        if club_id in allowed_clubs and roles.intersection({"captain", "club_admin"}):
+        # Nov 4 2026 (Amit's role rules): deleting a match / scorecard is for club admins and the superadmin only
+        # (captains manage and edit their games but don't delete them).
+        if club_id in allowed_clubs and roles.intersection({"club_admin"}):
             return True
-    captain_name = normalize_name(str(match.get("heartlake_captain") or ""))
-    member_names = {
-        normalize_name(str(value or ""))
-        for value in [
-            user_row["display_name"],
-            (member or {}).get("name"),
-            (member or {}).get("full_name"),
-            *((member or {}).get("aliases", []) or []),
-        ]
-        if str(value or "").strip()
-    }
-    captain_member_id = str(match.get("heartlake_captain_member_id") or "").strip()
-    return bool(
-        (captain_name and captain_name in member_names)
-        or (captain_member_id and captain_member_id == str(user_row["member_id"] or "").strip())
-    )
+    return False
 
 
 def _require_match_scorer(token: str | None, match_id: str, expected_club_id: str = "") -> tuple[sqlite3.Row, str]:
@@ -3942,7 +3939,33 @@ def root(request: Request) -> RedirectResponse:
 def startup_tasks() -> None:
     ensure_auth_schema()
     _refresh_player_stats_once()
+    _register_played_teams_in_background()
     threading.Thread(target=_reminder_loop, name="match-reminders", daemon=True).start()
+
+
+_REGISTER_LOCK = threading.Lock()
+
+
+def _register_played_teams_in_background() -> None:
+    """Nov 3 2026 (Amit: "I see only my primary club, not Coca Cola or Amit CC where I have played"): make sure
+    every club and player from played games (scored fixtures and published scorecards) is registered, and each
+    player is a member of the clubs they played for, so those clubs show on the Clubs / switch club page."""
+
+    if not _REGISTER_LOCK.acquire(blocking=False):
+        return  # one run at a time
+
+    def _work() -> None:
+        try:
+            store = load_store()
+            if _register_played_fixture_teams(store):
+                save_store(store)
+                logger.info("Registered clubs and players from played games.")
+        except Exception:
+            logger.exception("Registering clubs from played games failed")
+        finally:
+            _REGISTER_LOCK.release()
+
+    threading.Thread(target=_work, name="register-played-teams", daemon=True).start()
 
 
 STATS_REFRESH_VERSION = "strike-rate-fix-1"
@@ -5571,6 +5594,28 @@ def _upload_by_match_code(store: dict[str, Any], code: str) -> dict[str, Any] | 
     return None
 
 
+def _json_with_match_ids(text: str, upload: dict[str, Any]) -> str:
+    """Admin Center review JSON (Amit, Nov 3 2026): add match.match_code "M-XXXXXXXX" and each innings'
+    innings_id "M-XXXXXXXX-I1" ... so the reviewed JSON carries the same IDs as Scorecards."""
+    code = _match_code(upload.get("id"))
+    try:
+        template = json.loads(text)
+    except Exception:
+        return text
+    if not code or not isinstance(template, dict):
+        return text
+    match = template.get("match") if isinstance(template.get("match"), dict) else {}
+    template["match"] = {"match_code": code, **{k: v for k, v in match.items() if k != "match_code"}}
+    innings = [item for item in template.get("innings") or [] if isinstance(item, dict)]
+    numbers = [_scorecard_int(item.get("inning_number")) for item in innings]
+    use_written = all(isinstance(n, int) and n >= 1 for n in numbers) and len(set(numbers)) == len(numbers)
+    template["innings"] = [
+        {"innings_id": f"{code}-I{numbers[i] if use_written else i + 1}", **{k: v for k, v in item.items() if k != "innings_id"}}
+        for i, item in enumerate(innings)
+    ]
+    return json.dumps(template, indent=2)
+
+
 def _scorecard_list_item(card: dict[str, Any]) -> dict[str, Any]:
     return {
         "id": card["id"],
@@ -5649,6 +5694,31 @@ def public_scorecards(
                 clubs = [{"id": selected_club_id, "name": str(selected.get("name") or "My club")}]
         else:
             cards = []
+    pending_ids: set[str] = set()
+    if signed_in:
+        # Nov 3 2026: captains, club admins and superadmins also see their matches still waiting for review
+        # (marked "Waiting for review", opening the check page), so a just-linked match can always be found.
+        try:
+            if "score_matches" in _user_permissions(user_row, selected_club_id):
+                for upload in store.get("archive_uploads", []) or []:
+                    status = str(upload.get("status") or "").lower()
+                    if _archive_scorecard_is_published(upload) or status in {"rejected", "duplicate"}:
+                        continue
+                    try:
+                        card = _scorecard_from_archive(upload)
+                    except Exception:
+                        continue
+                    involved = _scorecard_involved_club_ids(store, card) | {str(c) for c in upload.get("club_ids") or [upload.get("club_id")] if c}
+                    if can_select_club:
+                        if club_id and club_id not in involved:
+                            continue
+                    elif not selected_club_id or selected_club_id not in involved:
+                        continue
+                    cards.append(card)
+                    pending_ids.add(card["id"])
+        except Exception:
+            logger.exception("Could not list scorecards waiting for review")
+    cards.sort(key=lambda card: (str(card.get("date") or ""), str(card.get("id") or "")), reverse=True)
     dates = sorted({card["date"] for card in cards}, reverse=True)
     if year:
         cards = [card for card in cards if card["year"] == year]
@@ -5658,6 +5728,9 @@ def public_scorecards(
     for card in cards:
         item = _scorecard_list_item(card)
         item["club_ids"] = sorted(_scorecard_involved_club_ids(store, card))
+        if card["id"] in pending_ids:
+            item["pending"] = True
+            item["url"] = f"/scorecards/{card['id'][2:]}?preview=1"
         scorecards.append(item)
     return {
         "scorecards": scorecards,
@@ -6021,6 +6094,7 @@ def _admin_center_html(request: Request) -> HTMLResponse:
             for upload in group:
                 template_value = upload.get("extraction_template") if isinstance(upload.get("extraction_template"), dict) else scorecard_template_from_archive(upload)
                 template_text = str(upload.get("review_template_json") or "").strip() or json.dumps(template_value, indent=2)
+                template_text = _json_with_match_ids(template_text, upload)
                 llm_chips, llm_details = _review_assessment_bits(upload)
                 review_llm_model = str(upload.get("review_llm_model") or "").strip()
                 review_llm_notes = str(upload.get("review_llm_notes") or "").strip()
@@ -6041,6 +6115,7 @@ def _admin_center_html(request: Request) -> HTMLResponse:
                     f"""
                       <article class="detail-card" data-admin-upload="{html.escape(str(upload.get('id') or ''))}">
                         <strong>{html.escape(upload.get('file_name') or '')}</strong>
+                        <p>Match ID <b>{html.escape(_match_code(upload.get('id')))}</b></p>
                         <p>{html.escape(upload.get('club_name') or upload.get('resolved_club_name') or 'Club TBD')} · {html.escape(upload.get('season') or 'Season TBD')}</p>
                         <small>{html.escape(upload.get('archive_date') or 'Date TBD')} · {html.escape(upload.get('status') or 'Pending review')}</small>
                         <p>{html.escape(upload.get('extracted_summary') or 'Review the extracted draft before approving.')}</p>
@@ -6241,7 +6316,7 @@ def _admin_center_html(request: Request) -> HTMLResponse:
         </div>
         <script src="/assets/multipage.js?v=20261025a"></script>
         <script src="/assets/scorecard.js?v=20261019a"></script>
-        <script src="/assets/admin_center.js?v=20261102c"></script>
+        <script src="/assets/admin_center.js?v=20261103c"></script>
         <script src="/assets/admin_reread.js?v=20261024a"></script>
       </body>
     </html>
@@ -6390,6 +6465,7 @@ def clubs_page(request: Request, search: str = "", focus_club_id: str = "") -> R
     if isinstance(session, RedirectResponse):
         # Signed-out visitors get the public, read-only club list instead of the sign-in page.
         return _page_response("public_clubs.html")
+    _register_played_teams_in_background()  # never slows the page down; usually nothing new to add
     return _clubs_page_html(request, search, focus_club_id)
 
 
@@ -6788,6 +6864,12 @@ def _published_scorecard_matches(store: dict[str, Any]) -> list[dict[str, Any]]:
 def _register_played_fixture_teams(store: dict[str, Any]) -> bool:
     """Make clubs and players from scored fixtures available in registration."""
     changed = False
+    # repair profiles saved before Nov 4 2026, whose club links were replaced by typed names ("Amit CC")
+    for member in store.get("members", []) or []:
+        typed = [item for item in member.get("team_memberships") or [] if not isinstance(item, dict)]
+        if typed:
+            _add_member_clubs_by_name(store, member, typed)
+            changed = True
 
     def club_for_team(team_name: str, fallback: dict[str, Any]) -> dict[str, Any]:
         clean_name = re.sub(r"\s+", " ", str(team_name or "").strip())
@@ -7040,6 +7122,29 @@ def _register_played_fixture_teams(store: dict[str, Any]) -> bool:
                         {"club_id": club_id, "club_name": club_name, "teams": [team_name]}
                     )
                     changed = True
+
+    # Nov 4 2026: a published scorecard belongs to the clubs of both teams (e.g. Heartlake AND Amit CC), so it
+    # shows under both clubs and counts in both clubs' stats (each player only for the side they played for).
+    for upload in store.get("archive_uploads", []) or []:
+        if not isinstance(upload, dict) or not _archive_scorecard_is_published(upload):
+            continue
+        try:
+            card = _scorecard_from_archive(upload)
+        except Exception:
+            continue
+        ids = [str(item) for item in upload.get("club_ids") or [] if item]
+        for team in card.get("teams") or []:
+            if normalize_name(str(team or "")) in _GENERIC_TEAM_NAMES:
+                continue
+            club = _find_club_by_name(store, str(team)) or next(
+                (item for item in store.get("clubs", []) or [] if _same_team_name(team, item.get("name")) or _same_team_name(team, item.get("short_name"))),
+                None,
+            )
+            if club and str(club.get("id")) not in ids:
+                ids.append(str(club["id"]))
+        if ids != [str(item) for item in upload.get("club_ids") or [] if item]:
+            upload["club_ids"] = ids
+            changed = True
 
     if changed:
         save_store(store)
@@ -7567,6 +7672,9 @@ def signin(request: SignInRequest, response: Response) -> dict[str, Any]:
         "user": _auth_user_payload(user_row, current_club_id),
         "clubs": _visible_club_choices_for_user(store, user_row, current_club_id),
         "visible_clubs": _visible_club_choices_for_user(store, user_row, current_club_id),
+        # Nov 4 2026 (Amit): the clubs this person belongs to / played for (primary first) - for a superadmin too,
+        # whose "clubs" list is every club
+        "my_clubs": _visible_club_choices_for_user(store, user_row, current_club_id, all_for_superadmin=False),
         "session": session_state,
     }
 
@@ -7637,6 +7745,9 @@ def auth_me(x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
         "user": _auth_user_payload(user_row, current_club_id),
         "clubs": _visible_club_choices_for_user(store, user_row, current_club_id),
         "visible_clubs": _visible_club_choices_for_user(store, user_row, current_club_id),
+        # Nov 4 2026 (Amit): the clubs this person belongs to / played for (primary first) - for a superadmin too,
+        # whose "clubs" list is every club
+        "my_clubs": _visible_club_choices_for_user(store, user_row, current_club_id, all_for_superadmin=False),
         "session": session_state,
     }
 
@@ -8490,6 +8601,38 @@ def player_summary_data(x_auth_token: str | None = Header(default=None)) -> dict
     return player_profile_data(x_auth_token)
 
 
+def _add_member_clubs_by_name(store: dict[str, Any], member: dict[str, Any], names: list[Any]) -> list[str]:
+    """Link a player to the registered clubs named in `names` (exact or close spelling); keeps every existing link."""
+    added: list[str] = []
+    memberships = [item for item in member.get("team_memberships") or [] if isinstance(item, dict)]
+    club_links = [item for item in member.get("club_memberships") or [] if isinstance(item, dict)]
+    have = {str(item.get("club_id") or "") for item in memberships + club_links if item.get("club_id")}
+    clubs = [club for club in store.get("clubs", []) or [] if isinstance(club, dict) and club.get("id")]
+    for raw in names:
+        name = str(raw.get("club_name") or raw.get("team_name") or "") if isinstance(raw, dict) else str(raw or "")
+        name = name.strip()
+        if not name:
+            continue
+        club = _find_club_by_name(store, name) or next(
+            (item for item in clubs if _same_team_name(name, item.get("name")) or _same_team_name(name, item.get("short_name"))),
+            None,
+        )
+        if not club or str(club["id"]) in have:
+            continue
+        club_id, club_name = str(club["id"]), str(club.get("name") or name)
+        team_name = str(club.get("short_name") or club_name)
+        memberships.append({"team_name": team_name, "display_name": club_name, "club_id": club_id, "club_name": club_name, "team_type": "club", "is_primary": False})
+        club_links.append({"club_id": club_id, "club_name": club_name, "is_primary": False})
+        have.add(club_id)
+        added.append(club_name)
+    member["team_memberships"] = memberships
+    member["club_memberships"] = club_links
+    if not str(member.get("primary_club_id") or "").strip() and memberships:
+        member["primary_club_id"] = str(memberships[0].get("club_id") or "")
+        member["primary_club_name"] = str(memberships[0].get("club_name") or "")
+    return added
+
+
 @app.post("/api/player/profile")
 def save_player_profile(request: PlayerSelfProfileRequest, x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
     user_row, current_club_id = _auth_user_from_token(x_auth_token)
@@ -8518,14 +8661,17 @@ def save_player_profile(request: PlayerSelfProfileRequest, x_auth_token: str | N
     updates["bowling_style"] = str(updates.get("bowling_style", "") or "").strip()
     updates["notes"] = str(updates.get("notes", "") or "").strip()
     updates["age"] = int(updates.get("age", 0) or 0)
-    updates["team_memberships"] = list(updates.get("team_memberships") or [])
+    typed_teams = list(updates.pop("team_memberships", None) or [])
     updates["aliases"] = list(updates.get("aliases") or [])
     selected_primary_club_id = str(updates.pop("primary_club_id", "") or "").strip()
 
     for key, value in updates.items():
         member[key] = value
-    if member.get("team_memberships"):
-        member["team_name"] = member["team_memberships"][0]
+    # Nov 4 2026 (Amit: "team memberships show only Amit CC after saving"): saving the profile used to REPLACE the
+    # player's club links with the typed text, so Heartlake / Coca Cola disappeared everywhere. Club memberships
+    # now come from the games played (and club admins); a typed club name that matches a registered club is
+    # ADDED, nothing is ever removed here.
+    _add_member_clubs_by_name(store, member, typed_teams)
 
     save_store(store)
 
@@ -10794,6 +10940,12 @@ def quick_score_state(match_id: str, x_auth_token: str | None = Header(default=N
         "can_edit_scorebook": can_edit_scorebook,
         "can_delete_incomplete": can_delete_incomplete,
         "roster": _club_member_names(store, club),
+        # Nov 4 2026 (Amit): Player IDs shown while picking the team
+        "roster_player_ids": {
+            str(member.get("name")): str(member.get("player_id") or "")
+            for member in store.get("members", []) or []
+            if member.get("name") and member.get("player_id") and str(member.get("name")) in set(_club_member_names(store, club))
+        },
         "lineups": lineups,
         # Matches already being scored before line-ups were required carry on without them.
         "lineups_ready": _lineups_ready(lineups) or started,
@@ -12855,14 +13007,50 @@ def _find_other_half(store: dict[str, Any], record: dict[str, Any]) -> dict[str,
     return None
 
 
+def _chasing_side(first_template: dict[str, Any], second_template: dict[str, Any], first_inn: dict[str, Any], second_inn: dict[str, Any]) -> str:
+    """Which page's innings was the chase ("first" / "second" / ""): "won by N wickets" = the winner chased,
+    "won by N runs" = the winner batted first; with no margin, a winner who scored more in fewer overs chased."""
+    result = " ".join(
+        str(((template.get("validation") or {}) if isinstance(template.get("validation"), dict) else {}).get("expected_result") or (template.get("match") or {}).get("result") or "")
+        for template in (first_template, second_template)
+    ).lower()
+    if "won" not in result:
+        return ""
+    team_a, team_b = str(first_inn.get("batting_team") or ""), str(second_inn.get("batting_team") or "")
+    winner = ""
+    for team, side in ((team_a, "first"), (team_b, "second")):
+        words = _name_words(team)
+        if words and any(word in result for word in words):
+            winner = side if not winner else "both"
+    if winner not in {"first", "second"}:
+        return ""
+    loser = "second" if winner == "first" else "first"
+    if "wicket" in result:
+        return winner
+    if " run" in result:
+        return loser
+    runs = {side: _scorecard_int((inn.get("summary") or {}).get("runs")) for side, inn in (("first", first_inn), ("second", second_inn))}
+    if runs[winner] is not None and runs[loser] is not None and runs[winner] > runs[loser]:
+        return winner  # passed the target
+    return ""
+
+
 def _join_halves(store: dict[str, Any], keep: dict[str, Any], half: dict[str, Any], user_row: sqlite3.Row | None) -> dict[str, Any]:
     """Join upload `half` (one innings) into upload `keep` (the other innings): one scorecard with both innings
     and both photos; `half` is removed. Returns the checks of the joined card."""
     first_template = _scorecard_pick_template(keep) or {}
     second_template = _scorecard_pick_template(half) or {}
     # the innings written as innings 1 on its photo goes first
-    first_no = int((_single_innings(keep) or {}).get("inning_number") or 1)
-    second_no = int((_single_innings(half) or {}).get("inning_number") or 1)
+    first_inn, second_inn = _single_innings(keep) or {}, _single_innings(half) or {}
+    first_no = int(first_inn.get("inning_number") or 1)
+    second_no = int(second_inn.get("inning_number") or 1)
+    if first_no == second_no:
+        # both pages say "1st" (the reader often misses "(2nd)"): the result decides who batted second
+        chaser = _chasing_side(first_template, second_template, first_inn, second_inn)
+        if chaser == "first":
+            first_no, second_no = 2, 1
+        elif chaser == "second":
+            first_no, second_no = 1, 2
     if second_no < first_no:
         joined = _join_innings_photos(second_template, first_template)
     else:
@@ -12889,8 +13077,14 @@ def _join_halves(store: dict[str, Any], keep: dict[str, Any], half: dict[str, An
             keep["club_ids"] = list(keep.get("club_ids") or []) + [club_id]
     store["archive_uploads"] = [item for item in store.get("archive_uploads", []) or [] if str(item.get("id")) != str(half.get("id"))]
     checks = _scorecard_upload_checks(store, keep)
-    if was_published and not checks["needs_review"]:
-        keep["status"] = old_status  # stays published with both innings
+    if was_published:
+        # Nov 3 2026 (Amit: "innings got linked but I can't find the match"): a published card stays published
+        # when its other innings is joined; anything the checks found is kept in review_flags for the admins.
+        keep["status"] = old_status
+        try:
+            _register_played_fixture_teams(store)
+        except Exception:
+            logger.exception("Club registration after joining %s failed", keep.get("id"))
     _audit_event(
         "archive.join_innings",
         "archive_upload",
@@ -13117,7 +13311,7 @@ def scorecard_upload_preview(upload_id: str, x_auth_token: str | None = Header(d
         "can_publish": status.lower().startswith("pending") and (is_admin or not flags),
         "can_report": status.lower() not in {"rejected", "duplicate"},
         "can_edit": status.lower() not in {"rejected", "duplicate"},
-        "can_delete": bool(upload_roles.intersection({"captain", "club_admin", "superadmin"})),
+        "can_delete": bool(upload_roles.intersection({"club_admin", "superadmin"})),
         "is_published": _archive_scorecard_is_published(upload),
         "unreadable": any(word in str(upload.get("ocr_engine") or "").lower() for word in ("unreadable", "fallback"))
         or (
@@ -13922,8 +14116,8 @@ def delete_archive(upload_id: str, published: bool = False, x_auth_token: str | 
     upload_club_id = str(upload.get("club_id") or "").strip()
     roles = set(_user_role_names(user_row, current_club_id))
     upload_roles = set(_user_role_names(user_row, upload_club_id)) if upload_club_id else set()
-    if not roles.union(upload_roles).intersection({"captain", "club_admin", "superadmin"}):
-        raise HTTPException(status_code=403, detail="Only captains, club admins, or superadmins can delete incomplete scorecards.")
+    if not roles.union(upload_roles).intersection({"club_admin", "superadmin"}):
+        raise HTTPException(status_code=403, detail="Only club admins or the superadmin can delete scorecards.")
     if _archive_scorecard_is_published(upload) and not published:
         # Nov 2 2026 (Amit): a wrong published scorecard can be deleted too, when asked for on purpose.
         raise HTTPException(status_code=409, detail="This scorecard is published. Confirm that you want to delete a published scorecard.")
@@ -13934,7 +14128,7 @@ def delete_archive(upload_id: str, published: bool = False, x_auth_token: str | 
             str(user_row["primary_club_id"] or ""),
             str(current_club_id or ""),
         }
-        if upload_club_id not in allowed_clubs or not upload_roles.intersection({"captain", "club_admin"}):
+        if upload_club_id not in allowed_clubs or not upload_roles.intersection({"club_admin"}):
             raise HTTPException(status_code=403, detail="This incomplete scorecard belongs to a different club.")
     if not is_site_admin and not archive_belongs_to_club(upload, upload_club, store.get("clubs", []), store.get("members", []), store.get("fixtures", [])):
         raise HTTPException(status_code=403, detail="This archive belongs to a different club.")

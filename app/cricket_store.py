@@ -5432,8 +5432,13 @@ def _read_relational_state(connection: sqlite3.Connection) -> dict[str, Any]:
                 },
             )
         primary_membership = next((item for item in memberships if item["is_primary"]), memberships[0] if memberships else None)
+        row_keys = set(row.keys())
         member = {
             "id": row["id"],
+            # Nov 4 2026: the Player ID and date of birth were saved in the members table but never read back,
+            # so every page showed "Player ID: Pending" (Amit's 1000 included).
+            "player_id": str(row["player_id"] or "") if "player_id" in row_keys else "",
+            "date_of_birth": str(row["date_of_birth"] or "") if "date_of_birth" in row_keys else "",
             "name": row["name"],
             "full_name": row["full_name"] or "",
             "gender": row["gender"] or "",
@@ -7054,10 +7059,13 @@ def build_player_pending_stats(archive_uploads: list[dict[str, Any]], members: l
         if status.startswith(("pending", "needs")) or status == "applied to match":
             continue
         archive_key = upload.get("id") or upload.get("file_name", "")
+        side_players = upload.get("_club_side_players")
         for performance in _archive_player_performances(upload, members):
             name = _canonical_member_name(members, performance.get("player_name", ""))
             if not name or name not in member_names:
                 continue
+            if side_players is not None and normalize_name(name) not in side_players and normalize_name(performance.get("player_name", "")) not in side_players:
+                continue  # played for the other team in this match
             stats.setdefault(
                 name,
                 {
@@ -7160,8 +7168,12 @@ def build_combined_player_stats(
     archive_uploads: list[dict[str, Any]],
     members: list[dict[str, Any]],
     club: dict[str, Any] | None = None,
+    side_filter: bool = True,
 ) -> list[dict[str, Any]]:
     live_stats = build_player_stats(fixtures, members, club)
+    if club and side_filter:
+        # a club's stats count each uploaded scorecard only for the players who played FOR that club (Nov 4 2026)
+        archive_uploads = _CanonicalArchiveList([_archive_for_club_side(item, club) for item in canonical_archive_uploads(archive_uploads)])
     pending_stats = build_player_pending_stats(archive_uploads, members)
     live_by_name = {item["player_name"]: item for item in live_stats}
     pending_by_name = {item["player_name"]: item for item in pending_stats}
@@ -7498,6 +7510,70 @@ def _build_materialized_member_stats(store: dict[str, Any]) -> tuple[list[dict[s
     return overall_rows, year_rows, club_rows
 
 
+_SIDE_STOP_WORDS = {"cricket", "club", "cc", "xi", "the", "and", "of", "team", "community", "sports", "academy"}
+
+
+def _side_words(name: Any) -> set[str]:
+    return {word for word in re.findall(r"[a-z0-9]+", str(name or "").lower()) if word not in _SIDE_STOP_WORDS and len(word) > 1}
+
+
+def _team_is_club(team: Any, club: dict[str, Any]) -> bool:
+    team_words = _side_words(team)
+    if not team_words:
+        return False
+    for value in [club.get("name"), club.get("short_name"), *(club.get("aliases") or [])]:
+        words = _side_words(value)
+        if words and (words <= team_words or team_words <= words):
+            return True
+    return False
+
+
+def _archive_for_club_side(upload: dict[str, Any], club: dict[str, Any]) -> dict[str, Any]:
+    """Nov 4 2026 (Amit: Amit S's 24 for Amit CC was counted as a Heartlake innings): mark which players played
+    FOR this club in an uploaded scorecard - batters of the innings this club batted, bowlers / fielders of the
+    innings it bowled. When the card's team names don't name this club at all, everything counts (as before)."""
+    template: dict[str, Any] = {}
+    for key in ("review_template_json", "review_source_json"):
+        try:
+            value = json.loads(str(upload.get(key) or "")) if upload.get(key) else {}
+        except Exception:
+            value = {}
+        if isinstance(value, dict) and value.get("innings"):
+            template = value
+            break
+    if not template and isinstance(upload.get("extraction_template"), dict):
+        template = upload["extraction_template"]
+    players: set[str] = set()
+    matched = False
+    for innings in template.get("innings") or []:
+        if not isinstance(innings, dict):
+            continue
+        bats, bowls = _team_is_club(innings.get("batting_team"), club), _team_is_club(innings.get("bowling_team"), club)
+        matched = matched or bats or bowls
+        if bats:
+            for row in innings.get("batting") or []:
+                player = (row.get("player") or {}) if isinstance(row, dict) else {}
+                name = player.get("name") if isinstance(player, dict) else player
+                if name:
+                    players.add(normalize_name(str(name)))
+        if bowls:
+            for row in innings.get("bowling") or []:
+                player = (row.get("player") or {}) if isinstance(row, dict) else {}
+                name = player.get("name") if isinstance(player, dict) else player
+                if name:
+                    players.add(normalize_name(str(name)))
+            for row in innings.get("batting") or []:
+                dismissal = (row.get("dismissal") or {}) if isinstance(row, dict) else {}
+                fielder = dismissal.get("fielder") if isinstance(dismissal, dict) else None
+                if fielder:
+                    players.add(normalize_name(str(fielder)))
+    if not matched:
+        return upload
+    copy = dict(upload)
+    copy["_club_side_players"] = players
+    return copy
+
+
 def build_club_rankings(store: dict[str, Any]) -> dict[str, dict[str, list[dict[str, Any]]]]:
     rankings: dict[str, dict[str, list[dict[str, Any]]]] = {}
     for club in store.get("clubs", []) or ([store["club"]] if store.get("club") else []):
@@ -7744,7 +7820,8 @@ def build_rankings_for_year(
 ) -> dict[str, list[dict[str, Any]]]:
     fixtures = _filter_fixtures_by_year(store.get("fixtures", []), year)
     archives = _filter_archives_by_year(store.get("archive_uploads", []), year)
-    combined = build_combined_player_stats(fixtures, archives, store.get("members", []), store.get("club"))
+    # a player's season totals count every club they played for (no per-club side filter here)
+    combined = build_combined_player_stats(fixtures, archives, store.get("members", []), store.get("club"), side_filter=False)
     return {
         "player_stats": combined,
         "batting_rankings": build_batting_rankings(combined),

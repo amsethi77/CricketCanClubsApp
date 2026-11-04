@@ -1123,3 +1123,4 @@ body.quick-score-page .qs-rolebtn.set {
   background: #fee2e2 !important;
   color: #b91c1c !important;
 }
+.qs-pid { color: #64748b; font-weight: 600; font-size: 0.78em; }
