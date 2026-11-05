@@ -3975,7 +3975,7 @@ def _register_played_teams_in_background() -> None:
     threading.Thread(target=_work, name="register-played-teams", daemon=True).start()
 
 
-STATS_REFRESH_VERSION = "two-club-archive-owner-1"
+STATS_REFRESH_VERSION = "two-club-archive-owner-2"
 
 
 def _refresh_player_stats_once() -> None:
@@ -3991,6 +3991,7 @@ def _refresh_player_stats_once() -> None:
         try:
             logger.info("Refreshing saved player stats (%s)...", STATS_REFRESH_VERSION)
             save_store(load_store())
+            marker.parent.mkdir(parents=True, exist_ok=True)
             marker.write_text(STATS_REFRESH_VERSION, encoding="utf-8")
             logger.info("Player stats refreshed.")
         except Exception:
@@ -6768,7 +6769,11 @@ def dashboard(
 @app.get("/api/auth/options")
 def auth_options() -> dict[str, Any]:
     store = load_store()
-    _register_played_fixture_teams(store)
+    if _register_played_fixture_teams(store):
+        try:
+            save_store(store)
+        except Exception:
+            logger.exception("Saving registered clubs and players failed")
     linked_member_ids: set[str] = set()
     linked_member_name_keys: set[str] = set()
     with _auth_connection() as connection:
@@ -13124,6 +13129,59 @@ def _halves_match(record: dict[str, Any], other: dict[str, Any]) -> bool:
     return True
 
 
+def _same_innings(record: dict[str, Any], other: dict[str, Any]) -> bool:
+    """True when the two uploads hold the same innings (same batting side and the same total or mostly the same
+    batters): a real duplicate to delete, as opposed to the other team's innings, which is joined instead."""
+    def batters(innings: dict[str, Any]) -> set[str]:
+        names = set()
+        for row in innings.get("batting") or []:
+            player = row.get("player") if isinstance(row, dict) else None
+            name = (player.get("name") if isinstance(player, dict) else player) if isinstance(row, dict) else row
+            key = normalize_name(str((name or (row.get("name") if isinstance(row, dict) else "")) or ""))
+            if key:
+                names.add(key)
+        return names
+
+    mine = _usable_innings(_scorecard_pick_template(record) or {})
+    theirs = _usable_innings(_scorecard_pick_template(other) or {})
+    for first in mine:
+        for second in theirs:
+            bat_a, bat_b = first.get("batting_team"), second.get("batting_team")
+            if bat_a and bat_b and not _same_team_name(bat_a, bat_b):
+                continue
+            runs_a = (first.get("summary") or {}).get("runs")
+            runs_b = (second.get("summary") or {}).get("runs")
+            if runs_a not in (None, "") and runs_a == runs_b:
+                return True
+            names_a, names_b = batters(first), batters(second)
+            if names_a and names_b and len(names_a & names_b) >= max(2, min(len(names_a), len(names_b)) // 2):
+                return True
+    return False
+
+
+def _same_photo(record: dict[str, Any], other: dict[str, Any]) -> bool:
+    """The same photo uploaded again (same file hash or fingerprint, or the same file name saved as .jpg/.png/.HEIC
+    with no conflicting date)."""
+    for key in ("file_hash", "image_fingerprint"):
+        if record.get(key) and record.get(key) == other.get(key):
+            return True
+
+    def stem(upload: dict[str, Any]) -> str:
+        return Path(str(upload.get("original_file_name") or upload.get("file_name") or "").replace("\\", "/")).stem.strip().lower()
+
+    def card_date(upload: dict[str, Any]) -> str:
+        return str(upload.get("scorecard_date") or upload.get("archive_date") or ((_scorecard_pick_template(upload) or {}).get("match") or {}).get("date") or "")[:10]
+
+    if not stem(record) or stem(record) != stem(other):
+        return False
+    date_a, date_b = card_date(record), card_date(other)
+    return not date_a or not date_b or date_a == date_b
+
+
+def _is_duplicate_upload(record: dict[str, Any], other: dict[str, Any]) -> bool:
+    return _same_photo(record, other) or _same_innings(record, other)
+
+
 def _find_other_half(store: dict[str, Any], record: dict[str, Any]) -> dict[str, Any] | None:
     """Amit / Dhruvika, Nov 2 2026: each team may upload its own innings photo (or one team both). Find the
     upload that holds the other innings of this match, so the two are joined into one scorecard."""
@@ -13444,6 +13502,25 @@ def scorecard_upload_preview(upload_id: str, x_auth_token: str | None = Header(d
     status = str(upload.get("status") or "")
     flags = list(upload.get("review_flags") or [])
     upload_roles = set(_user_role_names(user_row, preview_club_id))
+    duplicate_candidates: list[dict[str, Any]] = []
+    for item in upload.get("possible_duplicates") or []:
+        if not isinstance(item, dict) or not item.get("id"):
+            continue
+        try:
+            other = get_archive_or_404(store, str(item["id"]))
+        except ValueError:
+            continue
+        if str(other.get("status") or "").lower() in {"rejected", "duplicate"} or not _is_duplicate_upload(upload, other):
+            continue
+        duplicate_candidates.append(
+            {
+                "id": other.get("id"),
+                "match_code": _match_code(other.get("id")),
+                "file_name": other.get("original_file_name") or other.get("file_name") or "",
+                "is_published": _archive_scorecard_is_published(other),
+            }
+        )
+    same_innings_ids = {str(item["id"]) for item in duplicate_candidates}
     return {
         "scorecard": _scorecard_from_archive(upload),
         "status": status,
@@ -13470,8 +13547,10 @@ def scorecard_upload_preview(upload_id: str, x_auth_token: str | None = Header(d
         "link_candidates": [
             {"id": item.get("id"), "match_code": _match_code(item.get("id")), "file_name": item.get("file_name") or ""}
             for item in (upload.get("possible_duplicates") or [])
-            if isinstance(item, dict) and item.get("id")
+            if isinstance(item, dict) and item.get("id") and str(item["id"]) not in same_innings_ids
         ] if _template_innings_count(_scorecard_pick_template(upload) or {}) < 2 else [],
+        # the same innings uploaded twice: offered as "Delete the duplicate"
+        "duplicate_candidates": duplicate_candidates,
         # Nov 2 2026: the other innings of this match uploaded separately -> offer "Join the two innings"
         "other_half": (lambda half: {"id": half.get("id"), "file_name": half.get("original_file_name") or half.get("file_name") or "", "uploaded_by": half.get("uploaded_by") or ""} if half else None)(_find_other_half(store, upload)),
         # Nov 2 2026: only one innings on the photo -> offer "Add the 2nd innings photo"
@@ -13692,6 +13771,54 @@ def scorecard_upload_join(upload_id: str, other_id: str, x_auth_token: str | Non
         "preview_url": f"/scorecards/{keep.get('id')}?preview=1",
         "checks": {key: value for key, value in checks.items() if key != "scorecard"},
     }
+
+
+class ScorecardRemoveDuplicateRequest(BaseModel):
+    confirm_published: bool = False
+
+
+@app.post("/api/scorecards/{upload_id}/remove-duplicate/{other_id}")
+def scorecard_upload_remove_duplicate(upload_id: str, other_id: str, request: ScorecardRemoveDuplicateRequest, x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
+    """"🗑 Delete the duplicate": the other upload holds the same innings as this one, so it is removed (with its
+    photo) and this scorecard keeps going. Club admins and site admins only; a published duplicate needs a confirm."""
+    user_row, current_club_id, store, upload, is_admin = _scorecard_upload_access(x_auth_token, upload_id)
+    if not is_admin and not set(_user_role_names(user_row, current_club_id)).intersection({"club_admin", "superadmin"}):
+        raise HTTPException(status_code=403, detail="Only club admins or the superadmin can delete a duplicate scorecard.")
+    other_id = other_id[2:] if other_id.startswith("a-") else other_id
+    try:
+        other = get_archive_or_404(store, other_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    if str(other.get("id")) == str(upload.get("id")):
+        raise HTTPException(status_code=400, detail="Choose the other upload, not this one.")
+    if not _is_duplicate_upload(upload, other):
+        raise HTTPException(status_code=409, detail="These two uploads aren't the same photo or the same innings. If they are the two innings of one match, join them instead.")
+    if _archive_scorecard_is_published(other) and not request.confirm_published:
+        raise HTTPException(status_code=409, detail="That scorecard is published. Confirm that you want to delete a published scorecard.")
+    other_key = str(other.get("id"))
+    other_code = _match_code(other_key)
+    file_path = str(other.get("file_path") or "").strip()
+    store["archive_uploads"] = [item for item in store.get("archive_uploads", []) or [] if str(item.get("id")) != other_key]
+    store["duplicate_uploads"] = [
+        item
+        for item in store.get("duplicate_uploads", []) or []
+        if str(item.get("original_upload_id") or "") != other_key and str(item.get("duplicate_upload_id") or "") != other_key
+    ]
+    still_used = any(str(item.get("file_path") or "").strip() == file_path for item in store["archive_uploads"]) if file_path else True
+    if file_path and not still_used:
+        try:
+            resolved = Path(file_path).resolve()
+            if resolved.exists() and UPLOAD_DIR.resolve() in resolved.parents:
+                resolved.unlink()
+        except Exception as exc:
+            logger.warning("Could not delete duplicate upload file from disk: %s", exc)
+    upload["possible_duplicates"] = [item for item in upload.get("possible_duplicates") or [] if str((item or {}).get("id")) != other_key]
+    upload["review_flags"] = [flag for flag in upload.get("review_flags") or [] if f"(Match ID {other_code})" not in str(flag)]
+    if str(upload.get("status") or "") == NEEDS_REVIEW and not upload["review_flags"]:
+        upload["status"] = "Pending review"
+    save_store(store)
+    _audit_event("archive.duplicate.delete", "archive_upload", other_key, actor=user_row, club_id=str(other.get("club_id") or ""), details={"kept": str(upload.get("id") or ""), "file_name": other.get("file_name") or ""}, source="api")
+    return {"message": f"Deleted the duplicate {other_code}. This scorecard is kept.", "status": upload.get("status")}
 
 
 @app.post("/api/scorecards/{upload_id}/manual")

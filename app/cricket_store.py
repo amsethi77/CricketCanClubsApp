@@ -4644,6 +4644,15 @@ def _write_relational_state(connection: sqlite3.Connection, store: dict[str, Any
         }
     )
 
+    # A club-linked membership names its club; an older plain team row of the same name must take that club.
+    known_club_ids = {str(club["id"]) for club in clubs}
+    membership_club_ids: dict[str, str] = {}
+    for member in members:
+        for membership in _member_team_memberships(member):
+            membership_club_id = str(membership.get("club_id") or "").strip()
+            if membership_club_id in known_club_ids:
+                membership_club_ids.setdefault(membership["team_name"].lower(), membership_club_id)
+
     team_rows: list[dict[str, Any]] = []
     team_name_to_id: dict[str, str] = {}
     for team in teams:
@@ -4654,8 +4663,11 @@ def _write_relational_state(connection: sqlite3.Connection, store: dict[str, Any
         resolved_club_id = club_name_to_id.get(raw_club_key, "")
         if not resolved_club_id and team.get("type") == "club":
             resolved_club_id = primary_club_id
+        row_id = _team_row_id(team, resolved_club_id)
+        if not resolved_club_id and membership_club_ids.get(name.lower()):
+            resolved_club_id = membership_club_ids[name.lower()]
         row = {
-            "id": _team_row_id(team, resolved_club_id),
+            "id": row_id,
             "club_id": resolved_club_id or None,
             "name": name,
             "type": str(team.get("type") or "team"),
@@ -7114,10 +7126,14 @@ def build_player_pending_stats(archive_uploads: list[dict[str, Any]], members: l
             _apply_batting_sample(stats[name], performance)
             notes = str(performance.get("notes", "") or "")
             lowered_notes = notes.lower()
+            def played_for_other_side(candidate: str) -> bool:
+                # the bowler or fielder named on a dismissal belongs to the opposing side in this match
+                return side_players is not None and normalize_name(candidate) in other_players
+
             fielder_match = re.search(r"fielder:\s*([^|]+)", notes, flags=re.IGNORECASE)
             if fielder_match:
                 fielder_name = _canonical_member_name(members, fielder_match.group(1).strip())
-                if fielder_name not in member_names:
+                if fielder_name not in member_names or played_for_other_side(fielder_name):
                     fielder_name = ""
                 if fielder_name:
                     stats.setdefault(
@@ -7142,7 +7158,7 @@ def build_player_pending_stats(archive_uploads: list[dict[str, Any]], members: l
             bowler_match = re.search(r"bowler:\s*([^|]+)", notes, flags=re.IGNORECASE)
             if bowler_match and not any(tag in lowered_notes for tag in ["run_out", "run out", "not_out", "not out", "retired"]):
                 bowler_name = _canonical_member_name(members, bowler_match.group(1).strip())
-                if bowler_name not in member_names:
+                if bowler_name not in member_names or played_for_other_side(bowler_name):
                     bowler_name = ""
                 if bowler_name:
                     stats.setdefault(
@@ -8448,7 +8464,19 @@ def build_dashboard(
         for duplicate in list(reversed(store.get("duplicate_uploads", [])))
         if _duplicate_belongs_to_club(duplicate, focus_club, focused_store.get("archive_uploads", []))
     ]
-    selected_year = _resolve_dashboard_season_year(store, requested_season_year)
+    selected_year = _resolve_dashboard_season_year(
+        store, "" if str(requested_season_year or "").strip().lower() == "auto" else requested_season_year
+    )
+    if str(requested_season_year or "").strip().lower() == "auto":
+        # Stats page default: the current season, or the club's latest season with numbers when this one is still empty.
+        club_years = {
+            year
+            for year in _dashboard_season_years(store)
+            if _filter_fixtures_by_year(_club_stat_fixtures(store, focus_club), year)
+            or _filter_archives_by_year(focus_archives, year)
+        }
+        if selected_year not in club_years and club_years:
+            selected_year = max(club_years)
     season_label = _season_label_for_year(selected_year)
     season_years = _dashboard_season_years(store)
     season_stat_fixtures = _filter_fixtures_by_year(_club_stat_fixtures(store, focus_club), selected_year)

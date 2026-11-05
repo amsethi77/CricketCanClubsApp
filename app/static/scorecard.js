@@ -577,6 +577,10 @@
         ${flags.length ? `<ul class="sc-check-list">${flags.map((f) => `<li>${escapeHtml(f)}</li>`).join("")}</ul>` : ""}
         ${new URLSearchParams(location.search).get("joined") === "1" ? `<p class="sc-check-lede sc-joined-note">🔗 This photo was the other innings of a match already uploaded, so both innings are now one scorecard.</p>` : ""}
         ${data.match_code ? `<p class="sc-check-lede">Match ID <b>${escapeHtml(data.match_code)}</b>${data.innings_count < 2 ? " · if the other team has their innings, give them this ID so they can link it" : ""}.</p>` : ""}
+        ${(data.duplicate_candidates || []).length && data.can_delete ? `<div class="sc-second-photo">
+          <p class="sc-check-lede"><strong>The same innings was uploaded twice.</strong> Keep this one and delete the duplicate?</p>
+          ${data.duplicate_candidates.map((c) => `<button type="button" class="sc-btn sc-danger" data-sc="remove-dup" data-other="${escapeHtml(c.id)}" data-published="${c.is_published ? "1" : "0"}">🗑 Delete duplicate ${escapeHtml(c.match_code)}${c.file_name ? ` (${escapeHtml(c.file_name)})` : ""}</button>`).join(" ")}
+        </div>` : ""}
         ${(data.link_candidates || []).length && !data.other_half ? `<div class="sc-second-photo">
           <p class="sc-check-lede"><strong>Is one of these the other team's innings of the same match?</strong> Link it and the match gets both innings.</p>
           ${data.link_candidates.map((c) => `<button type="button" class="sc-btn" data-sc="link" data-code="${escapeHtml(c.match_code)}">🔗 Link with ${escapeHtml(c.match_code)}${c.file_name ? ` (${escapeHtml(c.file_name)})` : ""}</button>`).join(" ")}
@@ -697,6 +701,26 @@
         msg.textContent = error.message;
         button.disabled = false;
         button.textContent = "🔗 Join the two innings";
+      }
+      return;
+    }
+    if (button.dataset.sc === "remove-dup") {
+      const ask = button.dataset.published === "1"
+        ? "That duplicate is PUBLISHED. Delete it and its photo? This can't be undone."
+        : "Delete the duplicate upload and its photo? This scorecard is kept. This can't be undone.";
+      if (!window.confirm(ask)) return;
+      button.disabled = true;
+      try {
+        const data = await previewAction(
+          `/api/scorecards/${encodeURIComponent(id.replace(/^a-/, ""))}/remove-duplicate/${encodeURIComponent(button.dataset.other)}`,
+          { confirm_published: button.dataset.published === "1" }
+        );
+        document.getElementById("scEditor")?.remove();
+        await loadPreview();
+        checkEl.querySelector(".sc-check-msg").textContent = data.message || "Deleted.";
+      } catch (error) {
+        msg.textContent = error.message;
+        button.disabled = false;
       }
       return;
     }

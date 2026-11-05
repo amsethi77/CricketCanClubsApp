@@ -35,9 +35,11 @@ body[data-dashboard-widget="overview"] .dashboard-hero-panel .template-kicker {
 body[data-dashboard-widget="overview"] .dashboard-hero-panel .template-title {
   margin: 6px 0 8px !important;
   font-family: var(--font-display, "Roboto", sans-serif) !important;
-  font-size: clamp(0.75rem, 1.35vw, 1.025rem) !important;
-  font-weight: 700 !important;
-  letter-spacing: -0.03em !important;
+  font-size: 0.7rem !important;
+  line-height: 1.2 !important;
+  white-space: nowrap;
+  font-weight: 600 !important;
+  letter-spacing: 0 !important;
   color: #fff !important;
 }
 

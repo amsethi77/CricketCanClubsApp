@@ -102,8 +102,7 @@
     const copy = hero.querySelector(".template-header-copy") || hero;
     copy.insertAdjacentHTML(
       "beforeend",
-      `<p class="dash-hello" id="dashHello"></p>
-       <div class="dash-hero-actions">
+      `<div class="dash-hero-actions">
          <a class="home-btn primary small" href="/score">🎯 Score a match</a>
          <a class="home-btn ghost small" href="/matches" data-paid-action="availability">✅ Update availability</a>
          <a class="home-btn ghost small" href="/scorecards/upload" data-scorer-action hidden>📤 Upload scorecard</a>
@@ -125,22 +124,6 @@
         hero.querySelectorAll("[data-scorer-action]").forEach((el) => (el.hidden = !(user.permissions || []).includes("score_matches")));
       })
       .catch(() => null);
-    const fillHello = () => {
-      const hello = document.getElementById("dashHello");
-      const badge = document.getElementById("userIdentityBadge");
-      const name = String(badge?.title || "").trim().split(/\s+/)[0];
-      const hour = new Date().getHours();
-      const greeting = hour < 12 ? "Good morning" : hour < 17 ? "Good afternoon" : "Good evening";
-      if (hello && name) hello.textContent = `${greeting}, ${name} 👋`;
-      return Boolean(name);
-    };
-    if (!fillHello()) {
-      let tries = 0;
-      const timer = setInterval(() => {
-        tries += 1;
-        if (fillHello() || tries > 20) clearInterval(timer);
-      }, 300);
-    }
   }
 
   // ---------- 2. Match strip ----------

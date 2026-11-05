@@ -4744,8 +4744,8 @@ button:hover,
   }
 
   .dashboard-hero-panel .template-title {
-    font-size: clamp(0.8rem, 3.5vw, 1.1rem);
-    line-height: 0.98;
+    font-size: 0.66rem;
+    line-height: 1.2;
   }
 
   .dashboard-hero-panel .template-kicker {

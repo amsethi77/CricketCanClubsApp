@@ -2892,12 +2892,13 @@ function renderViewerProfile(dashboard) {
   const viewerName = profile.display_name || state.viewerAuth?.user?.display_name || state.viewerAuth?.user?.full_name || "Captain";
   const clubName = focusClub.name || dashboard.club.name || "Club";
   if (elements.heroEyebrow) {
-    elements.heroEyebrow.textContent = "Good evening";
+    elements.heroEyebrow.textContent = [state.selectedSeasonYear ? `Season ${state.selectedSeasonYear}` : "Season overview", clubName].filter(Boolean).join(" · ");
   }
   if (elements.heroGreetingTitle) {
-    elements.heroGreetingTitle.textContent = state.selectedSeasonYear
-      ? `Season ${state.selectedSeasonYear}`
-      : "Season overview";
+    const hour = new Date().getHours();
+    const greeting = hour < 12 ? "Good morning" : hour < 17 ? "Good afternoon" : "Good evening";
+    const firstName = String(viewerName || "").trim().split(/\s+/)[0];
+    elements.heroGreetingTitle.textContent = firstName && firstName !== "Captain" ? `${greeting}, ${firstName}` : greeting;
   }
   syncClubBadge(clubName);
   syncUserBadge(dashboard?.user || state.viewerAuth?.user || null);
@@ -3424,7 +3425,7 @@ function renderSchedule(fixtures) {
       <article class="schedule-card clickable-card ${match.id === state.selectedMatchId ? "active-card" : ""}" data-match="${match.id}">
         <strong>${match.date_label}</strong>
         <p>vs ${match.opponent}</p>
-        <p>${match.status} · ${match.availability.length} available</p>
+        <p>${match.status} · ${(match.availability || []).length} available</p>
         <p>${match.heartlake_score || "--"} / ${match.opponent_score || "--"}</p>
         <div class="inline-actions">
           <a class="secondary-button" href="/player-availability?fixture_id=${encodeURIComponent(match.id)}">Open availability</a>
@@ -4701,7 +4702,7 @@ function updateWhatsappLink(match) {
   }
   const selectedLineup = selectedPlayingXiNames(match);
   const text = encodeURIComponent(
-    `${state.dashboard.focus_club?.name || state.dashboard.club?.name || "Club"} update: ${match.date_label} vs ${match.opponent}. Status: ${match.status}. Available players: ${match.availability.join(", ") || "none yet"}.` +
+    `${state.dashboard.focus_club?.name || state.dashboard.club?.name || "Club"} update: ${match.date_label} vs ${match.opponent}. Status: ${match.status}. Available players: ${(match.availability || []).join(", ") || "none yet"}.` +
       (selectedLineup.length ? ` Selected XI: ${selectedLineup.join(", ")}.` : "") +
       " Please update availability in the dashboard."
   );
@@ -4715,6 +4716,9 @@ function renderDashboard(dashboard) {
     fixtures: Array.isArray(dashboard?.fixtures) ? dashboard.fixtures.length : 0,
     archives: Array.isArray(dashboard?.archive_uploads) ? dashboard.archive_uploads.length : 0,
   });
+  if (dashboard && dashboard.upcoming_match && !dashboard.upcoming_match.id) {
+    dashboard.upcoming_match = null; // a club with no fixtures sends {}: treat it as "no upcoming match"
+  }
   state.dashboard = dashboard;
   syncUserBadge(dashboard?.user || state.viewerAuth?.user || null);
   syncAdminOnlyElements(dashboard?.user || state.viewerAuth?.user || null);
@@ -4744,7 +4748,9 @@ function renderDashboard(dashboard) {
   const storedSelectedYear = normalizeStoredSeasonYear(state.selectedSeasonYear || getStoredSeasonYear());
   state.selectedSeasonYear = activeWidget === "archive"
     ? (storedSelectedYear || dashboardSelectedYear || currentYear)
-    : currentYear;
+    : activeWidget === "performance"
+      ? (dashboardSelectedYear || currentYear)
+      : currentYear;
   persistSelectedSeasonYear(state.selectedSeasonYear);
   const normalizedSelectedYear = normalizeSeasonYear(state.selectedSeasonYear || currentYear);
   const isLiveSeason = normalizedSelectedYear === currentYear;
@@ -5018,7 +5024,8 @@ async function loadDashboard() {
   const currentYear = String(new Date().getFullYear());
   const seasonYear = String(state.selectedSeasonYear || currentYear).trim();
   if (seasonYear) {
-    queryParams.set("selected_season_year", seasonYear);
+    const statsPage = document.body?.dataset?.dashboardWidget === "performance";
+    queryParams.set("selected_season_year", statsPage && seasonYear === currentYear ? "auto" : seasonYear);
   }
   const query = queryParams.toString() ? `?${queryParams.toString()}` : "";
   const dashboard = await runAction(() => getJson(`/api/dashboard${query}`), "", "load dashboard");
