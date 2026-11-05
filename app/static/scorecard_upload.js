@@ -88,7 +88,7 @@
     const started = Date.now();
     const tick = () => {
       const secs = Math.round((Date.now() - started) / 1000);
-      const step = secs < 3 ? "📤 Uploading the photo" : secs < 45 ? `🤖 Reading the scorecard with ${reader.label}` : "🤖 Still reading - handwritten cards can take a little longer";
+      const step = secs < 3 ? "📤 Uploading the photo" : secs < 45 ? "📄 Reading the scorecard" : "📄 Still reading - handwritten cards can take a little longer";
       say(`${step}… ${secs}s (${reader.speed}). Keep this page open.`);
     };
     tick();

@@ -139,7 +139,7 @@
           );
           const club = dashboard.focus_club || dashboard.club || {};
           const clubName = club.name || "Selected club";
-          const readOnlyLabel = `Read-only club fixtures${selectedClubId ? ` · ${clubName}` : ""}`;
+          const readOnlyLabel = `Club fixtures${selectedClubId ? ` · ${clubName}` : ""}`;
           if (fixturesHeroSummaryEl) fixturesHeroSummaryEl.hidden = true;
           if (fixturesTotalCountEl) fixturesTotalCountEl.textContent = String(fixtures.length || 0);
           if (fixturesClubCountEl) fixturesClubCountEl.textContent = "1";
@@ -149,7 +149,6 @@
               fixtures.filter((fixture) => String(fixture.status || "").toLowerCase() !== "completed" && String(fixture.date || "").slice(0, 10) >= today).length || 0
             );
           }
-          if (fixturesModeLabelEl) fixturesModeLabelEl.textContent = "Read-only";
           if (fixturesListHeadingEl) fixturesListHeadingEl.textContent = `${clubName} fixtures`;
           if (fixturesListBadgeEl) fixturesListBadgeEl.textContent = readOnlyLabel;
           renderGroups([
@@ -159,7 +158,7 @@
               count: fixtures.length,
               fixtures,
             },
-          ], "Club read-only mode");
+          ], "Club fixtures");
           return;
         }
       }
@@ -177,10 +176,9 @@
       if (fixturesTotalCountEl) fixturesTotalCountEl.textContent = String(data.hero?.total_fixtures || totalFixtures || 0);
       if (fixturesClubCountEl) fixturesClubCountEl.textContent = String(data.hero?.club_count || groups.length || 0);
       if (fixturesUpcomingCountEl) fixturesUpcomingCountEl.textContent = String(data.hero?.upcoming_count || 0);
-      if (fixturesModeLabelEl) fixturesModeLabelEl.textContent = "Public";
       if (fixturesListHeadingEl) fixturesListHeadingEl.textContent = "All clubs";
       if (fixturesListBadgeEl) fixturesListBadgeEl.textContent = `${groups.length} clubs`;
-      renderGroups(groups, "Public read-only mode");
+      renderGroups(groups, "All clubs");
     } catch (error) {
       console.error("[Fixtures]", error);
       if (fixturesGroupsEl) fixturesGroupsEl.innerHTML = `<div class="live-empty">Fixtures could not be loaded right now.</div>`;

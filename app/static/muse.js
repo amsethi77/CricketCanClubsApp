@@ -309,7 +309,7 @@ I always show you the plan first, and nothing changes until you tap Confirm.</di
     .then((status) => {
       const label = panel.querySelector(".muse-llm");
       if (!label || !status) return;
-      const chat = { gemini: "Google Gemini", claude: "Claude" }[status.chat_provider] || "";
+      const chat = { gemini: "AI Assistant", claude: "AI Assistant" }[status.chat_provider] || "";
       label.textContent = chat
         ? `Powered by ${chat} · ask or tell me what to do`
         : status.provider === "ollama" && status.model

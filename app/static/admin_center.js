@@ -363,7 +363,7 @@ async function runArchiveActionOnce(action, uploadId, button = null, reviewText 
         button.disabled = true;
         button.textContent = "Reading…";
       }
-      archiveCardNote(uploadId, "⏳ Reading the photo with AI… this can take up to a minute. Please keep this page open.", "warning");
+      archiveCardNote(uploadId, "⏳ Reading the scorecard… this can take up to a minute. Please keep this page open.", "warning");
       const result = await postJson(`/api/archive/${uploadId}/extract`, {}, true);
       resultNote = `✅ ${result?.message || "Scorecard re-extracted."}`;
       setStatus("Scorecard re-extracted.", "success");
@@ -459,7 +459,7 @@ async function deleteClubRosterItem(targetType, targetId) {
   }
   if (targetType === "club") {
     const clubName = club.name || "this club";
-    if (!confirmTypedDelete(`Delete ${clubName} and remove its club-only data?`, clubName)) {
+    if (!confirmTypedDelete(`Delete ${clubName}? Only a club with no players and no matches can be deleted.`, clubName)) {
       return;
     }
     try {
@@ -825,7 +825,8 @@ function renderClubDetail(dashboard) {
       ${clubStatus}
       <small>${members.length} players · ${teams.length} teams · ${escapeHtml(club.city || "City TBD")} · ${escapeHtml(club.country || "Country TBD")}</small>
       ${clubToggleAction}
-      <form class="admin-delete-form" method="post" action="/api/admin/clubs/${encodeURIComponent(club.id || "")}/delete">
+      <form class="admin-delete-form" method="post" action="/api/admin/clubs/${encodeURIComponent(club.id || "")}/delete" data-delete-club-form>
+        <p class="empty-state" data-delete-club-note hidden></p>
         <label class="stack-label">
           Type the exact club name to confirm deletion
           <input name="confirmation" type="text" placeholder="${escapeHtml(club.name || "")}" autocomplete="off" required />
@@ -845,6 +846,24 @@ function renderClubDetail(dashboard) {
       </div>
     </article>
   `;
+  applyClubDeleteCheck(club);
+}
+
+// A club with players or matches cannot be deleted: hide the delete form and say what blocks it.
+async function applyClubDeleteCheck(club) {
+  const form = clubDetail.querySelector("[data-delete-club-form]");
+  if (!form || !club?.id) return;
+  try {
+    const check = await getJson(`/api/admin/clubs/${encodeURIComponent(club.id)}/delete-check`, true);
+    if (check.can_delete) return;
+    const note = form.querySelector("[data-delete-club-note]");
+    note.textContent = `This club cannot be deleted: it still has ${check.reason}. A club can only be deleted when it has no matches and no players. Use Disable club to keep its history.`;
+    note.hidden = false;
+    form.querySelector("label")?.remove();
+    form.querySelector("button")?.remove();
+  } catch {
+    // the server refuses the delete anyway; the check only improves the screen
+  }
 }
 
 function populateFixtureForm(fixture = null) {

@@ -2916,6 +2916,7 @@ function renderViewerProfile(dashboard) {
 }
 
 function renderSelectedMatch(match) {
+  match = { ...match, details: match.details || {}, scorecard: match.scorecard || {} };
   const clubName = focusClubName();
   elements.matchCenterHeading.textContent = `${clubName} match center`;
   const scorecardHeading = elements.selectedScorecardTitle || elements.matchStatsSection;
@@ -2930,7 +2931,7 @@ function renderSelectedMatch(match) {
       <div>
         <p class="snapshot-label">${clubName} · ${match.date_label}</p>
         <h3>${clubName} vs ${match.opponent}</h3>
-        <p>${match.details.venue} · ${match.details.match_type} · ${match.details.scheduled_time}</p>
+        <p>${[match.details?.venue, match.details?.match_type, match.details?.scheduled_time].filter(Boolean).join(" · ") || "Details to be confirmed"}</p>
       </div>
       <div class="snapshot-side">
         <span class="fixture-badge">${match.status}</span>
@@ -3072,6 +3073,7 @@ function renderPlayingXiSection(match) {
 }
 
 function renderFormValues(match) {
+  match = { ...match, details: match.details || {}, scorecard: match.scorecard || {} };
   const clubShort = focusClubShortName();
   elements.captainInput.placeholder = `${clubShort} captain`;
   elements.heartlakeRunsInput.placeholder = `${clubShort} runs`;
@@ -3081,7 +3083,7 @@ function renderFormValues(match) {
   elements.archiveCricketClubAppWicketsInput.placeholder = `${clubShort} wickets`;
   elements.archiveCricketClubAppOversInput.placeholder = `${clubShort} overs`;
   elements.captainInput.value = match.heartlake_captain || "";
-  elements.venueInput.value = match.details.venue || "";
+  elements.venueInput.value = match.details?.venue || "";
   elements.matchTypeInput.value = match.details.match_type || "";
   elements.scheduledTimeInput.value = match.details.scheduled_time || "";
   elements.oversInput.value = match.details.overs || "";

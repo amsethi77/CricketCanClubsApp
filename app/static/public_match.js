@@ -654,7 +654,7 @@
       <p class="pm-action-status" data-delete-status role="status" aria-live="polite"></p>
       ${renderTabs(state.done)}
       <section class="pm-body" role="tabpanel">${body}</section>
-      <p class="pm-foot">Read-only scorecard.${state.isLive ? " Updates by itself every 10 seconds." : ""}</p>`;
+      <p class="pm-foot">${state.isLive ? "Updates by itself every 10 seconds." : ""}</p>`;
     const stamp = document.getElementById("pmUpdated");
     if (stamp) stamp.textContent = updated;
   }

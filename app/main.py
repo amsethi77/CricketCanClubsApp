@@ -3975,7 +3975,7 @@ def _register_played_teams_in_background() -> None:
     threading.Thread(target=_work, name="register-played-teams", daemon=True).start()
 
 
-STATS_REFRESH_VERSION = "strike-rate-fix-1"
+STATS_REFRESH_VERSION = "two-club-archive-owner-1"
 
 
 def _refresh_player_stats_once() -> None:
@@ -4713,7 +4713,7 @@ def _public_fixtures_page_payload(store: dict[str, Any]) -> dict[str, Any]:
     return {
         "hero": {
             "headline": "Fixtures across clubs",
-            "summary": "Browse fixtures by club. Signed-in users see their club fixtures in read-only mode.",
+            "summary": "Browse fixtures by club. Signed-in users see their own club fixtures.",
             "total_fixtures": len(fixtures),
             "club_count": len(club_groups),
             "upcoming_count": sum(1 for fixture in fixtures if str(fixture.get("status") or "").lower() != "completed" and not fixture.get("is_past")),
@@ -6047,6 +6047,21 @@ def _admin_center_html(request: Request) -> HTMLResponse:
             <button class="secondary-button" type="submit">Disable club</button>
           </form>'''
     )
+    delete_blockers = _club_blocking_deletion(store, club)
+    if any(delete_blockers.values()):
+        delete_form_html = (
+            '<p class="empty-state">This club cannot be deleted: it still has '
+            + html.escape(_describe_deletion_blockers(delete_blockers))
+            + ". A club can only be deleted when it has no matches and no players. Use Disable club to keep its history.</p>"
+        )
+    else:
+        delete_form_html = f'''<form class="admin-delete-form" method="post" action="/api/admin/clubs/{html.escape(str(club.get('id') or ''))}/delete">
+            <label class="stack-label">
+              Type the exact club name to confirm deletion
+              <input name="confirmation" type="text" placeholder="{html.escape(club.get('name') or '')}" autocomplete="off" required />
+            </label>
+            <button class="danger-button" type="submit">Delete club</button>
+          </form>'''
     club_detail_html = (
         f"""
         <article class="detail-card admin-club-card" data-admin-club="{html.escape(str(club.get('id') or ''))}">
@@ -6055,13 +6070,7 @@ def _admin_center_html(request: Request) -> HTMLResponse:
           {club_status_html}
           <small>{len(club_members)} players · {len(club_teams)} teams · {html.escape(club.get('city') or 'City TBD')} · {html.escape(club.get('country') or 'Country TBD')}</small>
           {club_toggle_html}
-          <form class="admin-delete-form" method="post" action="/api/admin/clubs/{html.escape(str(club.get('id') or ''))}/delete">
-            <label class="stack-label">
-              Type the exact club name to confirm deletion
-              <input name="confirmation" type="text" placeholder="{html.escape(club.get('name') or '')}" autocomplete="off" required />
-            </label>
-            <button class="danger-button" type="submit">Delete club</button>
-          </form>
+          {delete_form_html}
         </article>
         <article class="stack-card admin-roster-panel">
           <div class="panel-head compact-head">
@@ -9133,6 +9142,33 @@ def _delete_club_member_core(club_id: str, member_id: str, token: str | None, co
     }
 
 
+def _club_blocking_deletion(store: dict[str, Any], club: dict[str, Any]) -> dict[str, int]:
+    """What stops a club being deleted: players linked to it, and matches (fixtures or scorecards) it is part of."""
+    club_id = str(club.get("id") or "").strip()
+    club_name = str(club.get("name") or "").strip()
+    players = sum(1 for member in store.get("members", []) or [] if member_in_club(member, club_id, club_name))
+    fixtures = sum(
+        1
+        for fixture in store.get("fixtures", []) or []
+        if str(fixture.get("club_id") or "").strip() == club_id
+        or _club_matches_removed_club("", str(fixture.get("opponent") or ""), club)
+    )
+    scorecards = sum(
+        1
+        for archive in store.get("archive_uploads", []) or []
+        if archive_belongs_to_club(archive, club, store.get("clubs", []), store.get("members", []), store.get("fixtures", []))
+    )
+    return {"players": players, "matches": fixtures, "scorecards": scorecards}
+
+
+def _describe_deletion_blockers(blockers: dict[str, int]) -> str:
+    return ", ".join(
+        f"{count} {label}"
+        for label, count in (("player(s)", blockers.get("players", 0)), ("match(es)", blockers.get("matches", 0)), ("scorecard(s)", blockers.get("scorecards", 0)))
+        if count
+    )
+
+
 def _delete_club_core(club_id: str, token: str | None, confirmation: str = "") -> dict[str, Any]:
     user_row, _ = _auth_user_from_token(token)
     _require_superadmin(token)
@@ -9144,6 +9180,13 @@ def _delete_club_core(club_id: str, token: str | None, confirmation: str = "") -
     removed_club_id = str(club.get("id") or "").strip()
     removed_club_name = str(club.get("name") or "").strip()
     removed_short_name = str(club.get("short_name") or "").strip()
+
+    blockers = _club_blocking_deletion(store, club)
+    if any(blockers.values()):
+        raise HTTPException(
+            status_code=409,
+            detail=f"{removed_club_name} cannot be deleted: it still has {_describe_deletion_blockers(blockers)}. A club can only be deleted when it has no matches and no players. Disable it instead to keep its history.",
+        )
 
     expected = str(club.get("name") or "").strip()
     if str(confirmation or "").strip() != expected:
@@ -9335,6 +9378,17 @@ def delete_club_member_form(
         return _redirect_to_admin_center(result.get("club_id", club_id), result.get("message", "Player removed."), "success")
     except HTTPException as exc:
         return _redirect_to_admin_center(club_id, str(exc.detail), "error")
+
+
+@app.get("/api/admin/clubs/{club_id}/delete-check")
+def delete_club_check(club_id: str, x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
+    _require_superadmin(x_auth_token)
+    store = load_store()
+    club = next((item for item in store.get("clubs", []) if str(item.get("id") or "").strip() == str(club_id or "").strip()), None)
+    if not club:
+        raise HTTPException(status_code=404, detail="Club not found.")
+    blockers = _club_blocking_deletion(store, club)
+    return {"can_delete": not any(blockers.values()), "blockers": blockers, "reason": _describe_deletion_blockers(blockers)}
 
 
 @app.delete("/api/admin/clubs/{club_id}")
@@ -13481,11 +13535,11 @@ def scorecard_reader_info(x_auth_token: str | None = Header(default=None)) -> di
         except HTTPException:
             pass
     labels = {
-        "gemini": ("Google Gemini (free AI)", "usually well under a minute"),
-        "claude": ("Claude AI", "usually well under a minute"),
-        "ollama": (f"Ollama on this computer ({ai_vision.ollama_model()})", "can take a few minutes"),
+        "gemini": ("scorecard reader", "usually well under a minute"),
+        "claude": ("scorecard reader", "usually well under a minute"),
+        "ollama": ("scorecard reader", "can take a few minutes"),
     }
-    label, speed = labels.get(chosen, ("Basic photo reader (can't read handwriting)", "about a minute"))
+    label, speed = labels.get(chosen, ("scorecard reader", "about a minute"))
     return {"provider": chosen or "basic", "label": label, "speed": speed}
 
 

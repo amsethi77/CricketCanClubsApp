@@ -129,7 +129,9 @@
       const hello = document.getElementById("dashHello");
       const badge = document.getElementById("userIdentityBadge");
       const name = String(badge?.title || "").trim().split(/\s+/)[0];
-      if (hello && name) hello.textContent = `Welcome back, ${name} 👋`;
+      const hour = new Date().getHours();
+      const greeting = hour < 12 ? "Good morning" : hour < 17 ? "Good afternoon" : "Good evening";
+      if (hello && name) hello.textContent = `${greeting}, ${name} 👋`;
       return Boolean(name);
     };
     if (!fillHello()) {

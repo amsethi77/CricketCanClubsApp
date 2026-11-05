@@ -1471,6 +1471,16 @@ def archive_club_context(
     return club_ids, club_names
 
 
+def _stored_archive_club_names(archive: dict[str, Any]) -> set[str]:
+    raw = archive.get("club_names")
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw) if raw.strip() else []
+        except Exception:
+            raw = []
+    return {str(item or "").strip().lower() for item in raw or [] if str(item or "").strip()}
+
+
 def archive_belongs_to_club(
     archive: dict[str, Any],
     club: dict[str, Any],
@@ -1492,6 +1502,11 @@ def archive_belongs_to_club(
     club_ids, club_names = archive_club_context(archive, clubs or [], members, fixtures)
     archive_club_ids = {str(item or "").strip().lower() for item in club_ids if str(item or "").strip()}
     archive_club_names = {str(item or "").strip().lower() for item in club_names if str(item or "").strip()}
+    # The clubs recorded on the upload itself (both teams on the card, e.g. Heartlake vs Amit CC) always own it, so a
+    # published two-club card shows up for the visiting club too (Nov 4 2026: Amit CC showed 0 players).
+    stored_names = _stored_archive_club_names(archive)
+    if club_name and club_name in stored_names or club_short_name and club_short_name in stored_names:
+        return True
     if club_id and club_id in archive_club_ids:
         return True
     if club_name and club_name in archive_club_names:

@@ -41,7 +41,7 @@
         <h4>${escapeHtml(match.club_name || "Club")} vs ${escapeHtml(match.opponent || "Opponent")}</h4>
         <p>${escapeHtml(match.venue || "Venue TBD")} · ${escapeHtml(match.match_type || "Friendly")} · ${escapeHtml(match.scheduled_time || "Time TBD")}</p>
         <small>${escapeHtml(scoreDetail)}</small>
-        <small>${escapeHtml(liveSummary || "Tap to open the full read-only scorecard.")}</small>
+        <small>${escapeHtml(liveSummary || "Tap to open the full scorecard.")}</small>
       </a>
     `;
   }
