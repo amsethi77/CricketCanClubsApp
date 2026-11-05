@@ -350,6 +350,14 @@ async function renderPlayerBreakdowns() {
       memberships.push({ club_id: id, club_name: String(row.club_name || "").trim() || id });
     }
   }
+  // Nov 4 2026 (Amit: "3 clubs to select but stats show 4 with 0,0"): Club Wise lists the same clubs as the
+  // club picker (my_clubs) plus any club that has real stats; a stale membership with no club and no games is hidden.
+  const pickerIds = new Set((authData?.clubs || []).map((club) => String(club.club_id || club.id || "").trim()).filter(Boolean));
+  for (let index = memberships.length - 1; index >= 0; index -= 1) {
+    const id = memberships[index].club_id;
+    const hasGames = clubStats.some((item) => String(item.club_id || "").trim() === id && isMe(item.player_name) && Number(item.matches || 0) > 0);
+    if (pickerIds.size && !pickerIds.has(id) && !hasGames) memberships.splice(index, 1);
+  }
   for (const club of memberships) {
     const row = clubStats.find((item) => item.club_id === club.club_id && isMe(item.player_name)) || {
       runs: 0,
