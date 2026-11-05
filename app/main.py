@@ -151,6 +151,9 @@ try:
     import ai_chat as ai_chat
     from llm_service import clear_query_cache, infer as llm_infer, list_llm_documents, list_prompt_manifest, reindex_llm_corpus
     from cricket_store import (
+        card_sides_are_swapped,
+        inferred_innings_teams_for_archive,
+        side_anchors,
         ocr_rows_look_real,
         BASE_DIR,
         CACHE_FILE,
@@ -214,6 +217,9 @@ except ModuleNotFoundError:
     from app import ai_chat
     from app.llm_service import clear_query_cache, infer as llm_infer, list_llm_documents, list_prompt_manifest, reindex_llm_corpus
     from app.cricket_store import (
+        card_sides_are_swapped,
+        inferred_innings_teams_for_archive,
+        side_anchors,
         ocr_rows_look_real,
         BASE_DIR,
         CACHE_FILE,
@@ -1891,7 +1897,8 @@ def _auth_connection() -> sqlite3.Connection:
     connection = sqlite3.connect(DATABASE_FILE, timeout=60)
     connection.row_factory = sqlite3.Row
     connection.execute("PRAGMA foreign_keys = ON")
-    connection.execute("PRAGMA journal_mode = WAL")
+    # WAL is unsafe on Azure Files (SMB) and corrupted the production DB on 2026-11-04.
+    connection.execute("PRAGMA journal_mode = %s" % ("DELETE" if os.environ.get("WEBSITE_SITE_NAME") else "WAL"))
     connection.execute("PRAGMA synchronous = NORMAL")
     connection.execute("PRAGMA busy_timeout = 60000")
     return connection
@@ -5589,8 +5596,9 @@ def _upload_by_match_code(store: dict[str, Any], code: str) -> dict[str, Any] | 
     if not wanted:
         return None
     for upload in store.get("archive_uploads", []) or []:
-        if re.sub(r"[^0-9A-Z]", "", _match_code(upload.get("id")).upper())[1:] == wanted:
-            return upload
+        for known_id in [upload.get("id"), *(upload.get("joined_upload_ids") or [])]:
+            if re.sub(r"[^0-9A-Z]", "", _match_code(known_id).upper())[1:] == wanted:
+                return upload
     return None
 
 
@@ -5986,8 +5994,7 @@ def _admin_center_html(request: Request) -> HTMLResponse:
         inferred_club = _resolve_archive_club(upload, store.get("clubs", []))
         resolved_club_id = str((club_ids[0] if club_ids else upload.get("club_id")) or (inferred_club.get("id") if inferred_club else "") or "").strip()
         resolved_club_name = " / ".join(club_names) if club_names else str(upload.get("club_name") or (inferred_club.get("name") if inferred_club else "") or "Unassigned").strip() or "Unassigned"
-        if not archive_belongs_to_club(upload, club, store.get("clubs", []), store.get("members", []), store.get("fixtures", [])):
-            continue
+        # superadmin sees every club's scorecards (grouped by club below), not just the selected club's
         review_uploads.append(
             {
                 **upload,
@@ -6815,15 +6822,25 @@ def _published_scorecard_matches(store: dict[str, Any]) -> list[dict[str, Any]]:
     """Nov 3 2026 (Amit): published scorecard uploads register their clubs and players too (e.g. "Amit CC" from
     a photo), the same way scored fixtures do. Each one becomes a fixture-like row for _register_played_fixture_teams."""
     rows: list[dict[str, Any]] = []
+    anchors = side_anchors(store.get("archive_uploads"))
     for upload in store.get("archive_uploads", []) or []:
-        if not isinstance(upload, dict) or not _archive_scorecard_is_published(upload):
+        if not isinstance(upload, dict):
+            continue
+        published = _archive_scorecard_is_published(upload)
+        if not published and _scorecard_text(upload.get("status")).lower() in {"rejected", "duplicate", "deleted"}:
             continue
         try:
             card = _scorecard_from_archive(upload)
         except Exception:
             continue
+        if not published and not card.get("innings"):
+            continue  # an unread photo has no team names to register
         teams = [re.sub(r"\s+", " ", str(team or "").strip()) for team in card.get("teams") or []]
         teams = [team for team in teams if normalize_name(team) not in _GENERIC_TEAM_NAMES]
+        # imported cards can omit team names: take them from the card's two clubs and its "won by" result
+        inferred = inferred_innings_teams_for_archive(upload) if len(teams) < 2 else {}
+        if inferred:
+            teams = [inferred[0][0], inferred[0][1]]
         # "Coca Cola" on a card is the existing "Coca Cola XI" club, not a new one
         existing = [club for club in store.get("clubs", []) or [] if isinstance(club, dict)]
         teams = [
@@ -6841,10 +6858,23 @@ def _published_scorecard_matches(store: dict[str, Any]) -> list[dict[str, Any]]:
             home, opponent = teams[1], teams[0]
         home_is_uploader = bool(uploader_club) and _club_match_key(home) in _club_identity_keys(uploader_club)
         innings = []
-        for item in card.get("innings") or []:
+        specs = []
+        for index, item in enumerate(card.get("innings") or []):
+            fallback_bat, fallback_bowl = inferred.get(index, ("", ""))
+            specs.append((
+                str(item.get("team") or fallback_bat),
+                str(item.get("bowling_team") or fallback_bowl),
+                [row.get("name") for row in item.get("batting") or [] if row.get("name")],
+                [row.get("name") for row in item.get("bowling") or [] if row.get("name")],
+            ))
+        # a card whose team labels contradict the players' known teams is read with the sides swapped
+        swapped = card_sides_are_swapped(specs, anchors)
+        for item, (bat_team, bowl_team, _batters, _bowlers) in zip(card.get("innings") or [], specs):
+            if swapped:
+                bat_team, bowl_team = bowl_team, bat_team
             innings.append({
-                "batting_team": str(item.get("team") or ""),
-                "bowling_team": str(item.get("bowling_team") or ""),
+                "batting_team": bat_team,
+                "bowling_team": bowl_team,
                 "_players": {
                     "batting": [{"player_name": row.get("name")} for row in item.get("batting") or [] if row.get("name")],
                     "bowling": [{"player_name": row.get("name")} for row in item.get("bowling") or [] if row.get("name")],
@@ -6857,19 +6887,33 @@ def _published_scorecard_matches(store: dict[str, Any]) -> list[dict[str, Any]]:
             "opponent": opponent,
             "scorebook": {"innings": innings},
             "_from_scorecard": True,
+            "_clubs_only": not published,
         })
     return rows
 
 
+def _repair_typed_club_links(store: dict[str, Any]) -> bool:
+    """Link players to registered clubs they only have as typed text (e.g. "Amit CC" typed on the profile, which
+    reloads as a team with no club). Returns True when a link was added."""
+    changed = False
+    for member in store.get("members", []) or []:
+        typed = [
+            item
+            for item in member.get("team_memberships") or []
+            if not isinstance(item, dict)
+            or (not str(item.get("club_id") or "").strip() and str(item.get("team_type") or "") != "club")
+        ]
+        if typed and _add_member_clubs_by_name(store, member, typed):
+            changed = True
+    return changed
+
+
 def _register_played_fixture_teams(store: dict[str, Any]) -> bool:
     """Make clubs and players from scored fixtures available in registration."""
-    changed = False
     # repair profiles saved before Nov 4 2026, whose club links were replaced by typed names ("Amit CC")
-    for member in store.get("members", []) or []:
-        typed = [item for item in member.get("team_memberships") or [] if not isinstance(item, dict)]
-        if typed:
-            _add_member_clubs_by_name(store, member, typed)
-            changed = True
+    changed = _repair_typed_club_links(store)
+    played_for: dict[str, set[str]] = {}
+    played_against: dict[str, set[str]] = {}
 
     def club_for_team(team_name: str, fallback: dict[str, Any]) -> dict[str, Any]:
         clean_name = re.sub(r"\s+", " ", str(team_name or "").strip())
@@ -6962,6 +7006,11 @@ def _register_played_fixture_teams(store: dict[str, Any]) -> bool:
                 )
                 changed = True
 
+        # Nov 4 2026 (Amit CC vs Heartlake, 2024): a scorecard still waiting for approval registers its clubs, but
+        # players and memberships only come from approved cards (a misread name must not create a player).
+        if fixture.get("_clubs_only"):
+            continue
+
         players_by_club: dict[str, set[str]] = {
             str(home_club.get("id") or ""): set(),
             str(opponent_club.get("id") or ""): set(),
@@ -7006,6 +7055,12 @@ def _register_played_fixture_teams(store: dict[str, Any]) -> bool:
             clean_name = re.sub(r"\s+", " ", str(name or "").strip())
             if clean_name:
                 players_by_club.setdefault(str(opponent_club.get("id") or ""), set()).add(clean_name)
+
+        home_id, opponent_id = str(home_club.get("id") or ""), str(opponent_club.get("id") or "")
+        for side_id, side_names in players_by_club.items():
+            for side_name in side_names:
+                played_for.setdefault(normalize_name(side_name), set()).add(side_id)
+                played_against.setdefault(normalize_name(side_name), set()).add(opponent_id if side_id == home_id else home_id)
 
         for club in (home_club, opponent_club):
             club_id = str(club.get("id") or "").strip()
@@ -7123,10 +7178,41 @@ def _register_played_fixture_teams(store: dict[str, Any]) -> bool:
                     )
                     changed = True
 
-    # Nov 4 2026: a published scorecard belongs to the clubs of both teams (e.g. Heartlake AND Amit CC), so it
+    # A club a player only played AGAINST is not theirs (e.g. Amit S played for Coca Cola XI vs TP Community):
+    # drop that link unless it is their primary club or a club they typed on their profile.
+    for member in store.get("members", []) or []:
+        member_keys = {normalize_name(str(value)) for value in (member.get("name"), member.get("full_name"), *(member.get("aliases") or [])) if value}
+        for_ids = set().union(*(played_for.get(key, set()) for key in member_keys)) if member_keys else set()
+        against_ids = set().union(*(played_against.get(key, set()) for key in member_keys)) if member_keys else set()
+        wrong_ids = {
+            club_id
+            for club_id in against_ids - for_ids
+            if club_id and club_id != str(member.get("primary_club_id") or "").strip()
+        }
+        if not wrong_ids:
+            continue
+        typed_keys = {
+            normalize_name(str(item if not isinstance(item, dict) else item.get("team_name") or item.get("display_name") or ""))
+            for item in member.get("team_memberships") or []
+            if not isinstance(item, dict) or (not str(item.get("club_id") or "").strip() and str(item.get("team_type") or "") != "club")
+        }
+        for club_id in wrong_ids:
+            wrong_club = _club_by_identifier(store.get("clubs", []), club_id) or {}
+            if typed_keys & {normalize_name(str(wrong_club.get(key) or "")) for key in ("name", "short_name")} - {""}:
+                continue
+            for field in ("club_memberships", "team_memberships"):
+                kept = [item for item in member.get(field) or [] if not (isinstance(item, dict) and str(item.get("club_id") or "").strip() == club_id and not item.get("is_primary"))]
+                if len(kept) != len(member.get(field) or []):
+                    member[field] = kept
+                    changed = True
+
+    # a club typed on a profile ("Amit CC") may only have been registered just now from a scorecard
+    changed = _repair_typed_club_links(store) or changed
+    # Nov 4 2026: a scorecard belongs to the clubs of both teams (e.g. Heartlake AND Amit CC), so it
     # shows under both clubs and counts in both clubs' stats (each player only for the side they played for).
+    # One still waiting for approval is linked too, so the other club's admin sees it in the review queue.
     for upload in store.get("archive_uploads", []) or []:
-        if not isinstance(upload, dict) or not _archive_scorecard_is_published(upload):
+        if not isinstance(upload, dict) or _scorecard_text(upload.get("status")).lower() in {"rejected", "duplicate", "deleted"}:
             continue
         try:
             card = _scorecard_from_archive(upload)
@@ -13056,8 +13142,8 @@ def _join_halves(store: dict[str, Any], keep: dict[str, Any], half: dict[str, An
     else:
         joined = _join_innings_photos(first_template, second_template)
     _canonical_team_names(store, joined)
-    was_published = _archive_scorecard_is_published(keep)
-    old_status = keep.get("status")
+    was_published = _archive_scorecard_is_published(keep) or _archive_scorecard_is_published(half)
+    old_status = keep.get("status") if _archive_scorecard_is_published(keep) else half.get("status")
     _apply_ai_template(
         store,
         keep,
@@ -13072,6 +13158,7 @@ def _join_halves(store: dict[str, Any], keep: dict[str, Any], half: dict[str, An
     keep["second_preview_url"] = half.get("preview_url") or (f"/uploads/{keep['second_photo_file']}" if keep["second_photo_file"] else "")
     keep["second_uploaded_by"] = half.get("uploaded_by") or ""
     keep["joined_upload_id"] = str(half.get("id") or "")
+    keep["joined_upload_ids"] = list(dict.fromkeys([*(keep.get("joined_upload_ids") or []), *(half.get("joined_upload_ids") or []), str(half.get("id") or "")]))
     for club_id in half.get("club_ids") or [half.get("club_id")]:
         if club_id and club_id not in (keep.get("club_ids") or []):
             keep["club_ids"] = list(keep.get("club_ids") or []) + [club_id]

@@ -3874,7 +3874,8 @@ def _connection() -> sqlite3.Connection:
     connection = sqlite3.connect(DATABASE_FILE, timeout=60)
     connection.row_factory = sqlite3.Row
     connection.execute("PRAGMA foreign_keys = ON")
-    connection.execute("PRAGMA journal_mode = WAL")
+    # WAL is unsafe on Azure Files (SMB) and corrupted the production DB on 2026-11-04.
+    connection.execute("PRAGMA journal_mode = %s" % ("DELETE" if os.environ.get("WEBSITE_SITE_NAME") else "WAL"))
     connection.execute("PRAGMA synchronous = NORMAL")
     connection.execute("PRAGMA busy_timeout = 60000")
     return connection
@@ -6735,6 +6736,10 @@ def get_archive_or_404(store: dict[str, Any], upload_id: str) -> dict[str, Any]:
     for item in store["archive_uploads"]:
         if item["id"] == upload_id:
             return item
+    # the other club's upload was absorbed into one joined match: its old id still opens that match
+    for item in store["archive_uploads"]:
+        if upload_id in (item.get("joined_upload_ids") or []):
+            return item
     raise ValueError("Archive upload not found.")
 
 
@@ -7060,11 +7065,12 @@ def build_player_pending_stats(archive_uploads: list[dict[str, Any]], members: l
             continue
         archive_key = upload.get("id") or upload.get("file_name", "")
         side_players = upload.get("_club_side_players")
+        other_players = upload.get("_club_other_players") or set()
         for performance in _archive_player_performances(upload, members):
             name = _canonical_member_name(members, performance.get("player_name", ""))
             if not name or name not in member_names:
                 continue
-            if side_players is not None and normalize_name(name) not in side_players and normalize_name(performance.get("player_name", "")) not in side_players:
+            if side_players is not None and (normalize_name(name) in other_players or normalize_name(performance.get("player_name", "")) in other_players):
                 continue  # played for the other team in this match
             stats.setdefault(
                 name,
@@ -7173,7 +7179,8 @@ def build_combined_player_stats(
     live_stats = build_player_stats(fixtures, members, club)
     if club and side_filter:
         # a club's stats count each uploaded scorecard only for the players who played FOR that club (Nov 4 2026)
-        archive_uploads = _CanonicalArchiveList([_archive_for_club_side(item, club) for item in canonical_archive_uploads(archive_uploads)])
+        anchors = side_anchors(archive_uploads)
+        archive_uploads = _CanonicalArchiveList([_archive_for_club_side(item, club, anchors) for item in canonical_archive_uploads(archive_uploads)])
     pending_stats = build_player_pending_stats(archive_uploads, members)
     live_by_name = {item["player_name"]: item for item in live_stats}
     pending_by_name = {item["player_name"]: item for item in pending_stats}
@@ -7528,11 +7535,92 @@ def _team_is_club(team: Any, club: dict[str, Any]) -> bool:
     return False
 
 
-def _archive_for_club_side(upload: dict[str, Any], club: dict[str, Any]) -> dict[str, Any]:
+def _infer_innings_teams(upload: dict[str, Any], template: dict[str, Any]) -> dict[int, tuple[str, str]]:
+    """Imported cards can lack batting/bowling team names; derive them from the two club names plus
+    'X won by N runs' (winner batted first) or 'X won by N wickets' (winner batted second)."""
+    names = [str(name).strip() for name in upload.get("club_names") or [] if str(name).strip()]
+    result = str((template.get("validation") or {}).get("expected_result") or "")
+    found = re.match(r"\s*(.+?)\s+won by\s+\d+\s+(run|wicket)", result, flags=re.IGNORECASE)
+    if len(names) != 2 or not found:
+        return {}
+    winner = next((name for name in names if _team_is_club(found.group(1), {"name": name})), "")
+    if not winner:
+        return {}
+    loser = names[1] if names[0] == winner else names[0]
+    first, second = (winner, loser) if found.group(2).lower() == "run" else (loser, winner)
+    return {0: (first, second), 1: (second, first)}
+
+
+def side_anchors(archive_uploads: Any) -> dict[str, list[set[str]]]:
+    """player -> the teams they are tagged with ("Team: X") on reviewed scorecards, used to spot a card whose
+    team labels are swapped."""
+    anchors: dict[str, list[set[str]]] = {}
+    for upload in archive_uploads or []:
+        if not isinstance(upload, dict):
+            continue
+        for row in upload.get("suggested_performances") or []:
+            if not isinstance(row, dict) or not row.get("player_name"):
+                continue
+            found = re.search(r"team:\s*([^|]+)", str(row.get("notes") or ""), flags=re.IGNORECASE)
+            words = _side_words(found.group(1)) if found else set()
+            if words:
+                anchors.setdefault(normalize_name(str(row["player_name"])), []).append(words)
+    return anchors
+
+
+def _anchored_to(anchor_sets: list[set[str]], team: Any) -> bool:
+    words = _side_words(team)
+    return bool(words) and any(item <= words or words <= item for item in anchor_sets)
+
+
+def card_sides_are_swapped(innings_specs: list[tuple[Any, Any, list[str], list[str]]], anchors: dict[str, list[set[str]]]) -> bool:
+    """innings_specs: (batting_team, bowling_team, batters, bowlers). True when the players' known teams agree
+    better with the opposite labelling (e.g. Amit S, Jose and Sean are Coca Cola XI but the card lists them as
+    the TP Community innings)."""
+    as_written = swapped = 0
+    for batting_team, bowling_team, batters, bowlers in innings_specs:
+        for names, own, other in ((batters, batting_team, bowling_team), (bowlers, bowling_team, batting_team)):
+            for name in names:
+                known = anchors.get(normalize_name(str(name)))
+                if not known:
+                    continue
+                if _anchored_to(known, own):
+                    as_written += 1
+                elif _anchored_to(known, other):
+                    swapped += 1
+    return swapped > as_written
+
+
+def inferred_innings_teams_for_archive(upload: dict[str, Any]) -> dict[int, tuple[str, str]]:
+    for key in ("review_template_json", "review_source_json"):
+        try:
+            value = json.loads(str(upload.get(key) or "")) if upload.get(key) else {}
+        except Exception:
+            value = {}
+        if isinstance(value, dict) and value.get("innings"):
+            return _infer_innings_teams(upload, value)
+    template = upload.get("extraction_template")
+    return _infer_innings_teams(upload, template) if isinstance(template, dict) else {}
+
+
+def _archive_for_club_side(upload: dict[str, Any], club: dict[str, Any], anchors: dict[str, list[set[str]]] | None = None) -> dict[str, Any]:
     """Nov 4 2026 (Amit: Amit S's 24 for Amit CC was counted as a Heartlake innings): mark which players played
     FOR this club in an uploaded scorecard - batters of the innings this club batted, bowlers / fielders of the
     innings it bowled. When the card's team names don't name this club at all, everything counts (as before)."""
     template: dict[str, Any] = {}
+    tagged_players: set[str] = set()
+    tagged_others: set[str] = set()
+    for row in upload.get("suggested_performances") or []:
+        found = re.search(r"team:\s*([^|]+)", str(row.get("notes") or "") if isinstance(row, dict) else "", flags=re.IGNORECASE)
+        if not found or not row.get("player_name"):
+            continue
+        (tagged_players if _team_is_club(found.group(1).strip(), club) else tagged_others).add(normalize_name(str(row["player_name"])))
+    if tagged_players:
+        # reviewed imports tag each player with the team they played for - the most reliable side source
+        copy = dict(upload)
+        copy["_club_side_players"] = tagged_players
+        copy["_club_other_players"] = tagged_others - tagged_players
+        return copy
     for key in ("review_template_json", "review_source_json"):
         try:
             value = json.loads(str(upload.get(key) or "")) if upload.get(key) else {}
@@ -7544,33 +7632,55 @@ def _archive_for_club_side(upload: dict[str, Any], club: dict[str, Any]) -> dict
     if not template and isinstance(upload.get("extraction_template"), dict):
         template = upload["extraction_template"]
     players: set[str] = set()
+    others: set[str] = set()
     matched = False
-    for innings in template.get("innings") or []:
+    inferred_teams = _infer_innings_teams(upload, template)
+
+    def _names(rows: Any) -> set[str]:
+        found: set[str] = set()
+        for row in rows or []:
+            player = (row.get("player") or {}) if isinstance(row, dict) else {}
+            name = player.get("name") if isinstance(player, dict) else player
+            if name:
+                found.add(normalize_name(str(name)))
+        return found
+
+    def _fielders(rows: Any) -> set[str]:
+        found: set[str] = set()
+        for row in rows or []:
+            dismissal = (row.get("dismissal") or {}) if isinstance(row, dict) else {}
+            fielder = dismissal.get("fielder") if isinstance(dismissal, dict) else None
+            if fielder:
+                found.add(normalize_name(str(fielder)))
+        return found
+
+    resolved: list[tuple[dict[str, Any], Any, Any]] = []
+    for innings_index, innings in enumerate(template.get("innings") or []):
         if not isinstance(innings, dict):
             continue
-        bats, bowls = _team_is_club(innings.get("batting_team"), club), _team_is_club(innings.get("bowling_team"), club)
+        batting_team, bowling_team = innings.get("batting_team"), innings.get("bowling_team")
+        if not batting_team and not bowling_team and innings_index in inferred_teams:
+            batting_team, bowling_team = inferred_teams[innings_index]
+        resolved.append((innings, batting_team, bowling_team))
+    if anchors and card_sides_are_swapped(
+        [(bt, bw, sorted(_names(inn.get("batting"))), sorted(_names(inn.get("bowling")))) for inn, bt, bw in resolved], anchors
+    ):
+        resolved = [(inn, bw, bt) for inn, bt, bw in resolved]
+    for innings, batting_team, bowling_team in resolved:
+        bats, bowls = _team_is_club(batting_team, club), _team_is_club(bowling_team, club)
         matched = matched or bats or bowls
         if bats:
-            for row in innings.get("batting") or []:
-                player = (row.get("player") or {}) if isinstance(row, dict) else {}
-                name = player.get("name") if isinstance(player, dict) else player
-                if name:
-                    players.add(normalize_name(str(name)))
+            players |= _names(innings.get("batting"))
+            others |= _names(innings.get("bowling")) | _fielders(innings.get("batting"))
         if bowls:
-            for row in innings.get("bowling") or []:
-                player = (row.get("player") or {}) if isinstance(row, dict) else {}
-                name = player.get("name") if isinstance(player, dict) else player
-                if name:
-                    players.add(normalize_name(str(name)))
-            for row in innings.get("batting") or []:
-                dismissal = (row.get("dismissal") or {}) if isinstance(row, dict) else {}
-                fielder = dismissal.get("fielder") if isinstance(dismissal, dict) else None
-                if fielder:
-                    players.add(normalize_name(str(fielder)))
+            players |= _names(innings.get("bowling")) | _fielders(innings.get("batting"))
+            others |= _names(innings.get("batting"))
     if not matched:
         return upload
     copy = dict(upload)
+    # players named only on the other side are skipped; players the card doesn't place count for their own clubs
     copy["_club_side_players"] = players
+    copy["_club_other_players"] = others - players
     return copy
 
 
@@ -7821,7 +7931,7 @@ def build_rankings_for_year(
     fixtures = _filter_fixtures_by_year(store.get("fixtures", []), year)
     archives = _filter_archives_by_year(store.get("archive_uploads", []), year)
     # a player's season totals count every club they played for (no per-club side filter here)
-    combined = build_combined_player_stats(fixtures, archives, store.get("members", []), store.get("club"), side_filter=False)
+    combined = build_combined_player_stats(fixtures, archives, store.get("members", []), None, side_filter=False)
     return {
         "player_stats": combined,
         "batting_rankings": build_batting_rankings(combined),
