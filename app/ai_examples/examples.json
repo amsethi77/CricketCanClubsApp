@@ -2,6 +2,20 @@
  "about": "Worked examples for the AI scorecard reader: real photos checked by a person digit by digit, with the right answer. Sent with every read so the AI learns how these scorebooks are filled in. README: How the AI reader learns -> Worked examples.",
  "examples": [
   {
+   "photo": "example_4.jpg",
+   "answer": "example_4.json",
+   "source_file": "aa0ee5f326.jpeg",
+   "checked_by": "Claude, from the photo, 2026-11-06 (Heartlake page, Scarborough Pro vs Heartlake 27 Jul 2025)",
+   "lessons": [
+    "INNINGS OF says who batted on THIS page ('HEARTLAKE (2nd)' = Heartlake, inning_number 2), even when that team is written first in PLAYED BETWEEN.",
+    "Copy each batter's scribbles into ball_by_ball: a stroke '|' is 1, digits are runs. This scorer writes almost no dots, so balls faced are unknown: balls null.",
+    "'not' in HOW OUT with 'out' in the BOWLER column is NOT OUT (Roy, King) - never retired out or run out.",
+    "TOTAL numbers like '00', '07', '03' are 0, 7, 3. The batters' TOTALs (136) + extras (24) = the G. TOTAL (160).",
+    "HOW OUT can be spelled differently from the bowling list (MERWIN in How out = Marvin in the list): use the bowling list name for both.",
+    "Overs per bowler = boxes with marks in the BOWLING ANALYSIS; wickets come from the batting BOWLER column (Marvin 2, Rakesh 3, Manveer 2, Rich 1, Fabian 1)."
+   ]
+  },
+  {
    "photo": "example_1.jpg",
    "answer": "example_1.json",
    "source_file": "IMG_1975.HEIC",
@@ -38,4 +52,4 @@
    ]
   }
  ]
-}
+}

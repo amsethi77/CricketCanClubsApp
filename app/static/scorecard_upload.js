@@ -55,7 +55,7 @@
   fileEl.addEventListener("change", () => {
     const file = fileEl.files[0];
     if (!file) return;
-    dropText.textContent = file.name;
+    dropText.textContent = `1st innings: ${file.name}`;
     if (/^image\/(jpeg|png|webp|gif)$/i.test(file.type)) {
       previewEl.src = URL.createObjectURL(file);
       previewEl.hidden = false;
@@ -80,8 +80,12 @@
 
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
-    const file = fileEl.files[0];
-    if (!file) return say("Choose a photo first.", true);
+    // Nov 6 2026 (Amit): either photo can be given on its own - only the 2nd innings page is fine too.
+    const firstFile = fileEl.files[0];
+    const secondFile = file2El && file2El.files[0];
+    const file = firstFile || secondFile;
+    if (!file) return say("Choose the 1st innings photo, the 2nd innings photo, or both.", true);
+    const onlySecond = !firstFile && Boolean(secondFile);
     const button = form.querySelector("button[type=submit]");
     button.disabled = true;
     // Live progress with a seconds counter, so the wait feels shorter (README "Faster photo reading").
@@ -99,12 +103,13 @@
     if (seasonEl.value.trim()) qs.set("season", seasonEl.value.trim());
     const linkEl = document.getElementById("scuLink");
     if (linkEl && linkEl.value.trim()) qs.set("link_match_code", linkEl.value.trim());
+    if (onlySecond) qs.set("innings_number", "2");
     try {
       const response = await fetch(`/api/scorecards/upload?${qs}`, { method: "POST", headers: { "X-Auth-Token": token() }, body });
       const data = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(data.detail || "Upload failed.");
       const previewUrl = data.preview_url || `/scorecards/${encodeURIComponent(data.upload?.id || "")}?preview=1`;
-      const second = file2El && file2El.files[0];
+      const second = onlySecond ? null : file2El && file2El.files[0];
       if (second && data.upload?.id) {
         // the 1st photo is saved; now the 2nd innings photo (a problem here doesn't lose the 1st upload)
         const body2 = new FormData();

@@ -1,0 +1,339 @@
+{
+ "meta": {
+  "source": "checked-example",
+  "confidence": "high",
+  "status": "template"
+ },
+ "match": {
+  "match_type": "club",
+  "date": "2025-07-27",
+  "venue": "Dixie",
+  "teams": {
+   "team_1": "Scarborough Pro",
+   "team_2": "Heartlake Cricket Club"
+  },
+  "overs_limit": 35
+ },
+ "innings": [
+  {
+   "inning_number": 2,
+   "batting_team": "Heartlake Cricket Club",
+   "bowling_team": "Scarborough Pro",
+   "summary": {
+    "runs": 160,
+    "wickets": 9,
+    "overs": 35,
+    "balls": null
+   },
+   "batting": [
+    {
+     "player": {
+      "name": "John"
+     },
+     "runs": 14,
+     "balls": null,
+     "fours": 0,
+     "sixes": 0,
+     "dismissal": {
+      "type": null,
+      "fielder": null,
+      "bowler": "Fabian",
+      "written_as": "(unclear)"
+     },
+     "ball_runs_sum": 14,
+     "ball_count": null,
+     "ball_by_ball": "1 2 1 2 1 2 2 1 1 1",
+     "unsure": true
+    },
+    {
+     "player": {
+      "name": "Nav Singh"
+     },
+     "runs": 0,
+     "balls": null,
+     "fours": 0,
+     "sixes": 0,
+     "dismissal": {
+      "type": "caught",
+      "fielder": null,
+      "bowler": "Marvin",
+      "written_as": "Caught"
+     },
+     "ball_runs_sum": 0,
+     "ball_count": null,
+     "ball_by_ball": ".",
+     "unsure": false
+    },
+    {
+     "player": {
+      "name": "Ishwar"
+     },
+     "runs": 7,
+     "balls": null,
+     "fours": 0,
+     "sixes": 0,
+     "dismissal": {
+      "type": "bowled",
+      "fielder": null,
+      "bowler": "Marvin",
+      "written_as": "Bowled"
+     },
+     "ball_runs_sum": 7,
+     "ball_count": null,
+     "ball_by_ball": "1 1 1 1 1 2",
+     "unsure": false
+    },
+    {
+     "player": {
+      "name": "C Thomas"
+     },
+     "runs": 30,
+     "balls": null,
+     "fours": 3,
+     "sixes": 0,
+     "dismissal": {
+      "type": "caught",
+      "fielder": null,
+      "bowler": "Rakesh",
+      "written_as": "(empty)"
+     },
+     "ball_runs_sum": 30,
+     "ball_count": null,
+     "ball_by_ball": "1 1 1 4 1 1 4 1 1 1 1 1 . 2 1 2 1 4 1 1",
+     "unsure": true
+    },
+    {
+     "player": {
+      "name": "Kannan"
+     },
+     "runs": 11,
+     "balls": null,
+     "fours": 1,
+     "sixes": 0,
+     "dismissal": {
+      "type": "caught",
+      "fielder": null,
+      "bowler": "Rakesh",
+      "written_as": "caught"
+     },
+     "ball_runs_sum": 11,
+     "ball_count": null,
+     "ball_by_ball": "1 1 1 2 1 1 4",
+     "unsure": true
+    },
+    {
+     "player": {
+      "name": "Mohan"
+     },
+     "runs": 23,
+     "balls": null,
+     "fours": 1,
+     "sixes": 0,
+     "dismissal": {
+      "type": "caught",
+      "fielder": null,
+      "bowler": "Manveer",
+      "written_as": "caught"
+     },
+     "ball_runs_sum": 23,
+     "ball_count": null,
+     "ball_by_ball": "4 1 2 1 2 1 1 1 1 1 1 1 1 1 1 1 1 1",
+     "unsure": false
+    },
+    {
+     "player": {
+      "name": "Amit"
+     },
+     "runs": 6,
+     "balls": null,
+     "fours": 0,
+     "sixes": 0,
+     "dismissal": {
+      "type": "caught",
+      "fielder": null,
+      "bowler": "Rakesh",
+      "written_as": "caught"
+     },
+     "ball_runs_sum": 6,
+     "ball_count": null,
+     "ball_by_ball": "1 1 1 1 1 1",
+     "unsure": false
+    },
+    {
+     "player": {
+      "name": "Roy"
+     },
+     "runs": 3,
+     "balls": null,
+     "fours": 0,
+     "sixes": 0,
+     "dismissal": {
+      "type": "not out",
+      "fielder": null,
+      "bowler": null,
+      "written_as": "not | out"
+     },
+     "ball_runs_sum": 3,
+     "ball_count": null,
+     "ball_by_ball": "1 1 1",
+     "unsure": false
+    },
+    {
+     "player": {
+      "name": "King"
+     },
+     "runs": 26,
+     "balls": null,
+     "fours": 0,
+     "sixes": 0,
+     "dismissal": {
+      "type": "not out",
+      "fielder": null,
+      "bowler": null,
+      "written_as": "not | out"
+     },
+     "ball_runs_sum": 26,
+     "ball_count": null,
+     "ball_by_ball": "1 1 1 1 1 1 2 2 1 1 1 1 1 1 1 1 1 1 1 1 1 . 2 1",
+     "unsure": true
+    },
+    {
+     "player": {
+      "name": "Shayo"
+     },
+     "runs": 16,
+     "balls": null,
+     "fours": 3,
+     "sixes": 0,
+     "dismissal": {
+      "type": "caught",
+      "fielder": null,
+      "bowler": "Rich",
+      "written_as": "caught"
+     },
+     "ball_runs_sum": 16,
+     "ball_count": null,
+     "ball_by_ball": "4 1 4 2 4 1",
+     "unsure": false
+    },
+    {
+     "player": {
+      "name": "Simran"
+     },
+     "runs": 0,
+     "balls": null,
+     "fours": null,
+     "sixes": null,
+     "dismissal": {
+      "type": "caught",
+      "fielder": null,
+      "bowler": "Manveer",
+      "written_as": "caught"
+     },
+     "ball_runs_sum": null,
+     "ball_count": null,
+     "ball_by_ball": null,
+     "unsure": false
+    }
+   ],
+   "bowling": [
+    {
+     "player": {
+      "name": "Marvin"
+     },
+     "overs": 5,
+     "maidens": null,
+     "runs_conceded": null,
+     "wickets": 2,
+     "over_marks": null
+    },
+    {
+     "player": {
+      "name": "Fabian"
+     },
+     "overs": 6,
+     "maidens": null,
+     "runs_conceded": null,
+     "wickets": 1,
+     "over_marks": null
+    },
+    {
+     "player": {
+      "name": "Rakesh"
+     },
+     "overs": 5,
+     "maidens": null,
+     "runs_conceded": null,
+     "wickets": 3,
+     "over_marks": null
+    },
+    {
+     "player": {
+      "name": "Krish"
+     },
+     "overs": 5,
+     "maidens": null,
+     "runs_conceded": null,
+     "wickets": 0,
+     "over_marks": null
+    },
+    {
+     "player": {
+      "name": "Rich"
+     },
+     "overs": 5,
+     "maidens": null,
+     "runs_conceded": null,
+     "wickets": 1,
+     "over_marks": null
+    },
+    {
+     "player": {
+      "name": "Arthur"
+     },
+     "overs": 4,
+     "maidens": null,
+     "runs_conceded": null,
+     "wickets": 0,
+     "over_marks": null
+    },
+    {
+     "player": {
+      "name": "Manveer"
+     },
+     "overs": 2,
+     "maidens": null,
+     "runs_conceded": null,
+     "wickets": 2,
+     "over_marks": null
+    },
+    {
+     "player": {
+      "name": "Walnas"
+     },
+     "overs": 2,
+     "maidens": null,
+     "runs_conceded": null,
+     "wickets": 0,
+     "over_marks": null
+    }
+   ],
+   "extras": {
+    "wides": 18,
+    "no_balls": 6,
+    "byes": null,
+    "leg_byes": null,
+    "penalties": null,
+    "total": 24,
+    "written_as": "WIDES tally of 18 strokes, NO BALLS tally of 6",
+    "unsure": true
+   }
+  }
+ ],
+ "validation": {
+  "inning_1_total": null,
+  "inning_2_total": 160,
+  "expected_result": "",
+  "notes": "Only this team's innings is on the page. Bowlers' runs are not written per bowler."
+ }
+}

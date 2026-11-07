@@ -74,8 +74,8 @@ def model_name() -> str:
 
 # Free and offline: a vision model in Ollama on this computer (e.g. `ollama pull qwen3-vl:8b`).
 OLLAMA_VISION_MODELS = (
-    "qwen3-vl:8b", "qwen3-vl:latest", "qwen3-vl", "qwen3-vl:4b", "qwen2.5vl:7b", "qwen2.5vl:latest",
-    "qwen2.5vl", "llama3.2-vision:latest", "llama3.2-vision", "minicpm-v:latest", "llava:latest",
+    "qwen2.5vl:7b", "qwen2.5vl:latest", "qwen2.5vl", "qwen2.5vl:3b",
+    "qwen3-vl:8b", "qwen3-vl:latest", "qwen3-vl", "qwen3-vl:4b", "llama3.2-vision:latest", "llama3.2-vision", "minicpm-v:latest", "llava:latest",
     # Gemma 4: Google's free offline model family (Gemini's open sibling), reads images. e4b fits a laptop.
     "gemma4:e4b", "gemma4:latest", "gemma4", "gemma4:e2b", "gemma4:26b",
 )
@@ -164,7 +164,7 @@ def _zoomed_halves(path: Path, max_edge: int = 3072) -> list[tuple[str, str]]:
         return []
 
 
-def _image_payload(path: Path) -> tuple[str, str]:
+def _image_payload(path: Path, max_edge: int | None = None) -> tuple[str, str]:
     """(media_type, base64 data) — phone photos (HEIC, rotated, huge) become an upright JPEG."""
     try:
         from PIL import Image, ImageOps
@@ -177,7 +177,7 @@ def _image_payload(path: Path) -> tuple[str, str]:
             pass
         with Image.open(path) as image:
             image = ImageOps.exif_transpose(image).convert("RGB")
-            image.thumbnail((MAX_EDGE, MAX_EDGE))
+            image.thumbnail((max_edge or MAX_EDGE, max_edge or MAX_EDGE))
             buffer = io.BytesIO()
             image.save(buffer, format="JPEG", quality=90)
             return "image/jpeg", base64.b64encode(buffer.getvalue()).decode("ascii")
@@ -192,6 +192,9 @@ Copy what is written into JSON. Accuracy matters more than completeness.
 
 How a paper scorecard is laid out:
 - "PLAYED BETWEEN ... AND ..." gives the two teams; "DAY & DATE" the date; "VENUE"; "INNINGS OF" says who batted.
+  batting_team is the team written after "INNINGS OF" on THIS page, even when it is the 2nd team in PLAYED BETWEEN;
+  bowling_team is the other team. "(2nd)" or "2nd" written there means inning_number 2. Never take the batting
+  team from the order of PLAYED BETWEEN.
 - Each batting row: batter name, the ball-by-ball scribbles (1 4 . 2 6 ...), then HOW OUT, BOWLER and the TOTAL column.
   ROWS: HOW OUT, BOWLER and TOTAL belong to the batter on the SAME printed row (row numbers 1-11 are printed on the
   left). Count the rows; never shift a value up or down to the batter above or below. An empty BOWLER cell = null.
@@ -251,6 +254,18 @@ Double-checking (important):
   "ball_runs_sum" (null if you can't read them). It should match the TOTAL column; if it doesn't, look at both again.
 - Also count that batter's deliveries in the scribbles (every dot, digit and W is one ball; ignore crossed-out lines)
   and put it in "ball_count". It should match the balls in brackets; if not, look at the brackets again.
+- Ball by ball (copy the marks, the app does the counting): for every batter write the scribbles after the name
+  into "ball_by_ball", one token per delivery, separated by spaces, in order: "." for a dot (a dot or 0),
+  1 2 3 4 5 6 for runs (a "|" stroke is 1), "W" for the ball he was out on. Leave out the end-of-innings ticks
+  (">", ">>", "7", "77", long lines) and crossed-out marks. Example: "1 . 4 . . 2 6 1 W". null if you can't read them.
+  Some scorers write only the runs and no dots: then copy just what is written (the app then won't count balls).
+- "not" in HOW OUT with "out" in the BOWLER column (or "N.O.", "NO", "not out" split over the two cells) means
+  NOT OUT, never retired out or run out.
+- For every bowler write each used BOWLING ANALYSIS box (one box = one over) into "over_marks", one string per
+  over in order, one token per delivery: "." dot, 1-6 runs off the bat, "W" a wicket ball, "wd" a wide ("wd2" for a
+  wide that went for 2), "nb" a no ball ("nb4" when 4 was hit off it), "b1" / "lb1" byes / leg byes.
+  Example: ["1 . . 4 wd . 2", ". . . . . ."]. A small circled running total in a corner is not a delivery.
+  null if you can't read the boxes - but still give "overs" = the number of boxes with marks in them.
 - Dates: read the year digit by digit (0 and 6, 1 and 7 look alike). Write the date as YYYY-MM-DD.
 - Set "unsure": true on any batter (or on extras) where a digit is hard to read, so a person checks it.
 
@@ -273,8 +288,8 @@ Reply with ONLY this JSON, no other text:
       "inning_number": 1,
       "batting_team": "...", "bowling_team": "...",
       "summary": {{"runs": 0, "wickets": 0, "overs": null, "balls": null}},
-      "batting": [{{"player": {{"name": "..."}}, "runs": 0, "balls": null, "fours": null, "sixes": null, "dismissal": {{"type": "caught", "fielder": null, "bowler": "...", "written_as": "CAUGHT"}}, "ball_runs_sum": null, "ball_count": null, "unsure": false}}],
-      "bowling": [{{"player": {{"name": "..."}}, "overs": null, "maidens": null, "runs_conceded": null, "wickets": null}}],
+      "batting": [{{"player": {{"name": "..."}}, "runs": 0, "balls": null, "fours": null, "sixes": null, "dismissal": {{"type": "caught", "fielder": null, "bowler": "...", "written_as": "CAUGHT"}}, "ball_runs_sum": null, "ball_count": null, "ball_by_ball": "1 . 4 . 2 W", "unsure": false}}],
+      "bowling": [{{"player": {{"name": "..."}}, "overs": null, "maidens": null, "runs_conceded": null, "wickets": null, "over_marks": ["1 . . 4 wd . 2"]}}],
       "extras": {{"wides": null, "no_balls": null, "byes": null, "leg_byes": null, "penalties": null, "total": 0, "written_as": "exactly what is written in the extras boxes, e.g. 'W 52'", "unsure": false}}
     }}
   ],
@@ -331,8 +346,8 @@ def worked_examples(skip_photo: Path | None = None) -> list[dict[str, Any]]:
     if skip_photo is not None:
         own = Path(skip_photo).name.lower()
         items = [item for item in items if own not in {item["name"].lower(), item["source_file"].lower()}]
-    limit = subscriptions.setting("AI_WORKED_EXAMPLES", "3").strip()
-    return items[: int(limit) if limit.isdigit() else 3]
+    limit = subscriptions.setting("AI_WORKED_EXAMPLES", "4").strip()
+    return items[: int(limit) if limit.isdigit() else 4]
 
 
 def _example_intro(example: dict[str, Any]) -> str:
@@ -377,20 +392,201 @@ def _all_known_names(roster: list[str] | None) -> list[str]:
     return list(seen.values())
 
 
+# ---------------------------------------------------------------------------
+# Ball-by-ball counting (Nov 5 2026, "too many empty -: capture balls faced, 4s, 6s, dots, doubles, and the same
+# for bowlers"). The reader copies the marks; the counting is done here so it is exact, and a number written on
+# the card always wins over a count (a mismatch becomes a note for the person checking).
+# ---------------------------------------------------------------------------
+
+
+def _tokens(text: Any) -> list[str]:
+    return [token for token in re.split(r"[\s,]+", str(text or "").strip()) if token]
+
+
+def count_batter_marks(text: Any) -> dict[str, int] | None:
+    """'1 . 4 . 2 6 W' -> balls 7, runs 13, dots 3 (incl. the W ball), ones 1, twos 1, threes 0, fours 1, sixes 1."""
+    tokens = _tokens(text)
+    if not tokens:
+        return None
+    stats = {"balls": 0, "runs": 0, "dots": 0, "ones": 0, "twos": 0, "threes": 0, "fours": 0, "sixes": 0}
+    for token in tokens:
+        low = token.lower()
+        if low in {".", "0", "w", "x"}:
+            stats["balls"] += 1
+            stats["dots"] += 1
+        elif low.isdigit() and len(low) == 1:
+            runs = int(low)
+            stats["balls"] += 1
+            stats["runs"] += runs
+            key = {1: "ones", 2: "twos", 3: "threes", 4: "fours", 6: "sixes"}.get(runs)
+            if key:
+                stats[key] += 1
+            elif runs == 0:
+                stats["dots"] += 1
+        elif low.startswith("nb"):
+            off_bat = int(low[2:]) if low[2:].isdigit() else 0
+            stats["balls"] += 1  # a no ball counts as a ball faced
+            stats["runs"] += off_bat
+            if off_bat == 4:
+                stats["fours"] += 1
+            elif off_bat == 6:
+                stats["sixes"] += 1
+        elif low.startswith(("b", "lb")) and low.lstrip("lb").isdigit():
+            stats["balls"] += 1  # byes: a ball faced, no runs to the batter
+            stats["dots"] += 1
+        elif low.startswith("wd"):
+            continue  # a wide is not a ball faced
+        else:
+            return None  # something we can't read: don't count at all
+    return stats
+
+
+def count_bowler_marks(overs: Any) -> dict[str, Any] | None:
+    """['1 . . 4 wd . 2', '. . . . . .'] -> overs '2', runs 8, maidens 1, dots 9, wides 1, no balls 0, 4s 1, 6s 0, wickets 0."""
+    if isinstance(overs, str):
+        overs = [overs]
+    if not isinstance(overs, list) or not overs:
+        return None
+    stats = {"legal": 0, "runs": 0, "maidens": 0, "dots": 0, "wides": 0, "no_balls": 0, "fours": 0, "sixes": 0, "wicket_balls": 0}
+    full_overs = 0
+    last_legal = 0
+    for over in overs:
+        tokens = _tokens(over)
+        if not tokens:
+            continue
+        legal = runs = 0
+        for token in tokens:
+            low = token.lower()
+            if low in {".", "0", "x"}:
+                legal += 1
+                stats["dots"] += 1
+            elif low == "w":
+                legal += 1
+                stats["dots"] += 1
+                stats["wicket_balls"] += 1
+            elif low.isdigit() and len(low) == 1:
+                legal += 1
+                runs += int(low)
+                if low == "4":
+                    stats["fours"] += 1
+                elif low == "6":
+                    stats["sixes"] += 1
+                elif low == "0":
+                    stats["dots"] += 1
+            elif low.startswith("wd"):
+                extra = int(low[2:]) if low[2:].isdigit() else 1
+                runs += max(extra, 1)
+                stats["wides"] += max(extra, 1)
+            elif low.startswith("nb"):
+                off_bat = int(low[2:]) if low[2:].isdigit() else 0
+                runs += 1 + off_bat
+                stats["no_balls"] += 1
+                if off_bat == 4:
+                    stats["fours"] += 1
+                elif off_bat == 6:
+                    stats["sixes"] += 1
+            elif low.startswith(("lb", "b")) and low.lstrip("lb").isdigit():
+                legal += 1  # byes / leg byes: a legal ball, not the bowler's runs
+            else:
+                return None
+        stats["runs"] += runs
+        stats["legal"] += legal
+        if legal >= 6:
+            full_overs += 1
+            if runs == 0:
+                stats["maidens"] += 1
+        last_legal = legal
+    if not stats["legal"]:
+        return None
+    partial = last_legal if 0 < last_legal < 6 else 0
+    overs_text = f"{full_overs}.{partial}" if partial else str(full_overs)
+    return {"overs": overs_text, **{key: value for key, value in stats.items() if key not in {"legal"}}}
+
+
+def _fill_from_marks(template: dict[str, Any]) -> list[str]:
+    """Fill empty balls / 4s / 6s and add dots, 1s, 2s, 3s from each batter's ball-by-ball; fill empty overs /
+    maidens / runs and add dots, wides, no balls, 4s and 6s conceded from each bowler's boxes."""
+    notes: list[str] = []
+    for inn in template.get("innings") or []:
+        if not isinstance(inn, dict):
+            continue
+        counted = [(row, count_batter_marks(row.get("ball_by_ball"))) for row in inn.get("batting") or [] if isinstance(row, dict)]
+        with_marks = [stats for _row, stats in counted if stats]
+        # Nov 6 2026 (Scarborough Pro vs Heartlake card): some scorers write only the scoring shots, no dots. Then
+        # the marks can't give balls faced or dots (Ali "107 off 28") - only 4s, 6s, 1s, 2s, 3s and runs.
+        # dots count as "written" only when they are a real share of the marks: one stray dot on a runs-only
+        # card (Heartlake page: 3 dots in ~120 marks) must not make "balls faced" out of the runs.
+        total_marks = sum(stats["balls"] for stats in with_marks)
+        dots_written = len(with_marks) < 3 or (total_marks and sum(stats["dots"] for stats in with_marks) / total_marks >= 0.15)
+        if with_marks and not dots_written:
+            notes.append(f"{inn.get('batting_team') or 'This innings'}: no dots are written in the ball-by-ball, so balls faced can't be counted from it - type them in with ✏️ if you know them.")
+        for row, stats in counted:
+            if not stats:
+                continue
+            name = (row.get("player") or {}).get("name") if isinstance(row.get("player"), dict) else ""
+            for key in ("balls", "fours", "sixes") if dots_written else ("fours", "sixes"):
+                if row.get(key) in (None, ""):
+                    row[key] = stats[key]
+            for key in ("dots", "ones", "twos", "threes") if dots_written else ("ones", "twos", "threes"):
+                row[key] = stats[key]
+            row["ball_runs_sum"] = stats["runs"]
+            if dots_written:
+                row["ball_count"] = stats["balls"]
+            else:
+                row.pop("ball_count", None)
+            if isinstance(row.get("runs"), int) and row["runs"] != stats["runs"]:
+                notes.append(f"Check {name}: the TOTAL column says {row['runs']}, the ball-by-ball adds up to {stats['runs']}.")
+            elif row.get("runs") in (None, ""):
+                row["runs"] = stats["runs"]
+                notes.append(f"{name}'s TOTAL was empty; used the ball-by-ball runs ({stats['runs']}). Check it.")
+        for row in inn.get("bowling") or []:
+            if not isinstance(row, dict):
+                continue
+            stats = count_bowler_marks(row.get("over_marks"))
+            if not stats:
+                continue
+            name = (row.get("player") or {}).get("name") if isinstance(row.get("player"), dict) else ""
+            if row.get("overs") in (None, ""):
+                row["overs"] = stats["overs"]
+            elif str(row.get("overs")) != stats["overs"]:
+                notes.append(f"Check {name}'s overs: {row.get('overs')} written, {stats['overs']} in the bowling boxes.")
+            if row.get("maidens") in (None, ""):
+                row["maidens"] = stats["maidens"]
+            if row.get("runs_conceded") in (None, ""):
+                row["runs_conceded"] = stats["runs"]
+            elif isinstance(row.get("runs_conceded"), int) and abs(row["runs_conceded"] - stats["runs"]) > 2:
+                notes.append(f"Check {name}'s runs: {row['runs_conceded']} written, {stats['runs']} in the bowling boxes.")
+            for key in ("dots", "wides", "no_balls", "fours", "sixes"):
+                row[key] = stats[key]
+    return notes
+
+
 def _apply_learning(template: dict[str, Any], roster: list[str] | None) -> list[str]:
     """Fix names with the club's earlier corrections and near-miss known names; check the date against the
     photo date and balls against the ball-by-ball count. Returns notes for the person checking."""
     hints = _HINTS.get() or {}
-    notes: list[str] = []
+    notes: list[str] = _fill_from_marks(template)
     corrections = {str(k).strip().lower(): str(v).strip() for k, v in (hints.get("corrections") or {}).items() if str(v).strip()}
     known = _all_known_names(roster)
     known_lower = {name.lower(): name for name in known}
+    # Nov 5 2026 (Ravi and Rams both bowled for Heartlake): a learned fix is not used when the corrected name is
+    # already on this card as another player - that would merge two players into one.
+    on_card: set[str] = set()
+    for inn in template.get("innings") or []:
+        for rows in ((inn or {}).get("batting") or [], (inn or {}).get("bowling") or []) if isinstance(inn, dict) else ():
+            for row in rows:
+                player = row.get("player") if isinstance(row, dict) else None
+                if isinstance(player, dict) and player.get("name"):
+                    on_card.add(" ".join(str(player["name"]).split()).lower())
 
     def fix(name: Any) -> Any:
         text = " ".join(str(name or "").split())
         if not text:
             return name
         low = text.lower()
+        if low in corrections and corrections[low].lower() != low and corrections[low].lower() in on_card:
+            notes.append(f"'{text}' was kept: an earlier card changed it to '{corrections[low]}', but '{corrections[low]}' is also on this card.")
+            return text
         if low in corrections:
             if corrections[low] != text:
                 notes.append(f"'{text}' was changed to '{corrections[low]}' (corrected on an earlier card).")
@@ -765,6 +961,8 @@ def _read_once(path: Path, *, roster: list[str] | None, club_name: str, timeout:
                 backup["fallback"] = "ollama"
                 backup["fallback_reason"] = result.get("error")
                 return backup
+            # Nov 6 2026: say why the local AI didn't take over, instead of only "Gemini's limit is used up"
+            result = {**result, "error": f"{result.get('error')} The local AI (Ollama {ollama_model()}) was tried too: {backup.get('error')}"}
         return result
     if chosen == "ollama":
         return _read_with_ollama(path, roster=roster, club_name=club_name, extra=extra)
@@ -989,7 +1187,9 @@ def _read_with_ollama(path: Path, *, roster: list[str] | None, club_name: str, e
     if not model:
         return {"error": "No Ollama vision model found. Run: ollama pull qwen3-vl:8b"}
     try:
-        _, data = _image_payload(path)
+        # Nov 6 2026: a smaller photo for the laptop model (a full-size photo + a big context crashed Ollama:
+        # "connection forcibly closed" = out of memory).
+        _, data = _image_payload(path, int(subscriptions.setting("OLLAMA_IMAGE_EDGE", "1400") or 1400))
     except Exception as exc:
         return {"error": f"Couldn't open the photo: {exc}"}
     prompt = _prompt(roster, club_name) + extra
@@ -998,7 +1198,14 @@ def _read_with_ollama(path: Path, *, roster: list[str] | None, club_name: str, e
         "messages": [{"role": "user", "content": prompt, "images": [data]}],
         "stream": False,
         "format": "json",
-        "options": {"temperature": 0, "num_ctx": 8192},
+        # Nov 6 2026: "think": false for thinking models (qwen3-vl "thinking" builds otherwise spend the whole
+        # answer thinking and return nothing), and a context big enough for the prompt + photo + a full card.
+        "think": False,
+        "options": {
+            "temperature": 0,
+            "num_ctx": int(subscriptions.setting("OLLAMA_NUM_CTX", "16384") or 16384),
+            "num_predict": int(subscriptions.setting("OLLAMA_NUM_PREDICT", "6144") or 6144),
+        },
     }
     try:
         timeout = float(subscriptions.setting("OLLAMA_VISION_TIMEOUT", "600") or 600)
@@ -1008,13 +1215,21 @@ def _read_with_ollama(path: Path, *, roster: list[str] | None, club_name: str, e
     except httpx.HTTPError as exc:
         return {"error": f"Couldn't reach Ollama: {exc.__class__.__name__}. Is the Ollama app running?"}
     if response.status_code != 200:
-        return {"error": f"Ollama answered {response.status_code}: {response.text[:200]}"}
+        text = response.text[:200]
+        if "forcibly closed" in text or "out of memory" in text.lower() or "terminated" in text.lower():
+            return {"error": f"The local AI ({model}) ran out of memory on this computer. Close other apps and try again, use a smaller model (ollama pull qwen2.5vl:3b), or set OLLAMA_NUM_CTX=8192 in .env."}
+        return {"error": f"Ollama answered {response.status_code}: {text}"}
     payload = response.json()
-    text = str((payload.get("message") or {}).get("content") or "")
+    message = payload.get("message") or {}
+    text = str(message.get("content") or "")
     template = _parse_json(text)
+    if not template and message.get("thinking"):
+        # a thinking-only model that ignored "think": false may have put the JSON at the end of its thinking
+        template = _parse_json(str(message.get("thinking") or "").split("</think>")[-1])
     template = _normalise(template, model) if template else None
     if not template:
-        return {"error": "The Ollama model's answer wasn't a scorecard.", "raw": text[:2000]}
+        hint = " This model only 'thinks' and gives no answer: run  ollama pull qwen2.5vl:7b  (README 'Ollama backup')." if message.get("thinking") and not text.strip() else ""
+        return {"error": f"The local AI ({model}) didn't give a scorecard.{hint}", "raw": text[:2000]}
     return {"template": template, "model": model, "usage": {"input_tokens": payload.get("prompt_eval_count"), "output_tokens": payload.get("eval_count")}}
 
 

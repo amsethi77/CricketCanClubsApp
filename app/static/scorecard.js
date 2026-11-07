@@ -104,12 +104,21 @@
     return balls ? ((Number(runs) / balls) * 6).toFixed(2) : "";
   };
 
+  // Nov 5 2026: dots / 1s / 2s / 3s (batters) and dots / wides / no balls / 4s / 6s (bowlers), counted from the
+  // ball-by-ball marks on the photo. Shown only when they were counted.
+  function ballSplit(row, fields) {
+    const bits = fields
+      .filter(([key]) => row[key] !== null && row[key] !== undefined && row[key] !== "")
+      .map(([key, label]) => `${label} ${escapeHtml(row[key])}`);
+    return bits.length ? `<small class="pm-split">${bits.join(" · ")}</small>` : "";
+  }
+
   function battingTable(inn) {
     const rows = (inn.batting || [])
       .map((b) => {
         const how = howOutText(b.dismissal) || (b.not_out ? "not out" : "");
         return `<tr class="${b.not_out ? "pm-notout" : ""}">
-          <th scope="row"><span class="pm-name">${escapeHtml(b.name)}</span>${how ? `<small>${escapeHtml(how)}</small>` : ""}</th>
+          <th scope="row"><span class="pm-name">${escapeHtml(b.name)}</span>${how ? `<small>${escapeHtml(how)}</small>` : ""}${ballSplit(b, [["dots", "Dots"], ["ones", "1s"], ["twos", "2s"], ["threes", "3s"]])}</th>
           <td class="pm-r">${num(b.runs)}</td><td>${num(b.balls)}</td><td>${num(b.fours)}</td><td>${num(b.sixes)}</td><td>${num(b.strike_rate)}</td></tr>`;
       })
       .join("");
@@ -134,7 +143,7 @@
     const rows = inn.bowling
       .map(
         (b) => `<tr>
-          <th scope="row"><span class="pm-name">${escapeHtml(b.name)}</span></th>
+          <th scope="row"><span class="pm-name">${escapeHtml(b.name)}</span>${ballSplit(b, [["dots", "Dots"], ["wides", "Wd"], ["no_balls", "Nb"], ["fours", "4s"], ["sixes", "6s"]])}</th>
           <td>${num(b.overs)}</td><td>${num(b.maidens)}</td><td>${num(b.runs)}</td><td class="pm-r">${num(b.wickets)}</td><td>${num(b.economy)}</td></tr>`
       )
       .join("");
@@ -595,7 +604,7 @@
         </div>` : ""}
         ${data.can_add_second_photo && !data.other_half ? `<div class="sc-second-photo">
           <p class="sc-check-lede"><strong>Only ${data.innings_count === 1 ? "one innings" : "part of the match"} is on this photo.</strong> Is the other team's batting on a second page? Add its photo and it is joined to this scorecard.</p>
-          <label class="sc-btn primary sc-second-btn">📷 Add the 2nd innings photo
+          <label class="sc-btn primary sc-second-btn">📷 Add the ${missingInningsLabel(data)} innings photo
             <input type="file" accept="image/*,.jpg,.jpeg,.png,.webp,.heic,.heif" data-sc-second hidden />
           </label>
         </div>` : ""}
@@ -747,6 +756,12 @@
     }
   });
 
+  // Nov 6 2026: when the uploaded photo is the 2nd innings, the missing one is the 1st.
+  function missingInningsLabel(data) {
+    const ids = ((data && data.scorecard && data.scorecard.innings_ids) || []).filter((item) => item.status === "missing");
+    return ids.length && Number(ids[0].number) === 1 ? "1st" : "2nd";
+  }
+
   // "Add the 2nd innings photo" (POST /api/scorecards/{id}/second-photo)
   document.addEventListener("change", async (event) => {
     const input = event.target.closest("[data-sc-second]");
@@ -756,7 +771,7 @@
     label.classList.add("is-busy");
     const started = Date.now();
     const tick = () => {
-      msg.textContent = `📤 Adding the 2nd innings photo and reading it… ${Math.round((Date.now() - started) / 1000)}s. Keep this page open.`;
+      msg.textContent = `📤 Adding the other innings photo and reading it… ${Math.round((Date.now() - started) / 1000)}s. Keep this page open.`;
     };
     tick();
     const timer = setInterval(tick, 1000);
@@ -770,7 +785,7 @@
       document.getElementById("scEditor")?.remove();
       editorShown = false;
       await loadPreview();
-      checkEl.querySelector(".sc-check-msg").textContent = data.message || "2nd innings photo added.";
+      checkEl.querySelector(".sc-check-msg").textContent = data.message || "Innings photo added.";
     } catch (error) {
       clearInterval(timer);
       msg.textContent = error.message;

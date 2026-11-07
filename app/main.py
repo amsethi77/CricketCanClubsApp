@@ -3946,7 +3946,13 @@ def root(request: Request) -> RedirectResponse:
 def startup_tasks() -> None:
     ensure_auth_schema()
     _refresh_player_stats_once()
-    _register_played_teams_in_background()
+    # Nov 5 2026: clubs from played games are registered BEFORE the first request. Doing it in a background thread
+    # could save an older copy of the data over a change a request had just saved.
+    try:
+        _register_played_fixture_teams(load_store())  # saves by itself when it adds anything
+    except Exception:
+        logger.exception("Registering clubs from played games failed")
+    threading.Thread(target=_backup_loop, name="database-backups", daemon=True).start()
     threading.Thread(target=_reminder_loop, name="match-reminders", daemon=True).start()
 
 
@@ -4194,6 +4200,51 @@ def _public_fixture_card(fixture: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _fill_results_from_uploaded_scorecards(store: dict[str, Any], cards: list[dict[str, Any]]) -> None:
+    """Nov 5 2026 (home "Recent results": Heartlake vs Imran XI, 6 Sep, "Result not recorded" while the uploaded
+    scorecard has Imran XI 219/8, Heartlake 125): a fixture with no result takes it from the published scorecard
+    of the same game (same date, same two teams)."""
+    pending = [
+        card for card in cards
+        if str(card.get("result") or "").strip().lower() in {"", "tbd", "club won", "to be determined", "not recorded"}
+    ]
+    if not pending:
+        return
+    uploads = []
+    for archive in store.get("archive_uploads", []) or []:
+        if not isinstance(archive, dict) or not _archive_scorecard_is_published(archive):
+            continue
+        try:
+            uploads.append(_scorecard_from_archive(archive))
+        except Exception:
+            continue
+    for card in pending:
+        names = [card.get("club_name"), card.get("opponent")]
+        match = next(
+            (
+                item for item in uploads
+                if str(item.get("date") or "") == str(card.get("date") or "")
+                and all(any(_same_team_name(name, team) for team in item.get("teams") or []) for name in names if name)
+            ),
+            None,
+        )
+        if not match:
+            continue
+        card["result"] = str(match.get("result") or card.get("result") or "")
+        scores = {}
+        for innings in match.get("innings") or []:
+            score = str(innings.get("score") or "")
+            if score.endswith("/10"):
+                score = score[:-3]
+            scores[str(innings.get("team") or "")] = score
+        for key, name in (("heartlake_score", card.get("club_name")), ("opponent_score", card.get("opponent"))):
+            if str(card.get(key) or "").strip() in {"", "0", "0/0"}:
+                value = next((score for team, score in scores.items() if _same_team_name(name, team)), "")
+                if value:
+                    card[key] = value
+        card["scorecard_url"] = f"/scorecards/{match.get('id')}"
+
+
 def _public_live_page_payload(store: dict[str, Any]) -> dict[str, Any]:
     live_matches = [_public_fixture_card(match) for match in _public_live_matches(store)]
     live_match_ids = {item["id"] for item in live_matches}
@@ -4222,6 +4273,7 @@ def _public_live_page_payload(store: dict[str, Any]) -> dict[str, Any]:
         )
     )
     recent_results.sort(key=lambda item: str(item.get("date") or ""), reverse=True)
+    _fill_results_from_uploaded_scorecards(store, recent_results)
     grouped_upcoming: list[dict[str, Any]] = []
     group_map: dict[str, list[dict[str, Any]]] = {}
     for item in upcoming_candidates:
@@ -5152,6 +5204,11 @@ def _scorecard_from_archive_base(archive: dict[str, Any]) -> dict[str, Any]:
                 "balls": _scorecard_int(item.get("balls")),
                 "fours": _scorecard_int(item.get("fours")),
                 "sixes": _scorecard_int(item.get("sixes")),
+                # Nov 5 2026: counted from the batter's ball-by-ball marks (ai_vision.count_batter_marks)
+                "dots": _scorecard_int(item.get("dots")),
+                "ones": _scorecard_int(item.get("ones")),
+                "twos": _scorecard_int(item.get("twos")),
+                "threes": _scorecard_int(item.get("threes")),
                 "how": _scorecard_text(dismissal.get("type")),
                 "fielder": _scorecard_text(dismissal.get("fielder")),
                 "bowler": _scorecard_text(dismissal.get("bowler")),
@@ -5219,6 +5276,7 @@ def _scorecard_from_archive_base(archive: dict[str, Any]) -> dict[str, Any]:
                     "fours": row["fours"],
                     "sixes": row["sixes"],
                     "strike_rate": _scorecard_strike_rate(row["runs"], row["balls"]),
+                    **{key: row.get(key) for key in ("dots", "ones", "twos", "threes") if row.get(key) is not None},
                 }
             )
         if position == 0 and parts.get("did not bat"):
@@ -5249,6 +5307,8 @@ def _scorecard_from_archive_base(archive: dict[str, Any]) -> dict[str, Any]:
                     "runs": runs,
                     "wickets": _scorecard_int(item.get("wickets")),
                     "economy": f"{float(economy):.2f}" if economy not in (None, "") else "",
+                    # Nov 5 2026: counted from the bowler's analysis boxes (ai_vision.count_bowler_marks)
+                    **{key: _scorecard_int(item.get(key)) for key in ("dots", "wides", "no_balls", "fours", "sixes") if item.get(key) not in (None, "")},
                 }
             )
         known_bowlers = {normalize_name(item["name"]) for item in bowling}
@@ -5543,9 +5603,41 @@ def _innings_ids(card: dict[str, Any]) -> list[dict[str, Any]]:
     return out
 
 
+_RESULT_WORDS = re.compile(r"\b(won|win|wins|beat|beats|tie|tied|draw|drawn|abandon|abandoned|no result|forfeit|conceded)\b", re.I)
+
+
+def _result_from_innings(card: dict[str, Any]) -> str:
+    """Nov 5 2026 ("Imran XI 219/8" shown as the result): a 2-innings card with no result written gets it from
+    the two totals - "Imran XI won by 94 runs" / "X won by 4 wickets" / "Match tied"."""
+    innings = [item for item in card.get("innings") or [] if isinstance(item, dict) and item.get("runs") not in (None, "")]
+    if len(innings) != 2:
+        return ""
+    first, second = sorted(innings, key=lambda item: int(item.get("number") or 0))
+    try:
+        first_runs, second_runs = int(first.get("runs")), int(second.get("runs"))
+    except (TypeError, ValueError):
+        return ""
+    if not first.get("team") or not second.get("team"):
+        return ""
+    if second_runs > first_runs:
+        try:
+            left = 10 - int(second.get("wickets"))
+        except (TypeError, ValueError):
+            return f"{second['team']} won"
+        return f"{second['team']} won by {left} wicket{'s' if left != 1 else ''}" if left > 0 else f"{second['team']} won"
+    if second_runs < first_runs:
+        diff = first_runs - second_runs
+        return f"{first['team']} won by {diff} run{'s' if diff != 1 else ''}"
+    return "Match tied"
+
+
 def _scorecard_from_archive(archive: dict[str, Any]) -> dict[str, Any]:
     card = _scorecard_from_archive_base(archive)
     card["innings_ids"] = _innings_ids(card)
+    if not _RESULT_WORDS.search(str(card.get("result") or "")):
+        derived = _result_from_innings(card)
+        if derived:
+            card["result"] = derived
     return card
 
 
@@ -6269,7 +6361,7 @@ def _admin_center_html(request: Request) -> HTMLResponse:
                 <label style="display:flex;gap:10px;align-items:flex-start;margin:6px 0"><input type="checkbox" id="adminRereadCleanup" checked style="width:auto;margin-top:4px" /> Clean up first: delete uploads whose photo isn't on this computer and extra copies of the same photo, and add new photos from the img folder</label>
                 <label style="display:flex;gap:10px;align-items:flex-start;margin:6px 0"><input type="checkbox" id="adminRereadSkip" style="width:auto;margin-top:4px" /> Skip cards already read by the newest AI reader (to continue after the daily free limit)</label>
                 <label style="display:flex;gap:10px;align-items:flex-start;margin:6px 0"><input type="checkbox" id="adminRereadProblems" style="width:auto;margin-top:4px" /> Only cards with problems (runs or wickets don't add up, other team missing) - saves the free daily limit</label>
-                <div class="toolbar-actions"><button id="adminRereadButton" class="primary-button" type="button">🤖 Re-read all scorecards</button></div>
+                <div class="toolbar-actions"><button id="adminRereadButton" class="primary-button" type="button">🤖 Re-read all scorecards</button> <a class="secondary-button" href="/admin/backups">🗄️ Database backups</a></div>
                 <div id="adminRereadStatus" class="status-banner info" hidden></div>
               </div>
               </section>
@@ -6482,7 +6574,6 @@ def clubs_page(request: Request, search: str = "", focus_club_id: str = "") -> R
     if isinstance(session, RedirectResponse):
         # Signed-out visitors get the public, read-only club list instead of the sign-in page.
         return _page_response("public_clubs.html")
-    _register_played_teams_in_background()  # never slows the page down; usually nothing new to add
     return _clubs_page_html(request, search, focus_club_id)
 
 
@@ -6857,13 +6948,25 @@ def _published_scorecard_matches(store: dict[str, Any]) -> list[dict[str, Any]]:
             teams = [inferred[0][0], inferred[0][1]]
         # "Coca Cola" on a card is the existing "Coca Cola XI" club, not a new one
         existing = [club for club in store.get("clubs", []) or [] if isinstance(club, dict)]
-        teams = [
-            next(
+
+        def registered_name(team: Any) -> str:
+            team = re.sub(r"\s+", " ", str(team or "").strip())
+            if not team:
+                return team
+            return next(
                 (str(club.get("name")) for club in existing if club.get("name") and (_same_team_name(team, club.get("name")) or _same_team_name(team, club.get("short_name")))),
                 team,
             )
-            for team in teams
-        ]
+
+        raw_teams = list(teams)
+        teams = [registered_name(team) for team in teams]
+        # Nov 5 2026 (Amit 11 = Amit CC): the innings labels must use the same registered club names as the card's
+        # teams, otherwise "Amit 11" batters fall back to the uploader's club (Heartlake) when the card is approved.
+        same_side = {normalize_name(raw): name for raw, name in zip(raw_teams, teams)}
+
+        def side_name(team: Any) -> str:
+            key = normalize_name(str(team or ""))
+            return same_side.get(key) or registered_name(team) if key else ""
         if len(teams) < 2 or normalize_name(teams[0]) == normalize_name(teams[1]):
             continue
         uploader_club = _club_by_identifier(store.get("clubs", []), str(upload.get("club_id") or "")) or {}
@@ -6886,6 +6989,7 @@ def _published_scorecard_matches(store: dict[str, Any]) -> list[dict[str, Any]]:
         for item, (bat_team, bowl_team, _batters, _bowlers) in zip(card.get("innings") or [], specs):
             if swapped:
                 bat_team, bowl_team = bowl_team, bat_team
+            bat_team, bowl_team = side_name(bat_team), side_name(bowl_team)
             innings.append({
                 "batting_team": bat_team,
                 "bowling_team": bowl_team,
@@ -12636,6 +12740,24 @@ def save_archive_review_form(
         return _redirect_to_admin_center("", str(exc.detail), "error")
 
 
+def _mark_single_innings_number(record: dict[str, Any], number: int) -> None:
+    """Set the innings number of a one-innings upload in every stored copy of its template."""
+    for key in ("review_template_json", "review_source_json"):
+        try:
+            template = json.loads(str(record.get(key) or "")) if record.get(key) else None
+        except Exception:
+            template = None
+        if isinstance(template, dict) and len(_usable_innings(template)) == 1:
+            for item in template.get("innings") or []:
+                if isinstance(item, dict) and item in _usable_innings(template):
+                    item["inning_number"] = number
+            record[key] = json.dumps(template, indent=2)
+    template = record.get("extraction_template")
+    if isinstance(template, dict) and len(_usable_innings(template)) == 1:
+        for item in _usable_innings(template):
+            item["inning_number"] = number
+
+
 @app.post("/api/scorecards/upload")
 async def upload_scorecard(
     request: Request,
@@ -12643,6 +12765,7 @@ async def upload_scorecard(
     season: str | None = None,
     focus_club_id: str | None = None,
     link_match_code: str | None = None,
+    innings_number: int | None = None,
     x_auth_token: str | None = Header(default=None),
     file: UploadFile = File(...),
 ) -> dict[str, Any]:
@@ -12729,6 +12852,10 @@ async def upload_scorecard(
         if not _is_scorecard_template_payload(record.get("extraction_template")):
             record["extraction_template"] = scorecard_template_from_archive(record)
         record["review_template_json"] = json.dumps(record["extraction_template"], indent=2)
+    # Nov 6 2026 (Amit: "should allow if I have only 2nd innings scorecard"): the photo was put in the
+    # "2nd innings" box, so its one innings is innings 2 (the 1st innings shows as missing until it's added).
+    if innings_number == 2:
+        _mark_single_innings_number(record, 2)
     # The other innings of a match already uploaded (by this club or the other team): join them into one scorecard.
     other_half = None
     if link_match_code:
@@ -13030,8 +13157,15 @@ def _join_innings_photos(first: dict[str, Any], second: dict[str, Any]) -> dict[
         first_bowl = str(kept[0].get("bowling_team") or "")
         pick["batting_team"] = pick.get("batting_team") or first_bowl or next((n for n in names if n and n != first_bat), "")
         pick["bowling_team"] = pick.get("bowling_team") or first_bat
-    pick["inning_number"] = len(kept) + 1
-    joined["innings"] = kept + [pick]
+    # the page written as the 2nd innings ("HEARTLAKE (2nd)") stays 2nd: the other photo's innings goes first
+    kept_no = int((kept[0].get("inning_number") if kept else 1) or 1)
+    pick_no = int(pick.get("inning_number") or 0)
+    if len(kept) == 1 and kept_no == 2 and pick_no != 2:
+        pick["inning_number"] = 1
+        joined["innings"] = [pick] + kept
+    else:
+        pick["inning_number"] = len(kept) + 1
+        joined["innings"] = kept + [pick]
     # fill in match details the 1st photo didn't have (the 2nd page often has the result)
     match = joined.setdefault("match", {})
     for key, value in ((second.get("match") or {}).items()):
@@ -13303,8 +13437,26 @@ def _second_photo_path(record: dict[str, Any]) -> Path | None:
     return None
 
 
+def _repeated_batting_side_note(template: dict[str, Any]) -> str:
+    """Nov 5 2026 (Scarborough Pro vs Heartlake): the reader sometimes gives both innings the same batting team.
+    Which page is whose can't be guessed safely (the "Innings of" line decides), so the checker is asked."""
+    innings = [item for item in template.get("innings") or [] if isinstance(item, dict)]
+    if len(innings) != 2:
+        return ""
+    first, second = innings
+    if first.get("batting_team") and _same_team_name(first.get("batting_team"), second.get("batting_team")) and _same_team_name(first.get("bowling_team"), second.get("bowling_team")):
+        return (
+            f"Both innings were read as '{first.get('batting_team')}' batting. Check the 'Innings of' line on each photo "
+            "and set the right batting team with ✏️ Edit scorecard."
+        )
+    return ""
+
+
 def _apply_ai_template(store: dict[str, Any], record: dict[str, Any], template: dict[str, Any], result: dict[str, Any]) -> str:
     """Save an AI-read template onto the upload record (shared by the 1st photo and the 2nd innings photo)."""
+    side_note = _repeated_batting_side_note(template) if isinstance(template, dict) else ""
+    if side_note:
+        result = {**result, "notes": [*(result.get("notes") or []), side_note]}
     imported = parse_imported_extraction(store, json.dumps(template))
     record.update(imported)
     # Keep the AI result as THE reviewed copy too, so the Admin Center JSON box, the snapshot and the
@@ -13637,6 +13789,21 @@ def scorecard_upload_ai_read(upload_id: str, x_auth_token: str | None = Header(d
     reason = _scorecard_ai_read(store, upload, path, club)
     if reason:
         raise HTTPException(status_code=502, detail=reason)
+    # Nov 5 2026 (M-CA36A6F1 lost the Scarborough Pro innings): reading again must read the 2nd innings photo too,
+    # otherwise the other team's innings from that photo is thrown away.
+    second_path = _second_photo_path(upload)
+    if second_path is not None:
+        first_template = _scorecard_pick_template(upload) or {}
+        second_result = _read_photo_with_ai(store, upload, second_path, club)
+        if second_result.get("template"):
+            joined = _join_innings_photos(first_template, second_result["template"])
+            if _template_innings_count(joined) > _template_innings_count(first_template):
+                _apply_ai_template(
+                    store,
+                    upload,
+                    joined,
+                    {**second_result, "notes": [*(upload.get("ai_flags") or []), *(second_result.get("notes") or [])]},
+                )
     upload["status"] = "Pending review"
     upload["review_flags"] = []
     save_store(store)
@@ -13651,6 +13818,17 @@ def scorecard_upload_ai_read(upload_id: str, x_auth_token: str | None = Header(d
         "message": "Read by AI. Check it against the photo." + (" A site admin will look at the points listed." if checks["needs_review"] else " Everything adds up: tap Publish if it matches."),
         "checks": {key: value for key, value in checks.items() if key != "scorecard"},
     }
+
+
+def _is_unread_folder_copy(upload: dict[str, Any]) -> bool:
+    """An upload the uploads-folder scan made from a loose photo and nobody has read or reviewed yet."""
+    return (
+        str(upload.get("source") or "") == "filesystem"
+        and str(upload.get("confidence") or "") == "Draft only"
+        and not str(upload.get("ocr_engine") or "").strip()
+        and not _archive_scorecard_is_published(upload)
+        and not str(upload.get("reviewed_by") or "").strip()
+    )
 
 
 @app.post("/api/scorecards/{upload_id}/second-photo")
@@ -13678,12 +13856,22 @@ async def scorecard_upload_second_photo(
     incoming_hash = file_sha256_from_bytes(content)
     if incoming_hash == upload.get("file_hash"):
         raise HTTPException(status_code=409, detail="That is the same photo as the 1st innings. Take a photo of the 2nd innings page.")
-    for existing in store.get("archive_uploads", []) or []:
+    stray_file = ""
+    for existing in list(store.get("archive_uploads", []) or []):
+        if existing.get("file_hash") == incoming_hash and _is_unread_folder_copy(existing):
+            # Nov 5 2026: an older 2nd photo that the uploads-folder scan turned into its own unread "Ready for
+            # review" card (the "two Match IDs" bug). Take it back as this scorecard's 2nd photo.
+            stray_file = Path(str(existing.get("file_path") or existing.get("file_name") or "").replace("\\", "/")).name
+            store["archive_uploads"] = [item for item in store.get("archive_uploads", []) or [] if item is not existing]
+            continue
         if existing.get("file_hash") == incoming_hash or existing.get("second_photo_hash") == incoming_hash:
             raise HTTPException(status_code=409, detail=f"This photo was already uploaded as '{existing.get('original_file_name') or existing.get('file_name') or 'another scorecard'}'.")
     suffix = Path(file.filename or "scorecard.jpg").suffix or ".jpg"
-    file_token = f"{uuid.uuid4().hex[:10]}{suffix}"
-    (UPLOAD_DIR / file_token).write_bytes(content)
+    if stray_file and (UPLOAD_DIR / stray_file).is_file():
+        file_token = stray_file
+    else:
+        file_token = f"{uuid.uuid4().hex[:10]}{suffix}"
+        (UPLOAD_DIR / file_token).write_bytes(content)
     upload["second_photo_file"] = file_token
     upload["second_photo_hash"] = incoming_hash
     upload["second_photo_name"] = file.filename or file_token
@@ -14426,6 +14614,237 @@ def delete_archive(upload_id: str, published: bool = False, x_auth_token: str | 
         "message": f"{upload['file_name']} removed from archives.",
         "dashboard": current_dashboard(refreshed, upload_club.get("id", "")),
     }
+
+
+# ---------------------------------------------------------------------------
+# Database backups (Amit, Nov 5 2026: "We need a backup plan for the DB, once we go live we cannot afford to
+# lose the data"). README "Database backups".
+#   * a verified copy of the live SQLite file is made at start-up and every BACKUP_EVERY_HOURS (default 6),
+#     with SQLite's own backup API (safe while the app is running), checked with PRAGMA integrity_check, and
+#     kept in BACKUP_DIR (Azure: next to the live file on /home, which survives restarts and deploys)
+#   * kept: the newest 48 copies + one per day for 30 days
+#   * optional off-site copy: set CRICKETCLUBAPP_BACKUP_BLOB_SAS to an Azure Blob container SAS URL and every
+#     backup is also uploaded there (survives even if the App Service storage is lost)
+#   * the live file is checked at start-up; if it is damaged, site admins are told straight away
+#   * superadmin page /admin/backups: list, "Back up now", download any copy
+# ---------------------------------------------------------------------------
+BACKUP_DIR = Path(os.getenv("CRICKETCLUBAPP_BACKUP_DIR", str(DATABASE_FILE.parent / "backups")))
+BACKUP_EVERY_HOURS = max(1.0, float(os.getenv("CRICKETCLUBAPP_BACKUP_EVERY_HOURS", "6") or 6))
+BACKUP_KEEP_RECENT = 48
+BACKUP_KEEP_DAYS = 30
+_BACKUP_LOCK = threading.Lock()
+_BACKUP_NAME_RE = re.compile(r"^cricketclubapp-\d{8}T\d{6}Z-[a-z0-9-]{1,30}\.db$")
+
+
+def _database_is_healthy(path: Path) -> tuple[bool, str]:
+    try:
+        connection = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=30)
+        try:
+            result = [str(row[0]) for row in connection.execute("PRAGMA integrity_check").fetchall()]
+            tables = connection.execute("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table'").fetchone()[0]
+        finally:
+            connection.close()
+    except sqlite3.DatabaseError as exc:
+        return False, str(exc)
+    if result != ["ok"]:
+        return False, "; ".join(result[:5])
+    if not tables:
+        return False, "no tables"
+    return True, "ok"
+
+
+def _upload_backup_offsite(path: Path) -> str:
+    """PUT the copy to an Azure Blob container SAS URL (CRICKETCLUBAPP_BACKUP_BLOB_SAS). Returns "" or the error."""
+    sas = str(os.getenv("CRICKETCLUBAPP_BACKUP_BLOB_SAS") or "").strip()
+    if not sas:
+        return "off-site copy not set up"
+    base, _, query = sas.partition("?")
+    url = f"{base.rstrip('/')}/{path.name}" + (f"?{query}" if query else "")
+    try:
+        import httpx
+
+        with path.open("rb") as handle:
+            response = httpx.put(url, content=handle.read(), headers={"x-ms-blob-type": "BlockBlob"}, timeout=120)
+        if response.status_code >= 300:
+            return f"off-site upload failed ({response.status_code})"
+        return ""
+    except Exception as exc:  # never let an off-site problem stop the local backup
+        return f"off-site upload failed ({exc.__class__.__name__})"
+
+
+def _prune_backups() -> None:
+    files = sorted(BACKUP_DIR.glob("cricketclubapp-*.db"), key=lambda item: item.name, reverse=True)
+    keep: set[str] = {item.name for item in files[:BACKUP_KEEP_RECENT]}
+    days_seen: set[str] = set()
+    cutoff = (datetime.utcnow() - timedelta(days=BACKUP_KEEP_DAYS)).strftime("%Y%m%d")
+    for item in files:
+        day = item.name.split("-")[1][:8]
+        if day >= cutoff and day not in days_seen:
+            days_seen.add(day)
+            keep.add(item.name)
+    for item in files:
+        if item.name not in keep:
+            try:
+                item.unlink()
+            except OSError:
+                logger.warning("Couldn't remove old backup %s", item.name)
+
+
+def make_database_backup(reason: str = "scheduled") -> dict[str, Any]:
+    """A verified copy of the live database. Returns {ok, file, bytes, offsite, error}."""
+    reason = re.sub(r"[^a-z0-9-]+", "-", str(reason or "manual").lower()).strip("-")[:30] or "manual"
+    if not _BACKUP_LOCK.acquire(timeout=300):
+        return {"ok": False, "error": "another backup is running"}
+    try:
+        BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+        if not DATABASE_FILE.exists():
+            return {"ok": False, "error": "no database file yet"}
+        name = f"cricketclubapp-{datetime.utcnow().strftime('%Y%m%dT%H%M%SZ')}-{reason}.db"
+        target = BACKUP_DIR / name
+        partial = BACKUP_DIR / (name + ".partial")
+        _sqlite_copy(DATABASE_FILE, partial)
+        # A backup is a single self-contained file: switch the copy to the rollback journal so restoring it on
+        # Azure Files never brings WAL (and its -wal/-shm side files) back.
+        connection = sqlite3.connect(str(partial), timeout=60)
+        try:
+            connection.execute("PRAGMA journal_mode=DELETE")
+        finally:
+            connection.close()
+        for side in (Path(str(partial) + "-wal"), Path(str(partial) + "-shm")):
+            side.unlink(missing_ok=True)
+        healthy, detail = _database_is_healthy(partial)
+        if not healthy:
+            partial.unlink(missing_ok=True)
+            logger.error("Backup NOT kept: the copy failed its check (%s). The live database may be damaged.", detail)
+            _notify_site_admins("system", "Database backup failed its check", f"The copy didn't pass the integrity check: {detail}. Check the live database now.", "/admin/backups")
+            return {"ok": False, "error": f"copy failed its check: {detail}"}
+        partial.replace(target)
+        offsite = _upload_backup_offsite(target)
+        _prune_backups()
+        logger.info("Database backup %s (%s bytes). %s", name, target.stat().st_size, offsite or "Off-site copy uploaded.")
+        return {"ok": True, "file": name, "bytes": target.stat().st_size, "offsite": offsite or "uploaded"}
+    except Exception as exc:
+        logger.exception("Database backup failed")
+        return {"ok": False, "error": str(exc)}
+    finally:
+        _BACKUP_LOCK.release()
+
+
+def _list_database_backups() -> list[dict[str, Any]]:
+    if not BACKUP_DIR.exists():
+        return []
+    rows = []
+    for item in sorted(BACKUP_DIR.glob("cricketclubapp-*.db"), key=lambda path: path.name, reverse=True):
+        stat = item.stat()
+        rows.append({"file": item.name, "bytes": stat.st_size, "created_at": datetime.utcfromtimestamp(stat.st_mtime).strftime("%Y-%m-%dT%H:%M:%SZ")})
+    return rows
+
+
+def _backup_loop() -> None:
+    """Start-up check + backup, then a backup every BACKUP_EVERY_HOURS."""
+    try:
+        if DATABASE_FILE.exists():
+            healthy, detail = _database_is_healthy(DATABASE_FILE)
+            if not healthy:
+                logger.error("The live database failed its start-up check: %s", detail)
+                _notify_site_admins("system", "The database failed its start-up check", f"{detail}. Restore the newest good copy from /admin/backups (README 'Database backups').", "/admin/backups")
+            else:
+                make_database_backup("startup")
+    except Exception:
+        logger.exception("Start-up database check failed")
+    while True:
+        time_module.sleep(BACKUP_EVERY_HOURS * 3600)
+        make_database_backup("scheduled")
+
+
+@app.get("/api/admin/backups")
+def admin_backups(x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
+    _require_superadmin(x_auth_token)
+    healthy, detail = _database_is_healthy(DATABASE_FILE) if DATABASE_FILE.exists() else (False, "no database file")
+    return {
+        "backups": _list_database_backups(),
+        "backup_dir": str(BACKUP_DIR),
+        "every_hours": BACKUP_EVERY_HOURS,
+        "offsite": bool(str(os.getenv("CRICKETCLUBAPP_BACKUP_BLOB_SAS") or "").strip()),
+        "live_database": {"healthy": healthy, "detail": detail, "bytes": DATABASE_FILE.stat().st_size if DATABASE_FILE.exists() else 0},
+    }
+
+
+@app.post("/api/admin/backups")
+def admin_backup_now(x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
+    user_row, _ = _require_superadmin(x_auth_token)
+    result = make_database_backup("manual")
+    _audit_event("database.backup", "database", result.get("file") or "", actor=user_row, details=result, source="api")
+    if not result.get("ok"):
+        raise HTTPException(status_code=500, detail=result.get("error") or "Backup failed.")
+    return result
+
+
+@app.get("/api/admin/backups/{file_name}")
+def admin_backup_download(file_name: str, request: Request, x_auth_token: str | None = Header(default=None)) -> Response:
+    token = _auth_token_from_request(request, x_auth_token)
+    _require_superadmin(token)
+    if not _BACKUP_NAME_RE.match(file_name):
+        raise HTTPException(status_code=404, detail="Backup not found.")
+    path = BACKUP_DIR / file_name
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="Backup not found.")
+    return FileResponse(path, media_type="application/octet-stream", filename=file_name)
+
+
+@app.get("/admin/backups")
+def admin_backups_page(request: Request) -> Response:
+    """Superadmin page: database health, the backups kept, "Back up now" and downloads."""
+    session = _require_page_session(request)
+    if isinstance(session, RedirectResponse):
+        return session
+    try:
+        _require_superadmin(_auth_token_from_request(request))
+    except HTTPException:
+        return RedirectResponse("/admin-center", status_code=303)
+    healthy, detail = _database_is_healthy(DATABASE_FILE) if DATABASE_FILE.exists() else (False, "no database file")
+    rows = "".join(
+        f"<tr><td>{html.escape(item['file'])}</td><td>{item['created_at']}</td><td>{item['bytes'] // 1024:,} KB</td>"
+        f"<td><a href=\"/api/admin/backups/{html.escape(item['file'])}\">Download</a></td></tr>"
+        for item in _list_database_backups()
+    ) or '<tr><td colspan="4">No backups yet.</td></tr>'
+    offsite = "on (Azure Blob)" if str(os.getenv("CRICKETCLUBAPP_BACKUP_BLOB_SAS") or "").strip() else "not set up yet (CRICKETCLUBAPP_BACKUP_BLOB_SAS)"
+    page = f"""<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Database backups</title>
+<style>
+body {{ font-family: Roboto, system-ui, sans-serif; margin: 0; padding: 16px; background: #f8fafc; color: #0f172a; }}
+main {{ max-width: 900px; margin: 0 auto; }}
+.card {{ background: #fff; border: 1px solid #e2e8f0; border-radius: 14px; padding: 16px; margin-bottom: 14px; }}
+table {{ width: 100%; border-collapse: collapse; font-size: 0.92rem; }}
+td, th {{ text-align: left; padding: 8px 6px; border-bottom: 1px solid #e2e8f0; overflow-wrap: anywhere; }}
+.ok {{ color: #15803d; font-weight: 700; }} .bad {{ color: #b91c1c; font-weight: 700; }}
+button {{ min-height: 44px; padding: 0 16px; border-radius: 12px; border: 0; background: #0f172a; color: #fff; font-weight: 700; cursor: pointer; }}
+</style></head><body><main>
+<p><a href="/admin-center">‹ Admin Center</a></p>
+<h1>Database backups</h1>
+<section class="card">
+<p>Live database: <span class="{'ok' if healthy else 'bad'}">{'healthy' if healthy else 'DAMAGED: ' + html.escape(detail)}</span></p>
+<p>Automatic backups: at start-up and every {BACKUP_EVERY_HOURS:g} hours, each one checked before it is kept. Kept: newest {BACKUP_KEEP_RECENT} + one per day for {BACKUP_KEEP_DAYS} days.</p>
+<p>Off-site copy: {html.escape(offsite)}</p>
+<button type="button" id="backupNow">Back up now</button> <span id="backupMsg" role="status"></span>
+</section>
+<section class="card"><table><thead><tr><th>File</th><th>Made (UTC)</th><th>Size</th><th></th></tr></thead><tbody>{rows}</tbody></table></section>
+</main>
+<script>
+document.getElementById("backupNow").addEventListener("click", async (event) => {{
+  const msg = document.getElementById("backupMsg");
+  event.target.disabled = true; msg.textContent = "Backing up…";
+  try {{
+    const token = localStorage.getItem("cricketClubAppAuthToken") || "";
+    const response = await fetch("/api/admin/backups", {{ method: "POST", headers: {{ "X-Auth-Token": token }} }});
+    const data = await response.json().catch(() => ({{}}));
+    if (!response.ok) throw new Error(data.detail || "Backup failed.");
+    msg.textContent = "Saved " + data.file; setTimeout(() => location.reload(), 900);
+  }} catch (error) {{ msg.textContent = error.message; event.target.disabled = false; }}
+}});
+</script></body></html>"""
+    return HTMLResponse(page)
 
 
 if __name__ == "__main__":

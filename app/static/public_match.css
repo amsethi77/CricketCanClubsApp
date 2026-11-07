@@ -1144,3 +1144,9 @@
   background: #fffbeb;
   color: #92400e;
 }
+
+/* Nov 5 2026: dots / 1s / 2s / 3s and bowler dots / wides counted from the ball-by-ball marks */
+.pm-table th small.pm-split {
+  opacity: 0.75;
+  font-size: 0.72rem;
+}

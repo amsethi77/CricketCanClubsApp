@@ -31,12 +31,15 @@
 
   function parts(iso) {
     const [y, m, d] = String(iso || "").split("-").map(Number);
+    // Nov 5 2026: an upload whose date wasn't read showed "January 0" / "MON undefined JAN".
+    if (!y || !m || !d) return { y: 0, m: 0, d: "?", day: "", month: "", none: true };
     const date = new Date(y, (m || 1) - 1, d || 1);
     return { y, m, d, day: DAYS[date.getDay()], month: MONTHS[(m || 1) - 1] };
   }
 
   function longDate(iso) {
     const p = parts(iso);
+    if (p.none) return "Date not set";
     return `${p.day} ${p.d} ${p.month} ${p.y}`;
   }
 
@@ -146,8 +149,8 @@
     const groups = new Map();
     visible.forEach((item) => {
       const p = parts(item.date);
-      const key = `${p.y}-${String(p.m).padStart(2, "0")}`;
-      if (!groups.has(key)) groups.set(key, { label: `${p.month} ${p.y}`, items: [] });
+      const key = p.none ? "0000-00" : `${p.y}-${String(p.m).padStart(2, "0")}`;
+      if (!groups.has(key)) groups.set(key, { label: p.none ? "Date not set - add it with ✏️ Edit scorecard" : `${p.month} ${p.y}`, items: [] });
       groups.get(key).items.push(item);
     });
     listEl.innerHTML = [...groups.values()]

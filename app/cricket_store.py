@@ -2128,6 +2128,15 @@ ARCHIVE_EXTRA_KEYS = (
     "ai_flags",
     "reviewed_by",
     "reviewed_at",
+    # Nov 5 2026: the 2nd innings photo and joined halves must survive a reload, otherwise the 2nd photo is
+    # picked up again from the uploads folder as a new scorecard (a second Match ID for the same game).
+    "second_photo_file",
+    "second_photo_hash",
+    "second_photo_name",
+    "second_preview_url",
+    "second_uploaded_by",
+    "joined_upload_id",
+    "joined_upload_ids",
 )
 
 
@@ -6317,6 +6326,7 @@ def sync_uploads_in_store(store: dict[str, Any]) -> bool:
         for item in store.get("duplicate_uploads", [])
     }
 
+    second_photos: set[str] = set()
     for item in store["archive_uploads"]:
         path = Path(item.get("file_path") or "")
         if not item.get("file_hash") and path.is_file():
@@ -6327,13 +6337,23 @@ def sync_uploads_in_store(store: dict[str, Any]) -> bool:
             existing_hashes[item["file_hash"]] = item
         if item.get("file_name"):
             existing_paths[item["file_name"].lower()] = item
+        # a scorecard's 2nd innings photo belongs to that scorecard: never a new upload of its own
+        second_name = Path(str(item.get("second_photo_file") or "").replace("\\", "/")).name.lower()
+        if second_name:
+            second_photos.add(second_name)
+        if item.get("second_photo_hash"):
+            second_photos.add(str(item["second_photo_hash"]))
 
     for path in sorted(UPLOAD_DIR.iterdir()):
         if not path.is_file():
             continue
         if path.suffix.lower() not in IMAGE_EXTENSIONS:
             continue
+        if path.name.lower() in second_photos:
+            continue
         file_hash = file_sha256(path)
+        if file_hash in second_photos:
+            continue
         duplicate_key = (file_hash, path.name.lower())
         matched_item = existing_hashes.get(file_hash)
         if matched_item and Path(matched_item.get("file_path") or "") != path:
