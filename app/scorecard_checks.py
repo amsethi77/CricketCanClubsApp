@@ -35,29 +35,57 @@ try:  # Pillow is already used by the OCR pipeline; HEIC photos need pillow-heif
 except Exception:  # pragma: no cover - Pillow missing
     Image = None  # type: ignore[assignment]
 
-FINGERPRINT_SAME = 5  # bits out of 64; at or below this the photos are the same picture
+FINGERPRINT_SAME = 5  # out of 64; at or below this the photos are the same picture
+
+# Nov 7 2026 (Amit: "This looks like the same photo as 'image.jpg'" on every upload): the old 8x8 average hash
+# (64 bits) makes every green-lined scorebook page look alike - different pages were only 7-8 bits apart and live
+# photos collided. Fingerprints are now a 32x32 difference hash (1024 bits, "d32:" + 256 hex digits): the same
+# photo re-saved by WhatsApp is <= ~20 bits apart, two different scorecard pages >= ~340. Old-style fingerprints
+# are never compared with new ones (exact copies are still caught by the file hash).
+_FP_PREFIX = "d32:"
+_FP_SIZE = 32
 
 
 def image_fingerprint(content: bytes) -> str:
-    """16-hex-digit average hash of the photo, or '' when it can't be read."""
+    """'d32:' + 256 hex digits (32x32 difference hash of the photo), or '' when it can't be read."""
     if Image is None or not content:
         return ""
     try:
+        from PIL import ImageOps
+
         with Image.open(io.BytesIO(content)) as image:
-            small = image.convert("L").resize((8, 8))
+            gray = ImageOps.autocontrast(ImageOps.exif_transpose(image).convert("L"))
+            small = gray.resize((_FP_SIZE + 1, _FP_SIZE), Image.LANCZOS)
             pixels = list(small.getdata())
     except Exception:
         return ""
-    average = sum(pixels) / len(pixels)
     bits = 0
-    for value in pixels:
-        bits = (bits << 1) | (1 if value >= average else 0)
-    return f"{bits:016x}"
+    width = _FP_SIZE + 1
+    for y in range(_FP_SIZE):
+        for x in range(_FP_SIZE):
+            bits = (bits << 1) | (1 if pixels[y * width + x] > pixels[y * width + x + 1] else 0)
+    return f"{_FP_PREFIX}{bits:0{_FP_SIZE * _FP_SIZE // 4}x}"
+
+
+def is_current_fingerprint(value: Any) -> bool:
+    return str(value or "").startswith(_FP_PREFIX)
 
 
 def fingerprint_distance(first: str, second: str) -> int:
+    """Distance on a 0-64 scale (so FINGERPRINT_SAME keeps its meaning); 64 when the two can't be compared."""
+    first, second = str(first or ""), str(second or "")
     try:
-        return bin(int(first, 16) ^ int(second, 16)).count("1")
+        if first.startswith(_FP_PREFIX) and second.startswith(_FP_PREFIX):
+            a, b = int(first[len(_FP_PREFIX):], 16), int(second[len(_FP_PREFIX):], 16)
+            total = _FP_SIZE * _FP_SIZE
+            # a nearly blank picture has almost no detail to compare: never call it "the same photo"
+            if min(bin(a).count("1"), total - bin(a).count("1"), bin(b).count("1"), total - bin(b).count("1")) < total // 20:
+                return 64
+            bits = bin(a ^ b).count("1")
+            return bits * 64 // total
+        if first.startswith(_FP_PREFIX) or second.startswith(_FP_PREFIX):
+            return 64
+        return bin(int(first, 16) ^ int(second, 16)).count("1") + 64  # old 8x8 hashes: never "the same" any more
     except (TypeError, ValueError):
         return 64
 

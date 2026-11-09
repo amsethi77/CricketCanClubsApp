@@ -50,8 +50,15 @@
   // ---------- Same look as a scored match's page (/live/{id}, public_match.css) - Dhruvika, Oct 30 ----------
   // "make same like for manual one is made, no different": the uploaded scorecard uses the live page's markup.
   function shortCode(name) {
-    const words = String(name || "").replace(/[^A-Za-z0-9 ]/g, " ").split(/\s+/).filter(Boolean);
+    let words = String(name || "").replace(/[^A-Za-z0-9 ]/g, " ").split(/\s+/).filter(Boolean);
     if (!words.length) return "?";
+    // Nov 7 2026: "Imran XI" showed as "IX" - a trailing XI / 11 isn't part of the code ("IMR", "CCXI")
+    const xi = words.length > 1 && /^(xi|11)$/i.test(words[words.length - 1]);
+    if (xi) {
+      words = words.slice(0, -1);
+      if (words.length === 1) return words[0].slice(0, 3).toUpperCase();
+      return `${words.map((w) => w[0]).join("").slice(0, 2).toUpperCase()}XI`;
+    }
     if (words.length === 1) return words[0].length <= 4 && words[0] === words[0].toUpperCase() ? words[0] : words[0].slice(0, 3).toUpperCase();
     return words.map((w) => w[0]).join("").slice(0, 3).toUpperCase();
   }
@@ -106,6 +113,13 @@
 
   // Nov 5 2026: dots / 1s / 2s / 3s (batters) and dots / wides / no balls / 4s / 6s (bowlers), counted from the
   // ball-by-ball marks on the photo. Shown only when they were counted.
+  // Nov 7 2026: a registered player's name opens his read-only profile (/players/<player id>)
+  function playerName(row) {
+    return row.player_key
+      ? `<a class="pm-name" href="/players/${encodeURIComponent(row.player_key)}">${escapeHtml(row.name)}</a>`
+      : `<span class="pm-name">${escapeHtml(row.name)}</span>`;
+  }
+
   function ballSplit(row, fields) {
     const bits = fields
       .filter(([key]) => row[key] !== null && row[key] !== undefined && row[key] !== "")
@@ -118,7 +132,7 @@
       .map((b) => {
         const how = howOutText(b.dismissal) || (b.not_out ? "not out" : "");
         return `<tr class="${b.not_out ? "pm-notout" : ""}">
-          <th scope="row"><span class="pm-name">${escapeHtml(b.name)}</span>${how ? `<small>${escapeHtml(how)}</small>` : ""}${ballSplit(b, [["dots", "Dots"], ["ones", "1s"], ["twos", "2s"], ["threes", "3s"]])}</th>
+          <th scope="row">${playerName(b)}${how ? `<small>${escapeHtml(how)}</small>` : ""}${ballSplit(b, [["dots", "Dots"], ["ones", "1s"], ["twos", "2s"], ["threes", "3s"]])}</th>
           <td class="pm-r">${num(b.runs)}</td><td>${num(b.balls)}</td><td>${num(b.fours)}</td><td>${num(b.sixes)}</td><td>${num(b.strike_rate)}</td></tr>`;
       })
       .join("");
@@ -143,7 +157,7 @@
     const rows = inn.bowling
       .map(
         (b) => `<tr>
-          <th scope="row"><span class="pm-name">${escapeHtml(b.name)}</span>${ballSplit(b, [["dots", "Dots"], ["wides", "Wd"], ["no_balls", "Nb"], ["fours", "4s"], ["sixes", "6s"]])}</th>
+          <th scope="row">${playerName(b)}${ballSplit(b, [["dots", "Dots"], ["wides", "Wd"], ["no_balls", "Nb"], ["fours", "4s"], ["sixes", "6s"]])}${Array.isArray(b.over_runs) && b.over_runs.length ? `<small class="pm-split">Runs per over: ${b.over_runs.map((value) => escapeHtml(value)).join(" · ")}</small>` : ""}</th>
           <td>${num(b.overs)}</td><td>${num(b.maidens)}</td><td>${num(b.runs)}</td><td class="pm-r">${num(b.wickets)}</td><td>${num(b.economy)}</td></tr>`
       )
       .join("");
@@ -177,6 +191,9 @@
       ["Club", sc.club_name],
       ["Season", sc.season],
       ["Result", sc.result],
+      // Nov 7 2026: read from the card's CAPTS. and MAN OF MATCH boxes
+      ["Captains", (sc.captains || []).map((c) => (c.team ? `${c.name} (${c.team})` : c.name)).join(" · ")],
+      ["Man of the match", sc.man_of_match],
     ].filter(([, value]) => value);
     return `<div class="pm-subhead"><h2>Match details</h2></div>
       <dl class="pm-details">${rows.map(([k, v]) => `<div><dt>${escapeHtml(k)}</dt><dd>${escapeHtml(v)}</dd></div>`).join("")}</dl>`;
@@ -419,7 +436,39 @@
       </form>`;
     editorShown = true;
     updateSums();
+    wireRenameEverywhere(editor);
     editor.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
+  // Nov 7 2026 (Amit: "if we update at 1 place then it should replace in other places while editing the scorecard
+  // manually"): changing a player's name changes the same name everywhere on the card - batting, bowling and the
+  // bowler in How out, in both innings.
+  function wireRenameEverywhere(editor) {
+    if (editor.dataset.renameWired) return;
+    editor.dataset.renameWired = "1";
+    const nameFields = '[data-f="name"], [data-f="bowler"]';
+    editor.addEventListener("focusin", (event) => {
+      const input = event.target.closest(nameFields);
+      if (input) input.dataset.prev = input.value.trim();
+    });
+    editor.addEventListener("change", (event) => {
+      const input = event.target.closest(nameFields);
+      if (!input) return;
+      const before = (input.dataset.prev || "").trim();
+      const after = input.value.trim();
+      input.dataset.prev = after;
+      if (!before || !after || before.toLowerCase() === after.toLowerCase()) return;
+      let changed = 0;
+      editor.querySelectorAll(nameFields).forEach((other) => {
+        if (other !== input && other.value.trim().toLowerCase() === before.toLowerCase()) {
+          other.value = after;
+          other.dataset.prev = after;
+          changed += 1;
+        }
+      });
+      const msg = editor.querySelector("[data-sce-msg]");
+      if (msg && changed) msg.textContent = `'${before}' was also changed to '${after}' in ${changed} other place${changed === 1 ? "" : "s"} on this card.`;
+    });
   }
 
   const fieldNum = (el) => (el && el.value.trim() !== "" ? Number(el.value) : null);

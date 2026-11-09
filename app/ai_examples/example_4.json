@@ -12,7 +12,12 @@
    "team_1": "Scarborough Pro",
    "team_2": "Heartlake Cricket Club"
   },
-  "overs_limit": 35
+  "overs_limit": 35,
+  "captains": {
+   "team_1": null,
+   "team_2": "Checkley"
+  },
+  "man_of_match": null
  },
  "innings": [
   {

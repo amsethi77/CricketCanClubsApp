@@ -3981,7 +3981,7 @@ def _register_played_teams_in_background() -> None:
     threading.Thread(target=_work, name="register-played-teams", daemon=True).start()
 
 
-STATS_REFRESH_VERSION = "two-club-archive-owner-2"
+STATS_REFRESH_VERSION = "one-club-per-match-3"  # Nov 7 2026: club-wise stats = one club per match
 
 
 def _refresh_player_stats_once() -> None:
@@ -4327,6 +4327,7 @@ def public_signin_stats() -> dict[str, Any]:
         summary = build_summary(club_store)
         matches_played = int(summary.get("matches_played") or 0)
         matches_won = int(summary.get("matches_won") or 0)
+        matches_decided = int(summary.get("matches_decided") or 0)
         if matches_played <= 0 and matches_won <= 0:
             continue
         club_leaders.append(
@@ -4335,7 +4336,10 @@ def public_signin_stats() -> dict[str, Any]:
                 "club_name": club.get("name", ""),
                 "matches_played": matches_played,
                 "matches_won": matches_won,
-                "win_rate": (matches_won / matches_played) if matches_played else 0.0,
+                "matches_lost": int(summary.get("matches_lost") or 0),
+                "matches_decided": matches_decided,
+                # Nov 7 2026: wins out of the matches whose result is known (one-innings cards have none)
+                "win_rate": (matches_won / matches_decided) if matches_decided else 0.0,
             }
         )
     club_leaders.sort(
@@ -5309,6 +5313,8 @@ def _scorecard_from_archive_base(archive: dict[str, Any]) -> dict[str, Any]:
                     "economy": f"{float(economy):.2f}" if economy not in (None, "") else "",
                     # Nov 5 2026: counted from the bowler's analysis boxes (ai_vision.count_bowler_marks)
                     **{key: _scorecard_int(item.get(key)) for key in ("dots", "wides", "no_balls", "fours", "sixes") if item.get(key) not in (None, "")},
+                    # Nov 7 2026: runs in each of his overs (written under the boxes, or counted from them)
+                    **({"over_runs": [int(value) for value in item.get("over_runs") if str(value).strip().lstrip("-").isdigit()]} if isinstance(item.get("over_runs"), list) and item.get("over_runs") else {}),
                 }
             )
         known_bowlers = {normalize_name(item["name"]) for item in bowling}
@@ -5631,9 +5637,28 @@ def _result_from_innings(card: dict[str, Any]) -> str:
     return "Match tied"
 
 
+def _card_people(archive: dict[str, Any], card: dict[str, Any]) -> None:
+    """Nov 7 2026 (Amit): captains and the man of the match read from the card (CAPTS. HOME / VISIT, MAN OF MATCH)."""
+    template = _scorecard_pick_template(archive) or {}
+    match = template.get("match") if isinstance(template.get("match"), dict) else {}
+    teams_info = match.get("teams") if isinstance(match.get("teams"), dict) else {}
+    captains = match.get("captains") if isinstance(match.get("captains"), dict) else {}
+    pairs = []
+    for key in ("team_1", "team_2"):
+        name = " ".join(str(captains.get(key) or "").split())
+        if name and name.lower() not in {"null", "none", "-"}:
+            team = str(teams_info.get(key) or "")
+            shown = next((item for item in card.get("teams") or [] if team and _same_team_name(team, item)), team)
+            pairs.append({"team": shown, "name": name})
+    card["captains"] = pairs
+    mom = " ".join(str(match.get("man_of_match") or "").split())
+    card["man_of_match"] = "" if mom.lower() in {"", "null", "none", "-"} else mom
+
+
 def _scorecard_from_archive(archive: dict[str, Any]) -> dict[str, Any]:
     card = _scorecard_from_archive_base(archive)
     card["innings_ids"] = _innings_ids(card)
+    _card_people(archive, card)
     if not _RESULT_WORDS.search(str(card.get("result") or "")):
         derived = _result_from_innings(card)
         if derived:
@@ -5843,6 +5868,117 @@ def public_scorecards(
     }
 
 
+# ---------------------------------------------------------------------------
+# Nov 7 2026 (Amit: "When we click on players name it should show players profile and his stats in a read only
+# mode"): scorecard names link to /players/<player id>, a public read-only profile (no phone, email or age).
+# ---------------------------------------------------------------------------
+def _club_roster(store: dict[str, Any], club_id: str) -> list[dict[str, Any]]:
+    return [
+        member for member in store.get("members", []) or []
+        if any(str(link.get("club_id") or "") == club_id for link in member.get("club_memberships", []) or [] if isinstance(link, dict))
+    ]
+
+
+def _member_for_card_name(store: dict[str, Any], name: Any, team: Any) -> dict[str, Any] | None:
+    """The registered player behind a name on a card: first among the players of the club that team is, then anyone
+    with exactly that name or alias. None when it isn't clear (two players fit)."""
+    clean = " ".join(str(name or "").split())
+    if not clean:
+        return None
+    club = _find_club_by_name(store, str(team or "")) if team else None
+    pools = []
+    if club:
+        pools.append(_club_roster(store, str(club.get("id") or "")))
+    pools.append(list(store.get("members", []) or []))
+    for pool in pools:
+        found = [member for member in pool if _member_matches_name(member, clean)]
+        if len(found) == 1:
+            return found[0]
+        if len(found) > 1:
+            return None
+    return None
+
+
+def _member_public_key(member: dict[str, Any]) -> str:
+    return str(member.get("player_id") or member.get("id") or "").strip()
+
+
+def _link_card_players(store: dict[str, Any], card: dict[str, Any]) -> dict[str, Any]:
+    for innings in card.get("innings") or []:
+        if not isinstance(innings, dict):
+            continue
+        for key, team in (("batting", innings.get("team")), ("bowling", innings.get("bowling_team"))):
+            for row in innings.get(key) or []:
+                if not isinstance(row, dict) or row.get("player_key"):
+                    continue
+                member = _member_for_card_name(store, row.get("name"), team)
+                if member and _member_public_key(member):
+                    row["player_key"] = _member_public_key(member)
+    return card
+
+
+def _find_member_by_key(store: dict[str, Any], key: str) -> dict[str, Any] | None:
+    key = str(key or "").strip()
+    return next(
+        (member for member in store.get("members", []) or [] if key and key in {str(member.get("player_id") or ""), str(member.get("id") or "")}),
+        None,
+    )
+
+
+@app.get("/players/{player_key}")
+def public_player_page(player_key: str) -> FileResponse:
+    return _page_response("player_public.html")
+
+
+@app.get("/api/public/players/{player_key}")
+def public_player_profile(player_key: str) -> dict[str, Any]:
+    store = load_store()
+    member = _find_member_by_key(store, player_key)
+    if not member:
+        raise HTTPException(status_code=404, detail="Player not found.")
+    member_id = str(member.get("id") or "")
+
+    def rows(name: str) -> list[dict[str, Any]]:
+        return [dict(row) for row in store.get(name, []) or [] if str(row.get("member_id") or "") == member_id]
+
+    keep = ("matches", "batting_innings", "outs", "runs", "balls", "batting_average", "strike_rate", "wickets", "catches", "fours", "sixes", "highest_score", "scores_50_plus", "scores_100_plus")
+    summary = next(iter(rows("member_summary_stats")), {})
+    years = sorted(rows("member_year_stats"), key=lambda row: str(row.get("season_year") or ""), reverse=True)
+    clubs = sorted(rows("member_club_stats"), key=lambda row: -int(row.get("matches") or 0))
+    recent = []
+    for card in _public_scorecards(store):
+        _link_card_players(store, card)
+        batting = bowling = None
+        for innings in card.get("innings") or []:
+            for row in innings.get("batting") or []:
+                if row.get("player_key") == _member_public_key(member):
+                    batting = {"runs": row.get("runs"), "balls": row.get("balls"), "not_out": row.get("not_out"), "team": innings.get("team")}
+            for row in innings.get("bowling") or []:
+                if row.get("player_key") == _member_public_key(member):
+                    bowling = {"overs": row.get("overs"), "runs": row.get("runs"), "wickets": row.get("wickets")}
+        if batting or bowling:
+            recent.append({"id": card.get("id"), "date": card.get("date"), "date_label": card.get("date_label"), "title": card.get("title"), "result": card.get("result"), "batting": batting, "bowling": bowling})
+    recent.sort(key=lambda item: str(item.get("date") or ""), reverse=True)
+    return {
+        "player": {
+            "name": member.get("name") or "",
+            "full_name": member.get("full_name") or "",
+            "player_id": member.get("player_id") or "",
+            "role": member.get("role") or "",
+            "batting_style": member.get("batting_style") or "",
+            "bowling_style": member.get("bowling_style") or "",
+            "aliases": [alias for alias in member.get("aliases") or [] if alias],
+            "clubs": [str(link.get("club_name") or "") for link in member.get("club_memberships", []) or [] if isinstance(link, dict) and link.get("club_name")],
+            "picture_url": member.get("picture_url") or "",
+        },
+        "summary": {key: summary.get(key) for key in keep},
+        "years": [{"season_year": row.get("season_year"), **{key: row.get(key) for key in keep}} for row in years if row.get("matches")],
+        "clubs": [{"club_name": row.get("club_name"), **{key: row.get(key) for key in keep}} for row in clubs if row.get("matches")],
+        "recent": recent[:20],
+        "read_only": True,
+    }
+
+
 @app.get("/api/public/scorecards/{scorecard_id}")
 def public_scorecard_detail(
     scorecard_id: str,
@@ -5857,7 +5993,7 @@ def public_scorecard_detail(
                     allowed_club_id = str(current_club_id or user_row["primary_club_id"] or "").strip()
                     if not allowed_club_id or allowed_club_id not in _scorecard_involved_club_ids(store, card):
                         raise HTTPException(status_code=404, detail="Scorecard not found.")
-            return {"scorecard": card, "generated_at": now_iso()}
+            return {"scorecard": _link_card_players(store, card), "generated_at": now_iso()}
     raise HTTPException(status_code=404, detail="Scorecard not found.")
 
 
@@ -8835,6 +8971,153 @@ def _add_member_clubs_by_name(store: dict[str, Any], member: dict[str, Any], nam
         member["primary_club_id"] = str(memberships[0].get("club_id") or "")
         member["primary_club_name"] = str(memberships[0].get("club_name") or "")
     return added
+
+
+# ---------------------------------------------------------------------------
+# Nov 7 2026 (Amit: "the player who registers as CHECKLEY should see all his scorecards with his match names like
+# chuck, checkly, chukli, CJ ... AI should suggest the matches and ask the player to identify and merge"):
+# names written on scorecards that look like the signed-in player are suggested on his profile; "This is me"
+# adds the name to his aliases (and merges an unclaimed duplicate player record of that name into his), so those
+# scorecards count in his stats.
+# ---------------------------------------------------------------------------
+class NameClaimRequest(BaseModel):
+    name: str
+
+
+def _claimed_member_ids() -> set[str]:
+    try:
+        with _auth_connection() as connection:
+            return {str(row[0]) for row in connection.execute("SELECT member_id FROM app_users WHERE member_id IS NOT NULL AND member_id != ''")}
+    except Exception:
+        return set()
+
+
+def _consonant_skeleton(text: str) -> str:
+    """'checkley' -> 'chkl', 'chukli' -> 'chkl': consonants in order, doubles and a trailing y dropped."""
+    letters = re.sub(r"[^a-z]", "", text.lower()).replace("ck", "k").replace("ph", "f")
+    out = ""
+    for ch in letters[:1] + re.sub(r"[aeiouy]", "", letters[1:]):
+        if not out or out[-1] != ch:
+            out += ch
+    return out
+
+
+def _looks_like_member(name: str, member: dict[str, Any]) -> float:
+    """0..1: how much a written name looks like this player. Nov 9 2026: tightened after testing on live data
+    ("Harry" for Barry, "Amit G" for Amir were suggested): the first letter must match, and a near spelling
+    ("Checkly"), the same sounds ("Chukli" for Checkley) or the player's initials ("CJ") are needed."""
+    import difflib
+
+    low = normalize_name(name)
+    if not low:
+        return 0.0
+    keys = [key for key in _member_identity_keys(member) if key and not key.isdigit()]
+    compact = low.replace(" ", "")
+    best = 0.0
+    for key in keys:
+        words = key.split()
+        if len(compact) in (2, 3) and " " not in low and compact == "".join(word[0] for word in words if word) and len(words) > 1:
+            best = max(best, 0.86)  # "CJ" for "Chris James"
+        if key[:1] != low[:1]:
+            continue
+        low_words = low.split()
+        if len(low_words) > 1 and len(words) > 1 and low_words[0] == words[0] and low_words[1][:1] != words[1][:1]:
+            return 0.0  # same first name, different surname initial ("Amit G" is not "Amit S")
+        best = max(best, difflib.SequenceMatcher(None, low, key).ratio())
+        if len(low_words[0]) >= 4 and _consonant_skeleton(low_words[0]) == _consonant_skeleton(words[0]) and len(_consonant_skeleton(words[0])) >= 3:
+            best = max(best, 0.86)  # "Chukli" / "Checkly" for "Checkley"
+        if len(words) > 1 and low == words[0]:
+            best = max(best, 0.86)  # "Amit" for "Amit S" (skipped later when another player is also "Amit")
+    return best
+
+
+def _name_fits_other_players(store: dict[str, Any], member: dict[str, Any], name: str) -> bool:
+    """True when the name is (or could be) somebody else: another player's name or alias, or a bare first name
+    ("Amit") that another player also has."""
+    low = normalize_name(name)
+    for other in store.get("members", []) or []:
+        if other is member or str(other.get("id") or "") == str(member.get("id") or ""):
+            continue
+        if _member_matches_name(other, name):
+            return True
+        if " " not in low and normalize_name(str(other.get("name") or "")).split(" ")[0] == low:
+            return True
+    return False
+
+
+def _name_suggestions_for(store: dict[str, Any], member: dict[str, Any]) -> list[dict[str, Any]]:
+    claimed = _claimed_member_ids() - {str(member.get("id") or "")}
+    own_clubs = {str(link.get("club_name") or "") for link in member.get("club_memberships", []) or [] if isinstance(link, dict)}
+    found: dict[str, dict[str, Any]] = {}
+    for card in _public_scorecards(store):
+        for innings in card.get("innings") or []:
+            for key, team in (("batting", innings.get("team")), ("bowling", innings.get("bowling_team"))):
+                if own_clubs and team and not any(_same_team_name(team, club) for club in own_clubs):
+                    continue  # he didn't play for that side
+                for row in innings.get(key) or []:
+                    name = " ".join(str(row.get("name") or "").split())
+                    if not name or _member_matches_name(member, name):
+                        continue
+                    other = _member_for_card_name(store, name, team)
+                    if other and str(other.get("id") or "") in claimed:
+                        continue  # that name is another registered player
+                    if _name_fits_other_players(store, member, name) and not (other and str(other.get("id") or "") not in claimed and normalize_name(str(other.get("name") or "")) == normalize_name(name)):
+                        continue  # "Amit" could be Amit G as well - not suggested
+                    score = _looks_like_member(name, member)
+                    if score < 0.85:
+                        continue
+                    item = found.setdefault(normalize_name(name), {"name": name, "score": round(score, 2), "cards": []})
+                    if not any(entry["id"] == card.get("id") for entry in item["cards"]):
+                        detail = f"{row.get('runs')} runs" if key == "batting" and row.get("runs") is not None else (f"{row.get('wickets')} wkts" if row.get("wickets") is not None else "")
+                        item["cards"].append({"id": card.get("id"), "date": card.get("date"), "title": card.get("title"), "detail": detail})
+    return sorted(found.values(), key=lambda item: (-item["score"], -len(item["cards"])))[:12]
+
+
+@app.get("/api/player/name-suggestions")
+def player_name_suggestions(x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
+    user_row, _ = _auth_user_from_token(x_auth_token)
+    store = load_store()
+    member = _member_for_user(store, user_row)
+    if not member:
+        return {"suggestions": []}
+    return {"player": member.get("name") or "", "suggestions": _name_suggestions_for(store, member)}
+
+
+@app.post("/api/player/name-suggestions/claim")
+def player_claim_name(request: NameClaimRequest, x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
+    user_row, _ = _auth_user_from_token(x_auth_token)
+    store = load_store()
+    member = _member_for_user(store, user_row)
+    name = " ".join(str(request.name or "").split())
+    if not member or not name:
+        raise HTTPException(status_code=400, detail="Choose a name first.")
+    claimed = _claimed_member_ids() - {str(member.get("id") or "")}
+    duplicates = [
+        item for item in store.get("members", []) or []
+        if item is not member and normalize_name(str(item.get("name") or "")) == normalize_name(name)
+    ]
+    if any(str(item.get("id") or "") in claimed for item in duplicates):
+        raise HTTPException(status_code=409, detail=f"'{name}' is another registered player. Ask a club admin if it is really you.")
+    others = [item for item in store.get("members", []) or [] if item is not member and not any(item is dup for dup in duplicates)]
+    if _name_fits_other_players({"members": others}, member, name):
+        raise HTTPException(status_code=409, detail=f"'{name}' could also be another player. Ask a club admin to link it to the right player.")
+    aliases = [alias for alias in member.get("aliases") or [] if alias]
+    merged = []
+    for item in duplicates:
+        # an unclaimed player record made from a scorecard with that name: fold it into this player
+        for alias in [item.get("name"), item.get("full_name"), *(item.get("aliases") or [])]:
+            if alias and normalize_name(str(alias)) not in {normalize_name(a) for a in aliases}:
+                aliases.append(str(alias))
+        _add_member_clubs_by_name(store, member, [link.get("club_name") for link in item.get("club_memberships", []) or [] if isinstance(link, dict)])
+        merged.append(str(item.get("name") or name))
+    if normalize_name(name) not in {normalize_name(a) for a in aliases}:
+        aliases.append(name)
+    member["aliases"] = aliases
+    if duplicates:
+        store["members"] = [item for item in store.get("members", []) or [] if not any(item is dup for dup in duplicates)]
+    save_store(store)
+    _audit_event("player.claim_name", "member", str(member.get("id") or ""), actor=user_row, club_id="", club_name="", details={"name": name, "merged": merged}, source="api")
+    return {"message": f"'{name}' is now one of your names. Scorecards with it count in your stats.", "aliases": aliases, "merged": merged}
 
 
 @app.post("/api/player/profile")
@@ -12805,7 +13088,13 @@ async def upload_scorecard(
     fingerprint = scorecard_checks.image_fingerprint(content)
     if fingerprint:
         for existing in store["archive_uploads"]:
-            if str(existing.get("status") or "").lower() in {"rejected", "duplicate"} or not existing.get("image_fingerprint"):
+            if str(existing.get("status") or "").lower() in {"rejected", "duplicate"}:
+                continue
+            if not scorecard_checks.is_current_fingerprint(existing.get("image_fingerprint")):
+                # an upload from before Nov 7 2026: work out its new-style fingerprint from its photo once
+                path = _upload_file_path(existing)
+                existing["image_fingerprint"] = scorecard_checks.image_fingerprint(path.read_bytes()) if path is not None else ""
+            if not existing.get("image_fingerprint"):
                 continue
             if scorecard_checks.fingerprint_distance(fingerprint, str(existing["image_fingerprint"])) <= scorecard_checks.FINGERPRINT_SAME:
                 raise HTTPException(
@@ -13042,7 +13331,9 @@ def _ai_known_names(store: dict[str, Any], club: dict[str, Any]) -> list[str]:
                 aliases = aliases.split(",")
             names.update(str(alias).strip() for alias in aliases if str(alias).strip())
     for upload in store.get("archive_uploads", []) or []:
-        if str(upload.get("club_id") or "") != club_id or str(upload.get("status") or "").lower() not in {"approved", "published"}:
+        # Nov 7 2026: every published card this club played in (it can be the other team's upload)
+        card_clubs = {str(upload.get("club_id") or "")} | {str(item) for item in upload.get("club_ids") or []}
+        if club_id not in card_clubs or str(upload.get("status") or "").lower() not in {"approved", "published"}:
             continue
         template = upload.get("extraction_template")
         if not isinstance(template, dict):
@@ -13051,6 +13342,58 @@ def _ai_known_names(store: dict[str, Any], club: dict[str, Any]) -> list[str]:
             names.update(name for _, _, name in rows)
     names.update(str(name) for name in ((_ai_learning().get("known_names") or {}).get(club_id) or []) if str(name).strip())
     return sorted(names, key=str.lower)[:400]
+
+
+def _ai_aliases(store: dict[str, Any], club: dict[str, Any]) -> dict[str, list[str]]:
+    """{registered name: [other spellings]} for this club's players (their aliases and full name)."""
+    club_id = str((club or {}).get("id") or "")
+    found: dict[str, list[str]] = {}
+    roster = _club_roster(store, club_id) if club_id else []
+    first_names: dict[str, int] = {}
+    for member in roster:
+        first = normalize_name(str(member.get("name") or "")).split(" ")[0]
+        first_names[first] = first_names.get(first, 0) + 1
+    for member in roster:
+        name = str(member.get("name") or "").strip()
+        raw = member.get("aliases") or []
+        if isinstance(raw, str):
+            raw = raw.split(",")
+        # a bare first name two players share ("Amit": Amit S and Amit G) is never given as one player's spelling
+        others = [
+            str(item).strip() for item in [*raw, member.get("full_name")]
+            if str(item or "").strip() and normalize_name(str(item)) != normalize_name(name)
+            and not (" " not in normalize_name(str(item)) and first_names.get(normalize_name(str(item)), 0) > 1)
+        ]
+        if name and others:
+            found[name] = list(dict.fromkeys(others))
+    return found
+
+
+def _ai_other_clubs(store: dict[str, Any], club: dict[str, Any]) -> dict[str, list[str]]:
+    """{club name: player names} for the clubs this club has played (most games first), so the other team's
+    batters and bowlers are read as their registered players too."""
+    club_id = str((club or {}).get("id") or "")
+    if not club_id:
+        return {}
+    counts: dict[str, int] = {}
+    for upload in store.get("archive_uploads", []) or []:
+        ids = {str(upload.get("club_id") or "")} | {str(item) for item in upload.get("club_ids") or []}
+        if club_id in ids:
+            for other in ids - {club_id, ""}:
+                counts[other] = counts.get(other, 0) + 1
+    for fixture in store.get("fixtures", []) or []:
+        if str(fixture.get("club_id") or "") == club_id:
+            other = _find_club_by_name(store, str(fixture.get("opponent") or ""))
+            if other and str(other.get("id") or "") != club_id:
+                counts[str(other["id"])] = counts.get(str(other["id"]), 0) + 1
+    result: dict[str, list[str]] = {}
+    clubs = {str(item.get("id") or ""): item for item in store.get("clubs", []) or [] if isinstance(item, dict)}
+    for other_id, _count in sorted(counts.items(), key=lambda item: -item[1])[:6]:
+        other = clubs.get(other_id)
+        names = sorted({str(member.get("name") or "").strip() for member in _club_roster(store, other_id)} - {""}, key=str.lower)
+        if other and names:
+            result[str(other.get("name") or other_id)] = names
+    return result
 
 
 def _photo_date(record: dict[str, Any]) -> str:
@@ -13084,6 +13427,8 @@ def _scorecard_ai_read(store: dict[str, Any], record: dict[str, Any], path: Path
         known_names=_ai_known_names(store, club) if club else [],
         corrections=_ai_corrections(str((club or {}).get("id") or record.get("club_id") or "")),
         photo_date=_photo_date(record),
+        aliases=_ai_aliases(store, club) if club else {},
+        other_clubs=_ai_other_clubs(store, club) if club else {},
     )
     template = result.get("template")
     if not template:
@@ -13106,6 +13451,8 @@ def _read_photo_with_ai(store: dict[str, Any], record: dict[str, Any], path: Pat
         known_names=_ai_known_names(store, club) if club else [],
         corrections=_ai_corrections(str((club or {}).get("id") or record.get("club_id") or "")),
         photo_date=_photo_date(record),
+        aliases=_ai_aliases(store, club) if club else {},
+        other_clubs=_ai_other_clubs(store, club) if club else {},
     )
 
 
@@ -13452,11 +13799,106 @@ def _repeated_batting_side_note(template: dict[str, Any]) -> str:
     return ""
 
 
+def _map_card_names_to_rosters(store: dict[str, Any], template: dict[str, Any]) -> list[str]:
+    """Nov 7 2026 (Amit: "AI should try to map it with the existing players of that club so that we have less
+    mismatch"): each name read from a card is matched to the registered players of the club on THAT side
+    (batters to the batting club, bowlers and fielders to the bowling club): an exact name or alias becomes the
+    player's registered name ("Chuck" -> "Checkley"), and a clear one-off misspelling of exactly one player of
+    that club is corrected with a note to check. Anything unclear stays as written."""
+    import difflib
+
+    notes: list[str] = []
+    rosters: dict[str, list[dict[str, Any]]] = {}
+
+    def roster_for(team: Any) -> list[dict[str, Any]]:
+        club = _find_club_by_name(store, str(team or "")) if team else None
+        if not club:
+            return []
+        club_id = str(club.get("id") or "")
+        if club_id not in rosters:
+            rosters[club_id] = _club_roster(store, club_id)
+        return rosters[club_id]
+
+    def mapped(name: Any, roster: list[dict[str, Any]]) -> str:
+        text = " ".join(str(name or "").split())
+        if not text or not roster:
+            return text
+        low_text = normalize_name(text)
+        if " " not in low_text:
+            # a bare first name shared by two players of the club ("Amit": Amit S and Amit G) stays as written,
+            # even when one of them has it saved as an alias
+            sharing = [member for member in roster if normalize_name(str(member.get("name") or "")).split(" ")[0] == low_text]
+            if len(sharing) > 1:
+                return text
+        exact = [member for member in roster if _member_matches_name(member, text)]
+        if len(exact) == 1:
+            return str(exact[0].get("name") or text)
+        if exact:
+            return text  # two players of the club fit: leave it for the person checking
+        low = normalize_name(text)
+        scored = []
+        for member in roster:
+            best = max((difflib.SequenceMatcher(None, low, key).ratio() for key in _member_identity_keys(member) if key and key[:1] == low[:1] and abs(len(key) - len(low)) <= 2), default=0.0)
+            scored.append((best, member))
+        scored.sort(key=lambda item: -item[0])
+        if scored and scored[0][0] >= 0.85 and (len(scored) == 1 or scored[0][0] - scored[1][0] >= 0.1):
+            chosen = str(scored[0][1].get("name") or text)
+            if normalize_name(chosen) != low:
+                notes.append(f"'{text}' was matched to the club's player '{chosen}'. Check it against the photo.")
+            return chosen
+        return text
+
+    for innings in template.get("innings") or []:
+        if not isinstance(innings, dict):
+            continue
+        batting_roster, bowling_roster = roster_for(innings.get("batting_team")), roster_for(innings.get("bowling_team"))
+        for row in innings.get("batting") or []:
+            if not isinstance(row, dict):
+                continue
+            player = row.get("player") if isinstance(row.get("player"), dict) else None
+            if player and player.get("name"):
+                new = mapped(player["name"], batting_roster)
+                if new and new != player["name"]:
+                    player["name"], player["normalized_name"] = new, normalize_name(new)
+            dismissal = row.get("dismissal") if isinstance(row.get("dismissal"), dict) else None
+            if dismissal:
+                for key in ("bowler", "fielder"):
+                    if dismissal.get(key):
+                        dismissal[key] = mapped(dismissal[key], bowling_roster) or dismissal[key]
+        for row in innings.get("bowling") or []:
+            player = row.get("player") if isinstance(row, dict) and isinstance(row.get("player"), dict) else None
+            if player and player.get("name"):
+                new = mapped(player["name"], bowling_roster)
+                if new and new != player["name"]:
+                    player["name"], player["normalized_name"] = new, normalize_name(new)
+        # the same bowler written two ways on one card ("Nandeep" in How out, "Nandip" in the bowling list): How out
+        # uses the bowling-list name, so his wickets are credited to him
+        bowlers = [str((row.get("player") or {}).get("name") or "") for row in innings.get("bowling") or [] if isinstance(row, dict) and isinstance(row.get("player"), dict)]
+        bowlers = [name for name in bowlers if name]
+        for row in innings.get("batting") or []:
+            dismissal = row.get("dismissal") if isinstance(row, dict) and isinstance(row.get("dismissal"), dict) else None
+            written = " ".join(str((dismissal or {}).get("bowler") or "").split())
+            if not written or not bowlers or normalize_name(written) in {normalize_name(name) for name in bowlers}:
+                continue
+            low = normalize_name(written)
+            close = sorted(
+                ((difflib.SequenceMatcher(None, low, normalize_name(name)).ratio(), name) for name in bowlers if normalize_name(name)[:1] == low[:1]),
+                reverse=True,
+            )
+            if close and close[0][0] >= 0.75 and (len(close) == 1 or close[0][0] - close[1][0] >= 0.1):
+                notes.append(f"How out bowler '{written}' is '{close[0][1]}' in the bowling list - used '{close[0][1]}'.")
+                dismissal["bowler"] = close[0][1]
+    return list(dict.fromkeys(notes))
+
+
 def _apply_ai_template(store: dict[str, Any], record: dict[str, Any], template: dict[str, Any], result: dict[str, Any]) -> str:
     """Save an AI-read template onto the upload record (shared by the 1st photo and the 2nd innings photo)."""
     side_note = _repeated_batting_side_note(template) if isinstance(template, dict) else ""
     if side_note:
         result = {**result, "notes": [*(result.get("notes") or []), side_note]}
+    roster_notes = _map_card_names_to_rosters(store, template) if isinstance(template, dict) else []
+    if roster_notes:
+        result = {**result, "notes": [*(result.get("notes") or []), *roster_notes]}
     imported = parse_imported_extraction(store, json.dumps(template))
     record.update(imported)
     # Keep the AI result as THE reviewed copy too, so the Admin Center JSON box, the snapshot and the
@@ -13674,7 +14116,7 @@ def scorecard_upload_preview(upload_id: str, x_auth_token: str | None = Header(d
         )
     same_innings_ids = {str(item["id"]) for item in duplicate_candidates}
     return {
-        "scorecard": _scorecard_from_archive(upload),
+        "scorecard": _link_card_players(store, _scorecard_from_archive(upload)),
         "status": status,
         "flags": flags,
         "duplicates": list(upload.get("possible_duplicates") or []),
@@ -14135,7 +14577,7 @@ def admin_scorecard_checks(x_auth_token: str | None = Header(default=None)) -> d
     # Older uploads have no photo fingerprint yet: work it out from the file in app/uploads once.
     filled = 0
     for upload in archives:
-        if upload.get("image_fingerprint"):
+        if scorecard_checks.is_current_fingerprint(upload.get("image_fingerprint")):
             continue
         name = Path(str(upload.get("file_path") or "").replace("\\", "/")).name or str(upload.get("file_name") or "")
         path = UPLOAD_DIR / name if name else None

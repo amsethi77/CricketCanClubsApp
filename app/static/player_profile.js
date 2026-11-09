@@ -219,3 +219,83 @@ requireAuth()
     await loadProfile(auth);
   })
   .catch((error) => setStatus(error.message, "error"));
+
+
+// Nov 7 2026 (Amit: "players in their profile page should be shown matching names and asked to merge"):
+// GET /api/player/name-suggestions lists names on scorecards that look like this player; "This is me" calls
+// POST /api/player/name-suggestions/claim, which adds the name to his aliases (and merges an unclaimed duplicate).
+(function nameMatches() {
+  const box = document.getElementById("playerNameMatches");
+  if (!box) return;
+  const list = box.querySelector("[data-name-list]");
+  const msg = box.querySelector("[data-name-msg]");
+  const token = () => {
+    try {
+      return localStorage.getItem("cricketClubAppAuthToken") || "";
+    } catch (error) {
+      return "";
+    }
+  };
+  const esc = (v) => String(v ?? "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
+  const hiddenKey = "cricketClubAppNotMeNames";
+  const notMe = () => {
+    try {
+      return JSON.parse(localStorage.getItem(hiddenKey) || "[]");
+    } catch (error) {
+      return [];
+    }
+  };
+  async function load() {
+    if (!token()) return;
+    const response = await fetch("/api/player/name-suggestions", { headers: { "X-Auth-Token": token() } }).catch(() => null);
+    if (!response || !response.ok) return;
+    const data = await response.json();
+    const skip = new Set(notMe().map((n) => String(n).toLowerCase()));
+    const items = (data.suggestions || []).filter((item) => !skip.has(String(item.name).toLowerCase()));
+    if (!items.length) {
+      box.hidden = true;
+      return;
+    }
+    list.innerHTML = items
+      .map(
+        (item) => `<div class="detail-card" data-name="${esc(item.name)}">
+          <strong>${esc(item.name)}</strong>
+          <p class="lede">${item.cards.length} scorecard${item.cards.length === 1 ? "" : "s"}: ${item.cards
+            .slice(0, 3)
+            .map((c) => `<a href="/scorecards/${encodeURIComponent(c.id)}">${esc(c.date || "")} ${esc(c.title || "")}</a>${c.detail ? ` (${esc(c.detail)})` : ""}`)
+            .join(" · ")}</p>
+          <button type="button" class="primary-button" data-claim>This is me</button>
+          <button type="button" class="secondary-button" data-not-me>Not me</button>
+        </div>`
+      )
+      .join("");
+    box.hidden = false;
+  }
+  list.addEventListener("click", async (event) => {
+    const card = event.target.closest("[data-name]");
+    if (!card) return;
+    const name = card.dataset.name;
+    if (event.target.closest("[data-not-me]")) {
+      localStorage.setItem(hiddenKey, JSON.stringify([...notMe(), name]));
+      card.remove();
+      if (!list.children.length) box.hidden = true;
+      return;
+    }
+    if (!event.target.closest("[data-claim]")) return;
+    msg.textContent = "Saving…";
+    const response = await fetch("/api/player/name-suggestions/claim", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Auth-Token": token() },
+      body: JSON.stringify({ name }),
+    }).catch(() => null);
+    const data = response ? await response.json().catch(() => ({})) : {};
+    msg.textContent = response && response.ok ? data.message : data.detail || "Couldn't save it. Please try again.";
+    if (response && response.ok) {
+      card.remove();
+      const aliases = document.getElementById("profileAliases");
+      if (aliases && data.aliases) aliases.value = data.aliases.join(", ");
+      if (!list.children.length) box.hidden = true;
+    }
+  });
+  load();
+})();

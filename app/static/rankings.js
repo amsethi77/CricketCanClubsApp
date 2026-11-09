@@ -110,6 +110,7 @@
       renderTable(clubsEl, "Club standings", clubs, [
         { label: "Club", value: (row) => row.club_name || "Club" },
         { label: "Won", value: (row) => formatNumber(row.matches_won), numeric: true },
+        { label: "Lost", value: (row) => formatNumber(row.matches_lost || 0), numeric: true },
         { label: "Played", value: (row) => formatNumber(row.matches_played), numeric: true },
         { label: "Win rate", value: (row) => `${formatNumber(Number(row.win_rate || 0) * 100)}%`, numeric: true },
       ]);

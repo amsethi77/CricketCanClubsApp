@@ -266,6 +266,14 @@ Double-checking (important):
   wide that went for 2), "nb" a no ball ("nb4" when 4 was hit off it), "b1" / "lb1" byes / leg byes.
   Example: ["1 . . 4 wd . 2", ". . . . . ."]. A small circled running total in a corner is not a delivery.
   null if you can't read the boxes - but still give "overs" = the number of boxes with marks in them.
+- Runs per over: many scorers write the runs of each over UNDER (or in the corner of) its box, e.g. "5-0  7  11  6
+  14  6  9". Copy them in order into "over_runs" (a list of numbers, one per over; null if not written). A running
+  total ("5, 12, 23 ...") is not runs per over - then write the differences.
+- Batters: if the BALLS RCD (balls received), 4's / 6's or MINS columns are filled in, copy them into "balls",
+  "fours" and "sixes" - they win over anything counted from the scribbles.
+- Captains: the CAPTS. HOME / VISIT boxes (or "(c)" after a name) give each team's captain - write them in
+  match.captains {{"team_1": name, "team_2": name}} by team. MAN OF MATCH (or "MOM", "Player of the match") goes in
+  match.man_of_match. null when not written.
 - Dates: read the year digit by digit (0 and 6, 1 and 7 look alike). Write the date as YYYY-MM-DD.
 - Set "unsure": true on any batter (or on extras) where a digit is hard to read, so a person checks it.
 
@@ -282,14 +290,14 @@ Rules:
 Reply with ONLY this JSON, no other text:
 {{
   "meta": {{"source": "claude-vision", "confidence": "high|medium|low", "status": "template"}},
-  "match": {{"match_type": "club", "date": "YYYY-MM-DD or null", "venue": null, "teams": {{"team_1": "team batting first", "team_2": "other team"}}, "overs_limit": null}},
+  "match": {{"match_type": "club", "date": "YYYY-MM-DD or null", "venue": null, "teams": {{"team_1": "team batting first", "team_2": "other team"}}, "overs_limit": null, "captains": {{"team_1": null, "team_2": null}}, "man_of_match": null}},
   "innings": [
     {{
       "inning_number": 1,
       "batting_team": "...", "bowling_team": "...",
       "summary": {{"runs": 0, "wickets": 0, "overs": null, "balls": null}},
       "batting": [{{"player": {{"name": "..."}}, "runs": 0, "balls": null, "fours": null, "sixes": null, "dismissal": {{"type": "caught", "fielder": null, "bowler": "...", "written_as": "CAUGHT"}}, "ball_runs_sum": null, "ball_count": null, "ball_by_ball": "1 . 4 . 2 W", "unsure": false}}],
-      "bowling": [{{"player": {{"name": "..."}}, "overs": null, "maidens": null, "runs_conceded": null, "wickets": null, "over_marks": ["1 . . 4 wd . 2"]}}],
+      "bowling": [{{"player": {{"name": "..."}}, "overs": null, "maidens": null, "runs_conceded": null, "wickets": null, "over_marks": ["1 . . 4 wd . 2"], "over_runs": [8]}}],
       "extras": {{"wides": null, "no_balls": null, "byes": null, "leg_byes": null, "penalties": null, "total": 0, "written_as": "exactly what is written in the extras boxes, e.g. 'W 52'", "unsure": false}}
     }}
   ],
@@ -376,6 +384,17 @@ def _prompt(roster: list[str] | None, club_name: str) -> str:
     known = [name for name in hints.get("known_names") or [] if name not in (roster or [])]
     if known:
         extra.append("- Other players seen on this club's scorecards (opponents too): " + ", ".join(known[:150]) + ".")
+    # Nov 7 2026 (Amit: "RAG ... learns the players' names and uses aliases"): the club's own players with the
+    # other spellings they appear under, and the players of the clubs it plays against, so a written name is read as
+    # the registered player ("CHUCKLEY" -> Checkley) on whichever side he played.
+    aliases = hints.get("aliases") or {}
+    if aliases:
+        pairs = "; ".join(f"{name} (also written {', '.join(list(others)[:5])})" for name, others in list(aliases.items())[:80] if others)
+        if pairs:
+            extra.append(f"- The same player written differently - write the registered name (first one): {pairs}.")
+    for other_club, names in list((hints.get("other_clubs") or {}).items())[:6]:
+        if names:
+            extra.append(f"- Players of {other_club} (if that team is on the card): " + ", ".join(list(names)[:60]) + ".")
     if not extra:
         return text
     return text + "\n\nExtra help for this club:\n" + "\n".join(extra)
@@ -490,6 +509,7 @@ def count_bowler_marks(overs: Any) -> dict[str, Any] | None:
             else:
                 return None
         stats["runs"] += runs
+        stats.setdefault("per_over", []).append(runs)
         stats["legal"] += legal
         if legal >= 6:
             full_overs += 1
@@ -500,7 +520,7 @@ def count_bowler_marks(overs: Any) -> dict[str, Any] | None:
         return None
     partial = last_legal if 0 < last_legal < 6 else 0
     overs_text = f"{full_overs}.{partial}" if partial else str(full_overs)
-    return {"overs": overs_text, **{key: value for key, value in stats.items() if key not in {"legal"}}}
+    return {"overs": overs_text, **{key: value for key, value in stats.items() if key not in {"legal", "per_over"}}, "over_runs": list(stats.get("per_over") or [])}
 
 
 def _fill_from_marks(template: dict[str, Any]) -> list[str]:
@@ -542,7 +562,21 @@ def _fill_from_marks(template: dict[str, Any]) -> list[str]:
         for row in inn.get("bowling") or []:
             if not isinstance(row, dict):
                 continue
+            written = [int(value) for value in row.get("over_runs") or [] if isinstance(value, (int, float)) or str(value).strip().isdigit()] if isinstance(row.get("over_runs"), list) else []
             stats = count_bowler_marks(row.get("over_marks"))
+            name = (row.get("player") or {}).get("name") if isinstance(row.get("player"), dict) else ""
+            if written:
+                row["over_runs"] = written
+                if row.get("overs") in (None, ""):
+                    row["overs"] = len(written)
+                if row.get("runs_conceded") in (None, ""):
+                    row["runs_conceded"] = sum(written)
+                elif isinstance(row.get("runs_conceded"), int) and abs(row["runs_conceded"] - sum(written)) > 2:
+                    notes.append(f"Check {name}'s runs: {row['runs_conceded']} written, his runs per over add up to {sum(written)}.")
+                if row.get("maidens") in (None, ""):
+                    row["maidens"] = sum(1 for value in written if value == 0)
+            elif stats:
+                row["over_runs"] = stats["over_runs"]
             if not stats:
                 continue
             name = (row.get("player") or {}).get("name") if isinstance(row.get("player"), dict) else ""
@@ -891,13 +925,22 @@ def read_scorecard(
     known_names: list[str] | None = None,
     corrections: dict[str, str] | None = None,
     photo_date: str = "",
+    aliases: dict[str, list[str]] | None = None,
+    other_clubs: dict[str, list[str]] | None = None,
 ) -> dict[str, Any]:
     """{"template": {...}, "model": ...} on success, {"error": "..."} otherwise. Never raises.
 
     known_names / corrections / photo_date are what the app learned about this club (see _prompt).
     If the batters' runs + extras don't add up to the total, the model is asked once more to look at
     the photo again, told exactly which numbers don't add up (a second "checking" pass)."""
-    token = _HINTS.set({"known_names": list(known_names or []), "corrections": dict(corrections or {}), "photo_date": photo_date or "", "club_name": club_name or ""})
+    token = _HINTS.set({
+        "known_names": list(known_names or []),
+        "corrections": dict(corrections or {}),
+        "photo_date": photo_date or "",
+        "club_name": club_name or "",
+        "aliases": dict(aliases or {}),
+        "other_clubs": dict(other_clubs or {}),
+    })
     try:
         result = _read_scorecard(path, roster=roster, club_name=club_name, timeout=timeout)
         template = result.get("template")

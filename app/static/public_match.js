@@ -210,8 +210,15 @@
 
   // ---------- team badges: "New Zealand" -> NZ, "India" -> IND, "Heartlake Cricket Club" -> HCC ----------
   function shortCode(name) {
-    const words = String(name || "").replace(/[^A-Za-z0-9 ]/g, " ").split(/\s+/).filter(Boolean);
+    let words = String(name || "").replace(/[^A-Za-z0-9 ]/g, " ").split(/\s+/).filter(Boolean);
     if (!words.length) return "?";
+    // Nov 7 2026: "Imran XI" showed as "IX" - a trailing XI / 11 isn't part of the code ("IMR", "CCXI")
+    const xi = words.length > 1 && /^(xi|11)$/i.test(words[words.length - 1]);
+    if (xi) {
+      words = words.slice(0, -1);
+      if (words.length === 1) return words[0].slice(0, 3).toUpperCase();
+      return `${words.map((w) => w[0]).join("").slice(0, 2).toUpperCase()}XI`;
+    }
     if (words.length === 1) return words[0].length <= 4 && words[0] === words[0].toUpperCase() ? words[0] : words[0].slice(0, 3).toUpperCase();
     return words.map((w) => w[0]).join("").slice(0, 3).toUpperCase();
   }

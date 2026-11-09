@@ -1,0 +1,331 @@
+{
+ "meta": {
+  "source": "checked-example",
+  "confidence": "high",
+  "status": "template"
+ },
+ "match": {
+  "match_type": "club",
+  "date": "2024-06-16",
+  "venue": "Save Max",
+  "teams": {
+   "team_1": "Heartlake Cricket Club",
+   "team_2": "Amit CC"
+  },
+  "overs_limit": 35,
+  "captains": {
+   "team_1": "Chuckley",
+   "team_2": "Amit S"
+  },
+  "man_of_match": null,
+  "result": "Amit CC won"
+ },
+ "innings": [
+  {
+   "inning_number": 2,
+   "batting_team": "Amit CC",
+   "bowling_team": "Heartlake Cricket Club",
+   "summary": {
+    "runs": 207,
+    "wickets": 7,
+    "overs": 27,
+    "balls": null
+   },
+   "batting": [
+    {
+     "player": {
+      "name": "Dixit"
+     },
+     "runs": 10,
+     "balls": null,
+     "fours": null,
+     "sixes": null,
+     "dismissal": {
+      "type": "caught",
+      "fielder": null,
+      "bowler": "Chuckley",
+      "written_as": "Caught"
+     },
+     "ball_runs_sum": null,
+     "ball_count": null,
+     "ball_by_ball": null,
+     "unsure": false
+    },
+    {
+     "player": {
+      "name": "Vishnu"
+     },
+     "runs": 28,
+     "balls": null,
+     "fours": null,
+     "sixes": null,
+     "dismissal": {
+      "type": "caught",
+      "fielder": null,
+      "bowler": null,
+      "written_as": "Caught"
+     },
+     "ball_runs_sum": null,
+     "ball_count": null,
+     "ball_by_ball": null,
+     "unsure": false
+    },
+    {
+     "player": {
+      "name": "Rishi"
+     },
+     "runs": 0,
+     "balls": null,
+     "fours": null,
+     "sixes": null,
+     "dismissal": {
+      "type": "run out",
+      "fielder": null,
+      "bowler": null,
+      "written_as": "Run out"
+     },
+     "ball_runs_sum": null,
+     "ball_count": null,
+     "ball_by_ball": null,
+     "unsure": false
+    },
+    {
+     "player": {
+      "name": "Haris"
+     },
+     "runs": 7,
+     "balls": null,
+     "fours": null,
+     "sixes": null,
+     "dismissal": {
+      "type": "lbw",
+      "fielder": null,
+      "bowler": "Chuckley",
+      "written_as": "LBW"
+     },
+     "ball_runs_sum": null,
+     "ball_count": null,
+     "ball_by_ball": null,
+     "unsure": false
+    },
+    {
+     "player": {
+      "name": "Sarbajeet"
+     },
+     "runs": 66,
+     "balls": null,
+     "fours": null,
+     "sixes": null,
+     "dismissal": {
+      "type": "caught",
+      "fielder": null,
+      "bowler": "Sam",
+      "written_as": "Caught"
+     },
+     "ball_runs_sum": null,
+     "ball_count": null,
+     "ball_by_ball": null,
+     "unsure": false
+    },
+    {
+     "player": {
+      "name": "Sanjay"
+     },
+     "runs": 0,
+     "balls": null,
+     "fours": null,
+     "sixes": null,
+     "dismissal": {
+      "type": "caught",
+      "fielder": null,
+      "bowler": "Steve",
+      "written_as": "Caught"
+     },
+     "ball_runs_sum": null,
+     "ball_count": null,
+     "ball_by_ball": null,
+     "unsure": false
+    },
+    {
+     "player": {
+      "name": "Amit S"
+     },
+     "runs": 24,
+     "balls": null,
+     "fours": null,
+     "sixes": null,
+     "dismissal": {
+      "type": "run out",
+      "fielder": "Sam",
+      "bowler": null,
+      "written_as": "Run out (Sam in the BOWLER column = the fielder)"
+     },
+     "ball_runs_sum": null,
+     "ball_count": null,
+     "ball_by_ball": null,
+     "unsure": false
+    },
+    {
+     "player": {
+      "name": "Soorav"
+     },
+     "runs": 36,
+     "balls": null,
+     "fours": null,
+     "sixes": null,
+     "dismissal": {
+      "type": "not out",
+      "fielder": null,
+      "bowler": null,
+      "written_as": "not out"
+     },
+     "ball_runs_sum": null,
+     "ball_count": null,
+     "ball_by_ball": null,
+     "unsure": false
+    },
+    {
+     "player": {
+      "name": "Ali"
+     },
+     "runs": 16,
+     "balls": null,
+     "fours": null,
+     "sixes": null,
+     "dismissal": {
+      "type": "not out",
+      "fielder": null,
+      "bowler": null,
+      "written_as": "not out"
+     },
+     "ball_runs_sum": null,
+     "ball_count": null,
+     "ball_by_ball": null,
+     "unsure": false
+    }
+   ],
+   "bowling": [
+    {
+     "player": {
+      "name": "Sam"
+     },
+     "overs": 7,
+     "maidens": 0,
+     "runs_conceded": 58,
+     "wickets": 1,
+     "over_marks": null,
+     "over_runs": [
+      5,
+      7,
+      11,
+      6,
+      14,
+      6,
+      9
+     ],
+     "unsure": false
+    },
+    {
+     "player": {
+      "name": "Chuckley"
+     },
+     "overs": 7,
+     "maidens": 0,
+     "runs_conceded": 43,
+     "wickets": 2,
+     "over_marks": null,
+     "over_runs": [
+      6,
+      3,
+      2,
+      12,
+      9,
+      2,
+      9
+     ],
+     "unsure": false
+    },
+    {
+     "player": {
+      "name": "Ravi"
+     },
+     "overs": 7,
+     "maidens": 0,
+     "runs_conceded": 62,
+     "wickets": 0,
+     "over_marks": null,
+     "over_runs": [
+      15,
+      7,
+      7,
+      6,
+      8,
+      13,
+      6
+     ],
+     "unsure": false
+    },
+    {
+     "player": {
+      "name": "Aneesh"
+     },
+     "overs": 3,
+     "maidens": 0,
+     "runs_conceded": 20,
+     "wickets": 0,
+     "over_marks": null,
+     "over_runs": [
+      3,
+      4,
+      13
+     ],
+     "unsure": false
+    },
+    {
+     "player": {
+      "name": "Steve"
+     },
+     "overs": 3,
+     "maidens": 0,
+     "runs_conceded": 18,
+     "wickets": 1,
+     "over_marks": null,
+     "over_runs": [
+      3,
+      7,
+      8
+     ],
+     "unsure": false
+    },
+    {
+     "player": {
+      "name": "Rams"
+     },
+     "overs": 1,
+     "maidens": null,
+     "runs_conceded": null,
+     "wickets": 0,
+     "over_marks": null,
+     "over_runs": null,
+     "unsure": true
+    }
+   ],
+   "extras": {
+    "wides": 20,
+    "no_balls": null,
+    "byes": null,
+    "leg_byes": null,
+    "penalties": null,
+    "total": 20,
+    "written_as": "WIDES tally of 20 strokes",
+    "unsure": false
+   }
+  }
+ ],
+ "validation": {
+  "inning_1_total": null,
+  "inning_2_total": 207,
+  "expected_result": "Amit CC won",
+  "notes": "Only Amit CC's innings is on this page. Rams' one over is not readable for certain."
+ }
+}

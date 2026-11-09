@@ -324,14 +324,15 @@ def _club_record(store: dict[str, Any], club: dict[str, Any]) -> dict[str, Any]:
     played = int(summary.get("matches_played") or 0)
     won = int(summary.get("matches_won") or 0)
     lost = int(summary.get("matches_lost") or 0)
+    decided = int(summary.get("matches_decided") or (won + lost))
     return {
         "club_id": str(club.get("id") or ""),
         "club_name": str(club.get("name") or ""),
         "played": played,
         "won": won,
         "lost": lost,
-        "win_rate": (won / played) if played else 0.0,
-        "smoothed": (won + 1) / (played + 2),
+        "win_rate": (won / decided) if decided else 0.0,
+        "smoothed": (won + 1) / (decided + 2),
         "store": club_store,
         "summary": summary,
     }

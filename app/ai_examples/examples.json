@@ -12,7 +12,34 @@
     "'not' in HOW OUT with 'out' in the BOWLER column is NOT OUT (Roy, King) - never retired out or run out.",
     "TOTAL numbers like '00', '07', '03' are 0, 7, 3. The batters' TOTALs (136) + extras (24) = the G. TOTAL (160).",
     "HOW OUT can be spelled differently from the bowling list (MERWIN in How out = Marvin in the list): use the bowling list name for both.",
-    "Overs per bowler = boxes with marks in the BOWLING ANALYSIS; wickets come from the batting BOWLER column (Marvin 2, Rakesh 3, Manveer 2, Rich 1, Fabian 1)."
+    "Overs per bowler = boxes with marks in the BOWLING ANALYSIS; wickets come from the batting BOWLER column (Marvin 2, Rakesh 3, Manveer 2, Rich 1, Fabian 1).",
+    "CAPTS. HOME / VISIT names the captains (here CHECKLEY for Heartlake; a crossed-out name doesn't count): match.captains by team."
+   ]
+  },
+  {
+   "photo": "example_5.jpg",
+   "answer": "example_5.json",
+   "source_file": "be4c954572.jpeg",
+   "checked_by": "Claude, from the photo, 2026-11-07 (Amit CC page, Heartlake vs Amit CC 16 Jun 2024; live card aefcc3e5)",
+   "lessons": [
+    "Runs per over are written under each bowling box (Sam 5, 7, 11, 6, 14, 6, 9): copy them into over_runs; runs_conceded is their sum (58) and overs is how many there are (7).",
+    "The 3rd bowler is RAVI, not Rams: read each bowler's name in the BOWLING list, never copy a name from another row.",
+    "'AMIT 11' in PLAYED BETWEEN and 'AMIT CC' in INNINGS OF are the same team: use the INNINGS OF name.",
+    "Run out with a name in the BOWLER column: that name is the fielder, not the bowler (no wicket for him).",
+    "A batter with an empty BOWLER cell after 'Caught' (Vishnu) has bowler null - never guess one.",
+    "CAPTS. HOME / VISIT give the captains (Amit S, Chuckley); 'AMIT CC WON' in NOTES is the result."
+   ]
+  },
+  {
+   "photo": "example_3.png",
+   "answer": "example_3.json",
+   "source_file": "Heartlake_vs_Toronto_CC_scorecard.png",
+   "checked_by": "Claude with Dhruvika, 2026-10-30",
+   "lessons": [
+    "Printed scorecards: copy every number exactly; How out 'c Shah b Khan' = caught, fielder Shah, bowler Khan.",
+    "'c & b Singh' is caught and bowled: type 'caught and bowled', fielder AND bowler = Singh (never 'c Singh b Singh' written as two people).",
+    "'run out (Ali)' has a fielder and no bowler; 'Did not bat' names are listed with runs null.",
+    "Check the card against itself: bowlers' runs = total - byes - leg byes; bowlers' overs = innings overs; each bowler's wickets = batters out to him."
    ]
   },
   {
@@ -37,18 +64,6 @@
     "Extras boxes are tallies: '11111' = 5 and '21' = 3.",
     "The grand total is the last number in the over-by-over score column when there is no G. TOTAL.",
     "A bowler can be written above the BOWLER heading ('9. TONY') - include him."
-   ]
-  },
-  {
-   "photo": "example_3.png",
-   "answer": "example_3.json",
-   "source_file": "Heartlake_vs_Toronto_CC_scorecard.png",
-   "checked_by": "Claude with Dhruvika, 2026-10-30",
-   "lessons": [
-    "Printed scorecards: copy every number exactly; How out 'c Shah b Khan' = caught, fielder Shah, bowler Khan.",
-    "'c & b Singh' is caught and bowled: type 'caught and bowled', fielder AND bowler = Singh (never 'c Singh b Singh' written as two people).",
-    "'run out (Ali)' has a fielder and no bowler; 'Did not bat' names are listed with runs null.",
-    "Check the card against itself: bowlers' runs = total - byes - leg byes; bowlers' overs = innings overs; each bowler's wickets = batters out to him."
    ]
   }
  ]

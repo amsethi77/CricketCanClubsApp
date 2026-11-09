@@ -46,6 +46,13 @@
             <label class="profile-field profile-field-wide"><span>Notes</span><textarea id="profileNotes" rows="3" placeholder="Notes"></textarea></label>
             <button class="primary-button wide" type="submit">Save player profile</button>
           </form>
+          <!-- Nov 7 2026 (Amit): names on scorecards that look like this player - "This is me" merges them -->
+          <div id="playerNameMatches" class="detail-card" hidden>
+            <strong>Are these you?</strong>
+            <p class="lede">These names on scorecards look like yours. Tap <b>This is me</b> and those matches count in your stats.</p>
+            <div data-name-list class="detail-stack"></div>
+            <p data-name-msg class="lede" role="status"></p>
+          </div>
           <div class="detail-card">
             <strong>Selected player details</strong>
             <p class="lede">Your career snapshot as a signed-in player.</p>
@@ -79,7 +86,7 @@
       </section>
     </div>
     <script src="/assets/multipage.js?v=20261030f"></script>
-    <script src="/assets/player_profile.js?v=20261104a"></script>
+    <script src="/assets/player_profile.js?v=20261107a"></script>
     <script src="/assets/account_delete.js?v=20261027a"></script>
   </body>
 </html>
