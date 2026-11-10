@@ -605,14 +605,23 @@
 
   // Published scorecard (Nov 9 2026): shown when the fixture has no ball-by-ball scorebook. Same innings markup as the
   // uploaded scorecard page (scorecard_view.js), so the two pages look the same.
-  function renderPublishedScorecard(card) {
+  function renderPublishedScorecard(card, match) {
     const innings = Array.isArray(card?.innings) ? card.innings : [];
     if (!innings.length) return '<p class="pm-empty">No balls bowled yet.</p>';
-    return window.CricketClubAppScorecardView.inningsSections(card);
+    const keys = match?.player_keys || {};
+    const linked = {
+      ...card,
+      innings: (card.innings || []).map((inn) => ({
+        ...inn,
+        batting: (inn.batting || []).map((b) => ({ ...b, player_key: b.player_key || keys[b.name] })),
+        bowling: (inn.bowling || []).map((b) => ({ ...b, player_key: b.player_key || keys[b.name] })),
+      })),
+    };
+    return window.CricketClubAppScorecardView.inningsSections(linked);
   }
 
   function renderScorecardTab(match, state) {
-    if (!state.played.length) return renderPublishedScorecard(match.published_scorecard);
+    if (!state.played.length) return renderPublishedScorecard(match.published_scorecard, match);
 
     const latest = state.played[state.played.length - 1].inning_number;
     const open = openInnings || new Set([latest]);

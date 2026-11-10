@@ -6187,6 +6187,17 @@ def public_match(
         "roles": _clean_lineup_roles(lineups.get("roles"), list(lineups.get("club") or []), list(lineups.get("opponent") or [])),
     }
     match["player_keys"] = _lineup_player_keys(store, match, match["lineups"])
+    # Names on the linked published card keep their player links even when the match has no lineup.
+    for innings in (match.get("published_scorecard") or {}).get("innings") or []:
+        if not isinstance(innings, dict):
+            continue
+        for key, team in (("batting", innings.get("team")), ("bowling", innings.get("bowling_team"))):
+            for row in innings.get(key) or []:
+                if not isinstance(row, dict) or not row.get("name"):
+                    continue
+                member = _member_for_card_name(store, row.get("name"), team)
+                if member and _member_public_key(member):
+                    match["player_keys"].setdefault(str(row["name"]), _member_public_key(member))
     return {
         "match": match,
         "generated_at": now_iso(),
