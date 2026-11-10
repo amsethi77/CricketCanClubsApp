@@ -4741,6 +4741,7 @@ def _public_fixtures_page_payload(store: dict[str, Any]) -> dict[str, Any]:
     for fixture in fixtures:
         fixture["scorecard_url"] = scorecard_urls.get(str(fixture.get("id") or ""), "")
         fixture["is_past"] = _fixture_is_past(fixture)
+    _fill_results_from_uploaded_scorecards(store, fixtures)
     # Past games that were never played or scored are not "upcoming": hide them. Played games stay as results.
     fixtures = [
         fixture

@@ -68,6 +68,7 @@ These rules are the source of truth for the current implementation. If older log
 This section captures the user requirements in the order they were given and refined during the build.
 
 ### November 2026 Azure internal server error
+- "Why these scorecards scores are not coming when the same is coming in the Latest Scorecards" (home Recent results showed "Result not recorded" while Latest scorecards had the scores).
 - "There should be a way to delete the duplicates if the innings match" (scorecard preview flags: "Only one innings is on this photo", "Possible duplicate of IMG_3286.png / IMG_3286.HEIC / IMG_3284.jpg").
 - "3 lines ... should be more professionally done" (home page greeting header).
 - "please put only 1 greeting" (home page).
@@ -1302,6 +1303,7 @@ Model (soft launch, Oct 2026): keep the core cricket experience free; one paid p
 
 ## Change log
 
+- 2026-11-09: Home "Recent results" showed "Result not recorded" with no scores for games whose published scorecard had the scores (e.g. Heartlake vs Imran XI, 6 Sep). The home strip reads `/api/public/fixtures-page`, which never applied the upload backfill that the live page uses. `_public_fixtures_page_payload` now calls `_fill_results_from_uploaded_scorecards` too (`main.py`), so the result, scores and scorecard link match "Latest scorecards".
 - 2026-11-05: Scorecard preview can now delete a duplicate upload. When a "Possible duplicate" is the same photo (same file hash/fingerprint, or same file name saved as .jpg/.png/.HEIC) or the same innings (same batting team and total or mostly the same batters), the preview shows "Delete duplicate <code>" and `POST /api/scorecards/{id}/remove-duplicate/{other_id}` removes the other upload, its unshared file, and the matching flags (admins only; published copies need confirmation; the other team's innings is refused with a hint to Join). The preview response gains `duplicate_candidates`; those ids are no longer offered as "Link" candidates (`main.py`, `scorecard.js`).
 - 2026-11-05: Fixed a player's match counts not tallying between "Year wise" (8) and "Club wise" (9) on the player stats page. When a card is for two clubs, a batter's dismissal note ("bowler: Amit S" / "fielder: X") credited a match and a wicket/catch to that bowler or fielder under the batter's club, even though he played for the other club in that game. `build_player_pending_stats` now skips a named bowler or fielder who played for the other side (`cricket_store.py`); stats refresh version bumped to `two-club-archive-owner-2` so stored stats rebuild. Amit S now shows 1 + 2 + 5 = 8 matches club-wise, same as year-wise.
 - 2026-11-05: Stats page (Team roster, Team played scoreboard, rankings) showed all zeros for a club whose numbers are in an earlier season (e.g. Amit CC, 2024 only) because the page always opened on the current season. The Stats page now asks the dashboard for `selected_season_year=auto`: the current season, or the club's latest season that has matches when the current one is empty (`build_dashboard` in `cricket_store.py`, `app.js`). Picking a season in the dropdown still works as before.
