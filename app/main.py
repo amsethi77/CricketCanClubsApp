@@ -3952,6 +3952,13 @@ def startup_tasks() -> None:
         _register_played_fixture_teams(load_store())  # saves by itself when it adds anything
     except Exception:
         logger.exception("Registering clubs from played games failed")
+    # Fixtures take the result of their published scorecard (backfill for scorecards approved before this).
+    try:
+        startup_store = load_store()
+        if _sync_fixture_results_from_scorecards(startup_store):
+            save_store(startup_store)
+    except Exception:
+        logger.exception("Syncing fixture results from scorecards failed")
     threading.Thread(target=_backup_loop, name="database-backups", daemon=True).start()
     threading.Thread(target=_reminder_loop, name="match-reminders", daemon=True).start()
 
@@ -4189,8 +4196,8 @@ def _public_fixture_card(fixture: dict[str, Any]) -> dict[str, Any]:
         "status": status,
         "status_key": status.lower(),
         "result": str(scorecard.get("result") or fixture.get("result") or "TBD"),
-        "heartlake_score": str(scorecard.get("heartlake_runs") or fixture.get("heartlake_score") or ""),
-        "opponent_score": str(scorecard.get("opponent_runs") or fixture.get("opponent_score") or ""),
+        "heartlake_score": _side_score_text(scorecard, "heartlake", fixture.get("heartlake_score")),
+        "opponent_score": _side_score_text(scorecard, "opponent", fixture.get("opponent_score")),
         "live_summary": str(scorecard.get("live_summary") or ""),
         "commentary_count": len(fixture.get("commentary", []) or []),
         "performances_count": len(fixture.get("performances", []) or []),
@@ -4243,6 +4250,70 @@ def _fill_results_from_uploaded_scorecards(store: dict[str, Any], cards: list[di
                 if value:
                     card[key] = value
         card["scorecard_url"] = f"/scorecards/{match.get('id')}"
+
+
+def _split_innings_score(text: str) -> tuple[str, str]:
+    match = re.match(r"\s*(\d+)\s*(?:/\s*(\d+))?", str(text or ""))
+    return (match.group(1), match.group(2) or "") if match else ("", "")
+
+
+def _side_score_text(scorecard: dict[str, Any], side: str, fallback: Any) -> str:
+    """Nov 9 2026: fixtures showed "215" while the archive card showed "215/9". Both now use "runs/wickets"
+    (wickets omitted when all out, as in _scorecard_from_archive)."""
+    runs = str(scorecard.get(f"{side}_runs") or "").strip()
+    if not runs:
+        return str(fallback or "")
+    wickets = str(scorecard.get(f"{side}_wickets") or "").strip()
+    return f"{runs}/{wickets}" if wickets.isdigit() and int(wickets) < 10 else runs
+
+
+def _sync_fixture_results_from_scorecards(store: dict[str, Any]) -> bool:
+    """Nov 9 2026 (/live/2026-08-23-carl was empty while /scorecards/a-fa879005 had the full scorecard): a past
+    fixture linked to one published scorecard takes that game's result and innings scores, so the live page,
+    Recent results and fixtures show the same thing. Fixtures that already have scores (scored in the app) are kept."""
+    fixtures = [fixture for fixture in store.get("fixtures", []) or [] if isinstance(fixture, dict)]
+    if not fixtures:
+        return False
+    links = _past_fixture_scorecard_urls(store, [_public_fixture_card_payload(fixture) for fixture in fixtures])
+    if not links:
+        return False
+    archives = {str(item.get("id") or ""): item for item in store.get("archive_uploads", []) or [] if isinstance(item, dict)}
+    changed = False
+    for fixture in fixtures:
+        url = links.get(str(fixture.get("id") or ""), "")
+        archive = archives.get(url.rsplit("/a-", 1)[-1]) if url else None
+        if not archive or not _archive_scorecard_is_published(archive):
+            continue
+        view = _public_fixture_card_payload(fixture)
+        if _fixture_has_recorded_score_data(view):
+            continue
+        card = _scorecard_from_archive(archive)
+        innings = [item for item in card.get("innings") or [] if isinstance(item, dict)]
+        ours = next((item for item in innings if _same_team_name(view["club_name"], item.get("team"))), None)
+        theirs = next((item for item in innings if _same_team_name(view["opponent"], item.get("team"))), None)
+        if not ours or not theirs:
+            continue
+        ours_runs, ours_wickets = _split_innings_score(ours.get("score"))
+        theirs_runs, theirs_wickets = _split_innings_score(theirs.get("score"))
+        result = str(card.get("result") or "").strip()
+        if not ours_runs or not theirs_runs or not result or result.upper() == "TBD":
+            continue
+        scorecard = dict(fixture.get("scorecard") or {})
+        scorecard.update(
+            {
+                "heartlake_runs": ours_runs,
+                "heartlake_wickets": ours_wickets,
+                "opponent_runs": theirs_runs,
+                "opponent_wickets": theirs_wickets,
+                "result": result,
+            }
+        )
+        fixture["scorecard"] = scorecard
+        fixture["heartlake_score"] = f"{ours_runs}/{ours_wickets}" if ours_wickets else ours_runs
+        fixture["opponent_score"] = f"{theirs_runs}/{theirs_wickets}" if theirs_wickets else theirs_runs
+        fixture["status"] = "Completed"
+        changed = True
+    return changed
 
 
 def _public_live_page_payload(store: dict[str, Any]) -> dict[str, Any]:
@@ -4499,8 +4570,8 @@ def _public_live_matches(store: dict[str, Any]) -> list[dict[str, Any]]:
                 "status": status or "Scheduled",
                 "status_key": status_key or "scheduled",
                 "result": str(scorecard.get("result") or fixture.get("result") or "TBD"),
-                "heartlake_score": str(scorecard.get("heartlake_runs") or fixture.get("heartlake_score") or ""),
-                "opponent_score": str(scorecard.get("opponent_runs") or fixture.get("opponent_score") or ""),
+                "heartlake_score": _side_score_text(scorecard, "heartlake", fixture.get("heartlake_score")),
+                "opponent_score": _side_score_text(scorecard, "opponent", fixture.get("opponent_score")),
                 "live_summary": str(scorecard.get("live_summary") or ""),
                 "commentary_count": len(fixture.get("commentary", []) or []),
                 "performances_count": len(fixture.get("performances", []) or []),
@@ -4518,6 +4589,16 @@ def _public_live_matches(store: dict[str, Any]) -> list[dict[str, Any]]:
         )
     )
     return matches
+
+
+def _published_scorecard_for_fixture(store: dict[str, Any], fixture: dict[str, Any]) -> dict[str, Any] | None:
+    """A past fixture linked to a published scorecard shows that scorecard on its live page when it has no
+    ball-by-ball scorebook, so the live page and /scorecards/a-... show the same numbers."""
+    url = _past_fixture_scorecard_urls(store, [fixture]).get(str(fixture.get("id") or ""), "")
+    card_id = url.rsplit("/", 1)[-1]
+    if not card_id:
+        return None
+    return next((card for card in _public_scorecards(store) if card["id"] == card_id), None)
 
 
 def _public_match_payload(store: dict[str, Any], match_id: str) -> dict[str, Any]:
@@ -4579,8 +4660,18 @@ def _public_match_payload(store: dict[str, Any], match_id: str) -> dict[str, Any
                 ],
             }
         )
+    published = None
+    if not any(item["balls"] for item in innings_payload):
+        published = _published_scorecard_for_fixture(store, match)
+    status_text = str(match.get("status") or "Scheduled")
+    result_text = str(scorecard.get("result") or match.get("result") or "TBD")
+    if published:
+        status_text = "Completed"
+        if result_text in ("", "TBD"):
+            result_text = str(published.get("result") or "") or "Scorecard published"
     return {
         "id": str(match.get("id") or ""),
+        "published_scorecard": published,
         "club_id": str(match.get("club_id") or ""),
         "club_name": str(match.get("club_name") or ""),
         "date": str(match.get("date") or ""),
@@ -4590,10 +4681,10 @@ def _public_match_payload(store: dict[str, Any], match_id: str) -> dict[str, Any
         "match_type": str((match.get("details") or {}).get("match_type") or "Friendly"),
         "scheduled_time": str((match.get("details") or {}).get("scheduled_time") or "Time TBD"),
         "overs": str((match.get("details") or {}).get("overs") or ""),
-        "status": str(match.get("status") or "Scheduled"),
-        "result": str(scorecard.get("result") or match.get("result") or "TBD"),
-        "heartlake_score": str(scorecard.get("heartlake_runs") or match.get("heartlake_score") or ""),
-        "opponent_score": str(scorecard.get("opponent_runs") or match.get("opponent_score") or ""),
+        "status": status_text,
+        "result": result_text,
+        "heartlake_score": _side_score_text(scorecard, "heartlake", match.get("heartlake_score")),
+        "opponent_score": _side_score_text(scorecard, "opponent", match.get("opponent_score")),
         "live_summary": str(scorecard.get("live_summary") or ""),
         "selected_playing_xi": list(match.get("selected_playing_xi", []) or []),
         "availability": list(match.get("availability", []) or []),
@@ -4659,8 +4750,8 @@ def _public_fixture_card_payload(fixture: dict[str, Any]) -> dict[str, Any]:
         "status": str(fixture.get("status") or "Scheduled"),
         "status_key": str(fixture.get("status_key") or str(fixture.get("status") or "").lower().replace(" ", "-")),
         "result": str(scorecard.get("result") or fixture.get("result") or "TBD"),
-        "heartlake_score": str(scorecard.get("heartlake_runs") or fixture.get("heartlake_score") or ""),
-        "opponent_score": str(scorecard.get("opponent_runs") or fixture.get("opponent_score") or ""),
+        "heartlake_score": _side_score_text(scorecard, "heartlake", fixture.get("heartlake_score")),
+        "opponent_score": _side_score_text(scorecard, "opponent", fixture.get("opponent_score")),
         "live_summary": str(scorecard.get("live_summary") or ""),
     }
 
@@ -4719,13 +4810,18 @@ def _past_fixture_scorecard_urls(store: dict[str, Any], fixtures: list[dict[str,
             card = _scorecard_from_archive(archive)
             if str(card.get("date") or "")[:10] != fixture_date:
                 continue
-            card_teams = {
-                normalize_name(str(team.get("team") or ""))
+            card_teams = [
+                str(team.get("team") or "")
                 for team in (card.get("innings") or [])
                 if isinstance(team, dict) and team.get("team")
-            }
-            # The scorecard must identify both sides; never match on date/club alone.
-            if fixture_opponent and fixture_club_name and {fixture_opponent, fixture_club_name}.issubset(card_teams):
+            ]
+            # The scorecard must identify both sides (same team rule as the sync: "Coca Cola" = "Coca Cola XI"); never match on date/club alone.
+            if (
+                fixture_opponent
+                and fixture_club_name
+                and any(_same_team_name(fixture.get("club_name"), team) for team in card_teams)
+                and any(_same_team_name(fixture.get("opponent"), team) for team in card_teams)
+            ):
                 matched.append(archive)
 
         # Ambiguous same-day fixtures deliberately remain unlinked.
@@ -14071,6 +14167,10 @@ def _mark_archive_approved(store: dict[str, Any], upload: dict[str, Any], user_r
         _register_played_fixture_teams(store)
     except Exception:
         logger.exception("Club registration from scorecard %s failed", upload.get("id"))
+    try:
+        _sync_fixture_results_from_scorecards(store)
+    except Exception:
+        logger.exception("Fixture result sync from scorecard %s failed", upload.get("id"))
 
 
 class ScorecardReportRequest(BaseModel):
@@ -14949,6 +15049,10 @@ def approve_archive(
         _register_played_fixture_teams(store)
     except Exception:
         logger.exception("Club registration from scorecard %s failed", upload.get("id"))
+    try:
+        _sync_fixture_results_from_scorecards(store)
+    except Exception:
+        logger.exception("Fixture result sync from scorecard %s failed", upload.get("id"))
     save_store(store)
     refreshed = load_store()
     updated = get_archive_or_404(refreshed, upload_id)

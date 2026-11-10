@@ -593,8 +593,34 @@
       </div>`;
   }
 
+  // Published scorecard (Nov 9 2026): shown when the fixture has no ball-by-ball scorebook.
+  function renderPublishedScorecard(card) {
+    const innings = Array.isArray(card?.innings) ? card.innings : [];
+    if (!innings.length) return '<p class="pm-empty">No balls bowled yet.</p>';
+    return innings
+      .map((inn) => {
+        const batting = (inn.batting || [])
+          .map((b) => `<tr><td>${esc(b.name || "")}<small class="pm-dismissal">${esc(b.dismissal || "")}</small></td><td>${esc(b.runs ?? "")}</td><td>${esc(b.balls ?? "")}</td><td>${esc(b.fours ?? "")}</td><td>${esc(b.sixes ?? "")}</td><td>${esc(b.strike_rate ?? "")}</td></tr>`)
+          .join("");
+        const bowling = (inn.bowling || [])
+          .map((b) => `<tr><td>${esc(b.name || "")}</td><td>${esc(b.overs ?? "")}</td><td>${esc(b.runs ?? "")}</td><td>${esc(b.wickets ?? "")}</td><td>${esc(b.economy ?? "")}</td></tr>`)
+          .join("");
+        return `<section class="pm-inn open">
+          <div class="pm-innhead"><span>${esc(inn.team || `Innings ${inn.number || ""}`)} Innings</span><b>${esc(inn.score || "")} <small>${inn.overs ? `(${esc(inn.overs)} Ov)` : ""}</small></b></div>
+          <div class="pm-inn-body">
+            <div class="pm-table-wrap"><table class="pm-table"><thead><tr><th>Batter</th><th>R</th><th>B</th><th>4s</th><th>6s</th><th>SR</th></tr></thead>
+              <tbody>${batting || '<tr><td colspan="6" class="pm-empty">No batting details.</td></tr>'}</tbody></table></div>
+            <div class="pm-table-wrap"><table class="pm-table"><thead><tr><th>Bowler</th><th>O</th><th>R</th><th>W</th><th>Econ</th></tr></thead>
+              <tbody>${bowling || '<tr><td colspan="5" class="pm-empty">No bowling details.</td></tr>'}</tbody></table></div>
+          </div>
+        </section>`;
+      })
+      .join("");
+  }
+
   function renderScorecardTab(match, state) {
-    if (!state.played.length) return '<p class="pm-empty">No balls bowled yet.</p>';
+    if (!state.played.length) return renderPublishedScorecard(match.published_scorecard);
+
     const latest = state.played[state.played.length - 1].inning_number;
     const open = openInnings || new Set([latest]);
     const lineupFor = (team) => (same(team, match.club_name) ? match.lineups?.club : match.lineups?.opponent) || [];
