@@ -31,10 +31,6 @@
       .replaceAll("'", "&#39;");
   }
 
-  function num(value) {
-    return value === null || value === undefined || value === "" ? DASH : escapeHtml(value);
-  }
-
   function showTab(name) {
     tabs.forEach((tab) => {
       const on = tab.dataset.tab === name;
@@ -98,89 +94,6 @@
     document.title = `${sc.title} · ${sc.date_label} · Scorecard`;
   }
 
-  // "c Singh b Singh" -> "c & b Singh" (caught by the bowler), README req 165
-  function howOutText(text) {
-    const m = /^c\s+(.+?)\s+b\s+(.+)$/i.exec(String(text || "").trim());
-    return m && m[1].trim().toLowerCase() === m[2].trim().toLowerCase() ? `c & b ${m[2].trim()}` : String(text || "");
-  }
-
-  const rate = (runs, overs) => {
-    const o = Number(overs);
-    if (!Number.isFinite(o) || !o || runs === null || runs === undefined) return "";
-    const balls = Math.floor(o) * 6 + Math.round((o - Math.floor(o)) * 10);
-    return balls ? ((Number(runs) / balls) * 6).toFixed(2) : "";
-  };
-
-  // Nov 5 2026: dots / 1s / 2s / 3s (batters) and dots / wides / no balls / 4s / 6s (bowlers), counted from the
-  // ball-by-ball marks on the photo. Shown only when they were counted.
-  // Nov 7 2026: a registered player's name opens his read-only profile (/players/<player id>)
-  function playerName(row) {
-    return row.player_key
-      ? `<a class="pm-name" href="/players/${encodeURIComponent(row.player_key)}">${escapeHtml(row.name)}</a>`
-      : `<span class="pm-name">${escapeHtml(row.name)}</span>`;
-  }
-
-  function ballSplit(row, fields) {
-    const bits = fields
-      .filter(([key]) => row[key] !== null && row[key] !== undefined && row[key] !== "")
-      .map(([key, label]) => `${label} ${escapeHtml(row[key])}`);
-    return bits.length ? `<small class="pm-split">${bits.join(" · ")}</small>` : "";
-  }
-
-  function battingTable(inn) {
-    const rows = (inn.batting || [])
-      .map((b) => {
-        const how = howOutText(b.dismissal) || (b.not_out ? "not out" : "");
-        return `<tr class="${b.not_out ? "pm-notout" : ""}">
-          <th scope="row">${playerName(b)}${how ? `<small>${escapeHtml(how)}</small>` : ""}${ballSplit(b, [["dots", "Dots"], ["ones", "1s"], ["twos", "2s"], ["threes", "3s"]])}</th>
-          <td class="pm-r">${num(b.runs)}</td><td>${num(b.balls)}</td><td>${num(b.fours)}</td><td>${num(b.sixes)}</td><td>${num(b.strike_rate)}</td></tr>`;
-      })
-      .join("");
-    const rr = rate(inn.runs, inn.overs);
-    const totalBits = [inn.wickets !== null && inn.wickets !== undefined ? `${escapeHtml(inn.wickets)} wkts` : "", inn.overs ? `${escapeHtml(inn.overs)} Ov` : "", rr ? `RR ${rr}` : ""].filter(Boolean).join(", ");
-    return `
-      <div class="pm-table-wrap">
-        <table class="pm-table">
-          <thead><tr><th scope="col">Batter</th><th scope="col">R</th><th scope="col">B</th><th scope="col">4s</th><th scope="col">6s</th><th scope="col">SR</th></tr></thead>
-          <tbody>${rows || '<tr><td colspan="6" class="pm-empty">Batting details were not recorded for this innings.</td></tr>'}</tbody>
-          <tfoot>
-            <tr><th scope="row">Extras${inn.extras_detail ? ` <small>(${escapeHtml(inn.extras_detail)})</small>` : ""}</th><td class="pm-r" colspan="5">${num(inn.extras)}</td></tr>
-            <tr class="pm-total"><th scope="row">Total${totalBits ? ` <small>(${totalBits})</small>` : ""}</th><td class="pm-r" colspan="5">${inn.runs === null || inn.runs === undefined ? DASH : escapeHtml(inn.runs)}</td></tr>
-          </tfoot>
-        </table>
-      </div>
-      ${inn.did_not_bat && inn.did_not_bat.length ? `<p class="pm-note"><b>Did not bat:</b> ${inn.did_not_bat.map(escapeHtml).join(", ")}</p>` : ""}`;
-  }
-
-  function bowlingTable(inn) {
-    if (!inn.bowling || !inn.bowling.length) return '<p class="pm-note">Bowling figures were not recorded for this innings.</p>';
-    const rows = inn.bowling
-      .map(
-        (b) => `<tr>
-          <th scope="row">${playerName(b)}${ballSplit(b, [["dots", "Dots"], ["wides", "Wd"], ["no_balls", "Nb"], ["fours", "4s"], ["sixes", "6s"]])}${Array.isArray(b.over_runs) && b.over_runs.length ? `<small class="pm-split">Runs per over: ${b.over_runs.map((value) => escapeHtml(value)).join(" · ")}</small>` : ""}</th>
-          <td>${num(b.overs)}</td><td>${num(b.maidens)}</td><td>${num(b.runs)}</td><td class="pm-r">${num(b.wickets)}</td><td>${num(b.economy)}</td></tr>`
-      )
-      .join("");
-    return `
-      <div class="pm-table-wrap">
-        <table class="pm-table">
-          <thead><tr><th scope="col">Bowler</th><th scope="col">O</th><th scope="col">M</th><th scope="col">R</th><th scope="col">W</th><th scope="col">ECON</th></tr></thead>
-          <tbody>${rows}</tbody>
-        </table>
-      </div>`;
-  }
-
-  function inningsBlock(inn, open) {
-    const score = inn.runs === null || inn.runs === undefined ? DASH : `${escapeHtml(inn.runs)}-${escapeHtml(inn.wickets ?? 0)}`;
-    return `<section class="pm-inn${open ? " open" : ""}">
-        <button type="button" class="pm-innhead" data-sc-inn aria-expanded="${open}">
-          <span>${escapeHtml(inn.team)} Innings</span>
-          <b>${score}${inn.overs ? ` <small>(${escapeHtml(inn.overs)} Ov)</small>` : ""}</b><i aria-hidden="true">▾</i>
-        </button>
-        <div class="pm-inn-body">${battingTable(inn)}${bowlingTable(inn)}</div>
-      </section>`;
-  }
-
   function matchInfo(sc) {
     const rows = [
       ["Match", sc.title],
@@ -200,15 +113,13 @@
   }
 
   function scorecardMarkup(sc) {
-    const blocks = sc.innings.filter((inn) => inn.has_data);
-    const shown = blocks.length ? blocks : sc.innings;
     return `
       ${
         sc.has_details
           ? ""
           : `<p class="pm-note">Only the totals of this match have been digitised so far.${sc.photo_url ? ' See the <button type="button" class="pm-link" data-go-photo>original scorecard</button> for full details.' : ""}</p>`
       }
-      ${shown.map((inn, index) => inningsBlock(inn, index === shown.length - 1)).join("")}
+      ${window.CricketClubAppScorecardView.inningsSections(sc)}
       ${matchInfo(sc)}
     `;
   }

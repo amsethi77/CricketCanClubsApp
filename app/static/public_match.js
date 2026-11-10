@@ -208,6 +208,11 @@
     return tags.length ? ` <em class="pm-tag" title="${tags.map((t) => ROLE_NAMES[t]).join(", ")}">${tags.join(" ")}</em>` : "";
   }
 
+  // Name links to the player's profile when the server matched him to a registered player (match.player_keys).
+  function nameLink(match, name, suffix = "") {
+    return window.CricketClubAppScorecardView.nameHtml(name, match?.player_keys?.[name], suffix);
+  }
+
   // ---------- team badges: "New Zealand" -> NZ, "India" -> IND, "Heartlake Cricket Club" -> HCC ----------
   function shortCode(name) {
     let words = String(name || "").replace(/[^A-Za-z0-9 ]/g, " ").split(/\s+/).filter(Boolean);
@@ -346,16 +351,21 @@
   // Nov 3 2026 (Amit): the Match ID (parent) and one innings ID per innings (children), the same IDs as on
   // Scorecards: M-XXXXXXXX, M-XXXXXXXX-I1 / -I2 (a Test match: -I1 to -I4). An innings not played yet is "to come".
   function matchIds(match, state) {
-    const code = "M-" + String(match.id || "").replace(/[^0-9a-z]/gi, "").slice(0, 8).toUpperCase();
+    const code = match.published_match_code || ("M-" + String(match.id || "").replace(/[^0-9a-z]/gi, "").slice(0, 8).toUpperCase());
     if (code === "M-") return "";
     const test = /\btest\b|multi-day|two-day|2-day/i.test(String(match.match_type || ""));
     const slots = Math.max(test ? 4 : 2, state.played.length);
+    const published = Array.isArray(match.published_scorecard?.innings) ? match.published_scorecard.innings : [];
     const chips = [];
     for (let n = 1; n <= slots; n += 1) {
       const inn = state.played.find((i) => Number(i.inning_number) === n);
-      const team = inn ? inn.batting_team : n % 2 === 1 ? state.teams[0] : state.teams[1];
+      const pub = inn ? null : published[n - 1];
+      const pubScore = pub && pub.runs !== null && pub.runs !== undefined && pub.runs !== "" ? `${pub.runs}/${pub.wickets ?? 0}` : "";
+      const team = inn ? inn.batting_team : pub?.team || (n % 2 === 1 ? state.teams[0] : state.teams[1]);
       const f = inn ? (inn === state.current ? state.facts : inningsFacts(inn)) : null;
-      chips.push(`<li class="${inn ? "ok" : "missing"}"><b>${esc(code)}-I${n}</b> ${esc(team || `Innings ${n}`)} · ${f ? `${f.runs}/${f.wickets}` : state.done ? "<em>missing</em>" : "<em>to come</em>"}</li>`);
+      const recorded = Boolean(f || pubScore);
+      const text = f ? `${f.runs}/${f.wickets}` : pubScore || (state.done ? "<em>missing</em>" : "<em>to come</em>");
+      chips.push(`<li class="${recorded ? "ok" : "missing"}"><b>${esc(code)}-I${n}</b> ${esc(team || `Innings ${n}`)} · ${text}</li>`);
     }
     return `<p class="pm-info pm-match-id">Match ID <b>${esc(code)}</b></p><ul class="pm-innings-ids" aria-label="Innings of this match">${chips.join("")}</ul>`;
   }
@@ -471,7 +481,7 @@
         if (!name) return "";
         const r = f.batting.find((b) => b.player_name === name) || {};
         const sr = r.balls ? ((Number(r.runs || 0) / Number(r.balls)) * 100).toFixed(2) : "0.00";
-        return `<tr><th scope="row"><span class="pm-name">${esc(name)}${star ? "*" : ""}${tagHtml(match, side, name)}</span></th><td class="pm-r">${r.runs || 0}</td><td>${r.balls || 0}</td><td>${r.fours || 0}</td><td>${r.sixes || 0}</td><td>${sr}</td></tr>`;
+        return `<tr><th scope="row">${nameLink(match, name, `${star ? "*" : ""}${tagHtml(match, side, name)}`)}</th><td class="pm-r">${r.runs || 0}</td><td>${r.balls || 0}</td><td>${r.fours || 0}</td><td>${r.sixes || 0}</td><td>${sr}</td></tr>`;
       };
       const names = [];
       for (let i = f.balls.length - 1; i >= 0 && names.length < 2; i -= 1) {
@@ -482,7 +492,7 @@
       const bowlRows = names
         .map((name) => {
           const r = f.bowling.find((b) => b.player_name === name) || {};
-          return `<tr><th scope="row"><span class="pm-name">${esc(name)}${tagHtml(match, bowlSide, name)}</span></th><td>${esc(r.overs || "0.0")}</td><td>${r.maidens || 0}</td><td>${r.runs_conceded || 0}</td><td class="pm-r">${r.wickets || 0}</td><td>${Number(r.economy || 0).toFixed(2)}</td></tr>`;
+          return `<tr><th scope="row">${nameLink(match, name, tagHtml(match, bowlSide, name))}</th><td>${esc(r.overs || "0.0")}</td><td>${r.maidens || 0}</td><td>${r.runs_conceded || 0}</td><td class="pm-r">${r.wickets || 0}</td><td>${Number(r.economy || 0).toFixed(2)}</td></tr>`;
         })
         .join("");
       parts.push(`<div class="pm-table-wrap pm-bleed"><table class="pm-table pm-mini">
@@ -529,8 +539,8 @@
         return `<div class="pm-key">
           <p class="pm-key-head">${esc(inn.batting_team)} <b>${f.runs}/${f.wickets}</b> <small>(${oversShort(f.legal)} ov)</small></p>
           <div class="pm-key-grid">
-            <ul>${bats.map((b) => `<li><span>${esc(b.player_name)}${f.dismissal[b.player_name] ? "" : "*"}</span><b>${b.runs || 0}</b><small>(${b.balls || 0})</small></li>`).join("")}</ul>
-            <ul>${bowls.map((b) => `<li><span>${esc(b.player_name)}</span><b>${b.wickets || 0}-${b.runs_conceded || 0}</b><small>(${esc(b.overs || "0")})</small></li>`).join("")}</ul>
+            <ul>${bats.map((b) => `<li>${nameLink(match, b.player_name, f.dismissal[b.player_name] ? "" : "*")}<b>${b.runs || 0}</b><small>(${b.balls || 0})</small></li>`).join("")}</ul>
+            <ul>${bowls.map((b) => `<li>${nameLink(match, b.player_name)}<b>${b.wickets || 0}-${b.runs_conceded || 0}</b><small>(${esc(b.overs || "0")})</small></li>`).join("")}</ul>
           </div></div>`;
       })
       .join("");
@@ -556,7 +566,7 @@
         const inNow = b.player_name === pair.striker || b.player_name === pair.nonStriker;
         const how = out || (f.done || !inNow ? "not out" : b.player_name === pair.striker ? "batting *" : "batting");
         return `<tr class="${out ? "" : "pm-notout"}">
-          <th scope="row"><span class="pm-name">${esc(b.player_name)}${tagHtml(match, side, b.player_name)}</span><small>${esc(how)}</small></th>
+          <th scope="row">${nameLink(match, b.player_name, tagHtml(match, side, b.player_name))}<small>${esc(how)}</small></th>
           <td class="pm-r">${b.runs || 0}</td><td>${b.balls || 0}</td><td>${b.fours || 0}</td><td>${b.sixes || 0}</td><td>${sr}</td></tr>`;
       })
       .join("");
@@ -568,7 +578,7 @@
       .filter((b) => Number(b.legal_balls || 0) || Number(b.runs_conceded || 0))
       .map(
         (b) => `<tr>
-          <th scope="row"><span class="pm-name">${esc(b.player_name)}${tagHtml(match, bowlSide, b.player_name)}</span></th>
+          <th scope="row">${nameLink(match, b.player_name, tagHtml(match, bowlSide, b.player_name))}</th>
           <td>${esc(b.overs || "0.0")}</td><td>${b.maidens || 0}</td><td>${b.runs_conceded || 0}</td><td class="pm-r">${b.wickets || 0}</td><td>${Number(b.economy || 0).toFixed(2)}</td></tr>`
       )
       .join("");
@@ -583,7 +593,7 @@
           </tfoot>
         </table>
       </div>
-      ${yetToBat.length ? `<p class="pm-note"><b>Yet to bat:</b> ${yetToBat.map((n) => `${esc(n)}${tagHtml(match, side, n)}`).join(", ")}</p>` : ""}
+      ${yetToBat.length ? `<p class="pm-note"><b>Yet to bat:</b> ${yetToBat.map((n) => nameLink(match, n, tagHtml(match, side, n))).join(", ")}</p>` : ""}
       ${f.fallOfWickets.length ? `<p class="pm-note"><b>Fall of wickets:</b> ${f.fallOfWickets.map(esc).join(", ")}</p>` : ""}
       <div class="pm-table-wrap">
         <table class="pm-table">
@@ -593,29 +603,12 @@
       </div>`;
   }
 
-  // Published scorecard (Nov 9 2026): shown when the fixture has no ball-by-ball scorebook.
+  // Published scorecard (Nov 9 2026): shown when the fixture has no ball-by-ball scorebook. Same innings markup as the
+  // uploaded scorecard page (scorecard_view.js), so the two pages look the same.
   function renderPublishedScorecard(card) {
     const innings = Array.isArray(card?.innings) ? card.innings : [];
     if (!innings.length) return '<p class="pm-empty">No balls bowled yet.</p>';
-    return innings
-      .map((inn) => {
-        const batting = (inn.batting || [])
-          .map((b) => `<tr><td>${esc(b.name || "")}<small class="pm-dismissal">${esc(b.dismissal || "")}</small></td><td>${esc(b.runs ?? "")}</td><td>${esc(b.balls ?? "")}</td><td>${esc(b.fours ?? "")}</td><td>${esc(b.sixes ?? "")}</td><td>${esc(b.strike_rate ?? "")}</td></tr>`)
-          .join("");
-        const bowling = (inn.bowling || [])
-          .map((b) => `<tr><td>${esc(b.name || "")}</td><td>${esc(b.overs ?? "")}</td><td>${esc(b.runs ?? "")}</td><td>${esc(b.wickets ?? "")}</td><td>${esc(b.economy ?? "")}</td></tr>`)
-          .join("");
-        return `<section class="pm-inn open">
-          <div class="pm-innhead"><span>${esc(inn.team || `Innings ${inn.number || ""}`)} Innings</span><b>${esc(inn.score || "")} <small>${inn.overs ? `(${esc(inn.overs)} Ov)` : ""}</small></b></div>
-          <div class="pm-inn-body">
-            <div class="pm-table-wrap"><table class="pm-table"><thead><tr><th>Batter</th><th>R</th><th>B</th><th>4s</th><th>6s</th><th>SR</th></tr></thead>
-              <tbody>${batting || '<tr><td colspan="6" class="pm-empty">No batting details.</td></tr>'}</tbody></table></div>
-            <div class="pm-table-wrap"><table class="pm-table"><thead><tr><th>Bowler</th><th>O</th><th>R</th><th>W</th><th>Econ</th></tr></thead>
-              <tbody>${bowling || '<tr><td colspan="5" class="pm-empty">No bowling details.</td></tr>'}</tbody></table></div>
-          </div>
-        </section>`;
-      })
-      .join("");
+    return window.CricketClubAppScorecardView.inningsSections(card);
   }
 
   function renderScorecardTab(match, state) {
@@ -631,7 +624,7 @@
         return `<section class="pm-inn${isOpen ? " open" : ""}">
           <button type="button" class="pm-innhead" data-inn="${inn.inning_number}" aria-expanded="${isOpen}">
             <span>${esc(inn.batting_team || `Innings ${inn.inning_number}`)} Innings</span>
-            <b>${f.runs}-${f.wickets} <small>(${oversShort(f.legal)} Ov)</small></b><i aria-hidden="true">▾</i>
+            <b>${f.runs}/${f.wickets} <small>(${oversShort(f.legal)} Ov)</small></b><i aria-hidden="true">▾</i>
           </button>
           ${isOpen ? `<div class="pm-inn-body">${renderScorecard(inn, match, lineupFor(inn.batting_team))}</div>` : ""}
         </section>`;
@@ -715,6 +708,13 @@
       }
       render(lastData);
       if (tab.classList.contains("pm-link")) root.querySelector(".pm-tabbar")?.scrollIntoView({ block: "start", behavior: "smooth" });
+      return;
+    }
+    const pubInn = event.target.closest("[data-sc-inn]");
+    if (pubInn) {
+      const box = pubInn.closest(".pm-inn");
+      box.classList.toggle("open");
+      pubInn.setAttribute("aria-expanded", box.classList.contains("open") ? "true" : "false");
       return;
     }
     const inn = event.target.closest("[data-inn]");

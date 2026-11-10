@@ -637,6 +637,16 @@
   padding-bottom: 6px;
 }
 
+.pm-app .pm-inn:not(.open) .pm-inn-body {
+  display: none;
+}
+
+.pm-app .pm-dismissal {
+  display: block;
+  font-weight: 400;
+  color: #6b7280;
+}
+
 /* ---------- Commentary ---------- */
 .pm-comm {
   list-style: none;

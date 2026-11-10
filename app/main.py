@@ -4258,13 +4258,12 @@ def _split_innings_score(text: str) -> tuple[str, str]:
 
 
 def _side_score_text(scorecard: dict[str, Any], side: str, fallback: Any) -> str:
-    """Nov 9 2026: fixtures showed "215" while the archive card showed "215/9". Both now use "runs/wickets"
-    (wickets omitted when all out, as in _scorecard_from_archive)."""
+    """Nov 9 2026: every score is "runs/wickets" (all out is "154/10"), the same text on Home, fixtures, live and scorecards."""
     runs = str(scorecard.get(f"{side}_runs") or "").strip()
     if not runs:
         return str(fallback or "")
     wickets = str(scorecard.get(f"{side}_wickets") or "").strip()
-    return f"{runs}/{wickets}" if wickets.isdigit() and int(wickets) < 10 else runs
+    return f"{runs}/{wickets}" if wickets.isdigit() else runs
 
 
 def _sync_fixture_results_from_scorecards(store: dict[str, Any]) -> bool:
@@ -4672,6 +4671,8 @@ def _public_match_payload(store: dict[str, Any], match_id: str) -> dict[str, Any
     return {
         "id": str(match.get("id") or ""),
         "published_scorecard": published,
+        # same Match ID as the /scorecards page for the linked card (e.g. M-FA879005)
+        "published_match_code": _match_code(published.get("id")) if published else "",
         "club_id": str(match.get("club_id") or ""),
         "club_name": str(match.get("club_name") or ""),
         "date": str(match.get("date") or ""),
@@ -5466,7 +5467,7 @@ def _scorecard_from_archive_base(archive: dict[str, Any]) -> dict[str, Any]:
                 "runs": runs,
                 "wickets": wickets,
                 "overs": overs,
-                "score": (f"{runs}" + (f"/{wickets}" if wickets is not None and wickets < 10 else "")) if runs is not None else "",
+                "score": (f"{runs}" + (f"/{wickets}" if wickets is not None else "")) if runs is not None else "",
                 "extras": extras_total,
                 "extras_detail": extras_detail,
                 "batting": batting,
@@ -6014,6 +6015,19 @@ def _link_card_players(store: dict[str, Any], card: dict[str, Any]) -> dict[str,
     return card
 
 
+def _lineup_player_keys(store: dict[str, Any], match: dict[str, Any], lineups: dict[str, Any]) -> dict[str, str]:
+    """Name -> player id for the live scorecard, so its names link to /players/<id> like an uploaded card (Nov 9 2026)."""
+    keys: dict[str, str] = {}
+    for side, team in (("club", match.get("club_name")), ("opponent", match.get("opponent"))):
+        for name in lineups.get(side) or []:
+            if not isinstance(name, str) or not name.strip():
+                continue
+            member = _member_for_card_name(store, name, team)
+            if member and _member_public_key(member):
+                keys[name] = _member_public_key(member)
+    return keys
+
+
 def _find_member_by_key(store: dict[str, Any], key: str) -> dict[str, Any] | None:
     key = str(key or "").strip()
     return next(
@@ -6172,6 +6186,7 @@ def public_match(
         "opponent": list(lineups.get("opponent") or []),
         "roles": _clean_lineup_roles(lineups.get("roles"), list(lineups.get("club") or []), list(lineups.get("opponent") or [])),
     }
+    match["player_keys"] = _lineup_player_keys(store, match, match["lineups"])
     return {
         "match": match,
         "generated_at": now_iso(),
@@ -6657,7 +6672,8 @@ def _admin_center_html(request: Request) -> HTMLResponse:
           </section>
         </div>
         <script src="/assets/multipage.js?v=20261025a"></script>
-        <script src="/assets/scorecard.js?v=20261019a"></script>
+        <script src="/assets/scorecard_view.js?v=20261109a"></script>
+        <script src="/assets/scorecard.js?v=20261109c"></script>
         <script src="/assets/admin_center.js?v=20261103c"></script>
         <script src="/assets/admin_reread.js?v=20261024a"></script>
       </body>
