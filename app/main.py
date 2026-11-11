@@ -11,6 +11,7 @@ import threading
 import time as time_module
 import httpx
 from collections import Counter, defaultdict
+from difflib import SequenceMatcher
 from copy import deepcopy
 from urllib import request
 from urllib.parse import urlencode
@@ -150,11 +151,13 @@ try:
     import ai_vision as ai_vision
     import ai_chat as ai_chat
     from llm_service import clear_query_cache, infer as llm_infer, list_llm_documents, list_prompt_manifest, reindex_llm_corpus
+    from player_merge import MergeError, choose_survivor, merge_members_in_store
     from cricket_store import (
         card_sides_are_swapped,
         inferred_innings_teams_for_archive,
         side_anchors,
         ocr_rows_look_real,
+        normalize_name,
         BASE_DIR,
         CACHE_FILE,
         DATABASE_FILE,
@@ -216,11 +219,13 @@ except ModuleNotFoundError:
     from app import ai_vision
     from app import ai_chat
     from app.llm_service import clear_query_cache, infer as llm_infer, list_llm_documents, list_prompt_manifest, reindex_llm_corpus
+    from app.player_merge import MergeError, choose_survivor, merge_members_in_store
     from app.cricket_store import (
         card_sides_are_swapped,
         inferred_innings_teams_for_archive,
         side_anchors,
         ocr_rows_look_real,
+        normalize_name,
         BASE_DIR,
         CACHE_FILE,
         DATABASE_FILE,
@@ -621,10 +626,6 @@ def _touch_live_match_viewer(match_id: str, request: Request) -> int:
             (str(match_id), active_since),
         ).fetchone()
     return int(row[0] or 0)
-
-def normalize_name(name: str) -> str:
-    return (name or "").strip().lower()
-
 
 def _auth_identifier_candidates(identifier: str) -> list[str]:
     clean = str(identifier or "").strip()
@@ -2081,6 +2082,58 @@ def ensure_auth_schema() -> None:
               PRIMARY KEY (match_id, visitor_key)
             );
 
+                    CREATE TABLE IF NOT EXISTS app_name_claims (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              user_id INTEGER NOT NULL,
+              member_id TEXT NOT NULL,
+              claimed_name TEXT NOT NULL,
+              claimed_name_norm TEXT NOT NULL,
+              status TEXT NOT NULL DEFAULT 'pending',
+              created_at TEXT NOT NULL,
+              decided_at TEXT,
+              decided_by_user_id INTEGER,
+              decision_note TEXT,
+              FOREIGN KEY (user_id) REFERENCES app_users(id) ON DELETE CASCADE,
+              FOREIGN KEY (decided_by_user_id) REFERENCES app_users(id) ON DELETE SET NULL
+            );
+
+                    CREATE UNIQUE INDEX IF NOT EXISTS idx_name_claims_pending ON app_name_claims(user_id, member_id, claimed_name_norm) WHERE status = 'pending';
+                    CREATE INDEX IF NOT EXISTS idx_name_claims_status ON app_name_claims(status, created_at);
+                    CREATE TABLE IF NOT EXISTS app_merge_requests (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              requester_user_id INTEGER NOT NULL,
+              requester_member_id TEXT NOT NULL,
+              target_member_id TEXT NOT NULL,
+              status TEXT NOT NULL DEFAULT 'pending',
+              created_at TEXT NOT NULL,
+              decided_at TEXT,
+              decided_by_user_id INTEGER,
+              decision_note TEXT,
+              merge_id INTEGER,
+              keep_member_id TEXT,
+              FOREIGN KEY (requester_user_id) REFERENCES app_users(id) ON DELETE CASCADE
+            );
+                    CREATE INDEX IF NOT EXISTS idx_merge_requests_status ON app_merge_requests(status, created_at);
+                    CREATE TABLE IF NOT EXISTS app_merge_suggestion_dismissals (
+              user_id INTEGER NOT NULL,
+              target_member_id TEXT NOT NULL,
+              created_at TEXT NOT NULL,
+              PRIMARY KEY (user_id, target_member_id),
+              FOREIGN KEY (user_id) REFERENCES app_users(id) ON DELETE CASCADE
+            );
+                    CREATE TABLE IF NOT EXISTS app_member_merges (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              kept_member_id TEXT NOT NULL,
+              removed_member_id TEXT NOT NULL,
+              removed_name TEXT NOT NULL DEFAULT '',
+              merged_by_user_id INTEGER,
+              created_at TEXT NOT NULL,
+              store_version_after INTEGER NOT NULL,
+              store_snapshot TEXT NOT NULL,
+              auth_snapshot TEXT NOT NULL,
+              undone_at TEXT,
+              undone_by_user_id INTEGER
+            );
                     CREATE INDEX IF NOT EXISTS idx_analytics_visits_time ON app_analytics_visits(visited_at);
                     CREATE INDEX IF NOT EXISTS idx_live_match_viewers_time ON app_live_match_viewers(match_id, last_seen_at);
                     """
@@ -2088,6 +2141,9 @@ def ensure_auth_schema() -> None:
                 user_columns = {str(row[1]) for row in connection.execute("PRAGMA table_info(app_users)").fetchall()}
                 if "player_id" not in user_columns:
                     connection.execute("ALTER TABLE app_users ADD COLUMN player_id TEXT")
+                merge_request_columns = {str(row[1]) for row in connection.execute("PRAGMA table_info(app_merge_requests)").fetchall()}
+                if "keep_member_id" not in merge_request_columns:
+                    connection.execute("ALTER TABLE app_merge_requests ADD COLUMN keep_member_id TEXT")
 
                 connection.execute("CREATE INDEX IF NOT EXISTS idx_app_users_player_id ON app_users(player_id)")
                 _seed_role_catalog(connection)
@@ -3356,9 +3412,6 @@ def file_sha256_from_bytes(content: bytes) -> str:
 def _string_value(value: Any) -> str:
     return str(value or "").strip()
 
-def normalize_name(name: str) -> str:
-    return (name or "").strip().lower()
-
 def _extract_field(payload: dict[str, Any], *keys: str) -> str:
     containers = [payload]
     nested = payload.get("scorecard")
@@ -4363,10 +4416,26 @@ def _public_live_page_payload(store: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+_SIGNIN_STATS_CACHE: tuple[str, dict[str, Any]] | None = None
+
+
 @app.get("/api/public/signin-stats")
 def public_signin_stats() -> dict[str, Any]:
-    logger.debug("Public signin stats requested.")
+    # Leaders only change when the store changes, so they are cached against the store's signature.
+    global _SIGNIN_STATS_CACHE
     store = load_store()
+    signature = str(store.get("_cache_signature") or "")
+    cached = _SIGNIN_STATS_CACHE
+    if signature and cached is not None and cached[0] == signature:
+        return deepcopy(cached[1])
+    stats = _build_public_signin_stats(store)
+    if signature:
+        _SIGNIN_STATS_CACHE = (signature, deepcopy(stats))
+    return stats
+
+
+def _build_public_signin_stats(store: dict[str, Any]) -> dict[str, Any]:
+    logger.debug("Public signin stats requested.")
     members = list(store.get("members", []))
     fixtures = list(store.get("fixtures", []))
     archives = canonical_archive_uploads(store.get("archive_uploads", []))
@@ -6570,6 +6639,7 @@ def _admin_center_html(request: Request) -> HTMLResponse:
                 <button class="secondary-button" type="button" role="tab" aria-selected="false" aria-controls="adminSectionVisitors" data-admin-section="visitors">Unique Visitors</button>
                 <button class="secondary-button" type="button" role="tab" aria-selected="false" aria-controls="adminSectionScorecards" data-admin-section="scorecards">Scorecard Tools</button>
                 <button class="secondary-button" type="button" role="tab" aria-selected="false" aria-controls="adminSectionArchives" data-admin-section="archives">Archives</button>
+                <button class="secondary-button" type="button" role="tab" aria-selected="false" aria-controls="adminSectionNameMatches" data-admin-section="name-matches">Name Matches</button>
                 <button class="secondary-button" type="button" role="tab" aria-selected="false" aria-controls="adminSectionAudit" data-admin-section="audit">Audit Log</button>
                 <button class="secondary-button" type="button" role="tab" aria-selected="false" aria-controls="adminSectionFixtures" data-admin-section="fixtures">Fixtures</button>
               </nav>
@@ -6638,6 +6708,38 @@ def _admin_center_html(request: Request) -> HTMLResponse:
                 </div>
                 <div id="adminReviewQueue" class="detail-stack">{review_queue_html}</div>
               </div>
+              <div class="stack-card">
+                <div class="panel-head compact-head">
+                  <div>
+                    <p class="section-kicker">Players</p>
+                    <h2>Name claims</h2>
+                  </div>
+                </div>
+                <p>A player asked to add a name from a scorecard to their profile. Approving only adds it as an alias. No player records are merged or deleted.</p>
+                <div id="adminNameClaims" class="detail-stack"><p class="empty-state">Loading name claims...</p></div>
+              </div>
+              </section>
+              <section class="admin-section" id="adminSectionNameMatches" data-admin-section-panel="name-matches" role="tabpanel" hidden>
+              <div class="stack-card">
+                <div class="panel-head compact-head">
+                  <div>
+                    <p class="section-kicker">Players</p>
+                    <h2>Name matches</h2>
+                  </div>
+                </div>
+                <p>Read-only list of member records with the same or similar names, with their clubs. Nothing is merged, deleted or changed here except by the Merge buttons. Club admins see groups where all players belong to their clubs; superadmins see all groups.</p>
+                <div id="adminNameMatches" class="detail-stack"><p class="empty-state">Loading name matches...</p></div>
+              </div>
+              <div class="stack-card">
+                <div class="panel-head compact-head">
+                  <div>
+                    <p class="section-kicker">Players</p>
+                    <h2>Merge requests</h2>
+                  </div>
+                </div>
+                <p>Players who asked for two of their records to be merged. Approve merges the older record into the other one (undoable by a superadmin). Reject records the decision only.</p>
+                <div id="adminMergeRequests" class="detail-stack"><p class="empty-state">Loading merge requests...</p></div>
+              </div>
               </section>
               <section class="admin-section" id="adminSectionAudit" data-admin-section-panel="audit" role="tabpanel" hidden>
               <div class="stack-card">
@@ -6685,7 +6787,7 @@ def _admin_center_html(request: Request) -> HTMLResponse:
         <script src="/assets/multipage.js?v=20261025a"></script>
         <script src="/assets/scorecard_view.js?v=20261109a"></script>
         <script src="/assets/scorecard.js?v=20261109c"></script>
-        <script src="/assets/admin_center.js?v=20261103c"></script>
+        <script src="/assets/admin_center.js?v=20261110e"></script>
         <script src="/assets/admin_reread.js?v=20261024a"></script>
       </body>
     </html>
@@ -9108,6 +9210,11 @@ class NameClaimRequest(BaseModel):
     name: str
 
 
+class NameClaimDecisionRequest(BaseModel):
+    decision: str
+    note: str = ""
+
+
 def _claimed_member_ids() -> set[str]:
     try:
         with _auth_connection() as connection:
@@ -9225,23 +9332,609 @@ def player_claim_name(request: NameClaimRequest, x_auth_token: str | None = Head
     others = [item for item in store.get("members", []) or [] if item is not member and not any(item is dup for dup in duplicates)]
     if _name_fits_other_players({"members": others}, member, name):
         raise HTTPException(status_code=409, detail=f"'{name}' could also be another player. Ask a club admin to link it to the right player.")
-    aliases = [alias for alias in member.get("aliases") or [] if alias]
-    merged = []
-    for item in duplicates:
-        # an unclaimed player record made from a scorecard with that name: fold it into this player
-        for alias in [item.get("name"), item.get("full_name"), *(item.get("aliases") or [])]:
-            if alias and normalize_name(str(alias)) not in {normalize_name(a) for a in aliases}:
-                aliases.append(str(alias))
-        _add_member_clubs_by_name(store, member, [link.get("club_name") for link in item.get("club_memberships", []) or [] if isinstance(link, dict)])
-        merged.append(str(item.get("name") or name))
-    if normalize_name(name) not in {normalize_name(a) for a in aliases}:
-        aliases.append(name)
-    member["aliases"] = aliases
-    if duplicates:
-        store["members"] = [item for item in store.get("members", []) or [] if not any(item is dup for dup in duplicates)]
+    # Phase 0: no member merge or alias write here. A club admin decides via /api/admin/name-claims.
+    existing = _pending_name_claim(int(user_row["id"]), str(member.get("id") or ""), name)
+    if existing:
+        return {"message": f"Request for '{name}' is already waiting for a club admin to confirm.", "claim_id": existing, "status": "pending"}
+    with _auth_connection() as connection:
+        cursor = connection.execute(
+            """
+            INSERT INTO app_name_claims (user_id, member_id, claimed_name, claimed_name_norm, status, created_at)
+            VALUES (?, ?, ?, ?, 'pending', ?)
+            """,
+            (int(user_row["id"]), str(member.get("id") or ""), name, normalize_name(name), now_iso()),
+        )
+        claim_id = int(cursor.lastrowid)
+    _audit_event("player.claim_requested", "member", str(member.get("id") or ""), actor=user_row, club_id="", club_name="", details={"name": name, "claim_id": claim_id}, source="api")
+    return {"message": f"Request sent. A club admin will confirm that '{name}' is you.", "claim_id": claim_id, "status": "pending"}
+
+
+
+def _pending_name_claim(user_id: int, member_id: str, name: str) -> int | None:
+    with _auth_connection() as connection:
+        row = connection.execute(
+            "SELECT id FROM app_name_claims WHERE user_id = ? AND member_id = ? AND claimed_name_norm = ? AND status = 'pending'",
+            (user_id, member_id, normalize_name(name)),
+        ).fetchone()
+    return int(row["id"]) if row else None
+
+
+def _reviewer_can_decide(store: dict[str, Any], user_row: sqlite3.Row, current_club_id: str, member: dict[str, Any]) -> bool:
+    """Superadmin decides any claim; other reviewers only for players who belong to one of their clubs."""
+    if "superadmin" in _user_role_names(user_row, current_club_id):
+        return True
+    reviewer_ids = set(_user_club_ids(store, user_row, current_club_id))
+    reviewer_names = [str(club.get("name") or "") for club in store.get("clubs", []) or [] if str(club.get("id") or "") in reviewer_ids]
+    return any(
+        _same_team_name(str(link.get("club_name") or ""), club_name)
+        for link in member.get("club_memberships", []) or [] if isinstance(link, dict)
+        for club_name in reviewer_names
+    )
+
+
+def _member_by_id(store: dict[str, Any], member_id: str) -> dict[str, Any] | None:
+    return next((item for item in store.get("members", []) or [] if str(item.get("id") or "") == member_id), None)
+
+
+@app.get("/api/admin/name-claims")
+def admin_name_claims(x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
+    user_row, current_club_id = _require_permission(x_auth_token, "manage_players")
+    store = load_store()
+    with _auth_connection() as connection:
+        rows = connection.execute(
+            """
+            SELECT c.id, c.member_id, c.claimed_name, c.created_at, u.display_name AS requester
+            FROM app_name_claims c LEFT JOIN app_users u ON u.id = c.user_id
+            WHERE c.status = 'pending' ORDER BY c.created_at
+            """
+        ).fetchall()
+    claims: list[dict[str, Any]] = []
+    for row in rows:
+        member = _member_by_id(store, str(row["member_id"]))
+        if not member or not _reviewer_can_decide(store, user_row, current_club_id, member):
+            continue
+        claims.append({
+            "id": int(row["id"]),
+            "member_id": str(row["member_id"]),
+            "member_name": str(member.get("name") or ""),
+            "claimed_name": str(row["claimed_name"] or ""),
+            "requested_by": str(row["requester"] or ""),
+            "created_at": str(row["created_at"] or ""),
+        })
+    return {"claims": claims}
+
+
+class MemberMergeRequest(BaseModel):
+    first_member_id: str
+    second_member_id: str
+
+
+def _store_version_now() -> int:
+    with _auth_connection() as connection:
+        try:
+            row = connection.execute("SELECT version FROM app_store_version WHERE id = 1").fetchone()
+        except sqlite3.OperationalError:
+            return 0
+    return int(row["version"]) if row else 0
+
+
+def _relink_member_auth(kept_id: str, removed_id: str) -> str:
+    """Move login and follow links from the removed member to the kept one. Returns what undo needs to reverse it."""
+    with _auth_connection() as connection:
+        user_ids = [int(row["id"]) for row in connection.execute("SELECT id FROM app_users WHERE member_id = ?", (removed_id,)).fetchall()]
+        removed_followers = [int(row["user_id"]) for row in connection.execute("SELECT user_id FROM app_followed_players WHERE member_id = ?", (removed_id,)).fetchall()]
+        kept_followers = [int(row["user_id"]) for row in connection.execute("SELECT user_id FROM app_followed_players WHERE member_id = ?", (kept_id,)).fetchall()]
+        connection.execute("UPDATE app_users SET member_id = ? WHERE member_id = ?", (kept_id, removed_id))
+        connection.execute("UPDATE OR IGNORE app_followed_players SET member_id = ? WHERE member_id = ?", (kept_id, removed_id))
+        connection.execute("DELETE FROM app_followed_players WHERE member_id = ?", (removed_id,))
+    return json.dumps({"user_ids": user_ids, "removed_followers": removed_followers, "kept_followers": kept_followers})
+
+
+def _restore_member_auth(kept_id: str, removed_id: str, snapshot: dict[str, Any]) -> None:
+    with _auth_connection() as connection:
+        for user_id in snapshot.get("user_ids", []):
+            connection.execute("UPDATE app_users SET member_id = ? WHERE id = ? AND member_id = ?", (removed_id, user_id, kept_id))
+        for user_id in snapshot.get("removed_followers", []):
+            connection.execute("INSERT OR IGNORE INTO app_followed_players (user_id, member_id) VALUES (?, ?)", (user_id, removed_id))
+        added_to_kept = set(snapshot.get("removed_followers", [])) - set(snapshot.get("kept_followers", []))
+        for user_id in added_to_kept:
+            connection.execute("DELETE FROM app_followed_players WHERE user_id = ? AND member_id = ?", (user_id, kept_id))
+
+
+@app.post("/api/admin/name-matches/merge")
+def admin_merge_members(request: MemberMergeRequest, x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
+    # Superadmin merges any two players; a club admin only players from their own clubs. The older record survives.
+    user_row, current_club_id = _require_permission(x_auth_token, "manage_players")
+    store = load_store()
+    first_id, second_id = str(request.first_member_id or "").strip(), str(request.second_member_id or "").strip()
+    for member_id in (first_id, second_id):
+        member = _member_by_id(store, member_id)
+        if not member:
+            raise HTTPException(status_code=404, detail="Player not found.")
+        if not _reviewer_can_decide(store, user_row, current_club_id, member):
+            raise HTTPException(status_code=403, detail="You can only merge players from your own clubs.")
+    result = _perform_member_merge(store, first_id, second_id, user_row)
+    return {"message": f"'{result['removed_name']}' is merged into '{result['kept_name']}'. A superadmin can undo this.", **result}
+
+
+def _perform_member_merge(store: dict[str, Any], first_id: str, second_id: str, user_row: sqlite3.Row, keep_id: str | None = None) -> dict[str, Any]:
+    """Merge two members, relink their logins, save the store and record the merge so a superadmin can undo it."""
+    store_before = json.dumps(store, default=str)
+    try:
+        summary = merge_members_in_store(store, first_id, second_id, keep_id)
+    except MergeError as error:
+        raise HTTPException(status_code=400, detail=str(error))
+    auth_snapshot = _relink_member_auth(summary["kept_member_id"], summary["removed_member_id"])
     save_store(store)
-    _audit_event("player.claim_name", "member", str(member.get("id") or ""), actor=user_row, club_id="", club_name="", details={"name": name, "merged": merged}, source="api")
-    return {"message": f"'{name}' is now one of your names. Scorecards with it count in your stats.", "aliases": aliases, "merged": merged}
+    version_after = _store_version_now()
+    with _auth_connection() as connection:
+        cursor = connection.execute(
+            """
+            INSERT INTO app_member_merges (kept_member_id, removed_member_id, removed_name, merged_by_user_id, created_at,
+                                           store_version_after, store_snapshot, auth_snapshot)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (summary["kept_member_id"], summary["removed_member_id"], summary["removed_name"], int(user_row["id"]), now_iso(), version_after, store_before, auth_snapshot),
+        )
+        merge_id = int(cursor.lastrowid)
+    _audit_event("member.merge", "member", summary["kept_member_id"], actor=user_row, club_id="", club_name="", details={**summary, "merge_id": merge_id}, source="api")
+    return {"merge_id": merge_id, **summary}
+
+
+@app.post("/api/admin/member-merges/{merge_id}/undo")
+def admin_undo_member_merge(merge_id: int, x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
+    user_row, _ = _require_superadmin(x_auth_token)
+    with _auth_connection() as connection:
+        row = connection.execute("SELECT * FROM app_member_merges WHERE id = ?", (merge_id,)).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Merge not found.")
+    if row["undone_at"]:
+        raise HTTPException(status_code=409, detail="This merge was already undone.")
+    if _store_version_now() != int(row["store_version_after"]):
+        raise HTTPException(status_code=409, detail="Player data changed after this merge, so it cannot be undone automatically.")
+    save_store(json.loads(row["store_snapshot"]))
+    _restore_member_auth(str(row["kept_member_id"]), str(row["removed_member_id"]), json.loads(row["auth_snapshot"]))
+    with _auth_connection() as connection:
+        connection.execute(
+            "UPDATE app_member_merges SET undone_at = ?, undone_by_user_id = ? WHERE id = ?",
+            (now_iso(), int(user_row["id"]), merge_id),
+        )
+    _audit_event("member.merge_undo", "member", str(row["removed_member_id"]), actor=user_row, club_id="", club_name="", details={"merge_id": merge_id, "kept_member_id": str(row["kept_member_id"])}, source="api")
+    return {"message": f"Merge undone. '{row['removed_name']}' is restored as a separate player.", "merge_id": merge_id}
+
+
+NAME_MATCH_SIMILARITY = 0.85
+NAME_MATCH_MAX_GROUPS = 200
+
+
+@app.get("/api/admin/name-matches")
+def admin_name_matches(x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
+    # Read-only: lists member records with the same or similar names. Nothing is merged or written.
+    user_row, current_club_id = _require_permission(x_auth_token, "manage_players")
+    store = load_store()
+    club_names = {str(club.get("id") or ""): str(club.get("name") or "") for club in store.get("clubs", []) or [] if isinstance(club, dict)}
+    by_name: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for member in store.get("members", []) or []:
+        if not isinstance(member, dict) or not str(member.get("name") or "").strip():
+            continue
+        by_name[normalize_name(member.get("name"))].append(member)
+
+    candidates: list[tuple[str, float, list[dict[str, Any]]]] = []
+    for norm, items in by_name.items():
+        if len(items) > 1:
+            candidates.append(("exact", 1.0, items))
+    # Compare every name a player is known by (name, full name, aliases), so "Bim B" finds "Bim" once it is an alias.
+    members_with_names = [item for item in store.get("members", []) or [] if isinstance(item, dict) and str(item.get("name") or "").strip()]
+    prefixes: dict[str, list[tuple[str, int]]] = defaultdict(list)
+    for index, item in enumerate(members_with_names):
+        for norm in _identity_names(item):
+            prefixes[norm[:2]].append((norm, index))
+    paired: set[tuple[int, int]] = set()
+    for entries in prefixes.values():
+        for position, (first, i) in enumerate(entries):
+            for second, j in entries[position + 1:]:
+                pair = (min(i, j), max(i, j))
+                if i == j or pair in paired:
+                    continue
+                if normalize_name(members_with_names[i].get("name")) == normalize_name(members_with_names[j].get("name")):
+                    continue  # already listed as an exact match
+                if _names_look_same(first, second):
+                    paired.add(pair)
+                    score = SequenceMatcher(None, first, second).ratio()
+                    candidates.append(("similar", round(score, 2), [members_with_names[i], members_with_names[j]]))
+
+    groups: list[dict[str, Any]] = []
+    for match_type, score, items in sorted(candidates, key=lambda entry: (-entry[1], entry[0])):
+        # Show a group only when the reviewer may see every record in it, so no hidden player name leaks.
+        if not all(_reviewer_can_decide(store, user_row, current_club_id, member) for member in items):
+            continue
+        groups.append({
+            "match_type": match_type,
+            "score": score,
+            "members": [
+                {
+                    "id": str(member.get("id") or ""),
+                    "player_id": str(member.get("player_id") or ""),
+                    "name": str(member.get("name") or ""),
+                    "clubs": [
+                        club_names.get(str(link.get("club_id") or ""), str(link.get("club_id") or ""))
+                        for link in member.get("club_memberships") or []
+                        if isinstance(link, dict)
+                    ],
+                }
+                for member in items
+            ],
+        })
+        if len(groups) >= NAME_MATCH_MAX_GROUPS:
+            break
+    return {"groups": groups, "similarity_threshold": NAME_MATCH_SIMILARITY}
+
+
+@app.post("/api/admin/name-claims/{claim_id}/decision")
+def admin_decide_name_claim(claim_id: int, request: NameClaimDecisionRequest, x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
+    user_row, current_club_id = _require_permission(x_auth_token, "manage_players")
+    decision = str(request.decision or "").strip().lower()
+    if decision not in {"approve", "reject"}:
+        raise HTTPException(status_code=400, detail="Decision must be approve or reject.")
+    with _auth_connection() as connection:
+        row = connection.execute("SELECT * FROM app_name_claims WHERE id = ?", (claim_id,)).fetchone()
+    if not row or row["status"] != "pending":
+        raise HTTPException(status_code=404, detail="This request was not found or was already decided.")
+    store = load_store()
+    member_id = str(row["member_id"])
+    member = _member_by_id(store, member_id)
+    if not member or not _reviewer_can_decide(store, user_row, current_club_id, member):
+        raise HTTPException(status_code=403, detail="You can only decide requests for players in your clubs.")
+    claimed_name = str(row["claimed_name"])
+    status = "rejected"
+    if decision == "approve":
+        claimed_norm = normalize_name(claimed_name)
+        claimed_elsewhere = _claimed_member_ids() - {member_id}
+        if any(
+            str(item.get("id") or "") in claimed_elsewhere and normalize_name(str(item.get("name") or "")) == claimed_norm
+            for item in store.get("members", []) or []
+        ):
+            raise HTTPException(status_code=409, detail=f"'{claimed_name}' now belongs to another registered player. Reject this request.")
+        aliases = [alias for alias in member.get("aliases") or [] if alias]
+        if claimed_norm not in {normalize_name(alias) for alias in aliases}:
+            aliases.append(claimed_name)
+            member["aliases"] = aliases
+            save_store(store)
+        status = "approved"
+    with _auth_connection() as connection:
+        connection.execute(
+            "UPDATE app_name_claims SET status = ?, decided_at = ?, decided_by_user_id = ?, decision_note = ? WHERE id = ?",
+            (status, now_iso(), int(user_row["id"]), str(request.note or "").strip()[:500], claim_id),
+        )
+    _audit_event("player.claim_" + status, "member", member_id, actor=user_row, club_id="", club_name="", details={"name": claimed_name, "claim_id": claim_id}, source="api")
+    return {"status": status, "claim_id": claim_id}
+
+
+class MergeRequestCreate(BaseModel):
+    target_member_id: str
+    keep: str = "older"
+
+
+class MergeRequestDecision(BaseModel):
+    decision: str
+    note: str = ""
+
+
+def _names_look_same(first: str, second: str) -> bool:
+    first_norm, second_norm = normalize_name(first), normalize_name(second)
+    if not first_norm or not second_norm:
+        return False
+    if first_norm == second_norm or SequenceMatcher(None, first_norm, second_norm).ratio() >= NAME_MATCH_SIMILARITY:
+        return True
+    # "Bim" vs "Bim B" and "Amit" vs "Amit S": a name plus a one- or two-letter initial. Short names score too low for the ratio.
+    short, long_ = sorted((first_norm, second_norm), key=len)
+    extra = long_[len(short):]
+    return long_.startswith(short) and extra.startswith(" ") and len(extra.strip()) <= 2
+
+
+def _identity_names(member: dict[str, Any]) -> list[str]:
+    """Every name a player is known by: main name, full name and aliases, normalized and without duplicates."""
+    names: list[str] = []
+    for value in [member.get("name"), member.get("full_name"), *(member.get("aliases") or [])]:
+        norm = normalize_name(str(value or ""))
+        if norm and norm not in names:
+            names.append(norm)
+    return names
+
+
+def _members_look_same(first: dict[str, Any], second: dict[str, Any]) -> bool:
+    return any(_names_look_same(a, b) for a in _identity_names(first) for b in _identity_names(second))
+
+
+PLAYER_MERGE_SUGGEST_MIN_SCORE = 0.5
+
+
+def _members_match_score(first: dict[str, Any], second: dict[str, Any]) -> float:
+    """Best name similarity (0 to 1) between any identity name of each member."""
+    return max(
+        (SequenceMatcher(None, a, b).ratio() for a in _identity_names(first) for b in _identity_names(second)),
+        default=0.0,
+    )
+
+
+def _pending_merge_request(member_a: str, member_b: str) -> int | None:
+    with _auth_connection() as connection:
+        row = connection.execute(
+            """
+            SELECT id FROM app_merge_requests WHERE status = 'pending' AND (
+              (requester_member_id = ? AND target_member_id = ?) OR (requester_member_id = ? AND target_member_id = ?))
+            """,
+            (member_a, member_b, member_b, member_a),
+        ).fetchone()
+    return int(row["id"]) if row else None
+
+
+def _dismissed_suggestion_ids(user_id: int) -> set[str]:
+    with _auth_connection() as connection:
+        rows = connection.execute(
+            "SELECT target_member_id FROM app_merge_suggestion_dismissals WHERE user_id = ?",
+            (user_id,),
+        ).fetchall()
+    return {str(row["target_member_id"]) for row in rows}
+
+
+def _member_club_names(store: dict[str, Any], member: dict[str, Any]) -> list[str]:
+    club_names = {str(club.get("id") or ""): str(club.get("name") or "") for club in store.get("clubs", []) or [] if isinstance(club, dict)}
+    names: list[str] = []
+    for link in member.get("club_memberships") or []:
+        if not isinstance(link, dict):
+            continue
+        name = str(link.get("club_name") or club_names.get(str(link.get("club_id") or ""), "")).strip()
+        if name and name not in names:
+            names.append(name)
+    return names
+
+
+def _member_career_summary(store: dict[str, Any], member_id: str) -> dict[str, Any]:
+    row = next((item for item in store.get("member_summary_stats", []) or [] if str(item.get("member_id") or "") == member_id), {})
+    return {
+        "matches": int(row.get("matches") or 0),
+        "runs": int(row.get("runs") or 0),
+        "wickets": int(row.get("wickets") or 0),
+        "highest_score": row.get("highest_score") or 0,
+        "batting_average": row.get("batting_average") or 0,
+    }
+
+
+def _member_recent_matches(store: dict[str, Any], member: dict[str, Any], limit: int = 10) -> list[dict[str, Any]]:
+    """Recent batting rows for a player across club archives, matched by any of their known names."""
+    names = set(_identity_names(member))
+    club_names = {str(club.get("id") or ""): str(club.get("name") or "") for club in store.get("clubs", []) or [] if isinstance(club, dict)}
+    rows: list[dict[str, Any]] = []
+    for archive in canonical_archive_uploads(store.get("archive_uploads", [])):
+        if str(archive.get("status") or "").lower().startswith("pending"):
+            continue
+        performances = [item for item in archive.get("suggested_performances", []) or [] if isinstance(item, dict)]
+        if not performances:
+            try:
+                template = json.loads(str(archive.get("review_template_json") or "{}"))
+            except Exception:
+                template = {}
+            for inning in template.get("innings", []) or []:
+                for batting in inning.get("batting", []) or []:
+                    performances.append({
+                        "player_name": (batting.get("player") or {}).get("name") or batting.get("player_name") or "",
+                        "runs": batting.get("runs") or 0,
+                        "balls": batting.get("balls") or 0,
+                    })
+        match = archive.get("match") if isinstance(archive.get("match"), dict) else {}
+        teams = match.get("teams") if isinstance(match.get("teams"), dict) else {}
+        for performance in performances:
+            if normalize_name(str(performance.get("player_name") or "")) not in names:
+                continue
+            rows.append({
+                "date": str(match.get("date") or archive.get("archive_year") or ""),
+                "club": club_names.get(str(archive.get("club_id") or ""), ""),
+                "opponent": str(teams.get("team_2") or ""),
+                "runs": int(performance.get("runs") or 0),
+                "balls": int(performance.get("balls") or 0),
+                "wickets": int(performance.get("wickets") or 0),
+                "catches": int(performance.get("catches") or 0),
+            })
+    rows.sort(key=lambda row: row["date"], reverse=True)
+    return rows[:limit]
+
+
+@app.get("/api/player/merge-candidates/{target_member_id}/details")
+def player_merge_candidate_details(target_member_id: str, x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
+    """Full profile of one suggested player, limited to records that are valid suggestions for the caller."""
+    user_row, _ = _auth_user_from_token(x_auth_token)
+    store = load_store()
+    member = _member_for_user(store, user_row)
+    if not member:
+        raise HTTPException(status_code=400, detail="Your login is not linked to a player record yet.")
+    target = _member_by_id(store, target_member_id)
+    if not target or str(target.get("id")) == str(member.get("id")) or _members_match_score(member, target) <= PLAYER_MERGE_SUGGEST_MIN_SCORE:
+        raise HTTPException(status_code=404, detail="Player not found.")
+    return {
+        "id": str(target.get("id") or ""),
+        "player_id": str(target.get("player_id") or ""),
+        "name": str(target.get("name") or ""),
+        "full_name": str(target.get("full_name") or target.get("name") or ""),
+        "aliases": [str(alias) for alias in target.get("aliases") or [] if str(alias or "").strip()],
+        "clubs": _member_club_names(store, target),
+        "career": _member_career_summary(store, str(target.get("id") or "")),
+        "matches": _member_recent_matches(store, target),
+    }
+
+
+@app.post("/api/player/merge-suggestions/{target_member_id}/dismiss")
+def dismiss_player_merge_suggestion(target_member_id: str, x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
+    """Remember that this player rejected a similar-name suggestion so it stops showing."""
+    user_row, _ = _auth_user_from_token(x_auth_token)
+    store = load_store()
+    member = _member_for_user(store, user_row)
+    if not member:
+        raise HTTPException(status_code=400, detail="Your login is not linked to a player record yet.")
+    target = _member_by_id(store, target_member_id)
+    if not target or str(target.get("id")) == str(member.get("id")):
+        raise HTTPException(status_code=404, detail="Player not found.")
+    with _auth_connection() as connection:
+        connection.execute(
+            "INSERT OR IGNORE INTO app_merge_suggestion_dismissals (user_id, target_member_id, created_at) VALUES (?, ?, ?)",
+            (int(user_row["id"]), target_member_id, now_iso()),
+        )
+    return {"message": "Suggestion dismissed. It will not show again.", "target_member_id": target_member_id}
+
+
+@app.get("/api/player/merge-candidates")
+def player_merge_candidates(x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
+    """Other player records whose name is more than 50% similar, plus this player's own merge requests."""
+    user_row, _ = _auth_user_from_token(x_auth_token)
+    store = load_store()
+    member = _member_for_user(store, user_row)
+    if not member:
+        return {"candidates": [], "requests": []}
+    own_id = str(member.get("id") or "")
+    dismissed = _dismissed_suggestion_ids(int(user_row["id"]))
+    scored: list[tuple[float, dict[str, Any]]] = []
+    for item in store.get("members", []) or []:
+        item_id = str(item.get("id") or "")
+        if item_id == own_id or item_id in dismissed:
+            continue
+        score = _members_match_score(member, item)
+        if score <= PLAYER_MERGE_SUGGEST_MIN_SCORE:
+            continue
+        scored.append((score, item))
+    scored.sort(key=lambda pair: pair[0], reverse=True)
+    candidates: list[dict[str, Any]] = []
+    for score, item in scored[:20]:
+        item_id = str(item.get("id") or "")
+        candidates.append({
+            "id": item_id,
+            "player_id": str(item.get("player_id") or ""),
+            "name": str(item.get("name") or ""),
+            "full_name": str(item.get("full_name") or item.get("name") or ""),
+            "clubs": _member_club_names(store, item),
+            "career": _member_career_summary(store, item_id),
+            "match_percent": round(score * 100),
+            "older_name": str(member.get("name") or "") if choose_survivor(store, own_id, item_id)[0] == own_id else str(item.get("name") or ""),
+            "newer_name": str(item.get("name") or "") if choose_survivor(store, own_id, item_id)[0] == own_id else str(member.get("name") or ""),
+            "pending_request_id": _pending_merge_request(own_id, item_id),
+        })
+    with _auth_connection() as connection:
+        rows = connection.execute(
+            "SELECT id, target_member_id, status, created_at, decision_note FROM app_merge_requests WHERE requester_member_id = ? ORDER BY id DESC LIMIT 10",
+            (own_id,),
+        ).fetchall()
+    requests = []
+    for row in rows:
+        target = _member_by_id(store, str(row["target_member_id"]))
+        requests.append({
+            "id": int(row["id"]),
+            "target_name": str(target.get("name") or "") if target else "Removed player",
+            "status": str(row["status"]),
+            "created_at": str(row["created_at"] or ""),
+            "decision_note": str(row["decision_note"] or ""),
+        })
+    return {"candidates": candidates, "requests": requests}
+
+
+@app.post("/api/player/merge-requests")
+def player_request_merge(request: MergeRequestCreate, x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
+    """A player asks for two records of the same person to be merged. Only a club admin or superadmin decides."""
+    user_row, _ = _auth_user_from_token(x_auth_token)
+    store = load_store()
+    member = _member_for_user(store, user_row)
+    if not member:
+        raise HTTPException(status_code=400, detail="This signed-in account is not linked to a player profile.")
+    own_id = str(member.get("id") or "")
+    target_id = str(request.target_member_id or "").strip()
+    target = _member_by_id(store, target_id)
+    if not target or target_id == own_id:
+        raise HTTPException(status_code=400, detail="Choose another player to merge with.")
+    if _members_match_score(member, target) <= PLAYER_MERGE_SUGGEST_MIN_SCORE:
+        raise HTTPException(status_code=400, detail="Only players with the same or a similar name can be merged.")
+    keep = str(request.keep or "older").strip().lower()
+    if keep not in {"older", "newer"}:
+        raise HTTPException(status_code=400, detail="Choose whether to keep the older or the newer record.")
+    older_id, _ = choose_survivor(store, own_id, target_id)
+    keep_member_id = (older_id if keep == "older" else (target_id if older_id == own_id else own_id))
+    existing = _pending_merge_request(own_id, target_id)
+    if existing:
+        return {"message": "A merge request for this player is already waiting for a club admin.", "request_id": existing, "status": "pending"}
+    with _auth_connection() as connection:
+        cursor = connection.execute(
+            """
+            INSERT INTO app_merge_requests (requester_user_id, requester_member_id, target_member_id, status, created_at, keep_member_id)
+            VALUES (?, ?, ?, 'pending', ?, ?)
+            """,
+            (int(user_row["id"]), own_id, target_id, now_iso(), keep_member_id),
+        )
+        request_id = int(cursor.lastrowid)
+    _audit_event("player.merge_requested", "member", own_id, actor=user_row, club_id="", club_name="", details={"target_member_id": target_id, "request_id": request_id, "keep_member_id": keep_member_id}, source="api")
+    kept_name = str((_member_by_id(store, keep_member_id) or {}).get("name") or "that record")
+    return {"message": f"Request sent. A club admin will review the merge and keep '{kept_name}'.", "request_id": request_id, "status": "pending"}
+
+
+@app.get("/api/admin/merge-requests")
+def admin_merge_requests(x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
+    user_row, current_club_id = _require_permission(x_auth_token, "manage_players")
+    store = load_store()
+    with _auth_connection() as connection:
+        rows = connection.execute(
+            """
+            SELECT r.id, r.requester_member_id, r.target_member_id, r.created_at, u.display_name AS requester
+            FROM app_merge_requests r LEFT JOIN app_users u ON u.id = r.requester_user_id
+            WHERE r.status = 'pending' ORDER BY r.created_at
+            """
+        ).fetchall()
+    requests: list[dict[str, Any]] = []
+    for row in rows:
+        first = _member_by_id(store, str(row["requester_member_id"]))
+        second = _member_by_id(store, str(row["target_member_id"]))
+        if not first or not second:
+            continue
+        if not (_reviewer_can_decide(store, user_row, current_club_id, first) and _reviewer_can_decide(store, user_row, current_club_id, second)):
+            continue
+        requests.append({
+            "id": int(row["id"]),
+            "requester_name": str(first.get("name") or ""),
+            "requester_player_id": str(first.get("player_id") or ""),
+            "target_member_id": str(second.get("id") or ""),
+            "target_name": str(second.get("name") or ""),
+            "target_player_id": str(second.get("player_id") or ""),
+            "requested_by": str(row["requester"] or ""),
+            "created_at": str(row["created_at"] or ""),
+        })
+    return {"requests": requests}
+
+
+@app.post("/api/admin/merge-requests/{request_id}/decision")
+def admin_decide_merge_request(request_id: int, request: MergeRequestDecision, x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
+    user_row, current_club_id = _require_permission(x_auth_token, "manage_players")
+    decision = str(request.decision or "").strip().lower()
+    if decision not in {"approve", "reject"}:
+        raise HTTPException(status_code=400, detail="Decision must be approve or reject.")
+    with _auth_connection() as connection:
+        row = connection.execute("SELECT * FROM app_merge_requests WHERE id = ?", (request_id,)).fetchone()
+    if not row or row["status"] != "pending":
+        raise HTTPException(status_code=404, detail="This request was not found or was already decided.")
+    store = load_store()
+    requester_id, target_id = str(row["requester_member_id"]), str(row["target_member_id"])
+    members = [_member_by_id(store, requester_id), _member_by_id(store, target_id)]
+    if not all(members):
+        raise HTTPException(status_code=409, detail="One of these players no longer exists. Reject this request.")
+    if not all(_reviewer_can_decide(store, user_row, current_club_id, member) for member in members):
+        raise HTTPException(status_code=403, detail="You can only decide requests for players in your clubs.")
+    merge_id: int | None = None
+    status = "rejected"
+    if decision == "approve":
+        result = _perform_member_merge(store, requester_id, target_id, user_row, row["keep_member_id"])
+        merge_id = int(result["merge_id"])
+        status = "approved"
+    with _auth_connection() as connection:
+        connection.execute(
+            "UPDATE app_merge_requests SET status = ?, decided_at = ?, decided_by_user_id = ?, decision_note = ?, merge_id = ? WHERE id = ?",
+            (status, now_iso(), int(user_row["id"]), str(request.note or "").strip()[:500], merge_id, request_id),
+        )
+    _audit_event("player.merge_request_" + status, "member", requester_id, actor=user_row, club_id="", club_name="", details={"target_member_id": target_id, "request_id": request_id, "merge_id": merge_id}, source="api")
+    return {"status": status, "request_id": request_id, "merge_id": merge_id}
 
 
 @app.post("/api/player/profile")

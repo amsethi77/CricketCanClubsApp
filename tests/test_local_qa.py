@@ -1,4 +1,5 @@
 import base64
+import gc
 import html as html_lib
 import importlib
 import io
@@ -109,6 +110,8 @@ class LocalQATestCase(unittest.TestCase):
         except Exception:
             pass
         _clear_app_modules()
+        # Windows keeps the SQLite file locked until unreferenced connections are collected.
+        gc.collect()
         self._tempdir.cleanup()
         for key, value in self._original_env.items():
             if value is None:

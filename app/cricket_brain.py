@@ -1,6 +1,8 @@
+import copy
 import os
 import re
 import logging
+import time
 from functools import lru_cache
 from math import sqrt
 from typing import Any
@@ -156,7 +158,22 @@ def _ollama_base_url() -> str:
     return os.environ.get("OLLAMA_BASE_URL", "http://127.0.0.1:11434").rstrip("/")
 
 
+_LLM_STATUS_TTL_SECONDS = 30.0
+_LLM_STATUS_CACHE: tuple[float, dict[str, Any]] | None = None
+
+
 def get_llm_status() -> dict[str, Any]:
+    # Ollama is probed at most once per TTL: the probe costs ~0.7s and health/dashboard/AI routes call it per request.
+    global _LLM_STATUS_CACHE
+    now = time.monotonic()
+    if _LLM_STATUS_CACHE is not None and now - _LLM_STATUS_CACHE[0] < _LLM_STATUS_TTL_SECONDS:
+        return copy.deepcopy(_LLM_STATUS_CACHE[1])
+    status = _probe_llm_status()
+    _LLM_STATUS_CACHE = (now, status)
+    return copy.deepcopy(status)
+
+
+def _probe_llm_status() -> dict[str, Any]:
     base_url = _ollama_base_url()
     configured_model = os.environ.get("OLLAMA_MODEL")
     try:

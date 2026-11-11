@@ -382,3 +382,148 @@
       : `<div class="home-empty">No published scorecards for your club yet. <a href="/scorecards/upload">Upload a scorecard photo</a></div>`;
   })();
 })();
+
+// Club page: suggest merging a player record whose name is over 50% similar to the signed-in player's own.
+// The request only asks; a club admin approves it in Admin Center > Name matches.
+(() => {
+  if (document.body.dataset.dashboardWidget !== "overview") return;
+  const box = document.getElementById("clubMergeCandidates");
+  if (!box) return;
+  const list = box.querySelector("[data-merge-list]");
+  const requests = box.querySelector("[data-merge-requests]");
+  const msg = box.querySelector("[data-merge-msg]");
+  const token = () => {
+    try {
+      return localStorage.getItem("cricketClubAppAuthToken") || "";
+    } catch (error) {
+      return "";
+    }
+  };
+  const esc = (v) => String(v ?? "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
+  const statusText = { pending: "Waiting for a club admin", approved: "Approved and merged", rejected: "Not approved" };
+  async function load() {
+    if (!token()) return;
+    const response = await fetch("/api/player/merge-candidates", { headers: { "X-Auth-Token": token() } }).catch(() => null);
+    if (!response || !response.ok) return;
+    const data = await response.json();
+    const candidates = data.candidates || [];
+    const history = data.requests || [];
+    if (!candidates.length && !history.length) {
+      box.hidden = true;
+      return;
+    }
+    list.innerHTML = candidates.length
+      ? candidates
+          .map((item) => {
+            const career = item.career || {};
+            const clubs = (item.clubs || []).map((club) => `<span class="merge-chip">${esc(club)}</span>`).join("") || `<span class="merge-chip">No club</span>`;
+            const action = item.pending_request_id
+              ? `<p class="merge-status">${statusText.pending}</p>`
+              : `<button type="button" class="merge-btn merge-btn-primary" data-merge-ask data-keep="older">Merge into older record</button>
+                 <button type="button" class="merge-btn merge-btn-primary" data-merge-ask data-keep="newer">Merge into newer record</button>
+                 <button type="button" class="merge-btn" data-merge-reject>Not me</button>`;
+            return `<article class="merge-card" data-target-id="${esc(item.id)}">
+              <header class="merge-card-head">
+                <div>
+                  <h3 class="merge-name">${esc(item.full_name || item.name)}</h3>
+                  <p class="merge-meta">${esc(item.player_id)}</p>
+                </div>
+                <span class="merge-badge" title="Name similarity">${esc(item.match_percent)}% match</span>
+              </header>
+              <p class="merge-meta">Older record: <strong>${esc(item.older_name)}</strong> · Newer record: <strong>${esc(item.newer_name)}</strong></p>
+              <div class="merge-chips">${clubs}</div>
+              <dl class="merge-stats">
+                <div><dt>Matches</dt><dd>${esc(career.matches ?? 0)}</dd></div>
+                <div><dt>Runs</dt><dd>${esc(career.runs ?? 0)}</dd></div>
+                <div><dt>Wickets</dt><dd>${esc(career.wickets ?? 0)}</dd></div>
+                <div><dt>High score</dt><dd>${esc(career.highest_score ?? 0)}</dd></div>
+              </dl>
+              <div class="merge-actions">
+                ${action}
+                <button type="button" class="merge-btn merge-btn-link" data-merge-details aria-expanded="false">View details</button>
+              </div>
+              <div class="merge-details" data-merge-details-panel hidden></div>
+            </article>`;
+          })
+          .join("")
+      : "";
+    requests.innerHTML = history.length
+      ? `<p class="lede">Your requests</p>` +
+        history.map((item) => `<p class="lede">${esc(item.target_name)}: ${esc(statusText[item.status] || item.status)}${item.decision_note ? ` (${esc(item.decision_note)})` : ""}</p>`).join("")
+      : "";
+    box.hidden = false;
+  }
+  list.addEventListener("click", async (event) => {
+    const card = event.target.closest("[data-target-id]");
+    if (!card) return;
+    const targetId = card.dataset.targetId;
+    if (event.target.closest("[data-merge-details]")) {
+      await toggleDetails(card, targetId);
+      return;
+    }
+    if (event.target.closest("[data-merge-reject]")) {
+      msg.textContent = "Saving…";
+      const response = await fetch(`/api/player/merge-suggestions/${encodeURIComponent(targetId)}/dismiss`, {
+        method: "POST",
+        headers: { "X-Auth-Token": token() },
+      }).catch(() => null);
+      msg.textContent = response && response.ok ? "Thanks. We won't suggest this record again." : "Couldn't save that. Please try again.";
+      await load();
+      return;
+    }
+    if (!event.target.closest("[data-merge-ask]")) return;
+    const keep = event.target.closest("[data-merge-ask]").dataset.keep || "older";
+    msg.textContent = "Sending…";
+    const response = await fetch("/api/player/merge-requests", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Auth-Token": token() },
+      body: JSON.stringify({ target_member_id: targetId, keep }),
+    }).catch(() => null);
+    const data = response ? await response.json().catch(() => ({})) : {};
+    msg.textContent = response && response.ok ? data.message : data.detail || "Couldn't send the request. Please try again.";
+    await load();
+  });
+  async function toggleDetails(card, targetId) {
+    const toggle = card.querySelector("[data-merge-details]");
+    const panel = card.querySelector("[data-merge-details-panel]");
+    if (!panel.hidden) {
+      panel.hidden = true;
+      toggle.setAttribute("aria-expanded", "false");
+      return;
+    }
+    toggle.setAttribute("aria-expanded", "true");
+    panel.hidden = false;
+    if (panel.dataset.loaded) return;
+    panel.innerHTML = `<p class="merge-meta">Loading…</p>`;
+    const response = await fetch(`/api/player/merge-candidates/${encodeURIComponent(targetId)}/details`, {
+      headers: { "X-Auth-Token": token() },
+    }).catch(() => null);
+    if (!response || !response.ok) {
+      panel.innerHTML = `<p class="merge-meta">Couldn't load the details.</p>`;
+      return;
+    }
+    const data = await response.json();
+    const rows = (data.matches || []).length
+      ? data.matches
+          .map((row) => `<tr><td>${esc(row.date)}</td><td>${esc(row.club)}</td><td>${esc(row.opponent)}</td><td>${esc(row.runs)}(${esc(row.balls)})</td><td>${esc(row.wickets)}</td><td>${esc(row.catches)}</td></tr>`)
+          .join("")
+      : `<tr><td colspan="6" class="merge-meta">No match rows found for this player yet.</td></tr>`;
+    const aliases = (data.aliases || []).length ? `<p class="merge-meta">Also known as: ${esc(data.aliases.join(", "))}</p>` : "";
+    panel.innerHTML = `
+      <p class="merge-section-title">Full name</p>
+      <p class="merge-fullname">${esc(data.full_name || data.name)}</p>
+      ${aliases}
+      <p class="merge-section-title">Clubs</p>
+      <div class="merge-chips">${(data.clubs || []).map((club) => `<span class="merge-chip">${esc(club)}</span>`).join("") || `<span class="merge-chip">No club</span>`}</div>
+      <p class="merge-section-title">Recent matches</p>
+      <div class="merge-table-wrap">
+        <table class="merge-table">
+          <thead><tr><th>Date</th><th>Club</th><th>Opponent</th><th>R(B)</th><th>W</th><th>C</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>`;
+    panel.dataset.loaded = "1";
+  }
+  load();
+})();
+

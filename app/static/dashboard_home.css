@@ -385,3 +385,213 @@ body[data-dashboard-widget="overview"] .home-strip-row.is-grouped {
 .dash-hero-actions [hidden] {
   display: none !important;
 }
+
+/* Club page: similar-name player suggestions (merge card). */
+#clubMergeCandidates {
+  display: grid;
+  gap: 12px;
+  margin: 16px 0;
+  padding: 16px;
+  border: 1px solid var(--sports-line);
+  border-radius: 14px;
+  background: var(--sports-canvas);
+  box-shadow: var(--sports-shadow);
+}
+
+#clubMergeCandidates[hidden] {
+  display: none !important;
+}
+
+#clubMergeCandidates > strong {
+  font-family: var(--font-sports-display);
+  font-size: 1.05rem;
+  color: var(--sports-ink);
+}
+
+.merge-card {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid var(--sports-line);
+  border-left: 4px solid var(--sports-crimson);
+  border-radius: 12px;
+  background: #fff;
+}
+
+.merge-card-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.merge-name {
+  margin: 0;
+  font-family: var(--font-sports-display);
+  font-size: 1.1rem;
+  color: var(--sports-ink);
+}
+
+.merge-meta {
+  margin: 2px 0 0;
+  font-family: var(--font-sports-data);
+  font-size: 0.85rem;
+  color: var(--sports-muted);
+}
+
+.merge-badge {
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: var(--sports-crimson);
+  color: #fff;
+  font-family: var(--font-sports-ui);
+  font-size: 0.82rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.merge-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.merge-chip {
+  padding: 3px 9px;
+  border: 1px solid var(--sports-line);
+  border-radius: 999px;
+  background: var(--sports-canvas);
+  color: var(--sports-ink);
+  font-family: var(--font-sports-ui);
+  font-size: 0.82rem;
+}
+
+.merge-stats {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  margin: 0;
+}
+
+.merge-stats div {
+  padding: 8px;
+  border-radius: 10px;
+  background: var(--sports-canvas);
+  text-align: center;
+}
+
+.merge-stats dt {
+  font-family: var(--font-sports-ui);
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--sports-muted);
+}
+
+.merge-stats dd {
+  margin: 2px 0 0;
+  font-family: var(--font-sports-data);
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: var(--sports-ink);
+}
+
+.merge-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.merge-btn {
+  min-height: 40px;
+  padding: 8px 14px;
+  border: 1px solid var(--sports-line);
+  border-radius: 10px;
+  background: #fff;
+  color: var(--sports-ink);
+  font-family: var(--font-sports-ui);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.merge-btn-primary {
+  border-color: var(--sports-crimson);
+  background: var(--sports-crimson);
+  color: #fff;
+}
+
+.merge-btn-link {
+  border-color: transparent;
+  background: transparent;
+  color: var(--sports-crimson-deep);
+  text-decoration: underline;
+}
+
+.merge-status {
+  margin: 0;
+  font-family: var(--font-sports-ui);
+  color: var(--sports-muted);
+}
+
+.merge-details {
+  display: grid;
+  gap: 6px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--sports-line);
+}
+
+.merge-details[hidden] {
+  display: none !important;
+}
+
+.merge-section-title {
+  margin: 8px 0 0;
+  font-family: var(--font-sports-ui);
+  font-size: 0.78rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--sports-crimson-deep);
+}
+
+.merge-fullname {
+  margin: 0;
+  font-family: var(--font-sports-display);
+  font-size: 1rem;
+  color: var(--sports-ink);
+}
+
+.merge-table-wrap {
+  overflow-x: auto;
+}
+
+.merge-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: var(--font-sports-data);
+  font-size: 0.85rem;
+}
+
+.merge-table th,
+.merge-table td {
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--sports-line);
+  text-align: left;
+  white-space: nowrap;
+  color: var(--sports-ink);
+}
+
+.merge-table th {
+  font-family: var(--font-sports-ui);
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  color: var(--sports-muted);
+}
+
+@media (max-width: 520px) {
+  .merge-stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}

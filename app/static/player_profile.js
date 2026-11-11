@@ -223,7 +223,8 @@ requireAuth()
 
 // Nov 7 2026 (Amit: "players in their profile page should be shown matching names and asked to merge"):
 // GET /api/player/name-suggestions lists names on scorecards that look like this player; "This is me" calls
-// POST /api/player/name-suggestions/claim, which adds the name to his aliases (and merges an unclaimed duplicate).
+// POST /api/player/name-suggestions/claim, which only creates a pending request. A club admin approves it
+// (Admin Center > Name claims), and only then is the name added as an alias. No player records are merged here.
 (function nameMatches() {
   const box = document.getElementById("playerNameMatches");
   if (!box) return;
@@ -292,8 +293,6 @@ requireAuth()
     msg.textContent = response && response.ok ? data.message : data.detail || "Couldn't save it. Please try again.";
     if (response && response.ok) {
       card.remove();
-      const aliases = document.getElementById("profileAliases");
-      if (aliases && data.aliases) aliases.value = data.aliases.join(", ");
       if (!list.children.length) box.hidden = true;
     }
   });

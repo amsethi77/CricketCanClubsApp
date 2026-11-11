@@ -1131,6 +1131,87 @@ async function loadReviewQueue() {
   return reviewQueue;
 }
 
+function renderNameClaims(claims = []) {
+  const box = document.getElementById("adminNameClaims");
+  if (!box) return;
+  box.innerHTML = claims.length ? claims.map((claim) => `
+    <article class="detail-card" data-claim-id="${Number(claim.id)}">
+      <strong>${escapeHtml(claim.claimed_name)}</strong>
+      <p>For <a href="/players/${encodeURIComponent(claim.member_id)}">${escapeHtml(claim.member_name || claim.member_id)}</a> · requested by ${escapeHtml(claim.requested_by || "player")} · ${escapeHtml(String(claim.created_at || "").slice(0, 10))}</p>
+      <div class="toolbar-actions">
+        <button class="primary-button" type="button" data-claim-decision="approve">Approve</button>
+        <button class="secondary-button" type="button" data-claim-decision="reject">Reject</button>
+      </div>
+    </article>
+  `).join("") : `<p class="empty-state">No pending name claims.</p>`;
+}
+
+async function loadNameClaims() {
+  try {
+    const data = await getJson("/api/admin/name-claims", true);
+    renderNameClaims(data?.claims || []);
+    return data?.claims || [];
+  } catch (error) {
+    const box = document.getElementById("adminNameClaims");
+    if (box) box.innerHTML = `<p class="empty-state">Name claims could not be loaded: ${escapeHtml(error.message || "Request failed")}</p>`;
+    return [];
+  }
+}
+
+function renderNameMatches(groups = []) {
+  const box = document.getElementById("adminNameMatches");
+  if (!box) return;
+  box.innerHTML = groups.length ? groups.map((group) => `
+    <article class="detail-card">
+      <strong>${group.match_type === "exact" ? "Same name" : `Similar names (${Math.round(Number(group.score) * 100)}%)`}</strong>
+      <ul>
+        ${group.members.map((member) => `
+          <li><a href="/players/${encodeURIComponent(member.player_id || member.id)}">${escapeHtml(member.name)}</a> · ${escapeHtml(member.player_id || member.id)} · ${escapeHtml(member.clubs.join(", ") || "No club")}
+            ${group.members[0] && member.id !== group.members[0].id ? `<button type="button" class="ghost-button" data-merge-first="${escapeHtml(group.members[0].id)}" data-merge-second="${escapeHtml(member.id)}">Merge into ${escapeHtml(group.members[0].name)}</button>` : ""}
+          </li>
+        `).join("")}
+      </ul>
+    </article>
+  `).join("") : `<p class="empty-state">No name matches found.</p>`;
+}
+
+async function loadNameMatches() {
+  try {
+    const data = await getJson("/api/admin/name-matches", true);
+    renderNameMatches(data?.groups || []);
+    return data?.groups || [];
+  } catch (error) {
+    const box = document.getElementById("adminNameMatches");
+    if (box) box.innerHTML = `<p class="empty-state">Name matches could not be loaded: ${escapeHtml(error.message || "Request failed")}</p>`;
+    return [];
+  }
+}
+
+function renderMergeRequests(requests = []) {
+  const box = document.getElementById("adminMergeRequests");
+  if (!box) return;
+  box.innerHTML = requests.length ? requests.map((request) => `
+    <article class="detail-card" data-merge-request-id="${Number(request.id)}">
+      <strong>${escapeHtml(request.requester_name)} and ${escapeHtml(request.target_name)}</strong>
+      <p class="lede">${escapeHtml(request.requester_player_id)} · ${escapeHtml(request.target_player_id)} · requested by ${escapeHtml(request.requested_by || "a player")} on ${escapeHtml(String(request.created_at || "").slice(0, 10))}</p>
+      <button type="button" class="primary-button" data-merge-request-decision="approve">Approve merge</button>
+      <button type="button" class="secondary-button" data-merge-request-decision="reject">Reject</button>
+    </article>
+  `).join("") : `<p class="empty-state">No merge requests waiting.</p>`;
+}
+
+async function loadMergeRequests() {
+  try {
+    const data = await getJson("/api/admin/merge-requests", true);
+    renderMergeRequests(data?.requests || []);
+    return data?.requests || [];
+  } catch (error) {
+    const box = document.getElementById("adminMergeRequests");
+    if (box) box.innerHTML = `<p class="empty-state">Merge requests could not be loaded: ${escapeHtml(error.message || "Request failed")}</p>`;
+    return [];
+  }
+}
+
 async function loadAuditLog(targetClubId = "") {
   const clubFilter = String(targetClubId || selectedClubId || clubId() || auth?.user?.current_club_id || auth?.user?.primary_club_id || "").trim();
   adminDebug("Loading audit log.", { clubFilter });
@@ -1178,6 +1259,7 @@ async function refreshAll() {
   adminDebug("Refreshing Admin Center.");
   auth = await getJson("/api/auth/me", true);
   renderRoleBadge();
+  await Promise.allSettled([loadNameClaims(), loadNameMatches(), loadMergeRequests()]);
   const targetClubId = clubId() || auth?.user?.current_club_id || auth?.user?.primary_club_id || "";
   const queue = await loadReviewQueue();
   await loadClubView(targetClubId, queue);
@@ -1353,6 +1435,61 @@ function bindAdminCenterHandlers() {
     } catch (error) {
       adminError("Review queue refresh failed.", error);
       setStatus(error.message, "error");
+    }
+  });
+
+  document.getElementById("adminNameClaims")?.addEventListener("click", async (event) => {
+    const button = event.target.closest("[data-claim-decision]");
+    if (!button) return;
+    const card = button.closest("[data-claim-id]");
+    const decision = button.dataset.claimDecision;
+    button.disabled = true;
+    try {
+      const result = await postJson(`/api/admin/name-claims/${encodeURIComponent(card.dataset.claimId)}/decision`, { decision }, true);
+      setStatus(result?.status === "approved" ? "Name approved and added as an alias." : "Name claim rejected.", "success");
+    } catch (error) {
+      adminError("Name claim decision failed.", error);
+      setStatus(error.message || "Could not save the decision.", "error");
+    } finally {
+      await loadNameClaims();
+    }
+  });
+
+  document.getElementById("adminNameMatches")?.addEventListener("click", async (event) => {
+    const button = event.target.closest("[data-merge-first][data-merge-second]");
+    if (!button) return;
+    const firstId = button.dataset.mergeFirst;
+    const secondId = button.dataset.mergeSecond;
+    if (!window.confirm("Merge these two player records? The older record is kept and the newer one is removed. Scorecards and statistics will follow the kept record. A superadmin can undo this.")) return;
+    button.disabled = true;
+    try {
+      const result = await postJson("/api/admin/name-matches/merge", { first_member_id: firstId, second_member_id: secondId }, true);
+      setStatus(`Merged. ${result?.removed_name || "Duplicate"} was folded into the kept record.`, "success");
+    } catch (error) {
+      adminError("Player merge failed.", error);
+      setStatus(error.message || "Could not merge these players.", "error");
+    } finally {
+      await loadNameMatches();
+      await loadMergeRequests();
+    }
+  });
+
+  document.getElementById("adminMergeRequests")?.addEventListener("click", async (event) => {
+    const button = event.target.closest("[data-merge-request-decision]");
+    if (!button) return;
+    const card = button.closest("[data-merge-request-id]");
+    const decision = button.dataset.mergeRequestDecision;
+    if (decision === "approve" && !window.confirm("Approve this merge? The older record is kept and the other one is removed. A superadmin can undo it.")) return;
+    button.disabled = true;
+    try {
+      await postJson(`/api/admin/merge-requests/${encodeURIComponent(card.dataset.mergeRequestId)}/decision`, { decision }, true);
+      setStatus(decision === "approve" ? "Merge approved and done." : "Merge request rejected.", "success");
+    } catch (error) {
+      adminError("Merge request decision failed.", error);
+      setStatus(error.message || "Could not save the decision.", "error");
+    } finally {
+      await loadMergeRequests();
+      await loadNameMatches();
     }
   });
 
