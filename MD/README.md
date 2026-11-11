@@ -44,6 +44,7 @@ The same rules are in `AGENTS.md` and `CLAUDE.md` so every tool picks them up. I
 
 These rules are the source of truth for the current implementation. If older log items conflict with them, these rules win.
 
+- Registration allows at most two distinct club-admin accounts per club, counting both club-role assignments and legacy primary-club account roles. Creating a club still makes its creator a club admin; player and captain registrations are unaffected. Existing excess admins are not changed. The server rejects a full club with an actionable message, and serializes the final capacity check with account creation. Test by registering two admins and attempting a third, then registering a player, at phone and laptop widths.
 - Table headers and data cells are left aligned across pages, including numeric columns, so each column's headings and values line up. To check, view the Clubs, player profile, scorecard, and pricing tables at 390px and laptop widths.
 - The signed-in identity must come from the backend auth session and `app_users` row, not from the first matching player shown in the UI.
 - `member_id` is the canonical player link for the logged-in account. Display names, short names, and aliases are presentation-only labels.
@@ -67,6 +68,9 @@ These rules are the source of truth for the current implementation. If older log
 ## Prompt And Requirement Log
 
 This section captures the user requirements in the order they were given and refined during the build.
+
+### November 2026 club admin registration limit
+- On the registration page, allow no more than two club admins for each club.
 
 ### November 2026 table header alignment
 - All table headers on all pages should be left justified rather than right justified.
@@ -1372,6 +1376,8 @@ Model (soft launch, Oct 2026): keep the core cricket experience free; one paid p
 5. Stripe (optional, test mode): fill `.env`, restart, run `stripe listen`, choose Pro monthly on `/pricing` and pay with card `4242 4242 4242 4242`; the plan changes to Pro.
 
 ## Change log
+
+- 2026-11-11: Limited registration to two club-admin accounts per club, including legacy primary-club roles; added a registration hint, a clear full-club error, and serialized capacity checks. Added registration and concurrency regression tests.
 
 - 2026-11-11: Admin Center Name matches now has three actions for each pair: "Merge into <older> (older)", "Merge into <newer> (newer)" and "Not the same player". `POST /api/admin/name-matches/merge` takes an optional `keep_member_id` (must be one of the two players). New `POST /api/admin/name-matches/reject` saves the pair in the new table `app_name_match_rejections`, and `GET /api/admin/name-matches` hides saved pairs. Tests: `tests/test_player_merge.py` (`test_admin_can_keep_newer_record_when_merging`, `test_admin_keep_choice_must_be_one_of_the_pair`, `test_rejected_name_match_is_saved_and_hidden`). Bumped `admin_center.js?v=20261111d`.
 

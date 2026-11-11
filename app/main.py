@@ -1930,6 +1930,27 @@ def _auth_connection() -> sqlite3.Connection:
 
 
 ROLE_IDS: dict[str, int] = {"superadmin": 1, "club_admin": 2, "captain": 3, "player": 4}
+MAX_CLUB_ADMINS = 2
+
+
+def _check_club_admin_capacity(connection: sqlite3.Connection, club_id: str, user_id: int | None = None) -> None:
+    row = connection.execute(
+        """
+        SELECT COUNT(DISTINCT user_id) AS admin_count FROM (
+            SELECT id AS user_id FROM app_users
+            WHERE primary_club_id = ? AND role = 'club_admin'
+            UNION
+            SELECT user_id FROM app_user_club_roles
+            WHERE club_id = ? AND role_name = 'club_admin'
+        ) WHERE (? IS NULL OR user_id != ?)
+        """,
+        (club_id, club_id, user_id, user_id),
+    ).fetchone()
+    if int(row["admin_count"]) >= MAX_CLUB_ADMINS:
+        raise HTTPException(
+            status_code=409,
+            detail="This club already has two club admins. Register as a player or captain, or contact a club admin.",
+        )
 
 DEFAULT_ROLE_PERMISSIONS: dict[str, dict[str, str]] = {
     "player": {},
@@ -7934,7 +7955,7 @@ def register(request: RegisterRequest, response: Response) -> dict[str, Any]:
         if not requested_roles:
             requested_roles = ["player"]
         role = requested_roles[0]
-        if role == "superadmin":
+        if "superadmin" in requested_roles:
             raise HTTPException(status_code=403, detail="Superadmin registration is reserved for Amit S / Amit Sethi.")
 
         # -----------------------------
@@ -7971,8 +7992,7 @@ def register(request: RegisterRequest, response: Response) -> dict[str, Any]:
             requested_club_id = str(selected_club.get("id") or "").strip()
         if not selected_club:
             raise HTTPException(status_code=400, detail="Select an existing club or add a new club.")
-        if not requested_club_id:
-            requested_club_id = str(selected_club.get("id") or "").strip()
+        requested_club_id = str(selected_club.get("id") or "").strip()
 
         effective_role = max(requested_roles, key=_role_rank)
         if created_club and role in {"player", "captain", "club_admin", "admin"}:
@@ -8009,6 +8029,7 @@ def register(request: RegisterRequest, response: Response) -> dict[str, Any]:
                 None,
             )
 
+        member_aliases_changed = False
         if member:
             aliases = [str(alias or "").strip() for alias in (member.get("aliases") or []) if str(alias or "").strip()]
             requested_aliases = request.aliases.split(",") if isinstance(request.aliases, str) else request.aliases
@@ -8019,7 +8040,7 @@ def register(request: RegisterRequest, response: Response) -> dict[str, Any]:
                     known_aliases.add(normalize_name(alias))
             if aliases != member.get("aliases", []):
                 member["aliases"] = aliases
-                save_store(store)
+                member_aliases_changed = True
 
         # -----------------------------
         # ✅ PREPARE MEMBER (DO NOT SAVE YET)
@@ -8074,9 +8095,17 @@ def register(request: RegisterRequest, response: Response) -> dict[str, Any]:
             if existing and existing["member_id"]:
                 raise HTTPException(status_code=409, detail="User already exists.")
 
+            needs_admin_slot = "club_admin" in requested_roles or created_club
+            if needs_admin_slot:
+                _check_club_admin_capacity(
+                    connection, requested_club_id, int(reusable_existing_user["id"]) if reusable_existing_user else None
+                )
+
             # -----------------------------
             # ✅ CREATE MEMBER NOW (SAFE POINT)
             # -----------------------------
+            if member_aliases_changed:
+                save_store(store)
             if member_to_create:
                 store.setdefault("members", []).append(member_to_create)
                 save_store(store)
@@ -8099,6 +8128,12 @@ def register(request: RegisterRequest, response: Response) -> dict[str, Any]:
             existing_user_for_member = reusable_existing_user or _existing_user_for_member(connection, member_id or "")
             if existing_user_for_member and not reusable_existing_user:
                 raise HTTPException(status_code=409, detail="This Player ID is already linked to an account. Sign in to use that profile.")
+
+            if needs_admin_slot:
+                connection.execute("BEGIN IMMEDIATE")
+                _check_club_admin_capacity(
+                    connection, requested_club_id, int(existing_user_for_member["id"]) if existing_user_for_member else None
+                )
 
             # -----------------------------
             # ✅ CREATE OR REUSE USER
@@ -8207,6 +8242,9 @@ def register(request: RegisterRequest, response: Response) -> dict[str, Any]:
     # -----------------------------
     # ❌ ERROR HANDLING (FIXED)
     # -----------------------------
+    except HTTPException:
+        raise
+
     except sqlite3.IntegrityError as e:
         logger.warning("Registration integrity error. %s", str(e))
 
