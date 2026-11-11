@@ -91,6 +91,11 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
+table th,
+table td {
+  text-align: left;
+}
+
 .custom-table {
   width: 100%;
   border-collapse: collapse;
@@ -3256,7 +3261,7 @@ h1 {
 
 /* Nov 11 2026: Batting / Fielding / Bowling group header on the Clubs player snapshot */
 .snapshot-table .snapshot-band th {
-  text-align: center;
+  text-align: left;
   font-size: 0.75rem;
   text-transform: uppercase;
   letter-spacing: 0.05em;

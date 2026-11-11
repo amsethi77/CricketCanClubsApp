@@ -530,6 +530,7 @@
       return `<div class="sc-name-match sc-name-dup">
         <p class="sc-check-lede">🔎 <b>${escapeHtml(match.card_name)}</b> may be the same player as ${label(older)} and ${label(newer)} (${match.match_percent}% match).</p>
         <div class="sc-check-actions">${actions}<button type="button" class="sc-btn ghost" data-sc="name-ignore">Not the same, ignore</button></div>
+        <p class="sc-name-merge-msg" role="status"></p>
       </div>`;
     }).join("");
   }
@@ -637,7 +638,7 @@
   document.addEventListener("click", async (event) => {
     const button = event.target.closest("[data-sc]");
     if (!button || !checkEl || !checkEl.contains(button)) return;
-    const msg = checkEl.querySelector(".sc-check-msg");
+    const msg = checkEl.querySelector(":scope > .sc-check > .sc-check-msg");
     if (button.dataset.sc === "name-ignore") {
       button.closest(".sc-name-match")?.remove();
       return;
@@ -645,19 +646,27 @@
     if (button.dataset.sc === "name-merge") {
       const keep = button.dataset.keep;
       if (!window.confirm("Merge these players? Their stats are added together and the other name becomes an alias of the kept player.")) return;
+      const matchMsg = button.closest(".sc-name-match").querySelector(".sc-name-merge-msg");
+      matchMsg.textContent = "";
       document.querySelectorAll(".sc-name-match [data-sc='name-merge']").forEach((b) => (b.disabled = true));
+      let data;
       try {
-        const data = await previewAction(`/api/scorecards/${encodeURIComponent(id.replace(/^a-/, ""))}/name-merge`, {
+        data = await previewAction(`/api/scorecards/${encodeURIComponent(id.replace(/^a-/, ""))}/name-merge`, {
           first_id: button.dataset.first,
           second_id: button.dataset.second,
           keep,
         });
-        await loadPreview();
-        const note = checkEl?.querySelector(".sc-check-msg");
-        if (note) note.textContent = data.message || "Players merged.";
       } catch (error) {
         document.querySelectorAll(".sc-name-match [data-sc='name-merge']").forEach((b) => (b.disabled = false));
-        if (msg) msg.textContent = error.message;
+        matchMsg.textContent = error.message;
+        return;
+      }
+      try {
+        await loadPreview();
+        const note = checkEl?.querySelector(":scope > .sc-check > .sc-check-msg");
+        if (note) note.textContent = data.message || "Players merged.";
+      } catch (error) {
+        matchMsg.textContent = `${data.message || "Players merged."} Could not refresh the scorecard: ${error.message} Reload the page.`;
       }
       return;
     }

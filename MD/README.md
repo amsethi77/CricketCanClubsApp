@@ -44,6 +44,7 @@ The same rules are in `AGENTS.md` and `CLAUDE.md` so every tool picks them up. I
 
 These rules are the source of truth for the current implementation. If older log items conflict with them, these rules win.
 
+- Table headers and data cells are left aligned across pages, including numeric columns, so each column's headings and values line up. To check, view the Clubs, player profile, scorecard, and pricing tables at 390px and laptop widths.
 - The signed-in identity must come from the backend auth session and `app_users` row, not from the first matching player shown in the UI.
 - `member_id` is the canonical player link for the logged-in account. Display names, short names, and aliases are presentation-only labels.
 - The dashboard, clubs page, season fixtures page, and availability page must all use the logged-in user and active club from the backend payload first.
@@ -67,6 +68,10 @@ These rules are the source of truth for the current implementation. If older log
 
 This section captures the user requirements in the order they were given and refined during the build.
 
+### November 2026 table header alignment
+- All table headers on all pages should be left justified rather than right justified.
+- Table headings and their data cells should match and line up.
+
 ### November 2026 profile stats as cards
 - "this is not looking good as this is not professionally done... come up with better design and keep all batting bowling under same year or under club not spllitted by season or year or club and multiple times" (the profile shows three career tiles, then one card per season and one per club. Each card has Batting, Bowling and Fielding as separate labelled groups; the groups sit side by side on laptop and stack on phone.)
 - "add some space and move to left a you have alot of white space and try to use tiles in between..look and feel is not good" (profile: left aligned, group tiles with gaps, more space between sections.)
@@ -74,6 +79,9 @@ This section captures the user requirements in the order they were given and ref
 
 ### November 2026 batting, bowling and fielding kept separate
 - "is not making sense to include bowling under batting stats and batting under bowling stats or field.. please keep it simple and show only batting under batting, bowling under bowling and fielding under fielding stats" (each stats card and table shows only its own category.)
+
+### November 2026 Clubs page uses the new look and feel
+- "redesign this /clubs page to the new look and feel" (the Clubs page uses the player profile design: club tiles, a snapshot tile grid, Year wise and Club wise tables with Batting | Bowling | Fielding bands, and recent match history. The live page is built by `_clubs_page_html` in `main.py`.)
 
 ### November 2026 player profile shows bowling and fielding stats
 - "no in the players/<player id> should add bowling and field stats here" (the player profile shows bowling and fielding alongside batting: bowling tables for career, season and club, and catches in the batting tables.)
@@ -103,12 +111,14 @@ This section captures the user requirements in the order they were given and ref
 - "You should give both option to merge into older name or new name and reject as well and then save the response... match percent should be 50%" (the card offers "Merge into older record" and "Merge into newer record" plus "Not me"; the threshold is now 50%.)
 
 - "once this is learnt and merged then this engine should run during new match scorecard uploads and should identify this and let the uploader know instantly after the scorecard is uploaded that this is a match and merged into the other name..." (flag only, no auto-merge: the upload message and the scorecard preview show the match, and the uploader can merge into the older or newer record or ignore it.)
+- Player-name merge on the uploaded scorecard preview should work for the suggested records.
 - "keep the match percentage to 75% threshold as it is halucinating", then "threshold should be 80%" and "everywhere 80% it has to be consistent", then "keep 75% then" (the upload name check and the club-page card both use one constant, `PLAYER_MERGE_SUGGEST_MIN_SCORE` = 0.75.)
 
 ### November 2026 AIDuplicateEngine (clubs and aliases)
 - "it should not be just name matches, check his clubs, aliases, primary club and secondary club and then try to create a robust AI engine to identify the most near player and recommend for merging.. not just every name ..." (the match score now uses name, aliases, primary and secondary clubs, and explains each reason. The top candidate is marked "Recommended". Two different people who bat in the same match are never suggested. Still a deterministic rule-based engine, not an LLM, and it never merges by itself.)
 - "call this engine as AIDuplicateEngine and use it where ever applicable" (the engine is named `AIDuplicateEngine` in `app/ai_duplicate_engine.py` and is used on the club card, merge requests, the upload name check and Admin Center Name matches.)
 - "at or above..any uploader should be shown" (the 75% threshold now includes exactly 75% (`>=`), and any uploader sees the upload name check match. Only reviewers get the merge buttons.)
+- Upload preview and merge validation use the same current-club context for name matching; merge errors appear beside the selected suggestion. To test, open an upload preview at 390px and laptop width, and use synthetic players to test either keep choice and a denied merge.
 - "how about merge into other or newer name you should have both options and rejection" (Admin Center Name matches now shows three actions per pair: "Merge into <older> (older)", "Merge into <newer> (newer)" and "Not the same player". The keep choice is sent as `keep_member_id`. "Not the same player" is saved in `app_name_match_rejections` and hides the pair for all reviewers.)
 
 ### November 2026 member merge
@@ -1639,7 +1649,12 @@ Model (soft launch, Oct 2026): keep the core cricket experience free; one paid p
 - 2026-11-11: `/players/<player id>` recent matches use the same Batting | Bowling | Fielding bands as the season and club tables (R, B, SR | Ov, W, R | C, RO), one row per match. `_member_match_fielding` in `main.py` counts catches ("c X b Y", "c & b Y") and run outs per scorecard, returned in each `recent` item as `fielding`. Summary tiles have a colour per group (blue batting, orange bowling, green fielding) and larger figures. Numeric cells are right aligned. `player_public.js` v20261113i, `public_match.css` v20261113i, `player_public.html` loads both. Verified at 1280px (no overflow) and 390px (document 375px, tables scroll inside their boxes).
  a Bowling table for Career, Season by season and By club (Inns, Overs, Mdns, Runs, Wkts, Avg, Econ, Best). Bowling comes from the scorecards (`public_player_profile` in `main.py` aggregates each innings' bowling row). Batting tables keep Ct (catches) as the fielding figure; Wkts moved to the bowling table. Stumpings are not recorded anywhere in the app, so they are not shown. `player_public.js` v20261112a.
 - 2026-11-13: Home page caching. `multipage.js` has `cachedPageLoad(key, load, render)` (stale-while-revalidate in sessionStorage, keys prefixed `cricketClubAppPageCache:`) and `clearPageCache()`, which runs when the auth token changes. `app.js` `loadDashboard` caches `/api/dashboard` (`showCached: false` after a fixture delete). `dashboard_home.js` caches the Home feeds (live, fixtures, scorecards, club, scorebook edit rights) and re-renders through `selectHome`/`renderHome`. `index.html`: multipage.js and app.js v20261113a, dashboard_home.js v20261113a. Not yet tested in a browser (sign-in required).
-- 2026-11-13: Clubs page player snapshot shows bowling. Year wise and Club wise tables gained Ov, Wkts and Econ after St, with a Batting / Fielding / Bowling band row. Backend: `_member_bowling_breakdown` in `main.py` aggregates scorecard bowling by season and club for the signed-in member, returned as the `bowling` key of `player_profile_data` (feeds `/api/player/summary`). `clubs.js` `bowlingByYear` / `bowlingByClub`; `clubs.html` loads `clubs.js?v=20261111a` and `styles.css?v=20261111a`; `.snapshot-band` added to `styles.css`. Not yet verified in a browser (sign-in required).## New UI Look and Feel
+- 2026-11-13: Clubs page player snapshot shows bowling. Year wise and Club wise tables gained Ov, Wkts and Econ after St, with a Batting / Fielding / Bowling band row. Backend: `_member_bowling_breakdown` in `main.py` aggregates scorecard bowling by season and club for the signed-in member, returned as the `bowling` key of `player_profile_data` (feeds `/api/player/summary`). `clubs.js` `bowlingByYear` / `bowlingByClub`; `clubs.html` loads `clubs.js?v=20261111a` and `styles.css?v=20261111a`; `.snapshot-band` added to `styles.css`. Not yet verified in a browser (sign-in required).
+- 2026-11-13: Clubs page redesigned to the player profile look. `_clubs_page_html` in `main.py` now renders `main.pm-app.pm-profile.clubs-page` with `public_match.css?v=20261113j`: club tiles (`club-tile`, `is-current` badge), a player snapshot tile grid (`#clubsPlayerSnapshotTiles`), Year wise and Club wise tables with 22 columns (Batting 13 | Ov, Wkts, Econ | Ct, St). The recent match history table was removed at the user's request (the `recent_history` key of the player overview API is unchanged). `clubs.js` fills them (`snapshotTiles`, `renderTableRows`, `renderClubs`); `clubs.js?v=20261113k`. `public_match.css` has `.clubs-page` rules at the end. `clubs.html` is not used by any route and was not updated. Verified: template renders, `clubs.js` parses. Not yet checked in a browser: the signed-in `/clubs` takes over 30 s to respond (`current_dashboard` alone takes about 22 s), so the page cannot load in a browser yet.
+- 2026-11-11: Left aligned table headers and data cells across pages, including profile and Clubs group bands, scorecard numeric columns, and pricing tables, so headings and values line up.
+- 2026-11-11: Fixed scorecard-preview player merges by validating suggestions using the same club context as the preview. Errors now appear beside the selected pair, and a refresh failure is distinguished from a failed merge.
+
+## New UI Look and Feel
 
 ## 1. Typography & Global Layout Foundation
 Prompt for Copilot Chat / Panel:

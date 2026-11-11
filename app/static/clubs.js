@@ -15,9 +15,9 @@ const clubsSearchSummary = document.getElementById("clubsSearchSummary");
 const statusBanner = document.getElementById("clubsStatus");
 const clubsPlayerSnapshotTitle = document.getElementById("clubsPlayerSnapshotTitle");
 const clubsPlayerSnapshotDetails = document.getElementById("clubsPlayerSnapshotDetails");
+const clubsPlayerSnapshotTiles = document.getElementById("clubsPlayerSnapshotTiles");
 const clubsPlayerYearRows = document.getElementById("clubsPlayerYearRows");
 const clubsPlayerClubRows = document.getElementById("clubsPlayerClubRows");
-const clubsPlayerHistoryRows = document.getElementById("clubsPlayerHistoryRows");
 
 let authData = null;
 let dashboardData = null;
@@ -145,68 +145,75 @@ function highestScoreFor(member, { year = null, clubId = null } = {}) {
 function renderTableRows(body, rows, emptyText) {
   if (!body) return;
   if (!rows.length) {
-    body.innerHTML = `<tr><td colspan="19">${emptyText}</td></tr>`;
+    body.innerHTML = `<tr><td colspan="21">${emptyText}</td></tr>`;
     return;
   }
+  const gap = `<td class="pm-gap"></td>`;
   body.innerHTML = rows
     .map(
       (row) => `
         <tr>
           <td>${row.label}</td>
-          <td>${formatCell(row.matches)}</td>
-          <td>${formatCell(row.innings)}</td>
-          <td>${formatCell(row.not_outs)}</td>
-          <td>${formatCell(row.runs)}</td>
-          <td>${row.hs ?? "—"}</td>
-          <td>${formatCell(row.average, 2)}</td>
-          <td>${formatCell(row.balls)}</td>
-          <td>${formatCell(row.strike_rate, 2)}</td>
-          <td>${formatCell(row.scores_25_plus)}</td>
-          <td>${formatCell(row.fifties)}</td>
-          <td>${formatCell(row.hundreds)}</td>
-          <td>${formatCell(row.fours)}</td>
-          <td>${formatCell(row.sixes)}</td>
-          <td>${formatCell(row.catches)}</td>
-          <td>${formatCell(row.stumpings)}</td>
-          <td>${row.overs || "—"}</td>
-          <td>${formatCell(row.wickets)}</td>
-          <td>${formatCell(row.economy, 2)}</td>
+          <td class="pm-g-bat">${formatCell(row.matches)}</td>
+          <td class="pm-g-bat">${formatCell(row.innings)}</td>
+          <td class="pm-g-bat">${formatCell(row.not_outs)}</td>
+          <td class="pm-g-bat">${formatCell(row.runs)}</td>
+          <td class="pm-g-bat">${row.hs ?? "—"}</td>
+          <td class="pm-g-bat">${formatCell(row.average, 2)}</td>
+          <td class="pm-g-bat">${formatCell(row.balls)}</td>
+          <td class="pm-g-bat">${formatCell(row.strike_rate, 2)}</td>
+          <td class="pm-g-bat">${formatCell(row.scores_25_plus)}</td>
+          <td class="pm-g-bat">${formatCell(row.fifties)}</td>
+          <td class="pm-g-bat">${formatCell(row.hundreds)}</td>
+          <td class="pm-g-bat">${formatCell(row.fours)}</td>
+          <td class="pm-g-bat">${formatCell(row.sixes)}</td>
+          ${gap}
+          <td class="pm-g-bowl">${row.overs || "—"}</td>
+          <td class="pm-g-bowl">${formatCell(row.wickets)}</td>
+          <td class="pm-g-bowl">${formatCell(row.economy, 2)}</td>
+          ${gap}
+          <td class="pm-g-field">${formatCell(row.catches)}</td>
+          <td class="pm-g-field">${formatCell(row.stumpings)}</td>
         </tr>
       `
     )
     .join("");
 }
 
-function renderHistoryRows() {
-  if (!clubsPlayerHistoryRows) return;
-  const rows = playerOverviewData?.recent_history || [];
-  if (!rows.length) {
-    clubsPlayerHistoryRows.innerHTML = `<tr><td colspan="9">No recent match history available yet.</td></tr>`;
-    return;
-  }
-  clubsPlayerHistoryRows.innerHTML = rows
-    .map(
-      (row) => `
-        <tr>
-          <td>${row.date || "—"}</td>
-          <td>${row.source || "—"}</td>
-          <td>${row.club_name || "—"}</td>
-          <td>${row.opponent || "—"}</td>
-          <td>${row.runs ?? 0}</td>
-          <td>${row.balls ?? 0}</td>
-          <td>${row.wickets ?? 0}</td>
-          <td>${row.catches ?? 0}</td>
-          <td>${row.result || row.status || "—"}</td>
-        </tr>
-      `
-    )
-    .join("");
+function snapshotTiles(stats, bowl) {
+  const dash = (value) => (value === null || value === undefined || value === "" ? "—" : value);
+  const matches = Number(stats.matches || 0);
+  const catches = Number(stats.catches || 0);
+  const tile = (group, title, pairs) =>
+    `<div class="pm-stat-card pm-c-${group}"><h3>${title}</h3><dl>${pairs
+      .map(([label, value]) => `<div><dt>${label}</dt><dd>${dash(value)}</dd></div>`)
+      .join("")}</dl></div>`;
+  return (
+    tile("bat", "Batting", [
+      ["Matches", matches],
+      ["Runs", stats.runs],
+      ["Highest", stats.highest_score],
+      ["Average", formatCell(stats.batting_average, 2)],
+      ["Strike rate", formatCell(stats.strike_rate, 2)],
+    ]) +
+    tile("bowl", "Bowling", [
+      ["Innings", bowl.innings],
+      ["Overs", bowl.overs],
+      ["Wickets", bowl.wickets],
+      ["Economy", formatCell(bowl.economy, 2)],
+    ]) +
+    tile("field", "Fielding", [
+      ["Catches", catches],
+      ["Per match", matches ? formatCell(catches / matches, 2) : "—"],
+    ])
+  );
 }
 
 function updatePlayerSnapshot() {
   if (!clubsPlayerSnapshotTitle || !clubsPlayerSnapshotDetails) {
     return;
   }
+  if (clubsPlayerSnapshotTiles) clubsPlayerSnapshotTiles.innerHTML = "";
   const overview = playerOverviewData;
   const member =
     overview?.member ||
@@ -230,21 +237,9 @@ function updatePlayerSnapshot() {
     {};
   const stats = overview?.summary_stats || fallbackStats;
   const gamesPlayed = Number(stats.matches || 0);
-  const highestScore = stats.highest_score === null || stats.highest_score === undefined ? "—" : stats.highest_score;
-  const battingAverage = Number(stats.batting_average || 0);
-  const strikeRate = Number(stats.strike_rate || 0);
-  const details = [
-    `${stats.runs || 0} runs`,
-    `HS: ${highestScore}`,
-    `Avg: ${Number.isFinite(battingAverage) ? battingAverage.toFixed(2).replace(/\.0+$/, "").replace(/(\.\d*[1-9])0+$/, "$1") : "0"}`,
-    `SR: ${Number.isFinite(strikeRate) ? strikeRate.toFixed(2).replace(/\.0+$/, "").replace(/(\.\d*[1-9])0+$/, "$1") : "0"}`,
-    `25+: ${stats.scores_25_plus || 0}`,
-    `50+: ${stats.scores_50_plus || 0}`,
-    `100+: ${stats.scores_100_plus || 0}`,
-    `${stats.wickets || 0} wickets`,
-    `${stats.catches || 0} catches`,
-    `${gamesPlayed} games`,
-  ];
+  const bowlSummary = overview?.bowling?.summary || {};
+  clubsPlayerSnapshotTiles.innerHTML = snapshotTiles(stats, bowlSummary);
+  const details = [`${gamesPlayed} games`];
   if (stats.last_game_date) {
     details.push(`Last: ${stats.last_game_date} vs ${stats.last_opponent || "TBD"}`);
   }
@@ -289,7 +284,6 @@ async function renderPlayerBreakdowns() {
   if (!member) {
     renderTableRows(clubsPlayerYearRows, [], "Sign in with your player profile to see the yearly breakdown.");
     renderTableRows(clubsPlayerClubRows, [], "Sign in with your player profile to see the club breakdown.");
-    renderHistoryRows();
     return;
   }
 
@@ -408,7 +402,6 @@ async function renderPlayerBreakdowns() {
     });
   }
   renderTableRows(clubsPlayerClubRows, clubRows, "No club breakdown available yet.");
-  renderHistoryRows();
 }
 
 async function loadDashboardSnapshot() {
@@ -513,13 +506,12 @@ function renderClubs() {
   clubsList.innerHTML = visibleClubs
     .map(
       (club) => `
-        <article class="detail-card ${club.id === selectedId ? "active-card" : ""}">
+        <article class="club-tile ${club.id === selectedId ? "is-current" : ""}">
+          ${club.id === selectedId ? `<span class="club-tile-badge">Current club</span>` : ""}
           <strong>${club.name}</strong>
           <p>${club.season || "Season TBD"}</p>
           <small>${club.short_name || ""}</small>
-          <div class="inline-actions">
-            <button class="secondary-button" type="button" data-club-select="${club.id}">Select club</button>
-          </div>
+          <button class="secondary-button" type="button" data-club-select="${club.id}">Select club</button>
         </article>
       `
     )

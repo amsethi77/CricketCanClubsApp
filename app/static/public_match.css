@@ -496,9 +496,13 @@
   border-bottom: 1px solid #f1f5f9;
   background: transparent;
   color: #1f2937;
-  text-align: right;
+  text-align: left;
   white-space: nowrap;
   font-weight: 400;
+}
+
+.pm-app .pm-table th {
+  text-align: left;
 }
 
 .pm-app .pm-table th:first-child {
@@ -514,6 +518,7 @@
 }
 
 .pm-app .pm-table thead th {
+  text-align: left;
   padding-top: 6px;
   padding-bottom: 6px;
   font-size: 12px;
@@ -523,8 +528,9 @@
   border-bottom: 1px solid #e5e7eb;
 }
 
-.pm-app .pm-table thead th:first-child {
-  padding-left: 6px;
+.pm-app .pm-table thead th:first-child,
+.pm-app .pm-table tbody td:first-child {
+  padding-left: 0;
 }
 
 .pm-app .pm-mini thead th {
@@ -1203,7 +1209,7 @@
 }
 
 .pm-combined .pm-band th {
-  text-align: center;
+  text-align: left;
   font-size: 0.75rem;
   text-transform: uppercase;
   letter-spacing: 0.05em;
@@ -1315,13 +1321,8 @@
 .pm-profile .pm-combined .pm-band th.pm-tl {
   border-bottom-left-radius: 10px;
 }
-/* Numbers line up to the right under their headers; names stay left. */
-.pm-profile .pm-combined thead th:not(:first-child),
-.pm-profile .pm-combined tbody td {
-  text-align: right;
-}
 .pm-profile .pm-combined .pm-band th {
-  text-align: center;
+  text-align: left;
 }
 /* Summary tiles: one accent colour per group, larger figures so the summary stands out. */
 .pm-profile .pm-stat-card {
@@ -1353,4 +1354,103 @@
   .pm-stat-grid {
     grid-template-columns: 1fr;
   }
+}
+
+/* Nov 13 2026: /clubs uses the player profile look (tiles, group bands, right-aligned numbers). Scoped to .clubs-page. */
+.clubs-page .pm-body {
+  gap: 22px;
+}
+.clubs-page .pm-combined tbody td:first-child,
+.clubs-page .pm-combined td.pm-txt,
+.clubs-page .pm-combined th.pm-txt {
+  text-align: left;
+}
+.clubs-page .pm-combined td.pm-txt {
+  white-space: normal;
+}
+.clubs-page .pm-combined tbody td:first-child {
+  font-weight: 600;
+  color: #0f172a;
+  min-width: 120px;
+}
+.clubs-section {
+  display: grid;
+  gap: 10px;
+}
+.clubs-search {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin: 0;
+}
+.clubs-search input {
+  flex: 1 1 240px;
+  min-width: 0;
+  padding: 9px 12px;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  background: #fff;
+  font: inherit;
+}
+.clubs-search-summary {
+  color: #64748b;
+  font-size: 0.85rem;
+}
+.clubs-tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 12px;
+}
+.club-tile {
+  display: grid;
+  gap: 4px;
+  align-content: start;
+  padding: 14px 16px;
+  border: 1px solid #e2e8f0;
+  border-top: 3px solid #2563eb;
+  border-radius: 10px;
+  background: #f8fbff;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06);
+}
+.club-tile.is-current {
+  border-top-color: #16a34a;
+  background: #f6fdf8;
+}
+.club-tile strong {
+  font-size: 1rem;
+  color: #0f172a;
+}
+.club-tile p,
+.club-tile small {
+  margin: 0;
+  color: #64748b;
+  font-size: 0.85rem;
+}
+.club-tile-badge {
+  justify-self: start;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: #166534;
+}
+.club-tile .secondary-button {
+  justify-self: start;
+  margin-top: 8px;
+}
+.clubs-player {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 10px;
+}
+.clubs-player-name {
+  font-size: 1.05rem;
+  color: #0f172a;
+}
+.clubs-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
 }

@@ -334,7 +334,7 @@ body.pricing-page .pr-btn.quiet {
 .pr-table td {
   padding: 10px 12px;
   border-bottom: 1px solid #f1f5f9;
-  text-align: center;
+  text-align: left;
   white-space: nowrap;
 }
 

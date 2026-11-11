@@ -1,5 +1,7 @@
 import unittest
+from unittest.mock import patch
 
+from fastapi.testclient import TestClient
 from app.player_merge import MergeError, merge_members_in_store
 from tests.test_local_qa import LocalQATestCase
 
@@ -173,6 +175,51 @@ class PlayerMergeTests(unittest.TestCase):
             merge_members_in_store(_store(), "m1", "m1")
         with self.assertRaises(MergeError):
             merge_members_in_store(_store(), "m1", "missing")
+
+
+class ScorecardNameMergeTests(unittest.TestCase):
+    def setUp(self) -> None:
+        from app import main
+        self.main = main
+        self.client = TestClient(main.app)
+        self.store = {
+            "clubs": [{"id": "c1", "name": "Alpha"}],
+            "members": [
+                {"id": "m1", "name": "Bim", "primary_club_id": "c1", "aliases": [], "club_memberships": [{"club_id": "c1", "club_name": "Alpha"}]},
+                {"id": "m2", "name": "Bim B", "primary_club_id": "c1", "aliases": [], "club_memberships": [{"club_id": "c1", "club_name": "Alpha"}]},
+            ],
+        }
+        self.card = {"innings": [{"batting": [{"name": "Bim"}]}]}
+        self.user = {"id": 1}
+
+    def test_preview_match_can_be_merged_into_either_record(self) -> None:
+        for choice, kept, removed in (("older", "m1", "m2"), ("newer", "m2", "m1")):
+            with self.subTest(choice=choice), \
+                 patch.object(self.main, "_scorecard_upload_access", return_value=(self.user, "c1", self.store, {}, False)), \
+                 patch.object(self.main, "_scorecard_from_archive", return_value=self.card), \
+                 patch.object(self.main, "_reviewer_can_decide", return_value=True), \
+                 patch.object(self.main, "_perform_member_merge", return_value={"kept_member_id": kept, "removed_member_id": removed, "kept_name": "Kept", "removed_name": "Removed"}) as merge:
+                matches = self.main._card_name_matches(self.store, self.card, self.user, "c1")
+                self.assertEqual([m["id"] for m in matches[0]["members"]], ["m1", "m2"])
+                self.assertTrue(matches[0]["can_merge"])
+                self.assertFalse(self.main._card_name_matches(self.store, self.card))
+                response = self.client.post("/api/scorecards/upload-1/name-merge", json={"first_id": "m1", "second_id": "m2", "keep": choice})
+                self.assertEqual(response.status_code, 200, response.text)
+                self.assertEqual(response.json()["kept_member_id"], kept)
+                merge.assert_called_once_with(self.store, "m1", "m2", self.user, kept)
+
+    def test_merge_still_checks_authorization_and_current_match(self) -> None:
+        with patch.object(self.main, "_scorecard_upload_access", return_value=(self.user, "c1", self.store, {}, False)), \
+             patch.object(self.main, "_scorecard_from_archive", return_value=self.card), \
+             patch.object(self.main, "_reviewer_can_decide", return_value=False), \
+             patch.object(self.main, "_perform_member_merge") as merge:
+            denied = self.client.post("/api/scorecards/upload-1/name-merge", json={"first_id": "m1", "second_id": "m2", "keep": "older"})
+            self.assertEqual(denied.status_code, 403, denied.text)
+            stale = self.client.post("/api/scorecards/upload-1/name-merge", json={"first_id": "m1", "second_id": "missing", "keep": "older"})
+            self.assertEqual(stale.status_code, 404, stale.text)
+            invalid = self.client.post("/api/scorecards/upload-1/name-merge", json={"first_id": "m1", "second_id": "m2", "keep": "other"})
+            self.assertEqual(invalid.status_code, 400, invalid.text)
+            merge.assert_not_called()
 
 
 class PlayerMergeEndpointTests(LocalQATestCase):

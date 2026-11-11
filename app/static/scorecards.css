@@ -477,7 +477,7 @@
 }
 
 .sc-table .sc-num {
-  text-align: right;
+  text-align: left;
   width: 56px;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
@@ -747,8 +747,8 @@ html[data-theme="dark"] .sc-photo img {
 .sc-btn[disabled] { opacity: 0.6; cursor: default; }
 .sc-report { display: grid; gap: 8px; }
 .sc-report textarea, .scu-form select, .scu-form input[type="text"] { width: 100%; padding: 10px 12px; border-radius: 12px; border: 1.5px solid #cbd5e1; font: inherit; background: #fff; }
-.sc-check-msg { margin: 0; font-weight: 700; color: #0f172a; }
-.sc-check-msg:empty { display: none; }
+.sc-check-msg, .sc-name-merge-msg { margin: 0; font-weight: 700; color: #0f172a; }
+.sc-check-msg:empty, .sc-name-merge-msg:empty { display: none; }
 .sc-upload-cta { display: inline-flex; margin-top: 12px; }
 .scu-form { display: grid; gap: 14px; max-width: 560px; }
 .scu-form label { display: grid; gap: 6px; font-weight: 700; }

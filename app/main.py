@@ -691,8 +691,8 @@ def _clubs_page_html(request: Request, search: str = "", focus_club_id: str = ""
     viewer_display_name = "Signed in"
     snapshot_title = "No player selected"
     snapshot_details = "Sign in with your player profile to see your totals here."
-    year_rows_html = '<tr><td colspan="16">Loading year wise breakdown...</td></tr>'
-    club_rows_html = '<tr><td colspan="16">Loading club wise breakdown...</td></tr>'
+    year_rows_html = '<tr><td colspan="22">Loading year wise breakdown...</td></tr>'
+    club_rows_html = '<tr><td colspan="22">Loading club wise breakdown...</td></tr>'
 
     def _format_stat(value: Any, decimals: int = 0) -> str:
         if value in ("", None):
@@ -989,7 +989,8 @@ def _clubs_page_html(request: Request, search: str = "", focus_club_id: str = ""
     )
     cards = "".join(
         f"""
-        <article class="detail-card {'active-card' if club.get('id') == focus_club_id else ''}">
+        <article class="club-tile {'is-current' if club.get('id') == focus_club_id else ''}">
+          {'<span class="club-tile-badge">Current club</span>' if club.get('id') == focus_club_id else ''}
           <strong>{html.escape(str(club.get('name', '') or ''))}</strong>
           <p>{html.escape(str(club.get('season', '') or 'Season TBD'))}</p>
           <small>{html.escape(" · ".join(part for part in [str(club.get('short_name', '') or ''), str(club.get('city', '') or ''), str(club.get('country', '') or '')] if part))}</small>
@@ -1029,36 +1030,44 @@ def _clubs_page_html(request: Request, search: str = "", focus_club_id: str = ""
         <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, viewport-fit=cover" />
         <script src="/assets/zoom_lock.js?v=20261014a"></script>
         <title>Select Club · CricketClubApp</title>
-        <link rel="stylesheet" href="/assets/styles.css?v=20261016g" />
+        <link rel="stylesheet" href="/assets/styles.css?v=20261111tablealign" />
         <link rel="stylesheet" href="/assets/app_polish.css?v=20261006a" />
         <link rel="stylesheet" href="/assets/sports-system.css?v=20260926a" />
+        <link rel="stylesheet" href="/assets/public_match.css?v=20261111tablealign2" />
       </head>
       <body>
         <div class="page-shell">
           {topbar}
-          <section class="panel onboarding-panel">
-            <div class="stack-card">
-              <p class="section-kicker">Club Selection</p>
-              <h1 id="clubsGreeting">Welcome, {html.escape(viewer_display_name)}</h1>
-              <p id="selectedClubSummary" class="lede">{"Your current club is shown here. Use Admin Center to manage other clubs." if is_superadmin else "Choose your current club. Your primary club is the default."}</p>
+          <main class="pm-app pm-profile clubs-page">
+            <div class="pm-head">
+              <h1 id="clubsGreeting" class="pm-title">Welcome, {html.escape(viewer_display_name)}</h1>
+              <p id="selectedClubSummary" class="pm-info">{"Your current club is shown here. Use Admin Center to manage other clubs." if is_superadmin else "Choose your current club. Your primary club is the default."}</p>
+            </div>
+            <div class="pm-body">
               <div id="clubsStatus" class="status-banner" hidden></div>
-              <form class="toolbar-actions" method="get" action="/clubs">
-                <input id="clubSearchInput" name="search" type="search" value="{search_value}" placeholder="Search clubs by name, short name, or season" />
-                <button id="clubSearchButton" class="primary-button" type="submit">Search clubs</button>
-                <div id="clubsSearchSummary" class="archive-search-summary">{html.escape(summary)}</div>
-              </form>
-              <h2 class="section-heading">Available clubs</h2>
-              <div id="clubsList" class="detail-stack" data-server-rendered="true">{cards}</div>
-              <div class="mini-stat">
-                <span>Player Snapshot</span>
-                <strong id="clubsPlayerSnapshotTitle">{html.escape(snapshot_title)}</strong>
-                <small id="clubsPlayerSnapshotDetails">{html.escape(snapshot_details)}</small>
-              </div>
-              <div class="detail-card snapshot-breakdown">
-                <strong class="snapshot-breakdown-title">Year wise</strong>
-                <div class="review-table-wrap">
-                  <table class="review-table snapshot-table">
+              <section class="clubs-section">
+                <div class="pm-subhead"><h2>Available clubs</h2></div>
+                <form id="clubSearchForm" class="clubs-search" method="get" action="/clubs">
+                  <input id="clubSearchInput" name="search" type="search" value="{search_value}" placeholder="Search clubs by name, short name, or season" />
+                  <button id="clubSearchButton" class="primary-button" type="submit">Search clubs</button>
+                </form>
+                <div id="clubsSearchSummary" class="clubs-search-summary">{html.escape(summary)}</div>
+                <div id="clubsList" class="clubs-tiles" data-server-rendered="true">{cards}</div>
+              </section>
+              <section class="clubs-section">
+                <div class="pm-subhead"><h2>Player snapshot</h2></div>
+                <div class="clubs-player">
+                  <strong id="clubsPlayerSnapshotTitle" class="clubs-player-name">{html.escape(snapshot_title)}</strong>
+                  <small id="clubsPlayerSnapshotDetails" class="pm-info">{html.escape(snapshot_details)}</small>
+                </div>
+                <div id="clubsPlayerSnapshotTiles" class="pm-stat-grid"></div>
+              </section>
+              <section class="clubs-section">
+                <div class="pm-subhead"><h2>Year wise</h2></div>
+                <div class="pm-table-wrap">
+                  <table class="pm-table pm-combined">
                     <thead>
+                      <tr class="pm-band"><th></th><th colspan="13" class="pm-g-bat pm-tl pm-tr">Batting</th><th class="pm-gap"></th><th colspan="3" class="pm-g-bowl pm-tl pm-tr">Bowling</th><th class="pm-gap"></th><th colspan="2" class="pm-g-field pm-tl pm-tr">Fielding</th></tr>
                       <tr>
                         <th>Year</th>
                         <th>Mat</th>
@@ -1074,6 +1083,11 @@ def _clubs_page_html(request: Request, search: str = "", focus_club_id: str = ""
                         <th>100+</th>
                         <th>4s</th>
                         <th>6s</th>
+                        <th class="pm-gap"></th>
+                        <th>Ov</th>
+                        <th>Wkts</th>
+                        <th>Econ</th>
+                        <th class="pm-gap"></th>
                         <th>Ct</th>
                         <th>St</th>
                       </tr>
@@ -1081,10 +1095,13 @@ def _clubs_page_html(request: Request, search: str = "", focus_club_id: str = ""
                     <tbody id="clubsPlayerYearRows">{year_rows_html}</tbody>
                   </table>
                 </div>
-                <strong class="snapshot-breakdown-title">Club wise</strong>
-                <div class="review-table-wrap">
-                  <table class="review-table snapshot-table">
+              </section>
+              <section class="clubs-section">
+                <div class="pm-subhead"><h2>Club wise</h2></div>
+                <div class="pm-table-wrap">
+                  <table class="pm-table pm-combined">
                     <thead>
+                      <tr class="pm-band"><th></th><th colspan="13" class="pm-g-bat pm-tl pm-tr">Batting</th><th class="pm-gap"></th><th colspan="3" class="pm-g-bowl pm-tl pm-tr">Bowling</th><th class="pm-gap"></th><th colspan="2" class="pm-g-field pm-tl pm-tr">Fielding</th></tr>
                       <tr>
                         <th>Club</th>
                         <th>Mat</th>
@@ -1100,6 +1117,11 @@ def _clubs_page_html(request: Request, search: str = "", focus_club_id: str = ""
                         <th>100+</th>
                         <th>4s</th>
                         <th>6s</th>
+                        <th class="pm-gap"></th>
+                        <th>Ov</th>
+                        <th>Wkts</th>
+                        <th>Econ</th>
+                        <th class="pm-gap"></th>
                         <th>Ct</th>
                         <th>St</th>
                       </tr>
@@ -1107,17 +1129,17 @@ def _clubs_page_html(request: Request, search: str = "", focus_club_id: str = ""
                     <tbody id="clubsPlayerClubRows">{club_rows_html}</tbody>
                   </table>
                 </div>
-              </div>
-              <div class="inline-actions">
+              </section>
+              <div class="clubs-links">
                 <a id="seasonSetupLink" class="primary-link" href="/season-setup">Season Fixtures</a>
                 <a id="playerAvailabilityLink" class="primary-link" href="/player-availability">Player availability</a>
                 <a id="playerProfileLink" class="primary-link" href="/profile">Player profile</a>
               </div>
             </div>
-          </section>
+          </main>
         </div>
         <script src="/assets/multipage.js?v=20261025a"></script>
-        <script src="/assets/clubs.js?v=20261104c"></script>
+        <script src="/assets/clubs.js?v=20261113k"></script>
       </body>
     </html>
     """
@@ -6763,10 +6785,10 @@ def _admin_center_html(request: Request) -> HTMLResponse:
         <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, viewport-fit=cover" />
         <script src="/assets/zoom_lock.js?v=20261014a"></script>
         <title>Admin center · CricketClubApp</title>
-        <link rel="stylesheet" href="/assets/styles.css?v=20261102a" />
+        <link rel="stylesheet" href="/assets/styles.css?v=20261111tablealign" />
         <link rel="stylesheet" href="/assets/app_polish.css?v=20261006a" />
         <link rel="stylesheet" href="/assets/sports-system.css?v=20260926a" />
-        <link rel="stylesheet" href="/assets/scorecards.css?v=20261111a" />
+        <link rel="stylesheet" href="/assets/scorecards.css?v=20261111tablealign" />
       </head>
       <body>
         <div class="page-shell">
@@ -15221,7 +15243,7 @@ def scorecard_name_merge(upload_id: str, request: ScorecardNameMergeRequest, x_a
     pair_ids = {str(request.first_id or "").strip(), str(request.second_id or "").strip()}
     group = next(
         (
-            match for match in _card_name_matches(store, _scorecard_from_archive(upload))
+            match for match in _card_name_matches(store, _scorecard_from_archive(upload), user_row, current_club_id)
             if match["kind"] == "duplicate" and {m["id"] for m in match["members"]} == pair_ids
         ),
         None,
