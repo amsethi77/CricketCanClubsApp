@@ -927,6 +927,14 @@ function displayPlayerName(member) {
   return member.full_name || member.name || "";
 }
 
+// Links a player's name to the public profile at /players/<player id>. Plain text when the name is not a stored member.
+function playerNameLink(name, { member = null, label = null } = {}) {
+  const text = escapeHtml(label ?? name ?? "");
+  const found = member || findMemberByName(name);
+  const key = String(found?.player_id || found?.id || "").trim();
+  return key ? `<a class="player-profile-link" href="/players/${encodeURIComponent(key)}">${text}</a>` : text;
+}
+
 function normalizePlayerName(value) {
   return String(value || "")
     .trim()
@@ -2435,7 +2443,7 @@ function renderLandingClubStats(stats) {
     <article class="summary-card"><span>Teams</span><strong>${stats.team_count || 0}</strong></article>
     <article class="summary-card"><span>Fixtures</span><strong>${stats.fixture_count || 0}</strong></article>
     <article class="summary-card"><span>Archives</span><strong>${stats.archive_count || 0}</strong></article>
-    <article class="summary-card"><span>Top Batter</span><strong>${stats.top_batter || "TBD"}</strong><p>${stats.top_batter_runs || 0} runs</p></article>
+    <article class="summary-card"><span>Top Batter</span><strong>${stats.top_batter ? playerNameLink(stats.top_batter) : "TBD"}</strong><p>${stats.top_batter_runs || 0} runs</p></article>
   `;
 }
 
@@ -2755,7 +2763,7 @@ function renderFollowedPlayers(items) {
     emptyMessage: `<p class="empty-state">Follow players to pin their stats here.</p>`,
     renderItem: (item) => `
       <article class="detail-card clickable-card" data-player="${item.player_name}">
-        <strong>${item.full_name || item.player_name}</strong>
+        <strong>${playerNameLink(item.player_name, { label: item.full_name || item.player_name })}</strong>
         <p>${item.matches || 0} matches</p>
         <small>${item.runs || 0} runs · ${item.wickets || 0} wickets · ${item.catches || 0} catches</small>
       </article>
@@ -2825,7 +2833,7 @@ function renderLandingPlayerResults() {
             { runs: 0, matches: 0, wickets: 0, catches: 0 };
           return `
             <article class="detail-card">
-              <strong>${displayPlayerName(member)}</strong>
+              <strong>${playerNameLink(member.name, { member, label: displayPlayerName(member) })}</strong>
               <p>${stats.matches || 0} matches</p>
               <small>${stats.runs || 0} runs · ${stats.wickets || 0} wickets · ${stats.catches || 0} catches</small>
               <div class="inline-actions">
@@ -2863,7 +2871,7 @@ function renderPerformancePlayerResults() {
             { runs: 0, matches: 0, wickets: 0, catches: 0 };
           return `
             <article class="detail-card">
-              <strong>${displayPlayerName(member)}</strong>
+              <strong>${playerNameLink(member.name, { member, label: displayPlayerName(member) })}</strong>
               <p>${stats.matches || 0} matches</p>
               <small>${stats.runs || 0} runs · ${stats.wickets || 0} wickets · ${stats.catches || 0} catches</small>
               <div class="inline-actions">
@@ -2962,7 +2970,7 @@ function renderSelectedMatch(match) {
     emptyMessage: `<p class="empty-state">No player performances saved for this match yet.</p>`,
     renderItem: (item) => `
       <article class="detail-card">
-        <strong>${item.player_name}</strong>
+        <strong>${playerNameLink(item.player_name)}</strong>
         <p>${item.runs} runs · ${item.wickets} wickets · ${item.catches} catches</p>
         <small>${item.notes || item.source}</small>
       </article>
@@ -3208,7 +3216,7 @@ function renderScorebook(match) {
           (item, index) => `
             <article class="scorebook-person-card ${index === 0 ? "strike" : ""}">
               <div class="scorebook-person-copy">
-                <h4>${item.player_name}</h4>
+                <h4>${playerNameLink(item.player_name)}</h4>
                 <p>${index === 0 ? "On strike" : "Non-striker"} · ${item.balls} balls</p>
               </div>
               <strong>${item.runs}</strong>
@@ -3224,7 +3232,7 @@ function renderScorebook(match) {
           (item) => `
             <article class="scorebook-person-card bowl">
               <div class="scorebook-person-copy">
-                <h4>${item.player_name}</h4>
+                <h4>${playerNameLink(item.player_name)}</h4>
                 <p>${item.overs} overs · ${item.wickets} wickets</p>
               </div>
               <strong>${item.runs}/${item.wickets}</strong>
@@ -3400,7 +3408,7 @@ function renderMembers(members) {
         <article class="member-card clickable-card" data-player="${member.name}">
           ${avatar}
           <div>
-            <h3>${displayName}</h3>
+            <h3>${playerNameLink(member.name, { member, label: displayName })}</h3>
             <p>${member.role}${member.jersey_number ? ` · Jersey ${member.jersey_number}` : ""}</p>
             <p>${member.batting_style || "Batting style TBD"} / ${member.bowling_style || "Bowling style TBD"}</p>
             <p class="member-stats">${storedRuns} stored runs · ${stats.wickets} wickets · ${stats.matches} applied matches</p>
@@ -3697,6 +3705,20 @@ function populateRankingYearSelect(dashboard) {
   elements.rankingYearSelect.value = state.selectedSeasonYear || "";
 }
 
+// Each ranking card shows only the stats of its own category (batting, bowling or fielding).
+function rankingStatsHtml(item, category) {
+  if (category === "bowling") {
+    return `<p>Bowling: ${item.wickets} wickets · ${formatMetric(item.wickets_per_match)} per match</p>`;
+  }
+  if (category === "fielding") {
+    return `<p>Fielding: ${item.catches} catches · ${formatMetric(item.catches_per_match)} per match</p>`;
+  }
+  return `
+    <p>Batting: ${item.matches} matches · ${item.runs} runs · Avg ${formatMetric(item.batting_average)} · SR ${formatMetric(item.strike_rate)}</p>
+    <small>${item.balls ? `${item.balls} balls faced` : "Strike rate waiting for ball data"}</small>
+  `;
+}
+
 function renderRankingSection(title, rows, renderer, emptyMessage) {
   const content = renderLimitedCollection(rows, {
     key: `ranking-${title.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`,
@@ -3729,11 +3751,9 @@ function renderLeaderboard() {
     (item) => {
       return `
         <article class="leader-card clickable-card" data-player="${item.player_name}">
-          <strong>#${item.rank} ${item.player_name}</strong>
-          <p>${item.matches} stored matches · ${item.runs} stored runs</p>
-          <p>${item.runs} stored runs · Avg ${formatMetric(item.batting_average)} · SR ${formatMetric(item.strike_rate)}</p>
-          <small>${item.balls ? `${item.runs} off ${item.balls} balls` : "Strike rate waiting for ball data"}</small>
-        </article>
+            <strong>#${item.rank} ${playerNameLink(item.player_name)}</strong>
+            ${rankingStatsHtml(item, "batting")}
+          </article>
       `;
     },
     selectedYear ? `No batting rankings yet for ${selectedYear}.` : "No batting rankings yet. Add or apply player batting scores first."
@@ -3744,10 +3764,8 @@ function renderLeaderboard() {
     bowlingRows,
     (item) => `
       <article class="leader-card clickable-card" data-player="${item.player_name}">
-        <strong>#${item.rank} ${item.player_name}</strong>
-        <p>${item.wickets} wickets in ${item.matches} stored matches</p>
-        <p>${formatMetric(item.wickets_per_match)} wickets per match</p>
-        <small>${item.runs} runs scored as batter · ${item.catches} catches</small>
+        <strong>#${item.rank} ${playerNameLink(item.player_name)}</strong>
+        ${rankingStatsHtml(item, "bowling")}
       </article>
     `,
     selectedYear ? `No bowling rankings yet for ${selectedYear}.` : "No bowling rankings yet. Add wicket data from matches or applied archives first."
@@ -3758,10 +3776,8 @@ function renderLeaderboard() {
     fieldingRows,
     (item) => `
       <article class="leader-card clickable-card" data-player="${item.player_name}">
-        <strong>#${item.rank} ${item.player_name}</strong>
-        <p>${item.catches} catches in ${item.matches} stored matches</p>
-        <p>${formatMetric(item.catches_per_match)} catches per match</p>
-        <small>${item.wickets} wickets · ${item.runs} runs</small>
+        <strong>#${item.rank} ${playerNameLink(item.player_name)}</strong>
+        ${rankingStatsHtml(item, "fielding")}
       </article>
     `,
     selectedYear ? `No fielding rankings yet for ${selectedYear}.` : "No fielding rankings yet. Add catches to player performances first."
@@ -3792,8 +3808,8 @@ function renderHomeRankingsPreview() {
       <div class="rankings-preview-list">
         ${renderPreviewCards(battingRows, "No batting rankings yet.", (item) => `
           <div class="rankings-preview-item">
-            <strong>#${item.rank} ${item.player_name}</strong>
-            <p>${item.runs} runs · Avg ${formatMetric(item.batting_average)} · SR ${formatMetric(item.strike_rate)}</p>
+            <strong>#${item.rank} ${playerNameLink(item.player_name)}</strong>
+            ${rankingStatsHtml(item, "batting")}
           </div>
       `)}
       </div>
@@ -3803,8 +3819,8 @@ function renderHomeRankingsPreview() {
       <div class="rankings-preview-list">
         ${renderPreviewCards(bowlingRows, "No bowling rankings yet.", (item) => `
           <div class="rankings-preview-item">
-            <strong>#${item.rank} ${item.player_name}</strong>
-            <p>${item.wickets} wickets · ${formatMetric(item.wickets_per_match)} per match</p>
+            <strong>#${item.rank} ${playerNameLink(item.player_name)}</strong>
+            ${rankingStatsHtml(item, "bowling")}
           </div>
       `)}
       </div>
@@ -3814,8 +3830,8 @@ function renderHomeRankingsPreview() {
       <div class="rankings-preview-list">
         ${renderPreviewCards(fieldingRows, "No fielding rankings yet.", (item) => `
           <div class="rankings-preview-item">
-            <strong>#${item.rank} ${item.player_name}</strong>
-            <p>${item.catches} catches · ${formatMetric(item.catches_per_match)} per match</p>
+            <strong>#${item.rank} ${playerNameLink(item.player_name)}</strong>
+            ${rankingStatsHtml(item, "fielding")}
           </div>
       `)}
       </div>
@@ -4175,8 +4191,7 @@ function renderPlayerProfile() {
       <div class="player-hero-main">
         <div class="avatar-fallback profile-avatar">${player.picture}</div>
         <div>
-          <h3>${displayName}</h3>
-          <p>${player.gender || "Gender TBD"} · ${player.age || "TBD"} years</p>
+          <h3>${playerNameLink(player.name, { member: player, label: displayName })}</h3> · ${player.age || "TBD"} years</p>
           <p>${player.batting_style || "Batting style TBD"} / ${player.bowling_style || "Bowling style TBD"}</p>
           <small>Role: ${player.role || "Player"}</small>
           <small>Mobile: ${player.phone || "No mobile stored"}</small>
@@ -4486,7 +4501,7 @@ function archiveReviewTable(item) {
             .map(
               (entry) => `
                 <tr>
-                  <td>${entry.player_name}</td>
+                  <td>${playerNameLink(entry.player_name)}</td>
                   <td>${entry.runs || 0}</td>
                   <td>${entry.balls || "--"}</td>
                   <td>${entry.confidence || entry.source || "review"}</td>
@@ -4634,7 +4649,7 @@ function renderTeamPageInto(targets = {}) {
             <article class="member-card clickable-card" data-player="${member.name}">
               ${member.picture_url ? `<img class="avatar-image" src="${member.picture_url}" alt="${member.name}" />` : `<div class="avatar-fallback">${member.picture}</div>`}
               <div>
-                <h3>${displayName}</h3>
+                <h3>${playerNameLink(member.name, { member, label: displayName })}</h3>
                 <p>${member.role}</p>
                 <p class="member-stats">${confirmedRuns} confirmed runs · ${stats.wickets} wickets · ${stats.matches} applied matches</p>
                 <small>${archiveRuns ? `${confirmedRuns} confirmed + ${archiveRuns} reviewed historical archive runs` : `${confirmedRuns} confirmed runs`}</small>
@@ -4655,7 +4670,7 @@ function renderTeamPageInto(targets = {}) {
             const archiveRuns = Number(pending.runs || 0);
             return `
               <article class="leader-card clickable-card" data-player="${item.player_name}">
-                <strong>${item.player_name}</strong>
+                <strong>${playerNameLink(item.player_name)}</strong>
                 <p>${item.matches} applied matches</p>
                 <p>${confirmedRuns} confirmed runs · ${item.wickets} wickets · ${item.catches} catches</p>
                 <small>${archiveRuns ? `${confirmedRuns} confirmed + ${archiveRuns} reviewed historical archive runs` : `${confirmedRuns} confirmed runs`}</small>
@@ -4963,7 +4978,7 @@ function renderDashboard(dashboard) {
   }
 }
 
-async function loadDashboard() {
+async function loadDashboard({ showCached = true } = {}) {
   dashboardDebug("Loading dashboard for selected club.", {
     selectedClubId: state.selectedFocusClubId || "",
     selectedSeasonYear: state.selectedSeasonYear || "",
@@ -5028,7 +5043,7 @@ async function loadDashboard() {
     queryParams.set("selected_season_year", statsPage && seasonYear === currentYear ? "auto" : seasonYear);
   }
   const query = queryParams.toString() ? `?${queryParams.toString()}` : "";
-  const dashboard = await runAction(() => getJson(`/api/dashboard${query}`), "", "load dashboard");
+  const applyDashboard = (dashboard) => {
   if (dashboard) {
     dashboardDebug("Dashboard loaded.", {
       focusClub: dashboard.focus_club?.name || dashboard.club?.name || "",
@@ -5069,6 +5084,14 @@ async function loadDashboard() {
       setStatus(error.message || "Dashboard could not load.", "error");
     }
   }
+  };
+  // The Home dashboard is drawn from the last copy at once, then refreshed (multipage.js cachedPageLoad).
+  await window.CricketClubAppPages.cachedPageLoad(
+    `dashboard${query}`,
+    () => runAction(() => getJson(`/api/dashboard${query}`), "", "load dashboard"),
+    applyDashboard,
+    { showCached }
+  );
 }
 
 if (elements.activeMatchSelect) {
@@ -5534,7 +5557,7 @@ document.addEventListener("click", async (event) => {
     "delete fixture"
   );
   if (dashboard) {
-    await loadDashboard();
+    await loadDashboard({ showCached: false });
     if (elements.scheduleFixtureForm) {
       elements.scheduleFixtureForm.reset();
     }

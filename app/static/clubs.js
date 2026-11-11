@@ -145,7 +145,7 @@ function highestScoreFor(member, { year = null, clubId = null } = {}) {
 function renderTableRows(body, rows, emptyText) {
   if (!body) return;
   if (!rows.length) {
-    body.innerHTML = `<tr><td colspan="16">${emptyText}</td></tr>`;
+    body.innerHTML = `<tr><td colspan="19">${emptyText}</td></tr>`;
     return;
   }
   body.innerHTML = rows
@@ -168,6 +168,9 @@ function renderTableRows(body, rows, emptyText) {
           <td>${formatCell(row.sixes)}</td>
           <td>${formatCell(row.catches)}</td>
           <td>${formatCell(row.stumpings)}</td>
+          <td>${row.overs || "—"}</td>
+          <td>${formatCell(row.wickets)}</td>
+          <td>${formatCell(row.economy, 2)}</td>
         </tr>
       `
     )
@@ -303,6 +306,10 @@ async function renderPlayerBreakdowns() {
   }
   const yearStats = Array.from(yearStatsByKey.values());
   const rankingYears = [...new Set(yearStats.map((item) => item.season_year).filter(Boolean))];
+  // Nov 11 2026 (Amit: Clubs player snapshot should show bowling and fielding): bowling comes from the scorecards
+  // (/api/player/summary bowling block), matched by season and by club name.
+  const bowlingByYear = new Map((overview?.bowling?.years || []).map((row) => [String(row.season_year), row]));
+  const bowlingByClub = new Map((overview?.bowling?.clubs || []).map((row) => [String(row.club_name || "").trim().toLowerCase(), row]));
   for (const year of rankingYears) {
     const row = { runs: 0, wickets: 0, catches: 0, matches: 0, batting_innings: 0, outs: 0, batting_average: 0, strike_rate: 0, fours: 0, sixes: 0, highest_score: null };
     const match = yearStats.find((item) => item.season_year === String(year) && (item.player_name === member.name || performanceMatchesMember(item.player_name, member))) || row;
@@ -324,6 +331,9 @@ async function renderPlayerBreakdowns() {
       sixes: rowValue(yearRow, "sixes"),
       catches: rowValue(yearRow, "catches"),
       stumpings: rowValue(yearRow, "stumpings"),
+      overs: bowlingByYear.get(String(year))?.overs || "",
+      wickets: bowlingByYear.get(String(year))?.wickets ?? null,
+      economy: bowlingByYear.get(String(year))?.economy ?? null,
     });
   }
   renderTableRows(clubsPlayerYearRows, yearRows, "No yearly breakdown available yet.");
@@ -388,6 +398,9 @@ async function renderPlayerBreakdowns() {
       sixes: rowValue(row, "sixes"),
       catches: rowValue(row, "catches"),
       stumpings: rowValue(row, "stumpings"),
+      overs: bowlingByClub.get(String(club.club_name || "").trim().toLowerCase())?.overs || "",
+      wickets: bowlingByClub.get(String(club.club_name || "").trim().toLowerCase())?.wickets ?? null,
+      economy: bowlingByClub.get(String(club.club_name || "").trim().toLowerCase())?.economy ?? null,
     };
     clubRows.push({
       label: club.club_name,

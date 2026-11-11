@@ -67,6 +67,29 @@ These rules are the source of truth for the current implementation. If older log
 
 This section captures the user requirements in the order they were given and refined during the build.
 
+### November 2026 profile stats as cards
+- "this is not looking good as this is not professionally done... come up with better design and keep all batting bowling under same year or under club not spllitted by season or year or club and multiple times" (the profile shows three career tiles, then one card per season and one per club. Each card has Batting, Bowling and Fielding as separate labelled groups; the groups sit side by side on laptop and stack on phone.)
+- "add some space and move to left a you have alot of white space and try to use tiles in between..look and feel is not good" (profile: left aligned, group tiles with gaps, more space between sections.)
+- "should the Clubs page player snapshot also get bowling and fielding columns? Yes" (the Clubs page player snapshot, Year wise and Club wise tables, gets Ov, Wkts and Econ columns after St, with a Batting / Fielding / Bowling band row.)
+
+### November 2026 batting, bowling and fielding kept separate
+- "is not making sense to include bowling under batting stats and batting under bowling stats or field.. please keep it simple and show only batting under batting, bowling under bowling and fielding under fielding stats" (each stats card and table shows only its own category.)
+
+### November 2026 player profile shows bowling and fielding stats
+- "no in the players/<player id> should add bowling and field stats here" (the player profile shows bowling and fielding alongside batting: bowling tables for career, season and club, and catches in the batting tables.)
+
+### November 2026 profile recent matches and summary
+- "do the same for recent matches as well on the same page and on the summary above as well..this page is the most visted page has to stand out from others" (Recent matches uses the same Batting | Bowling | Fielding bands per match, with catches and run outs from each scorecard. The summary tiles get one accent colour per group and larger figures.)
+
+### November 2026 ranking cards show all stats and link snapshot names
+- "not its not there on the Ranking page, on the focussed club snapshot. Also, if you are showing the bowling stats of a player or a fielding snapshot then should show the player's bowling stats and fielding stats alongwith the batting stats...same as batting stats" (the Focused club snapshot Top Batter name links to the profile; every batting, bowling and fielding ranking card, and the Home preview, shows batting, bowling and fielding totals for the player.)
+
+### November 2026 Home page cached between visits
+- "we should cache the home page if it has loaded the first time...while going back and forth it relaods and time consuming activities." (the Home dashboard and the Home overview feeds are kept in the tab's sessionStorage: a return visit draws the last copy at once, then refreshes it in the background and redraws only when the data changed. The cache is cleared on sign-in and sign-out.)
+
+### November 2026 player name links on Home
+- "On the Home page and anywhere we show the players name ensure we have the hyperlink to it to show the player profile which is players/<player_id>" (every player name shown on the Home page links to `/players/<player_id>`.)
+
 ### November 2026 name claim approval scope
 - "both club admin and superadmin. Club admin sees its own club players and superadmin for all" (confirms the name claim and name matches rule: superadmin sees and decides everything; a club admin or captain sees and decides only for players in their own clubs, via `_reviewer_can_decide`. A name-matches group is shown only when the reviewer can see every member in it.)
 
@@ -1608,8 +1631,15 @@ Model (soft launch, Oct 2026): keep the core cricket experience free; one paid p
   - Matches already saved like that are put right as they are read: a team never bowls to itself and the two innings are always different teams (`_repair_scorebook_teams` in `cricket_store.py`). Tested by breaking a match the same way.
   - A batter or bowler typed in on the day joins their team's line-up (up to 11), so the pick lists show them next time and "all out" counts them (`_grow_lineups_with_new_players` in `main.py`; the Score page now sends the new batter with a wicket). In that match "Ab" batted without being in the line-up.
   - Tested: other team batting first, a typed-in batter, all out at the right wicket, the chase lists (Heartlake batters, their bowlers), the phone's Back button in the middle of the chase, and the public page. `quick_score.js` 20261031d.
-
-## New UI Look and Feel
+- 2026-11-11: Player names on the Home page (rankings, leaderboards, player search, follow list, selected player, team player scores, scorebook pair, suggested performances) link to the player profile `/players/<player id>`. `app.js` has `playerNameLink` (uses `findMemberByName`; plain text when the name is not a stored member); `styles.css` `.player-profile-link`; `index.html` app.js v20261111a, styles.css v20261111a.
+- 2026-11-11: Focused club snapshot "Top Batter" links to the profile. Batting, bowling and fielding ranking cards (Ranking page) and the Home rankings preview all show the player's batting, bowling and fielding totals through `rankingStatsHtml` in `app.js`. `index.html` app.js v20261111b.
+- 2026-11-13: Batting, bowling and fielding are kept apart in ranking cards. Cards (Ranking page and Home preview) show only their own category: batting cards show matches, runs, average and strike rate; bowling cards show wickets and per match; fielding cards show catches and per match (`rankingStatsHtml(item, category)` in `app.js`). `app.js` v20261113b.
+- 2026-11-13: `/players/<player id>` season and club stats are one row each, grouped as Batting | Bowling | Fielding under a group header. Each group is a tinted tile, with gap cells between tiles (`statRows` in `player_public.js`; `.pm-profile` rules in `public_match.css`). The profile is left aligned, full width (max 1040px), and has more space between sections. Columns: M, Runs, HS, Avg, SR | Ov, Wkts, Econ | Ct. `player_public.js` v20261113g, `player_public.html` loads `public_match.css` v20261113g and has class `pm-profile`. Checked in the browser at 1280px (no overflow) and 390px (table scrolls inside its box, page does not overflow).
+- 2026-11-13: `/players/<player id>` fielding shows catches (C) and run outs (RO) as columns after the Fielding band, with C and RO headers centred and values right aligned. Run outs come from scorecard dismissals "run out (Fielder)" and are counted per fielder, season and club by `_member_run_outs` in `main.py` (returned as `fielding`). Also added a Run outs tile. `player_public.js` v20261113h, `public_match.css` v20261113g. Verified at 1280px and 390px. Haris (1084) has 0 run outs in the stored data.
+- 2026-11-11: `/players/<player id>` recent matches use the same Batting | Bowling | Fielding bands as the season and club tables (R, B, SR | Ov, W, R | C, RO), one row per match. `_member_match_fielding` in `main.py` counts catches ("c X b Y", "c & b Y") and run outs per scorecard, returned in each `recent` item as `fielding`. Summary tiles have a colour per group (blue batting, orange bowling, green fielding) and larger figures. Numeric cells are right aligned. `player_public.js` v20261113i, `public_match.css` v20261113i, `player_public.html` loads both. Verified at 1280px (no overflow) and 390px (document 375px, tables scroll inside their boxes).
+ a Bowling table for Career, Season by season and By club (Inns, Overs, Mdns, Runs, Wkts, Avg, Econ, Best). Bowling comes from the scorecards (`public_player_profile` in `main.py` aggregates each innings' bowling row). Batting tables keep Ct (catches) as the fielding figure; Wkts moved to the bowling table. Stumpings are not recorded anywhere in the app, so they are not shown. `player_public.js` v20261112a.
+- 2026-11-13: Home page caching. `multipage.js` has `cachedPageLoad(key, load, render)` (stale-while-revalidate in sessionStorage, keys prefixed `cricketClubAppPageCache:`) and `clearPageCache()`, which runs when the auth token changes. `app.js` `loadDashboard` caches `/api/dashboard` (`showCached: false` after a fixture delete). `dashboard_home.js` caches the Home feeds (live, fixtures, scorecards, club, scorebook edit rights) and re-renders through `selectHome`/`renderHome`. `index.html`: multipage.js and app.js v20261113a, dashboard_home.js v20261113a. Not yet tested in a browser (sign-in required).
+- 2026-11-13: Clubs page player snapshot shows bowling. Year wise and Club wise tables gained Ov, Wkts and Econ after St, with a Batting / Fielding / Bowling band row. Backend: `_member_bowling_breakdown` in `main.py` aggregates scorecard bowling by season and club for the signed-in member, returned as the `bowling` key of `player_profile_data` (feeds `/api/player/summary`). `clubs.js` `bowlingByYear` / `bowlingByClub`; `clubs.html` loads `clubs.js?v=20261111a` and `styles.css?v=20261111a`; `.snapshot-band` added to `styles.css`. Not yet verified in a browser (sign-in required).## New UI Look and Feel
 
 ## 1. Typography & Global Layout Foundation
 Prompt for Copilot Chat / Panel:

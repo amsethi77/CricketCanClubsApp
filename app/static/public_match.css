@@ -1160,3 +1160,197 @@
   opacity: 0.75;
   font-size: 0.72rem;
 }
+
+/* Nov 13 2026: career tiles and one stat card per season / club (batting, bowling, fielding as separate groups) */
+.pm-stat-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin: 16px 0 8px;
+}
+.pm-stat-card {
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  padding: 12px 14px;
+  background: #fff;
+}
+.pm-stat-card h3 {
+  margin: 0 0 8px;
+  font-size: 0.8rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #475569;
+}
+.pm-stat-card dl {
+  margin: 0;
+  display: grid;
+  gap: 4px;
+}
+.pm-stat-card dl > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+.pm-stat-card dt {
+  color: #64748b;
+  font-size: 0.85rem;
+}
+.pm-stat-card dd {
+  margin: 0;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.pm-combined .pm-band th {
+  text-align: center;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #475569;
+  background: #f1f5f9;
+  border-bottom: 1px solid #cbd5e1;
+}
+.pm-combined th[rowspan] {
+  vertical-align: top;
+}
+.pm-combined th small {
+  display: block;
+  color: #64748b;
+  font-weight: 500;
+  font-size: 0.78rem;
+  white-space: nowrap;
+}
+/* Profile layout: left aligned, wider, with space between sections */
+.pm-app.pm-profile {
+  width: 100%;
+  max-width: 1040px;
+  margin: 0;
+}
+.pm-profile .pm-body {
+  display: grid;
+  gap: 18px;
+  padding: 14px 16px 24px;
+}
+.pm-profile .pm-subhead {
+  margin: 0;
+}
+.pm-profile .pm-stat-grid {
+  margin: 0;
+  gap: 12px;
+}
+.pm-profile .pm-table-wrap {
+  overflow-x: auto;
+}
+.pm-profile .pm-combined {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0 6px;
+}
+.pm-profile .pm-combined th,
+.pm-profile .pm-combined td {
+  border-bottom: 0;
+  padding: 8px 12px;
+}
+.pm-profile .pm-combined thead th {
+  background: transparent;
+  border-bottom: 0;
+  padding-bottom: 4px;
+}
+.pm-profile .pm-combined th:first-child {
+  width: auto;
+  min-width: 140px;
+  padding-left: 0;
+}
+.pm-profile .pm-combined td:last-child,
+.pm-profile .pm-combined th:last-child {
+  padding-right: 12px;
+}
+.pm-profile .pm-combined td.pm-gap,
+.pm-profile .pm-combined th.pm-gap {
+  width: 12px;
+  min-width: 12px;
+  padding: 0;
+  background: transparent;
+  border: 0;
+}
+.pm-profile .pm-combined .pm-g-bat,
+.pm-profile .pm-combined .pm-g-bowl,
+.pm-profile .pm-combined .pm-g-field {
+  background: #f8fafc;
+}
+.pm-profile .pm-combined .pm-g-bat {
+  background: #eff6ff;
+}
+.pm-profile .pm-combined .pm-g-bowl {
+  background: #fff7ed;
+}
+.pm-profile .pm-combined .pm-g-field {
+  background: #f0fdf4;
+}
+.pm-profile .pm-combined .pm-band th.pm-g-bat {
+  background: #dbeafe;
+  color: #1e3a8a;
+}
+.pm-profile .pm-combined .pm-band th.pm-g-bowl {
+  background: #ffedd5;
+  color: #9a3412;
+}
+.pm-profile .pm-combined .pm-band th.pm-g-field {
+  background: #dcfce7;
+  color: #166534;
+}
+.pm-profile .pm-combined .pm-tl {
+  border-top-left-radius: 10px;
+  border-bottom-left-radius: 10px;
+}
+.pm-profile .pm-combined .pm-tr {
+  border-top-right-radius: 10px;
+  border-bottom-right-radius: 10px;
+}
+.pm-profile .pm-combined .pm-band th {
+  padding: 8px 12px;
+  font-weight: 700;
+}
+.pm-profile .pm-combined .pm-band th.pm-tl {
+  border-bottom-left-radius: 10px;
+}
+/* Numbers line up to the right under their headers; names stay left. */
+.pm-profile .pm-combined thead th:not(:first-child),
+.pm-profile .pm-combined tbody td {
+  text-align: right;
+}
+.pm-profile .pm-combined .pm-band th {
+  text-align: center;
+}
+/* Summary tiles: one accent colour per group, larger figures so the summary stands out. */
+.pm-profile .pm-stat-card {
+  border-top: 3px solid #94a3b8;
+  padding: 14px 16px;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06);
+}
+.pm-profile .pm-stat-card.pm-c-bat {
+  border-top-color: #2563eb;
+  background: #f8fbff;
+}
+.pm-profile .pm-stat-card.pm-c-bowl {
+  border-top-color: #ea580c;
+  background: #fffaf5;
+}
+.pm-profile .pm-stat-card.pm-c-field {
+  border-top-color: #16a34a;
+  background: #f6fdf8;
+}
+.pm-profile .pm-stat-card h3 {
+  color: #334155;
+}
+.pm-profile .pm-stat-card dd {
+  font-size: 1.05rem;
+  color: #0f172a;
+}
+
+@media (max-width: 420px) {
+  .pm-stat-grid {
+    grid-template-columns: 1fr;
+  }
+}

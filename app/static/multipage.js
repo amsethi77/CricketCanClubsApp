@@ -104,11 +104,45 @@ function getAuthToken() {
 }
 
 function setAuthToken(token) {
+  if (getAuthToken() !== (token || "")) clearPageCache();
   if (token) {
     window.localStorage.setItem(TOKEN_KEY, token);
   } else {
     window.localStorage.removeItem(TOKEN_KEY);
   }
+}
+
+// Page data cache (Nov 11 2026, Amit: Home reloads and is slow when going back and forth). The last copy of a
+// page's data is kept in sessionStorage and drawn at once; the fresh copy is then loaded and drawn only if it
+// changed. Cleared when the signed-in member changes, so one member's data never shows for another.
+const PAGE_CACHE_PREFIX = "cricketClubAppPageCache:";
+
+function clearPageCache() {
+  Object.keys(window.sessionStorage)
+    .filter((key) => key.startsWith(PAGE_CACHE_PREFIX))
+    .forEach((key) => window.sessionStorage.removeItem(key));
+}
+
+async function cachedPageLoad(key, load, render, { showCached = true } = {}) {
+  const storageKey = PAGE_CACHE_PREFIX + key;
+  let cached = null;
+  try {
+    cached = JSON.parse(window.sessionStorage.getItem(storageKey) || "null");
+  } catch {
+    cached = null;
+  }
+  if (cached !== null && showCached) render(cached);
+  const fresh = await load();
+  if (fresh === null || fresh === undefined) return cached;
+  const freshText = JSON.stringify(fresh);
+  if (cached !== null && JSON.stringify(cached) === freshText) return fresh;
+  try {
+    window.sessionStorage.setItem(storageKey, freshText);
+  } catch {
+    // Storage full: the page still works, it just loads without the cached copy.
+  }
+  render(fresh);
+  return fresh;
 }
 
 function setPrimaryClubId(clubId) {
@@ -1004,6 +1038,8 @@ window.CricketClubAppPages = {
   setPrimaryClubId,
   getJson: sharedGetJson,
   postJson: sharedPostJson,
+  cachedPageLoad,
+  clearPageCache,
   putJson,
   deleteJson,
   authMe,

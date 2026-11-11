@@ -333,17 +333,13 @@
   });
 
   // ---------- Load ----------
-  (async () => {
-    const [live, fixtures, scorecards] = await Promise.all([
-      getJson("/api/public/live-page"),
-      getJson("/api/public/fixtures-page"),
-      getJson("/api/public/scorecards"),
-    ]);
-    const club = await myClub();
-    const clubId = club.id;
-    viewerClubId = clubId;
-    const clubKey = teamKey(club.name);
-    viewerClubKey = clubKey;
+  // The Home feeds are cached in the tab (multipage.js cachedPageLoad): the last copy is drawn at once, then refreshed.
+  function selectHome(bundle) {
+    const club = bundle.club || {};
+    viewerClubId = String(club.id || "");
+    viewerClubKey = teamKey(club.name);
+    const clubId = viewerClubId;
+    const clubKey = viewerClubKey;
     const mineFirst = (a, b) => Number(b.club === clubId) - Number(a.club === clubId);
     // A member's Home shows their own club's matches and scorecards only (Amit, Oct 26: Heartlake's Home
     // showed other clubs' scorecards). The club's own card, or a card where the club is one of the teams.
@@ -356,31 +352,58 @@
       return ownerId === clubId;
     };
 
-    const liveList = (live?.live_matches || []).map((f) => fromFixture(f, "live")).filter((m) => isMine(m.club, m.teams.map((t) => t.name)));
+    const liveList = (bundle.live?.live_matches || []).map((f) => fromFixture(f, "live")).filter((m) => isMine(m.club, m.teams.map((t) => t.name)));
     const liveIds = new Set(liveList.map((m) => m.id));
-    const all = (fixtures?.fixtures || [])
+    const all = (bundle.fixtures?.fixtures || [])
       .map((f) => fromFixture(f))
       .filter((m) => !liveIds.has(m.id) && isMine(m.club, m.teams.map((t) => t.name)));
     const results = all.filter((m) => m.kind === "result").sort((a, b) => String(b.date).localeCompare(String(a.date)));
-    await Promise.all(results.slice(0, 8).map(async (match) => {
-      match.canEditScorebook = await canEditScorebook(match.id);
-    }));
     const today = todayIso();
     const upcoming = all
       .filter((m) => m.kind === "upcoming" && String(m.date) >= today)
       .sort((a, b) => String(a.date).localeCompare(String(b.date)));
-    items = [...liveList.sort(mineFirst), ...results.slice(0, 8), ...upcoming.slice(0, 8)];
-    renderStrip();
-
-    const grid = scPanel.querySelector(".home-card-grid");
-    const list = (scorecards?.scorecards || []).filter((sc) =>
+    const list = (bundle.scorecards?.scorecards || []).filter((sc) =>
       isMine(sc.club_id, (sc.teams || []).map((t) => t.name))
     );
     list.sort((a, b) => String(b.date).localeCompare(String(a.date)));
-    grid.innerHTML = list.length
-      ? list.slice(0, 4).map(scCard).join("")
+    return {
+      results,
+      items: [...liveList.sort(mineFirst), ...results.slice(0, 8), ...upcoming.slice(0, 8)],
+      scorecards: list,
+    };
+  }
+
+  async function fetchHomeData() {
+    const [live, fixtures, scorecards, club] = await Promise.all([
+      getJson("/api/public/live-page"),
+      getJson("/api/public/fixtures-page"),
+      getJson("/api/public/scorecards"),
+      myClub(),
+    ]);
+    if (!live && !fixtures && !scorecards) return null;
+    const bundle = { live, fixtures, scorecards, club, editable: {} };
+    const toCheck = selectHome(bundle).results.slice(0, 8);
+    await Promise.all(toCheck.map(async (match) => {
+      bundle.editable[match.id] = await canEditScorebook(match.id);
+    }));
+    return bundle;
+  }
+
+  function renderHome(bundle) {
+    const selected = selectHome(bundle);
+    selected.items.forEach((match) => {
+      if (match.kind === "result") match.canEditScorebook = Boolean(bundle.editable?.[match.id]);
+    });
+    items = selected.items;
+    renderStrip();
+
+    const grid = scPanel.querySelector(".home-card-grid");
+    grid.innerHTML = selected.scorecards.length
+      ? selected.scorecards.slice(0, 4).map(scCard).join("")
       : `<div class="home-empty">No published scorecards for your club yet. <a href="/scorecards/upload">Upload a scorecard photo</a></div>`;
-  })();
+  }
+
+  window.CricketClubAppPages.cachedPageLoad("home", fetchHomeData, renderHome);
 })();
 
 // Club page: suggest merging a player record that the match engine scores at or above 75% (name, aliases and clubs).

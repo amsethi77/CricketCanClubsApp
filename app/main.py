@@ -6119,6 +6119,121 @@ def public_player_page(player_key: str) -> FileResponse:
     return _page_response("player_public.html")
 
 
+def _new_bowling_acc() -> dict[str, Any]:
+    return {"innings": 0, "balls": 0, "runs": 0, "wickets": 0, "maidens": 0, "best": None}
+
+
+def _add_bowling(acc: dict[str, Any], balls: int, runs: int, wickets: int, maidens: int) -> None:
+    acc["innings"] += 1
+    acc["balls"] += balls
+    acc["runs"] += runs
+    acc["wickets"] += wickets
+    acc["maidens"] += maidens
+    figure = (wickets, -runs)
+    if acc["best"] is None or figure > acc["best"]:
+        acc["best"] = figure
+
+
+def _bowling_summary(acc: dict[str, Any]) -> dict[str, Any]:
+    balls, runs, wickets = acc["balls"], acc["runs"], acc["wickets"]
+    best = acc["best"]
+    return {
+        "innings": acc["innings"],
+        "overs": f"{balls // 6}.{balls % 6}" if balls else "",
+        "maidens": acc["maidens"],
+        "runs": runs,
+        "wickets": wickets,
+        "bowling_average": round(runs / wickets, 2) if wickets else None,
+        "economy": round(runs / (balls / 6), 2) if balls else None,
+        "best": f"{best[0]}/{-best[1]}" if best else "",
+    }
+
+
+def _member_bowling_breakdown(store: dict[str, Any], member: dict[str, Any]) -> dict[str, Any]:
+    """Career, season and club bowling for one player, from the scorecards they bowled in."""
+    key = _member_public_key(member)
+    club_names = {str(club.get("id") or ""): str(club.get("name") or "").strip() for club in store.get("clubs", []) or [] if isinstance(club, dict)}
+    total = _new_bowling_acc()
+    years: dict[str, dict[str, Any]] = {}
+    clubs: dict[str, dict[str, Any]] = {}
+    for card in _public_scorecards(store):
+        _link_card_players(store, card)
+        season = str(card.get("date") or "")[:4]
+        club_name = club_names.get(str(card.get("club_id") or ""), "")
+        for innings in card.get("innings") or []:
+            for row in innings.get("bowling") or []:
+                if row.get("player_key") != key:
+                    continue
+                balls = _scorecard_overs_to_balls(row.get("overs")) or 0
+                runs = int(row.get("runs") or 0)
+                wickets = int(row.get("wickets") or 0)
+                if not (balls or runs or wickets):
+                    continue
+                maidens = int(row.get("maidens") or 0)
+                _add_bowling(total, balls, runs, wickets, maidens)
+                _add_bowling(years.setdefault(season, _new_bowling_acc()), balls, runs, wickets, maidens)
+                if club_name:
+                    _add_bowling(clubs.setdefault(club_name, _new_bowling_acc()), balls, runs, wickets, maidens)
+    return {
+        "summary": _bowling_summary(total),
+        "years": [{"season_year": year, **_bowling_summary(acc)} for year, acc in sorted(years.items(), reverse=True) if acc["innings"]],
+        "clubs": [{"club_name": name, **_bowling_summary(acc)} for name, acc in sorted(clubs.items(), key=lambda item: -item[1]["innings"]) if acc["innings"]],
+    }
+
+
+_RUN_OUT_FIELDER = re.compile(r"^run out\s*\((.+)\)$", re.IGNORECASE)
+
+
+def _member_run_outs(store: dict[str, Any], member: dict[str, Any], club_names: dict[str, str]) -> dict[str, Any]:
+    """Run outs a player effected (fielded the run out), career / season / club, from the scorecards."""
+    key = _member_public_key(member)
+    total = 0
+    years: dict[str, int] = {}
+    clubs: dict[str, int] = {}
+    for card in _public_scorecards(store):
+        season = str(card.get("date") or "")[:4]
+        club_name = club_names.get(str(card.get("club_id") or ""), "")
+        for innings in card.get("innings") or []:
+            for row in innings.get("batting") or []:
+                match = _RUN_OUT_FIELDER.match(str(row.get("dismissal") or "").strip())
+                if not match:
+                    continue
+                fielder = _member_for_card_name(store, match.group(1).strip(), innings.get("bowling_team"))
+                if not fielder or _member_public_key(fielder) != key:
+                    continue
+                total += 1
+                years[season] = years.get(season, 0) + 1
+                if club_name:
+                    clubs[club_name] = clubs.get(club_name, 0) + 1
+    return {
+        "summary": {"run_outs": total},
+        "years": [{"season_year": year, "run_outs": count} for year, count in sorted(years.items(), reverse=True)],
+        "clubs": [{"club_name": name, "run_outs": count} for name, count in sorted(clubs.items(), key=lambda item: -item[1])],
+    }
+
+
+_CATCH_BY = re.compile(r"^(?:c|ct|caught)\s+(.+?)\s+b\s+\S", re.IGNORECASE)
+_CATCH_AND_BOWLED = re.compile(r"^(?:c|ct|caught)\s*(?:&|and|\+)\s*b(?:owled)?\s+(.+)$", re.IGNORECASE)
+
+
+def _member_match_fielding(store: dict[str, Any], key: str, card: dict[str, Any]) -> dict[str, int]:
+    """Catches and run outs one player effected in one scorecard."""
+    counts = {"catches": 0, "run_outs": 0}
+    for innings in card.get("innings") or []:
+        for row in innings.get("batting") or []:
+            text = str(row.get("dismissal") or "").strip()
+            if match := _RUN_OUT_FIELDER.match(text):
+                field, name = "run_outs", match.group(1)
+            elif match := _CATCH_AND_BOWLED.match(text) or _CATCH_BY.match(text):
+                field, name = "catches", match.group(1)
+            else:
+                continue
+            fielder = _member_for_card_name(store, name.strip(), innings.get("bowling_team"))
+            if fielder and _member_public_key(fielder) == key:
+                counts[field] += 1
+    return counts
+
+
 @app.get("/api/public/players/{player_key}")
 def public_player_profile(player_key: str) -> dict[str, Any]:
     store = load_store()
@@ -6135,9 +6250,16 @@ def public_player_profile(player_key: str) -> dict[str, Any]:
     years = sorted(rows("member_year_stats"), key=lambda row: str(row.get("season_year") or ""), reverse=True)
     clubs = sorted(rows("member_club_stats"), key=lambda row: -int(row.get("matches") or 0))
     recent = []
+    club_names = {str(club.get("id") or ""): str(club.get("name") or "").strip() for club in store.get("clubs", []) or [] if isinstance(club, dict)}
+    bowling_all = _new_bowling_acc()
+    bowling_years: dict[str, dict[str, Any]] = {}
+    bowling_clubs: dict[str, dict[str, Any]] = {}
     for card in _public_scorecards(store):
         _link_card_players(store, card)
         batting = bowling = None
+        fielding = _member_match_fielding(store, _member_public_key(member), card)
+        season = str(card.get("date") or "")[:4]
+        club_name = club_names.get(str(card.get("club_id") or ""), "")
         for innings in card.get("innings") or []:
             for row in innings.get("batting") or []:
                 if row.get("player_key") == _member_public_key(member):
@@ -6145,9 +6267,20 @@ def public_player_profile(player_key: str) -> dict[str, Any]:
             for row in innings.get("bowling") or []:
                 if row.get("player_key") == _member_public_key(member):
                     bowling = {"overs": row.get("overs"), "runs": row.get("runs"), "wickets": row.get("wickets")}
-        if batting or bowling:
-            recent.append({"id": card.get("id"), "date": card.get("date"), "date_label": card.get("date_label"), "title": card.get("title"), "result": card.get("result"), "batting": batting, "bowling": bowling})
+                    balls = _scorecard_overs_to_balls(row.get("overs")) or 0
+                    runs = int(row.get("runs") or 0)
+                    wickets = int(row.get("wickets") or 0)
+                    if balls or runs or wickets:
+                        maidens = int(row.get("maidens") or 0)
+                        _add_bowling(bowling_all, balls, runs, wickets, maidens)
+                        _add_bowling(bowling_years.setdefault(season, _new_bowling_acc()), balls, runs, wickets, maidens)
+                        if club_name:
+                            _add_bowling(bowling_clubs.setdefault(club_name, _new_bowling_acc()), balls, runs, wickets, maidens)
+        if batting or bowling or fielding["catches"] or fielding["run_outs"]:
+            recent.append({"id": card.get("id"), "date": card.get("date"), "date_label": card.get("date_label"), "title": card.get("title"), "result": card.get("result"), "batting": batting, "bowling": bowling, "fielding": fielding})
     recent.sort(key=lambda item: str(item.get("date") or ""), reverse=True)
+    bowling_years_out = [{"season_year": year, **_bowling_summary(acc)} for year, acc in sorted(bowling_years.items(), reverse=True) if acc["innings"]]
+    bowling_clubs_out = [{"club_name": name, **_bowling_summary(acc)} for name, acc in sorted(bowling_clubs.items(), key=lambda item: -item[1]["innings"]) if acc["innings"]]
     return {
         "player": {
             "name": member.get("name") or "",
@@ -6164,6 +6297,12 @@ def public_player_profile(player_key: str) -> dict[str, Any]:
         "years": [{"season_year": row.get("season_year"), **{key: row.get(key) for key in keep}} for row in years if row.get("matches")],
         "clubs": [{"club_name": row.get("club_name"), **{key: row.get(key) for key in keep}} for row in clubs if row.get("matches")],
         "recent": recent[:20],
+        "bowling": {
+            "summary": _bowling_summary(bowling_all),
+            "years": bowling_years_out,
+            "clubs": bowling_clubs_out,
+        },
+        "fielding": _member_run_outs(store, member, club_names),
         "read_only": True,
     }
 
@@ -9168,6 +9307,7 @@ def player_profile_data(x_auth_token: str | None = Header(default=None)) -> dict
         "year_stats": year_stats,
         "club_stats": club_stats,
         "recent_history": recent_history[:20],
+        "bowling": _member_bowling_breakdown(store, member) if member else {"summary": _bowling_summary(_new_bowling_acc()), "years": [], "clubs": []},
     }
 
 

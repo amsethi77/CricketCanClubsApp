@@ -3254,6 +3254,16 @@ h1 {
   width: 100%;
 }
 
+/* Nov 11 2026: Batting / Fielding / Bowling group header on the Clubs player snapshot */
+.snapshot-table .snapshot-band th {
+  text-align: center;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #475569;
+  background: #f1f5f9;
+}
+
 .mini-stat .season-select {
   width: 100%;
   margin-top: 10px;
@@ -3756,6 +3766,17 @@ button:hover,
   display: grid;
   grid-template-columns: 64px 1fr;
   gap: 12px;
+}
+
+.player-profile-link {
+  color: inherit;
+  text-decoration: underline;
+  text-decoration-color: rgba(33, 91, 170, 0.45);
+  text-underline-offset: 3px;
+}
+
+.player-profile-link:hover {
+  text-decoration-color: currentColor;
 }
 
 .clickable-card {
