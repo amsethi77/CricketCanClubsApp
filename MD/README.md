@@ -69,6 +69,9 @@ These rules are the source of truth for the current implementation. If older log
 
 This section captures the user requirements in the order they were given and refined during the build.
 
+### November 2026 exclude databases from Git
+- Update Git ignore rules so database files and backups do not get pushed to GitHub.
+
 ### November 2026 club admin registration limit
 - On the registration page, allow no more than two club admins for each club.
 
@@ -570,6 +573,7 @@ Still two match tables (online `fixtures`, uploaded `archives`): both feed the s
 
 Request (Amit, Nov 5 2026): "We need a backup plan for the DB, once we go live we cannot afford to lose the data" (after the Nov 4 production file was damaged on Azure Files).
 
+- Local database files, SQLite sidecars and `app/data/backups/` are excluded from Git. Removing already tracked databases from the index keeps local copies but does not erase previously published Git history.
 - **Automatic, checked copies.** At start-up and every 6 hours (`CRICKETCLUBAPP_BACKUP_EVERY_HOURS`) the app copies the live SQLite file with SQLite's backup API (safe while it runs), runs `PRAGMA integrity_check` on the copy and only keeps it if it passes: `BACKUP_DIR/cricketclubapp-<UTC time>-<startup|scheduled|manual>.db`. `BACKUP_DIR` is `backups/` next to the live file (Azure: `/home/site/cricketclubapp/backups`, which survives restarts and deploys), or `CRICKETCLUBAPP_BACKUP_DIR`.
 - **Kept:** the newest 48 copies (12 days at 6 hours) plus one per day for 30 days.
 - **Off-site copy (recommended for go-live):** create an Azure Storage container and put its SAS URL (write permission) in the App Service setting `CRICKETCLUBAPP_BACKUP_BLOB_SAS`; every copy is then also uploaded there, so the data survives even if the App Service storage is lost.
@@ -1376,6 +1380,8 @@ Model (soft launch, Oct 2026): keep the core cricket experience free; one paid p
 5. Stripe (optional, test mode): fill `.env`, restart, run `stripe listen`, choose Pro monthly on `/pricing` and pay with card `4242 4242 4242 4242`; the plan changes to Pro.
 
 ## Change log
+
+- 2026-11-11: Excluded database files, SQLite sidecars and local backups from Git and removed existing database files from the index without deleting local copies.
 
 - 2026-11-11: Limited registration to two club-admin accounts per club, including legacy primary-club roles; added a registration hint, a clear full-club error, and serialized capacity checks. Added registration and concurrency regression tests.
 

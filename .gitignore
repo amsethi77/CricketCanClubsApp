@@ -6,8 +6,17 @@ venv/
 env/
 node_modules/
 
-app/data/heartlake.db
-app/data/*.db*
+# Local SQLite databases and their sidecars, at any directory depth
+*.db
+*.db-*
+*.db.*
+*.sqlite
+*.sqlite-*
+*.sqlite.*
+*.sqlite3
+*.sqlite3-*
+*.sqlite3.*
+app/data/backups/
 app/data/*_cache.json
 app/uploads/
 app/duplicates/
