@@ -737,6 +737,9 @@ html[data-theme="dark"] .sc-photo img {
 .sc-check h2 { margin: 0; font-size: 1.2rem; }
 .sc-check-lede { margin: 0; color: var(--sc-muted); }
 .sc-check-list { margin: 0; padding-left: 20px; display: grid; gap: 4px; color: #92400e; }
+.sc-name-match { display: grid; gap: 8px; padding: 12px; border: 1px solid #bfdbfe; border-radius: 12px; background: #eff6ff; }
+.sc-name-info { border-color: #e2e8f0; background: #f8fafc; }
+.sc-name-club { color: var(--sc-muted); font-size: 0.85rem; }
 .sc-check-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .sc-btn { min-height: 44px; padding: 0 16px; border-radius: 12px; border: 1.5px solid #cbd5e1; background: #fff; color: #0f172a; font-weight: 800; display: inline-flex; align-items: center; justify-content: center; cursor: pointer; text-decoration: none; }
 .sc-btn.primary { background: #0f172a; border-color: #0f172a; color: #fff; }

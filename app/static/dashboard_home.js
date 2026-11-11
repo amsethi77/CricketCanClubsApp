@@ -383,7 +383,7 @@
   })();
 })();
 
-// Club page: suggest merging a player record whose name is over 50% similar to the signed-in player's own.
+// Club page: suggest merging a player record that the match engine scores at or above 75% (name, aliases and clubs).
 // The request only asks; a club admin approves it in Admin Center > Name matches.
 (() => {
   if (document.body.dataset.dashboardWidget !== "overview") return;
@@ -428,10 +428,12 @@
                   <h3 class="merge-name">${esc(item.full_name || item.name)}</h3>
                   <p class="merge-meta">${esc(item.player_id)}</p>
                 </div>
-                <span class="merge-badge" title="Name similarity">${esc(item.match_percent)}% match</span>
+                <span class="merge-badge" title="Match confidence">${esc(item.match_percent)}% match</span>
+                ${item.recommended ? `<span class="merge-chip merge-chip-recommended">Recommended</span>` : ""}
               </header>
               <p class="merge-meta">Older record: <strong>${esc(item.older_name)}</strong> · Newer record: <strong>${esc(item.newer_name)}</strong></p>
               <div class="merge-chips">${clubs}</div>
+              ${(item.reasons || []).length ? `<ul class="merge-meta">${item.reasons.map((reason) => `<li>${esc(reason)}</li>`).join("")}</ul>` : ""}
               <dl class="merge-stats">
                 <div><dt>Matches</dt><dd>${esc(career.matches ?? 0)}</dd></div>
                 <div><dt>Runs</dt><dd>${esc(career.runs ?? 0)}</dd></div>

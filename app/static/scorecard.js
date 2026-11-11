@@ -513,6 +513,26 @@
       button.disabled = false;
     }
   });
+  function nameMatchesHtml(matches) {
+    return matches.map((match) => {
+      const label = (m) => `<b>${escapeHtml(m.name)}</b>${(m.clubs || []).length ? ` <span class="sc-name-club">${escapeHtml(m.clubs.join(", "))}</span>` : ""}`;
+      if (match.kind === "recognised") {
+        return `<div class="sc-name-match sc-name-info">
+          <p class="sc-check-lede">🔎 <b>${escapeHtml(match.card_name)}</b> is recognised as ${label(match.members[0])} (${match.match_percent}% match).</p>
+        </div>`;
+      }
+      const [older, newer] = match.members;
+      const pair = `data-first="${escapeHtml(older.id)}" data-second="${escapeHtml(newer.id)}"`;
+      const actions = match.can_merge
+        ? `<button type="button" class="sc-btn primary" data-sc="name-merge" data-keep="older" ${pair}>Merge into older record (${escapeHtml(older.name)})</button>
+          <button type="button" class="sc-btn" data-sc="name-merge" data-keep="newer" ${pair}>Merge into newer record (${escapeHtml(newer.name)})</button>`
+        : `<p class="sc-check-lede">Ask a club admin to merge these players.</p>`;
+      return `<div class="sc-name-match sc-name-dup">
+        <p class="sc-check-lede">🔎 <b>${escapeHtml(match.card_name)}</b> may be the same player as ${label(older)} and ${label(newer)} (${match.match_percent}% match).</p>
+        <div class="sc-check-actions">${actions}<button type="button" class="sc-btn ghost" data-sc="name-ignore">Not the same, ignore</button></div>
+      </div>`;
+    }).join("");
+  }
   function renderChecks(data) {
     if (!checkEl) {
       checkEl = document.createElement("section");
@@ -544,6 +564,7 @@
         ${data.ai_read ? `<p class="sc-check-lede">🤖 Read from the photo by AI. Compare it with the <button type="button" class="sc-link" data-go-photo>original scorecard</button> before publishing.</p>` : ""}
         ${data.unreadable && !data.ai_available && data.is_site_admin ? `<p class="sc-check-lede">Tip: handwriting can be read automatically. Add a free <strong>GEMINI_API_KEY</strong> to the .env file (see README "Reading handwritten scorecards automatically").</p>` : ""}
         ${flags.length ? `<ul class="sc-check-list">${flags.map((f) => `<li>${escapeHtml(f)}</li>`).join("")}</ul>` : ""}
+        ${nameMatchesHtml(data.name_matches || [])}
         ${new URLSearchParams(location.search).get("joined") === "1" ? `<p class="sc-check-lede sc-joined-note">🔗 This photo was the other innings of a match already uploaded, so both innings are now one scorecard.</p>` : ""}
         ${data.match_code ? `<p class="sc-check-lede">Match ID <b>${escapeHtml(data.match_code)}</b>${data.innings_count < 2 ? " · if the other team has their innings, give them this ID so they can link it" : ""}.</p>` : ""}
         ${(data.duplicate_candidates || []).length && data.can_delete ? `<div class="sc-second-photo">
@@ -617,6 +638,29 @@
     const button = event.target.closest("[data-sc]");
     if (!button || !checkEl || !checkEl.contains(button)) return;
     const msg = checkEl.querySelector(".sc-check-msg");
+    if (button.dataset.sc === "name-ignore") {
+      button.closest(".sc-name-match")?.remove();
+      return;
+    }
+    if (button.dataset.sc === "name-merge") {
+      const keep = button.dataset.keep;
+      if (!window.confirm("Merge these players? Their stats are added together and the other name becomes an alias of the kept player.")) return;
+      document.querySelectorAll(".sc-name-match [data-sc='name-merge']").forEach((b) => (b.disabled = true));
+      try {
+        const data = await previewAction(`/api/scorecards/${encodeURIComponent(id.replace(/^a-/, ""))}/name-merge`, {
+          first_id: button.dataset.first,
+          second_id: button.dataset.second,
+          keep,
+        });
+        await loadPreview();
+        const note = checkEl?.querySelector(".sc-check-msg");
+        if (note) note.textContent = data.message || "Players merged.";
+      } catch (error) {
+        document.querySelectorAll(".sc-name-match [data-sc='name-merge']").forEach((b) => (b.disabled = false));
+        if (msg) msg.textContent = error.message;
+      }
+      return;
+    }
     if (button.dataset.sc === "delete") {
       const isPublished = Boolean(lastPreview && lastPreview.is_published);
       const ask = isPublished

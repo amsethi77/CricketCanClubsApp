@@ -75,12 +75,42 @@ class PlayerMergeTests(unittest.TestCase):
         self.assertTrue(_members_look_same(bim, {"name": "Bim B"}))
         self.assertFalse(_members_look_same(bim, {"name": "Carl Dunn"}))
 
-    def test_candidate_score_needs_more_than_50_percent(self) -> None:
-        from app.main import PLAYER_MERGE_SUGGEST_MIN_SCORE, _members_match_score
-        self.assertEqual(PLAYER_MERGE_SUGGEST_MIN_SCORE, 0.5)
-        self.assertEqual(_members_match_score({"name": "Bim"}, {"name": "Bim"}), 1.0)
-        self.assertGreater(_members_match_score({"name": "Bim"}, {"name": "Bim B"}), 0.5)
-        self.assertLess(_members_match_score({"name": "Ann Lee"}, {"name": "Zed Quartermain"}), 0.5)
+    def test_candidate_score_is_75_percent_or_more(self) -> None:
+        from app.main import PLAYER_MERGE_SUGGEST_MIN_SCORE
+        from app.ai_duplicate_engine import AIDuplicateEngine
+        self.assertEqual(PLAYER_MERGE_SUGGEST_MIN_SCORE, 0.75)
+        engine = AIDuplicateEngine()
+        self.assertGreaterEqual(engine.score({"name": "Michael Jones"}, {"name": "Michael Jone"}).score, 0.75)
+        self.assertLess(engine.score({"name": "Ann Lee"}, {"name": "Zed Quartermain"}).score, 0.75)
+
+    def test_engine_suggests_initial_match_only_with_club_evidence(self) -> None:
+        from app.ai_duplicate_engine import AIDuplicateEngine
+        engine = AIDuplicateEngine()
+        bim = {"name": "Bim", "primary_club_id": "c1", "club_memberships": [{"club_id": "c1"}]}
+        same_club = {"name": "Bim B", "primary_club_id": "c1", "club_memberships": [{"club_id": "c1"}]}
+        other_club = {"name": "Bim B", "primary_club_id": "c2", "club_memberships": [{"club_id": "c2"}]}
+        self.assertGreater(engine.score(bim, same_club).score, 0.75)
+        self.assertLessEqual(engine.score(bim, other_club).score, 0.75)
+        self.assertIn("same primary club", engine.score(bim, same_club).reasons)
+
+    def test_engine_uses_secondary_clubs(self) -> None:
+        from app.ai_duplicate_engine import AIDuplicateEngine
+        engine = AIDuplicateEngine()
+        first = {"name": "Sam Ray", "primary_club_id": "c1", "club_memberships": [{"club_id": "c1"}, {"club_id": "c3"}]}
+        second = {"name": "Sam Ray", "primary_club_id": "c2", "club_memberships": [{"club_id": "c2"}, {"club_id": "c3"}]}
+        pair = engine.score(first, second)
+        self.assertEqual(pair.club_score, 0.6)
+        self.assertIn("shares a club (primary or secondary)", pair.reasons)
+
+    def test_engine_vetoes_two_names_batting_in_the_same_match(self) -> None:
+        from app.ai_duplicate_engine import AIDuplicateEngine
+        engine = AIDuplicateEngine([{"amit", "amit s"}])
+        amit = {"name": "Amit", "primary_club_id": "c1", "club_memberships": [{"club_id": "c1"}]}
+        amit_s = {"name": "Amit S", "primary_club_id": "c1", "club_memberships": [{"club_id": "c1"}]}
+        pair = engine.score(amit, amit_s)
+        self.assertTrue(pair.vetoed)
+        self.assertEqual(pair.score, 0.0)
+        self.assertFalse(engine.score(amit, amit_s, check_matches=False).vetoed)
 
     def test_player_can_choose_which_record_survives(self) -> None:
         store = {"members": [
@@ -90,6 +120,25 @@ class PlayerMergeTests(unittest.TestCase):
         summary = merge_members_in_store(store, "older-rec", "newer-rec", keep_id="newer-rec")
         self.assertEqual(summary["kept_member_id"], "newer-rec")
         self.assertEqual([m["id"] for m in store["members"]], ["newer-rec"])
+
+    def test_upload_names_flag_aliases_and_possible_duplicates(self) -> None:
+        from app.main import _card_name_matches, _name_match_notice
+        store = {"clubs": [], "members": [
+            {"id": "m1", "name": "Amit Sethi", "aliases": ["Amit S"], "club_memberships": []},
+            {"id": "b1", "name": "Michael Jones", "aliases": [], "club_memberships": []},
+            {"id": "b2", "name": "Michael Jone", "aliases": [], "club_memberships": []},
+        ]}
+        card = {"innings": [{"batting": [{"name": "Amit S"}, {"name": "Michael Jones"}], "bowling": [{"name": "Zed Nobody"}]}]}
+        matches = _card_name_matches(store, card)
+
+        self.assertEqual([m["kind"] for m in matches], ["recognised", "duplicate"])
+        self.assertEqual(matches[0]["members"][0]["id"], "m1")
+        self.assertEqual([m["id"] for m in matches[1]["members"]], ["b1", "b2"])
+        self.assertFalse(matches[1]["can_merge"])
+        notice = _name_match_notice(matches)
+        self.assertIn("'Amit S' is recognised as Amit Sethi", notice)
+        self.assertIn("'Michael Jones' and 'Michael Jone' look like the same player", notice)
+        self.assertEqual(_name_match_notice([]), "")
 
     def test_stats_add_up_after_merge_through_alias(self) -> None:
         from app.cricket_store import _build_materialized_member_stats
@@ -161,6 +210,36 @@ class PlayerMergeEndpointTests(LocalQATestCase):
         again = self.client.post(f"/api/admin/member-merges/{payload['merge_id']}/undo", headers=self.auth_headers(admin["token"]))
         self.assertEqual(again.status_code, 409, again.text)
 
+    def test_admin_can_keep_newer_record_when_merging(self) -> None:
+        self._add_members()
+        admin = self.signin(SUPERADMIN_MOBILE)
+        merged = self.client.post("/api/admin/name-matches/merge", json={"first_member_id": "qa-merge-older", "second_member_id": "qa-merge-newer", "keep_member_id": "qa-merge-newer"}, headers=self.auth_headers(admin["token"]))
+        self.assertEqual(merged.status_code, 200, merged.text)
+        self.assertEqual(merged.json()["kept_member_id"], "qa-merge-newer")
+        self.assertNotIn("qa-merge-older", self._member_ids())
+
+    def test_admin_keep_choice_must_be_one_of_the_pair(self) -> None:
+        self._add_members()
+        admin = self.signin(SUPERADMIN_MOBILE)
+        bad = self.client.post("/api/admin/name-matches/merge", json={"first_member_id": "qa-merge-older", "second_member_id": "qa-merge-newer", "keep_member_id": "someone-else"}, headers=self.auth_headers(admin["token"]))
+        self.assertEqual(bad.status_code, 400, bad.text)
+        self.assertIn("qa-merge-older", self._member_ids())
+
+    def test_rejected_name_match_is_saved_and_hidden(self) -> None:
+        self._add_members()
+        admin = self.signin(SUPERADMIN_MOBILE)
+        headers = self.auth_headers(admin["token"])
+
+        def listed_pairs() -> list[set[str]]:
+            data = self.client.get("/api/admin/name-matches", headers=headers).json()
+            return [{str(member["id"]) for member in group["members"]} for group in data["groups"]]
+
+        self.assertIn({"qa-merge-older", "qa-merge-newer"}, listed_pairs())
+        rejected = self.client.post("/api/admin/name-matches/reject", json={"first_member_id": "qa-merge-newer", "second_member_id": "qa-merge-older"}, headers=headers)
+        self.assertEqual(rejected.status_code, 200, rejected.text)
+        self.assertNotIn({"qa-merge-older", "qa-merge-newer"}, listed_pairs())
+        self.assertIn("qa-merge-newer", self._member_ids())
+
     def test_player_merge_request_is_decided_by_admin(self) -> None:
         player = self.signin(PLAYER_MOBILE)
         admin = self.signin(SUPERADMIN_MOBILE)
@@ -201,6 +280,27 @@ class PlayerMergeEndpointTests(LocalQATestCase):
 
         decided_again = self.client.post(f"/api/admin/merge-requests/{request_id}/decision", json={"decision": "reject"}, headers=self.auth_headers(admin["token"]))
         self.assertEqual(decided_again.status_code, 404, decided_again.text)
+
+    def test_admin_can_reject_merge_request(self) -> None:
+        player = self.signin(PLAYER_MOBILE)
+        admin = self.signin(SUPERADMIN_MOBILE)
+        store = self.main.load_store()
+        user_row, _ = self.main._auth_user_from_token(player["token"])
+        own = self.main._member_for_user(store, user_row)
+        own_name = str(own["name"])
+        store["members"].append({"id": "qa-rej-dup", "player_id": "QAREJ2", "name": own_name, "aliases": [], "club_memberships": []})
+        self.main.save_store(store)
+
+        sent = self.client.post("/api/player/merge-requests", json={"target_member_id": "qa-rej-dup"}, headers=self.auth_headers(player["token"]))
+        self.assertEqual(sent.status_code, 200, sent.text)
+        request_id = sent.json()["request_id"]
+
+        rejected = self.client.post(f"/api/admin/merge-requests/{request_id}/decision", json={"decision": "reject"}, headers=self.auth_headers(admin["token"]))
+        self.assertEqual(rejected.status_code, 200, rejected.text)
+        self.assertEqual(rejected.json()["status"], "rejected")
+        self.assertIn("qa-rej-dup", self._member_ids())
+        pending = self.client.get("/api/admin/merge-requests", headers=self.auth_headers(admin["token"])).json()["requests"]
+        self.assertNotIn(request_id, [item["id"] for item in pending])
 
     def test_rejected_suggestion_is_saved_and_hidden(self) -> None:
         player = self.signin(PLAYER_MOBILE)

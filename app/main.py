@@ -152,6 +152,7 @@ try:
     import ai_chat as ai_chat
     from llm_service import clear_query_cache, infer as llm_infer, list_llm_documents, list_prompt_manifest, reindex_llm_corpus
     from player_merge import MergeError, choose_survivor, merge_members_in_store
+    from ai_duplicate_engine import AIDuplicateEngine, identity_names
     from cricket_store import (
         card_sides_are_swapped,
         inferred_innings_teams_for_archive,
@@ -220,6 +221,7 @@ except ModuleNotFoundError:
     from app import ai_chat
     from app.llm_service import clear_query_cache, infer as llm_infer, list_llm_documents, list_prompt_manifest, reindex_llm_corpus
     from app.player_merge import MergeError, choose_survivor, merge_members_in_store
+    from app.ai_duplicate_engine import AIDuplicateEngine, identity_names
     from app.cricket_store import (
         card_sides_are_swapped,
         inferred_innings_teams_for_archive,
@@ -2120,6 +2122,13 @@ def ensure_auth_schema() -> None:
               created_at TEXT NOT NULL,
               PRIMARY KEY (user_id, target_member_id),
               FOREIGN KEY (user_id) REFERENCES app_users(id) ON DELETE CASCADE
+            );
+                    CREATE TABLE IF NOT EXISTS app_name_match_rejections (
+              member_low_id TEXT NOT NULL,
+              member_high_id TEXT NOT NULL,
+              rejected_by_user_id INTEGER,
+              created_at TEXT NOT NULL,
+              PRIMARY KEY (member_low_id, member_high_id)
             );
                     CREATE TABLE IF NOT EXISTS app_member_merges (
               id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -6618,7 +6627,7 @@ def _admin_center_html(request: Request) -> HTMLResponse:
         <link rel="stylesheet" href="/assets/styles.css?v=20261102a" />
         <link rel="stylesheet" href="/assets/app_polish.css?v=20261006a" />
         <link rel="stylesheet" href="/assets/sports-system.css?v=20260926a" />
-        <link rel="stylesheet" href="/assets/scorecards.css?v=20261015b" />
+        <link rel="stylesheet" href="/assets/scorecards.css?v=20261111a" />
       </head>
       <body>
         <div class="page-shell">
@@ -6786,8 +6795,8 @@ def _admin_center_html(request: Request) -> HTMLResponse:
         </div>
         <script src="/assets/multipage.js?v=20261025a"></script>
         <script src="/assets/scorecard_view.js?v=20261109a"></script>
-        <script src="/assets/scorecard.js?v=20261109c"></script>
-        <script src="/assets/admin_center.js?v=20261110e"></script>
+        <script src="/assets/scorecard.js?v=20261111a"></script>
+        <script src="/assets/admin_center.js?v=20261111d"></script>
         <script src="/assets/admin_reread.js?v=20261024a"></script>
       </body>
     </html>
@@ -9407,6 +9416,7 @@ def admin_name_claims(x_auth_token: str | None = Header(default=None)) -> dict[s
 class MemberMergeRequest(BaseModel):
     first_member_id: str
     second_member_id: str
+    keep_member_id: str = ""
 
 
 def _store_version_now() -> int:
@@ -9443,18 +9453,45 @@ def _restore_member_auth(kept_id: str, removed_id: str, snapshot: dict[str, Any]
 
 @app.post("/api/admin/name-matches/merge")
 def admin_merge_members(request: MemberMergeRequest, x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
-    # Superadmin merges any two players; a club admin only players from their own clubs. The older record survives.
+    # Superadmin merges any two players; a club admin only players from their own clubs. The older record survives unless keep_member_id names the newer one.
     user_row, current_club_id = _require_permission(x_auth_token, "manage_players")
     store = load_store()
     first_id, second_id = str(request.first_member_id or "").strip(), str(request.second_member_id or "").strip()
+    keep_id = str(request.keep_member_id or "").strip() or None
+    if keep_id and keep_id not in (first_id, second_id):
+        raise HTTPException(status_code=400, detail="Choose one of the two players to keep.")
     for member_id in (first_id, second_id):
         member = _member_by_id(store, member_id)
         if not member:
             raise HTTPException(status_code=404, detail="Player not found.")
         if not _reviewer_can_decide(store, user_row, current_club_id, member):
             raise HTTPException(status_code=403, detail="You can only merge players from your own clubs.")
-    result = _perform_member_merge(store, first_id, second_id, user_row)
+    result = _perform_member_merge(store, first_id, second_id, user_row, keep_id)
     return {"message": f"'{result['removed_name']}' is merged into '{result['kept_name']}'. A superadmin can undo this.", **result}
+
+
+@app.post("/api/admin/name-matches/reject")
+def admin_reject_name_match(request: MemberMergeRequest, x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
+    # Saves "not the same player" for this pair so it stops showing in Name matches.
+    user_row, current_club_id = _require_permission(x_auth_token, "manage_players")
+    store = load_store()
+    first_id, second_id = str(request.first_member_id or "").strip(), str(request.second_member_id or "").strip()
+    if not first_id or not second_id or first_id == second_id:
+        raise HTTPException(status_code=400, detail="Choose two different players.")
+    for member_id in (first_id, second_id):
+        member = _member_by_id(store, member_id)
+        if not member:
+            raise HTTPException(status_code=404, detail="Player not found.")
+        if not _reviewer_can_decide(store, user_row, current_club_id, member):
+            raise HTTPException(status_code=403, detail="You can only review players from your own clubs.")
+    low, high = sorted((first_id, second_id))
+    with _auth_connection() as connection:
+        connection.execute(
+            "INSERT OR IGNORE INTO app_name_match_rejections (member_low_id, member_high_id, rejected_by_user_id, created_at) VALUES (?, ?, ?, ?)",
+            (low, high, int(user_row["id"]), now_iso()),
+        )
+    _audit_event("member.name_match_rejected", "member", first_id, actor=user_row, club_id="", club_name="", details={"first_member_id": first_id, "second_member_id": second_id}, source="api")
+    return {"message": "Marked as not the same player. It will not show again.", "first_member_id": first_id, "second_member_id": second_id}
 
 
 def _perform_member_merge(store: dict[str, Any], first_id: str, second_id: str, user_row: sqlite3.Row, keep_id: str | None = None) -> dict[str, Any]:
@@ -9544,13 +9581,24 @@ def admin_name_matches(x_auth_token: str | None = Header(default=None)) -> dict[
                     candidates.append(("similar", round(score, 2), [members_with_names[i], members_with_names[j]]))
 
     groups: list[dict[str, Any]] = []
+    with _auth_connection() as connection:
+        rejected_pairs = {(str(row["member_low_id"]), str(row["member_high_id"])) for row in connection.execute("SELECT member_low_id, member_high_id FROM app_name_match_rejections").fetchall()}
+    engine = _match_engine(store)
     for match_type, score, items in sorted(candidates, key=lambda entry: (-entry[1], entry[0])):
+        # Drop pairs a reviewer already rejected as "not the same player".
+        first_member = items[0]
+        items = [first_member] + [member for member in items[1:] if tuple(sorted((str(first_member.get("id")), str(member.get("id"))))) not in rejected_pairs]
+        if len(items) < 2:
+            continue
         # Show a group only when the reviewer may see every record in it, so no hidden player name leaks.
         if not all(_reviewer_can_decide(store, user_row, current_club_id, member) for member in items):
             continue
+        pair = engine.score(items[0], items[1])
         groups.append({
             "match_type": match_type,
             "score": score,
+            "ai_match_percent": round(pair.score * 100),
+            "ai_reasons": pair.reasons,
             "members": [
                 {
                     "id": str(member.get("id") or ""),
@@ -9634,29 +9682,45 @@ def _names_look_same(first: str, second: str) -> bool:
 
 def _identity_names(member: dict[str, Any]) -> list[str]:
     """Every name a player is known by: main name, full name and aliases, normalized and without duplicates."""
-    names: list[str] = []
-    for value in [member.get("name"), member.get("full_name"), *(member.get("aliases") or [])]:
-        norm = normalize_name(str(value or ""))
-        if norm and norm not in names:
-            names.append(norm)
-    return names
+    return identity_names(member)
 
 
 def _members_look_same(first: dict[str, Any], second: dict[str, Any]) -> bool:
     return any(_names_look_same(a, b) for a in _identity_names(first) for b in _identity_names(second))
 
 
-PLAYER_MERGE_SUGGEST_MIN_SCORE = 0.5
+PLAYER_MERGE_SUGGEST_MIN_SCORE = 0.75  # overall match confidence (names, clubs, match history) that a record is suggested
 
 
-def _members_match_score(first: dict[str, Any], second: dict[str, Any]) -> float:
-    """Best name similarity (0 to 1) between any identity name of each member."""
-    return max(
-        (SequenceMatcher(None, a, b).ratio() for a in _identity_names(first) for b in _identity_names(second)),
-        default=0.0,
-    )
+def _archive_performance_rows(archive: dict[str, Any]) -> list[dict[str, Any]]:
+    """Batting rows of one archived match: the saved performances, or the review template when none are saved."""
+    performances = [item for item in archive.get("suggested_performances", []) or [] if isinstance(item, dict)]
+    if performances:
+        return performances
+    try:
+        template = json.loads(str(archive.get("review_template_json") or "{}"))
+    except Exception:
+        template = {}
+    for inning in template.get("innings", []) or []:
+        for batting in inning.get("batting", []) or []:
+            performances.append({
+                "player_name": (batting.get("player") or {}).get("name") or batting.get("player_name") or "",
+                "runs": batting.get("runs") or 0,
+                "balls": batting.get("balls") or 0,
+            })
+    return performances
 
 
+def _match_engine(store: dict[str, Any]) -> AIDuplicateEngine:
+    """AIDuplicateEngine that knows which names batted together in each past match (used to veto two-person pairs)."""
+    played: list[set[str]] = []
+    for archive in canonical_archive_uploads(store.get("archive_uploads", [])):
+        if str(archive.get("status") or "").lower().startswith("pending"):
+            continue
+        names = {normalize_name(str(row.get("player_name") or "")) for row in _archive_performance_rows(archive)} - {""}
+        if names:
+            played.append(names)
+    return AIDuplicateEngine(played)
 def _pending_merge_request(member_a: str, member_b: str) -> int | None:
     with _auth_connection() as connection:
         row = connection.execute(
@@ -9709,19 +9773,7 @@ def _member_recent_matches(store: dict[str, Any], member: dict[str, Any], limit:
     for archive in canonical_archive_uploads(store.get("archive_uploads", [])):
         if str(archive.get("status") or "").lower().startswith("pending"):
             continue
-        performances = [item for item in archive.get("suggested_performances", []) or [] if isinstance(item, dict)]
-        if not performances:
-            try:
-                template = json.loads(str(archive.get("review_template_json") or "{}"))
-            except Exception:
-                template = {}
-            for inning in template.get("innings", []) or []:
-                for batting in inning.get("batting", []) or []:
-                    performances.append({
-                        "player_name": (batting.get("player") or {}).get("name") or batting.get("player_name") or "",
-                        "runs": batting.get("runs") or 0,
-                        "balls": batting.get("balls") or 0,
-                    })
+        performances = _archive_performance_rows(archive)
         match = archive.get("match") if isinstance(archive.get("match"), dict) else {}
         teams = match.get("teams") if isinstance(match.get("teams"), dict) else {}
         for performance in performances:
@@ -9749,7 +9801,9 @@ def player_merge_candidate_details(target_member_id: str, x_auth_token: str | No
     if not member:
         raise HTTPException(status_code=400, detail="Your login is not linked to a player record yet.")
     target = _member_by_id(store, target_member_id)
-    if not target or str(target.get("id")) == str(member.get("id")) or _members_match_score(member, target) <= PLAYER_MERGE_SUGGEST_MIN_SCORE:
+    engine = _match_engine(store)
+    pair = engine.score(member, target) if target else None
+    if not target or str(target.get("id")) == str(member.get("id")) or pair.score < PLAYER_MERGE_SUGGEST_MIN_SCORE:
         raise HTTPException(status_code=404, detail="Player not found.")
     return {
         "id": str(target.get("id") or ""),
@@ -9760,6 +9814,8 @@ def player_merge_candidate_details(target_member_id: str, x_auth_token: str | No
         "clubs": _member_club_names(store, target),
         "career": _member_career_summary(store, str(target.get("id") or "")),
         "matches": _member_recent_matches(store, target),
+        "match_percent": round(pair.score * 100),
+        "reasons": pair.reasons,
     }
 
 
@@ -9784,7 +9840,7 @@ def dismiss_player_merge_suggestion(target_member_id: str, x_auth_token: str | N
 
 @app.get("/api/player/merge-candidates")
 def player_merge_candidates(x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
-    """Other player records whose name is more than 50% similar, plus this player's own merge requests."""
+    """Other player records whose name is 75% or more similar, plus this player's own merge requests."""
     user_row, _ = _auth_user_from_token(x_auth_token)
     store = load_store()
     member = _member_for_user(store, user_row)
@@ -9792,18 +9848,19 @@ def player_merge_candidates(x_auth_token: str | None = Header(default=None)) -> 
         return {"candidates": [], "requests": []}
     own_id = str(member.get("id") or "")
     dismissed = _dismissed_suggestion_ids(int(user_row["id"]))
-    scored: list[tuple[float, dict[str, Any]]] = []
+    engine = _match_engine(store)
+    scored: list[tuple[float, dict[str, Any], list[str]]] = []
     for item in store.get("members", []) or []:
         item_id = str(item.get("id") or "")
         if item_id == own_id or item_id in dismissed:
             continue
-        score = _members_match_score(member, item)
-        if score <= PLAYER_MERGE_SUGGEST_MIN_SCORE:
+        pair = engine.score(member, item)
+        if pair.score < PLAYER_MERGE_SUGGEST_MIN_SCORE:
             continue
-        scored.append((score, item))
-    scored.sort(key=lambda pair: pair[0], reverse=True)
+        scored.append((pair.score, item, pair.reasons))
+    scored.sort(key=lambda entry: entry[0], reverse=True)
     candidates: list[dict[str, Any]] = []
-    for score, item in scored[:20]:
+    for position, (score, item, reasons) in enumerate(scored[:20]):
         item_id = str(item.get("id") or "")
         candidates.append({
             "id": item_id,
@@ -9813,6 +9870,8 @@ def player_merge_candidates(x_auth_token: str | None = Header(default=None)) -> 
             "clubs": _member_club_names(store, item),
             "career": _member_career_summary(store, item_id),
             "match_percent": round(score * 100),
+            "reasons": reasons,
+            "recommended": position == 0,
             "older_name": str(member.get("name") or "") if choose_survivor(store, own_id, item_id)[0] == own_id else str(item.get("name") or ""),
             "newer_name": str(item.get("name") or "") if choose_survivor(store, own_id, item_id)[0] == own_id else str(member.get("name") or ""),
             "pending_request_id": _pending_merge_request(own_id, item_id),
@@ -9848,8 +9907,8 @@ def player_request_merge(request: MergeRequestCreate, x_auth_token: str | None =
     target = _member_by_id(store, target_id)
     if not target or target_id == own_id:
         raise HTTPException(status_code=400, detail="Choose another player to merge with.")
-    if _members_match_score(member, target) <= PLAYER_MERGE_SUGGEST_MIN_SCORE:
-        raise HTTPException(status_code=400, detail="Only players with the same or a similar name can be merged.")
+    if _match_engine(store).score(member, target).score < PLAYER_MERGE_SUGGEST_MIN_SCORE:
+        raise HTTPException(status_code=400, detail="Only players that the engine finds to be the same person can be merged.")
     keep = str(request.keep or "older").strip().lower()
     if keep not in {"older", "newer"}:
         raise HTTPException(status_code=400, detail="Choose whether to keep the older or the newer record.")
@@ -14005,17 +14064,20 @@ async def upload_scorecard(
         source="api",
     )
     _scorecard_check_alerts(record, checks, user_row)
+    name_matches = _card_name_matches(load_store(), checks.get("scorecard") or {}, user_row, str(selected_club.get("id") or ""))
+    name_notice = _name_match_notice(name_matches)
     left = "" if upload_limit is None else f" {max(0, int(upload_limit) - int(plan_info.get('uploads_used') or 0) - 1)} of {upload_limit} uploads left this month."
     if checks["needs_review"]:
-        message = f"Scorecard '{record.get('original_file_name') or file.filename or file_token}' uploaded. Some things need checking, so a site admin will review it." + left
+        message = f"Scorecard '{record.get('original_file_name') or file.filename or file_token}' uploaded. Some things need checking, so a site admin will review it." + name_notice + left
     else:
-        message = f"Scorecard '{record.get('original_file_name') or file.filename or file_token}' uploaded. Check the digital scorecard and tap Publish." + left
+        message = f"Scorecard '{record.get('original_file_name') or file.filename or file_token}' uploaded. Check the digital scorecard and tap Publish." + name_notice + left
     return {
                 "message": message,
                 "dashboard": current_dashboard(load_store(), selected_club.get("id", "")),
                 "upload": record,
                 "checks": checks,
                 "digital": checks.get("scorecard"),
+                "name_matches": name_matches,
                 "preview_url": f"/scorecards/{record.get('id')}?preview=1",
             }
 
@@ -14910,6 +14972,132 @@ class ScorecardDecisionRequest(BaseModel):
     note: str = ""
 
 
+class ScorecardNameMergeRequest(BaseModel):
+    first_id: str
+    second_id: str
+    keep: str = "older"  # older | newer
+
+
+def _card_player_names(card: dict[str, Any]) -> list[str]:
+    """Distinct batting and bowling names on a scorecard, in the order they appear."""
+    names: list[str] = []
+    seen: set[str] = set()
+    for innings in card.get("innings") or []:
+        if not isinstance(innings, dict):
+            continue
+        for key in ("batting", "bowling"):
+            for row in innings.get(key) or []:
+                name = str(row.get("name") or "").strip() if isinstance(row, dict) else ""
+                norm = normalize_name(name)
+                if norm and norm not in seen:
+                    seen.add(norm)
+                    names.append(name)
+    return names
+
+
+SCORECARD_NAME_MATCH_MIN_SCORE = PLAYER_MERGE_SUGGEST_MIN_SCORE  # upload name check uses the same 75% rule
+
+
+def _card_name_matches(store: dict[str, Any], card: dict[str, Any], user_row: sqlite3.Row | None = None, current_club_id: str = "") -> list[dict[str, Any]]:
+    """Names on a new scorecard that match players already on file (engine score at or above SCORECARD_NAME_MATCH_MIN_SCORE).
+
+    The card name is scored as a player in the uploader's club. "recognised": one player fits, under an alias or a shorter name.
+    "duplicate": two players fit and the engine says they are likely the same person; the older record is listed first.
+    Only the uploader's own clubs can merge them.
+    """
+    members = store.get("members", []) or []
+    engine = _match_engine(store)
+    matches: list[dict[str, Any]] = []
+    for name in _card_player_names(card):
+        norm = normalize_name(name)
+        card_player = {
+            "name": name,
+            "aliases": [],
+            "primary_club_id": current_club_id,
+            "club_memberships": [{"club_id": current_club_id}] if current_club_id else [],
+        }
+        scored: list[tuple[float, int, dict[str, Any]]] = []
+        for index, member in enumerate(members):
+            pair = engine.score(card_player, member, check_matches=False)
+            if pair.score >= SCORECARD_NAME_MATCH_MIN_SCORE:
+                scored.append((pair.score, index, member))
+        if not scored:
+            continue
+        scored.sort(key=lambda item: (-item[0], item[1]))
+        duplicate = None
+        if len(scored) >= 2:
+            first_two = sorted(scored[:2], key=lambda item: item[1])  # older record first
+            older, newer = first_two[0][2], first_two[1][2]
+            pair = engine.score(older, newer)
+            if pair.score >= SCORECARD_NAME_MATCH_MIN_SCORE and not pair.vetoed:
+                duplicate = (older, newer, pair)
+        if duplicate:
+            older, newer, pair = duplicate
+            can_merge = user_row is not None and all(_reviewer_can_decide(store, user_row, current_club_id, m) for m in (older, newer))
+            matches.append({
+                "kind": "duplicate",
+                "card_name": name,
+                "match_percent": round(pair.score * 100),
+                "reasons": pair.reasons,
+                "members": [
+                    {"id": str(m.get("id") or ""), "name": str(m.get("name") or ""), "clubs": _member_club_names(store, m), "is_older": position == 0}
+                    for position, m in enumerate((older, newer))
+                ],
+                "can_merge": can_merge,
+            })
+            continue
+        top_score, _, top = scored[0]
+        if normalize_name(str(top.get("name") or "")) == norm:
+            continue
+        matches.append({
+            "kind": "recognised",
+            "card_name": name,
+            "match_percent": round(top_score * 100),
+            "reasons": engine.score(card_player, top, check_matches=False).reasons,
+            "members": [{"id": str(top.get("id") or ""), "name": str(top.get("name") or ""), "clubs": _member_club_names(store, top)}],
+            "can_merge": False,
+        })
+    return matches
+
+
+def _name_match_notice(matches: list[dict[str, Any]]) -> str:
+    """One sentence for the upload message, so the uploader hears about matches straight away."""
+    parts = []
+    for match in matches:
+        names = [m["name"] for m in match["members"]]
+        if match["kind"] == "duplicate":
+            parts.append(f"'{names[0]}' and '{names[1]}' look like the same player")
+        else:
+            parts.append(f"'{match['card_name']}' is recognised as {names[0]}")
+    return f" Name check: {'; '.join(parts)}." if parts else ""
+
+
+@app.post("/api/scorecards/{upload_id}/name-merge")
+def scorecard_name_merge(upload_id: str, request: ScorecardNameMergeRequest, x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
+    """Merge two players that this scorecard's names show are the same person. Keeps the older or newer record."""
+    user_row, current_club_id, store, upload, _ = _scorecard_upload_access(x_auth_token, upload_id)
+    if request.keep not in {"older", "newer"}:
+        raise HTTPException(status_code=400, detail="Choose which record to keep: older or newer.")
+    pair_ids = {str(request.first_id or "").strip(), str(request.second_id or "").strip()}
+    group = next(
+        (
+            match for match in _card_name_matches(store, _scorecard_from_archive(upload))
+            if match["kind"] == "duplicate" and {m["id"] for m in match["members"]} == pair_ids
+        ),
+        None,
+    )
+    if not group:
+        raise HTTPException(status_code=404, detail="These players are not a match on this scorecard any more.")
+    older_id, newer_id = group["members"][0]["id"], group["members"][1]["id"]
+    for member_id in (older_id, newer_id):
+        member = _member_by_id(store, member_id)
+        if not member or not _reviewer_can_decide(store, user_row, current_club_id, member):
+            raise HTTPException(status_code=403, detail="Ask a club admin to merge these players.")
+    keep_id = older_id if request.keep == "older" else newer_id
+    result = _perform_member_merge(store, older_id, newer_id, user_row, keep_id)
+    return {"message": f"'{result['removed_name']}' is merged into '{result['kept_name']}'.", **result}
+
+
 @app.get("/api/scorecards/{upload_id}/preview")
 def scorecard_upload_preview(upload_id: str, x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
     """The full digital scorecard of an upload that isn't published yet (uploader, own club's scorers, site admins)."""
@@ -14966,6 +15154,8 @@ def scorecard_upload_preview(upload_id: str, x_auth_token: str | None = Header(d
         ] if _template_innings_count(_scorecard_pick_template(upload) or {}) < 2 else [],
         # the same innings uploaded twice: offered as "Delete the duplicate"
         "duplicate_candidates": duplicate_candidates,
+        # names on this card that match players on file: shown as "recognised" or "may be the same player"
+        "name_matches": _card_name_matches(store, _scorecard_from_archive(upload), user_row, preview_club_id),
         # Nov 2 2026: the other innings of this match uploaded separately -> offer "Join the two innings"
         "other_half": (lambda half: {"id": half.get("id"), "file_name": half.get("original_file_name") or half.get("file_name") or "", "uploaded_by": half.get("uploaded_by") or ""} if half else None)(_find_other_half(store, upload)),
         # Nov 2 2026: only one innings on the photo -> offer "Add the 2nd innings photo"

@@ -467,6 +467,13 @@ body[data-dashboard-widget="overview"] .home-strip-row.is-grouped {
   font-size: 0.82rem;
 }
 
+.merge-chip-recommended {
+  border-color: var(--sports-green, #1f7a4d);
+  background: var(--sports-green, #1f7a4d);
+  color: #fff;
+  font-weight: 700;
+}
+
 .merge-stats {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));

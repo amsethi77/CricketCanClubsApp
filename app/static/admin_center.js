@@ -1164,10 +1164,11 @@ function renderNameMatches(groups = []) {
   box.innerHTML = groups.length ? groups.map((group) => `
     <article class="detail-card">
       <strong>${group.match_type === "exact" ? "Same name" : `Similar names (${Math.round(Number(group.score) * 100)}%)`}</strong>
+      <p class="muted">AIDuplicateEngine: ${escapeHtml(group.ai_match_percent)}% · ${escapeHtml((group.ai_reasons || []).join(" · "))}</p>
       <ul>
         ${group.members.map((member) => `
           <li><a href="/players/${encodeURIComponent(member.player_id || member.id)}">${escapeHtml(member.name)}</a> · ${escapeHtml(member.player_id || member.id)} · ${escapeHtml(member.clubs.join(", ") || "No club")}
-            ${group.members[0] && member.id !== group.members[0].id ? `<button type="button" class="ghost-button" data-merge-first="${escapeHtml(group.members[0].id)}" data-merge-second="${escapeHtml(member.id)}">Merge into ${escapeHtml(group.members[0].name)}</button>` : ""}
+            ${group.members[0] && member.id !== group.members[0].id ? `<span class="name-match-actions"><button type="button" class="ghost-button" data-merge-first="${escapeHtml(group.members[0].id)}" data-merge-second="${escapeHtml(member.id)}" data-merge-keep="${escapeHtml(group.members[0].id)}">Merge into ${escapeHtml(group.members[0].name)} (older)</button> <button type="button" class="ghost-button" data-merge-first="${escapeHtml(group.members[0].id)}" data-merge-second="${escapeHtml(member.id)}" data-merge-keep="${escapeHtml(member.id)}">Merge into ${escapeHtml(member.name)} (newer)</button> <button type="button" class="ghost-button" data-merge-first="${escapeHtml(group.members[0].id)}" data-merge-second="${escapeHtml(member.id)}" data-name-reject="1">Not the same player</button></span>` : ""}
           </li>
         `).join("")}
       </ul>
@@ -1460,10 +1461,24 @@ function bindAdminCenterHandlers() {
     if (!button) return;
     const firstId = button.dataset.mergeFirst;
     const secondId = button.dataset.mergeSecond;
-    if (!window.confirm("Merge these two player records? The older record is kept and the newer one is removed. Scorecards and statistics will follow the kept record. A superadmin can undo this.")) return;
+    if ("nameReject" in button.dataset) {
+      button.disabled = true;
+      try {
+        await postJson("/api/admin/name-matches/reject", { first_member_id: firstId, second_member_id: secondId }, true);
+        setStatus("Saved. These two records are not the same player and will not show again.", "success");
+      } catch (error) {
+        adminError("Could not save the rejection.", error);
+        setStatus(error.message || "Could not save the rejection.", "error");
+      } finally {
+        await loadNameMatches();
+      }
+      return;
+    }
+    const keepId = button.dataset.mergeKeep || "";
+    if (!window.confirm("Merge these two player records? The record you choose to keep stays and the other one is removed. Scorecards and statistics will follow the kept record. A superadmin can undo this.")) return;
     button.disabled = true;
     try {
-      const result = await postJson("/api/admin/name-matches/merge", { first_member_id: firstId, second_member_id: secondId }, true);
+      const result = await postJson("/api/admin/name-matches/merge", { first_member_id: firstId, second_member_id: secondId, keep_member_id: keepId }, true);
       setStatus(`Merged. ${result?.removed_name || "Duplicate"} was folded into the kept record.`, "success");
     } catch (error) {
       adminError("Player merge failed.", error);
