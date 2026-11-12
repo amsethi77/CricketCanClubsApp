@@ -331,8 +331,8 @@ def _club_record(store: dict[str, Any], club: dict[str, Any]) -> dict[str, Any]:
         "played": played,
         "won": won,
         "lost": lost,
-        "win_rate": (won / decided) if decided else 0.0,
-        "smoothed": (won + 1) / (decided + 2),
+        "win_rate": (won / played) if played else 0.0,
+        "smoothed": (won + 1) / (played + 2),
         "store": club_store,
         "summary": summary,
     }

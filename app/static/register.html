@@ -46,6 +46,18 @@
                     <span class="si-input rg-plain"><input id="registerAliases" type="text" placeholder="Comma separated" /></span>
                   </label>
                 </div>
+                <!-- Nov 10 2026 (Amit): where the player lives -->
+                <div class="rg-row">
+                  <label class="si-field" for="registerCity">
+                    <span class="si-label">City</span>
+                    <span class="si-input rg-plain"><input id="registerCity" type="text" placeholder="e.g. Brampton" autocomplete="address-level2" /></span>
+                  </label>
+                  <label class="si-field" for="registerCountry">
+                    <span class="si-label">Country</span>
+                    <span class="si-input rg-plain"><input id="registerCountry" type="text" placeholder="e.g. Canada" autocomplete="country-name" list="registerCountryList" /></span>
+                  </label>
+                  <datalist id="registerCountryList"><option value="Canada"></option><option value="United States"></option><option value="India"></option><option value="Pakistan"></option><option value="Sri Lanka"></option><option value="Bangladesh"></option><option value="United Kingdom"></option><option value="Australia"></option><option value="New Zealand"></option><option value="South Africa"></option><option value="West Indies"></option><option value="Afghanistan"></option></datalist>
+                </div>
                 <div class="rg-row">
                   <label class="si-field" for="registerMobile">
                     <span class="si-label">Mobile</span>
@@ -136,8 +148,8 @@
         });
       })();
     </script>
-    <script src="/assets/public_header.js?v=20261030f"></script>
-    <script src="/assets/multipage.js?v=20261030f"></script>
+    <script src="/assets/public_header.js?v=20261115a"></script>
+    <script src="/assets/multipage.js?v=20261115a"></script>
     <script>
       // Inline fallback: populate `#registerRole` if external JS fails or is stale
       (async function populateRolesFallback() {
@@ -157,6 +169,6 @@
         }
       })();
     </script>
-    <script src="/assets/register.js?v=20261102a"></script>
+    <script src="/assets/register.js?v=20261115a"></script>
   </body>
 </html>

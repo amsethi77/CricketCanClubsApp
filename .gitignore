@@ -44,3 +44,7 @@ android/app/release/
 *.keystore
 ios/build/
 xcuserdata/
+
+# Nov 11 2026: AI reader learned examples and accuracy reports (photos + player names) stay local
+app/data/ai_learned_examples/
+app/data/ai_accuracy/

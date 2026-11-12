@@ -3,6 +3,7 @@ import hmac
 import json
 import html
 import os
+import importlib
 import re
 import secrets
 import sqlite3
@@ -1054,6 +1055,19 @@ def _clubs_page_html(request: Request, search: str = "", focus_club_id: str = ""
                 <div id="clubsSearchSummary" class="clubs-search-summary">{html.escape(summary)}</div>
                 <div id="clubsList" class="clubs-tiles" data-server-rendered="true">{cards}</div>
               </section>
+              <!-- Nov 10 2026 (Amit): club admins edit their club's name, city and country -->
+              <section id="clubSettingsCard" class="clubs-section" hidden>
+                <div class="pm-subhead"><h2>Your club's details</h2></div>
+                <p class="pm-info">Club admins can change the club's name, city and country. The old name keeps working for old scorecards.</p>
+                <form id="clubSettingsForm" class="clubs-search">
+                  <input id="clubSettingsName" type="text" required maxlength="80" placeholder="Club name" aria-label="Club name" />
+                  <input id="clubSettingsShort" type="text" maxlength="40" placeholder="Short name, e.g. Heartlake" aria-label="Short name" />
+                  <input id="clubSettingsCity" type="text" maxlength="80" placeholder="City, e.g. Brampton" aria-label="City" />
+                  <input id="clubSettingsCountry" type="text" maxlength="80" placeholder="Country, e.g. Canada" aria-label="Country" />
+                  <button class="primary-button" type="submit">Save club details</button>
+                </form>
+                <p id="clubSettingsMsg" class="pm-info" role="status"></p>
+              </section>
               <section class="clubs-section">
                 <div class="pm-subhead"><h2>Player snapshot</h2></div>
                 <div class="clubs-player">
@@ -1090,6 +1104,9 @@ def _clubs_page_html(request: Request, search: str = "", focus_club_id: str = ""
                         <th class="pm-gap"></th>
                         <th>Ct</th>
                         <th>St</th>
+                        <th>Ov</th>
+                        <th>Wkts</th>
+                        <th>Econ</th>
                       </tr>
                     </thead>
                     <tbody id="clubsPlayerYearRows">{year_rows_html}</tbody>
@@ -1124,6 +1141,9 @@ def _clubs_page_html(request: Request, search: str = "", focus_club_id: str = ""
                         <th class="pm-gap"></th>
                         <th>Ct</th>
                         <th>St</th>
+                        <th>Ov</th>
+                        <th>Wkts</th>
+                        <th>Econ</th>
                       </tr>
                     </thead>
                     <tbody id="clubsPlayerClubRows">{club_rows_html}</tbody>
@@ -1138,8 +1158,8 @@ def _clubs_page_html(request: Request, search: str = "", focus_club_id: str = ""
             </div>
           </main>
         </div>
-        <script src="/assets/multipage.js?v=20261025a"></script>
-        <script src="/assets/clubs.js?v=20261113k"></script>
+        <script src="/assets/multipage.js?v=20261115a"></script>
+        <script src="/assets/clubs.js?v=20261115a"></script>
       </body>
     </html>
     """
@@ -1307,7 +1327,7 @@ def _grow_lineups_with_new_players(match_id: str, match: dict[str, Any], innings
                 _ensure_extra_match_tables(connection)
                 connection.execute(
                     "UPDATE app_match_lineups SET lineups_json = ?, updated_at = ? WHERE match_id = ?",
-                    (json.dumps({"club": lineups.get("club") or [], "opponent": lineups.get("opponent") or [], "roles": lineups.get("roles") or {}}), now_iso(), match_id),
+                    (json.dumps({"club": lineups.get("club") or [], "opponent": lineups.get("opponent") or [], "roles": lineups.get("roles") or {}, "man_of_match": lineups.get("man_of_match") or ""}), now_iso(), match_id),
                 )
         except Exception:
             logger.exception("Couldn't add new players to the line-ups of %s", match_id)
@@ -1750,6 +1770,9 @@ class RegisterRequest(BaseModel):
     club_name: str = ""
     club_city: str = ""
     club_country: str = ""
+    # Nov 10 2026 (Amit): the player's own city and country
+    city: str = ""
+    country: str = ""
 
 
 class SignInRequest(BaseModel):
@@ -1774,6 +1797,8 @@ class SeasonFixtureRequest(BaseModel):
     overs: str = "20"
     # Ask the club's players "Are you available?" when the match is added (off for "Start a new match" today).
     notify: bool = True
+    # Nov 10 2026: the league / series this match is part of (optional) - README "Leagues and series"
+    league_id: str = ""
 
 
 class PlayerAvailabilitySelfRequest(BaseModel):
@@ -1794,6 +1819,8 @@ class PlayerSelfProfileRequest(BaseModel):
     gender: str = ""
     age: int = 0
     date_of_birth: str = ""
+    city: str = ""
+    country: str = ""
     role: str = ""
     batting_style: str = ""
     bowling_style: str = ""
@@ -4047,9 +4074,65 @@ def root(request: Request) -> RedirectResponse:
     return RedirectResponse(url="/live", status_code=303)
 
 
+def _join_published_halves(store: dict[str, Any]) -> int:
+    """Nov 11 2026 (Dhruvika: "some of them have been scored but it says no result"): published scorecards that
+    hold only one innings each but are the two innings of the same match (e.g. Coca Cola 195/5 and TPCC 189/5 on
+    6 Jun, uploaded separately with the other team written as "Police" / "TPCC Community") are joined into one
+    scorecard, so the match gets its result instead of two "No result" games."""
+    joined = 0
+    for _ in range(50):
+        pair = None
+        for upload in store.get("archive_uploads", []) or []:
+            if str(upload.get("status") or "").lower() != "approved" or not _single_innings(upload):
+                continue
+            other = _find_other_half(store, upload)
+            if other is not None and str(other.get("status") or "").lower() == "approved":
+                pair = (upload, other)
+                break
+        if pair is None:
+            break
+        first, second = pair
+        keep, half = (first, second) if str(first.get("created_at") or "") <= str(second.get("created_at") or "") else (second, first)
+        logger.info("Joining the two published innings %s + %s into one scorecard", keep.get("id"), half.get("id"))
+        _join_halves(store, keep, half, None)
+        joined += 1
+    return joined
+
+
+def _seed_learned_examples() -> int:
+    """Nov 11 2026: the first time, every published card a person already typed in / fixed (and that adds up)
+    becomes a learned example for the AI reader (README "How the AI reader learns" -> "Learned examples")."""
+    folder = ai_vision._learned_dir()
+    if folder.is_dir() and any(folder.glob("*.json")):
+        return 0
+    store = load_store()
+    saved = 0
+    for upload in store.get("archive_uploads", []) or []:
+        if str(upload.get("status") or "").lower() != "approved" or upload.get("second_photo_file"):
+            continue
+        if str(upload.get("ocr_engine") or "") not in {"manual-entry", "manual-import"}:
+            continue
+        path = _upload_file_path(upload)
+        template = _scorecard_pick_template(upload) or {}
+        if path is None or not template:
+            continue
+        teams = [str(value or "") for value in ((template.get("match") or {}).get("teams") or {}).values()]
+        if ai_vision.save_learned_example(str(upload.get("id") or ""), path, template, [str(upload.get("club_name") or ""), *teams]):
+            saved += 1
+    if saved:
+        logger.info("AI reader: %s fixed scorecards kept as learned examples", saved)
+    return saved
+
+
 @app.on_event("startup")
 def startup_tasks() -> None:
     ensure_auth_schema()
+    try:
+        halves_store = load_store()
+        if _join_published_halves(halves_store):
+            save_store(halves_store)
+    except Exception:
+        logger.exception("Joining published halves failed")
     _refresh_player_stats_once()
     # Nov 5 2026: clubs from played games are registered BEFORE the first request. Doing it in a background thread
     # could save an older copy of the data over a change a request had just saved.
@@ -4064,6 +4147,7 @@ def startup_tasks() -> None:
             save_store(startup_store)
     except Exception:
         logger.exception("Syncing fixture results from scorecards failed")
+    threading.Thread(target=_seed_learned_examples, name="ai-learned-examples", daemon=True).start()
     threading.Thread(target=_backup_loop, name="database-backups", daemon=True).start()
     threading.Thread(target=_reminder_loop, name="match-reminders", daemon=True).start()
 
@@ -4093,7 +4177,7 @@ def _register_played_teams_in_background() -> None:
     threading.Thread(target=_work, name="register-played-teams", daemon=True).start()
 
 
-STATS_REFRESH_VERSION = "one-club-per-match-3"  # Nov 7 2026: club-wise stats = one club per match
+STATS_REFRESH_VERSION = "one-club-per-match-5"  # Nov 10 2026: rebuild again - app/data/.stats_version (with -3) was pushed to git, so the -3 rebuild never ran
 
 
 def _refresh_player_stats_once() -> None:
@@ -4260,7 +4344,9 @@ def _fixture_has_recorded_score_data(fixture: dict[str, Any]) -> bool:
         fixture.get("opponent_score"),
     )
     if any(
-        value is not None and str(value).strip().lower() not in {"", "-", "tbd"}
+        # Nov 11 2026: "0" / "0/0" is what a fixture holds before anyone scores it (Imran XI, 20 Sep, showed as a
+        # result "Result not recorded"); a real score of 0 still counts through its balls below.
+        value is not None and str(value).strip().lower() not in {"", "-", "tbd", "0", "0/0"}
         for value in score_values
     ):
         return True
@@ -4395,12 +4481,15 @@ def _sync_fixture_results_from_scorecards(store: dict[str, Any]) -> bool:
         innings = [item for item in card.get("innings") or [] if isinstance(item, dict)]
         ours = next((item for item in innings if _same_team_name(view["club_name"], item.get("team"))), None)
         theirs = next((item for item in innings if _same_team_name(view["opponent"], item.get("team"))), None)
-        if not ours or not theirs:
+        if not ours and not theirs:
             continue
-        ours_runs, ours_wickets = _split_innings_score(ours.get("score"))
-        theirs_runs, theirs_wickets = _split_innings_score(theirs.get("score"))
+        ours_runs, ours_wickets = _split_innings_score((ours or {}).get("score"))
+        theirs_runs, theirs_wickets = _split_innings_score((theirs or {}).get("score"))
         result = str(card.get("result") or "").strip()
-        if not ours_runs or not theirs_runs or not result or result.upper() == "TBD":
+        # Nov 10 2026 (Amit: "same here not showing results"): a card with only one team's innings still gives the
+        # fixture that score and its result line ("Heartlake Cricket Club 215/9 in 35 overs"), so the game shows in
+        # Recent results instead of staying "Scheduled"; the other score fills in when its innings is added.
+        if not (ours_runs or theirs_runs) or not result or result.upper() == "TBD":
             continue
         scorecard = dict(fixture.get("scorecard") or {})
         scorecard.update(
@@ -4413,8 +4502,8 @@ def _sync_fixture_results_from_scorecards(store: dict[str, Any]) -> bool:
             }
         )
         fixture["scorecard"] = scorecard
-        fixture["heartlake_score"] = f"{ours_runs}/{ours_wickets}" if ours_wickets else ours_runs
-        fixture["opponent_score"] = f"{theirs_runs}/{theirs_wickets}" if theirs_wickets else theirs_runs
+        fixture["heartlake_score"] = (f"{ours_runs}/{ours_wickets}" if ours_wickets else ours_runs) or str(fixture.get("heartlake_score") or "")
+        fixture["opponent_score"] = (f"{theirs_runs}/{theirs_wickets}" if theirs_wickets else theirs_runs) or str(fixture.get("opponent_score") or "")
         fixture["status"] = "Completed"
         changed = True
     return changed
@@ -4529,8 +4618,9 @@ def _build_public_signin_stats(store: dict[str, Any]) -> dict[str, Any]:
                 "matches_won": matches_won,
                 "matches_lost": int(summary.get("matches_lost") or 0),
                 "matches_decided": matches_decided,
-                # Nov 7 2026: wins out of the matches whose result is known (one-innings cards have none)
-                "win_rate": (matches_won / matches_decided) if matches_decided else 0.0,
+                "matches_nr": max(0, matches_played - matches_won - int(summary.get("matches_lost") or 0)),
+                # Nov 10 2026 (Amit: "Imran XI played 4, won 1, lost 0 but win rate 100%"): wins out of matches played
+                "win_rate": (matches_won / matches_played) if matches_played else 0.0,
             }
         )
     club_leaders.sort(
@@ -5489,6 +5579,10 @@ def _scorecard_from_archive_base(archive: dict[str, Any]) -> dict[str, Any]:
             if dnb or (row["how"] == "" and row["runs"] is None and row["balls"] is None):
                 did_not_bat.append(row["name"])
                 continue
+            if row["balls"] is None and any(row.get(key) is not None for key in ("ones", "twos", "threes")):
+                # Nov 10 2026 (Amit): balls faced from the counted ball-by-ball - every scoring ball (and the dots
+                # when the scorer wrote them), so cards read before the change get B and SR too
+                row["balls"] = sum(int(row.get(key) or 0) for key in ("dots", "ones", "twos", "threes", "fours", "sixes")) or None
             batting.append(
                 {
                     "name": row["name"],
@@ -5687,6 +5781,18 @@ def _scorecard_from_fixture_base(fixture: dict[str, Any]) -> dict[str, Any]:
             if kind == "retired_out":
                 retired.add(normalize_name(player))
 
+        # Nov 11 2026 (Amit: "add 1s, 2s, 3s on the right along with 4s and 6s"): count them per batter from the
+        # ball-by-ball of a live-scored match (wides aren't balls faced; byes / leg byes are a dot for the batter)
+        scoring_counts: dict[str, dict[str, int]] = {}
+        for ball in source.get("balls", []) or []:
+            if str(ball.get("extras_type") or "").lower() in {"wide", "wides", "wd"}:
+                continue
+            counts = scoring_counts.setdefault(normalize_name(ball.get("striker")), {"dots": 0, "ones": 0, "twos": 0, "threes": 0})
+            bat_runs = int(ball.get("runs_bat") or 0)
+            key = {0: "dots", 1: "ones", 2: "twos", 3: "threes"}.get(bat_runs)
+            if key:
+                counts[key] += 1
+
         batting: list[dict[str, Any]] = []
         did_not_bat: list[str] = []
         for batter in summary.get("batting") or []:
@@ -5713,6 +5819,7 @@ def _scorecard_from_fixture_base(fixture: dict[str, Any]) -> dict[str, Any]:
                     "fours": _scorecard_int(batter.get("fours")),
                     "sixes": _scorecard_int(batter.get("sixes")),
                     "strike_rate": _scorecard_strike_rate(batter_runs, batter_balls),
+                    **(scoring_counts.get(normalize_name(name)) or {}),
                 }
             )
 
@@ -5834,8 +5941,13 @@ _RESULT_WORDS = re.compile(r"\b(won|win|wins|beat|beats|tie|tied|draw|drawn|aban
 def _result_from_innings(card: dict[str, Any]) -> str:
     """Nov 5 2026 ("Imran XI 219/8" shown as the result): a 2-innings card with no result written gets it from
     the two totals - "Imran XI won by 94 runs" / "X won by 4 wickets" / "Match tied"."""
-    innings = [item for item in card.get("innings") or [] if isinstance(item, dict) and item.get("runs") not in (None, "")]
-    if len(innings) != 2:
+    # Nov 10 2026 (Amit: one-innings card shown as "Match tied"): both innings need their batters on the card - an
+    # innings with only a total (often the other team's total copied from the same page) doesn't decide a result
+    innings = [
+        item for item in card.get("innings") or []
+        if isinstance(item, dict) and item.get("runs") not in (None, "") and any(isinstance(row, dict) and row.get("name") for row in item.get("batting") or [])
+    ]
+    if len(innings) != 2 or _same_team_name(innings[0].get("team"), innings[1].get("team")):
         return ""
     first, second = sorted(innings, key=lambda item: int(item.get("number") or 0))
     try:
@@ -5863,12 +5975,23 @@ def _card_people(archive: dict[str, Any], card: dict[str, Any]) -> None:
     teams_info = match.get("teams") if isinstance(match.get("teams"), dict) else {}
     captains = match.get("captains") if isinstance(match.get("captains"), dict) else {}
     pairs = []
-    for key in ("team_1", "team_2"):
+    card_teams = [str(item or "") for item in card.get("teams") or []]
+    for index, key in enumerate(("team_1", "team_2")):
         name = " ".join(str(captains.get(key) or "").split())
-        if name and name.lower() not in {"null", "none", "-"}:
-            team = str(teams_info.get(key) or "")
-            shown = next((item for item in card.get("teams") or [] if team and _same_team_name(team, item)), team)
-            pairs.append({"team": shown, "name": name})
+        if name.lower() in {"null", "none", "-"}:
+            name = ""
+        team = str(teams_info.get(key) or "") or (card_teams[index] if index < len(card_teams) else "")
+        shown = next((item for item in card_teams if team and _same_team_name(team, item)), team)
+        # Nov 11 2026 (Amit: "add the captains from each side"): both sides are listed, "not picked" when the card
+        # didn't have one, and the players of that side are offered to pick from (`squad`)
+        squad = sorted({
+            str(row.get("name") or "")
+            for innings in card.get("innings") or []
+            for row in ((innings.get("batting") or []) if _same_team_name(innings.get("team"), shown) else (innings.get("bowling") or []))
+            if str(row.get("name") or "").strip()
+        })
+        if shown or name:
+            pairs.append({"team": shown, "name": name, "side": key, "squad": squad})
     card["captains"] = pairs
     mom = " ".join(str(match.get("man_of_match") or "").split())
     card["man_of_match"] = "" if mom.lower() in {"", "null", "none", "-"} else mom
@@ -5878,17 +6001,134 @@ def _scorecard_from_archive(archive: dict[str, Any]) -> dict[str, Any]:
     card = _scorecard_from_archive_base(archive)
     card["innings_ids"] = _innings_ids(card)
     _card_people(archive, card)
+    card["man_of_match_auto"] = ""
     if not _RESULT_WORDS.search(str(card.get("result") or "")):
         derived = _result_from_innings(card)
         if derived:
             card["result"] = derived
+    if not card.get("man_of_match") and _RESULT_WORDS.search(str(card.get("result") or "")):
+        card["man_of_match_auto"] = _auto_man_of_match(card)
     return card
+
+
+def _auto_man_of_match(card: dict[str, Any]) -> str:
+    """Best all-round game on the winning side (runs + 20 a wicket + 10 a catch-free bonus none) - shown as an
+    automatic pick until a captain / admin chooses the man of the match."""
+    result = str(card.get("result") or "").lower()
+    winner = next((team for team in card.get("teams") or [] if team and result.startswith(str(team).lower())), "")
+    points: dict[str, float] = {}
+    for innings in card.get("innings") or []:
+        batting_side = str(innings.get("team") or "")
+        for row in innings.get("batting") or []:
+            if not winner or batting_side == winner:
+                name = str(row.get("name") or "")
+                points[name] = points.get(name, 0) + int(row.get("runs") or 0)
+        for row in innings.get("bowling") or []:
+            if not winner or batting_side != winner:
+                name = str(row.get("name") or "")
+                points[name] = points.get(name, 0) + 20 * int(row.get("wickets") or 0)
+    points = {name: value for name, value in points.items() if name and value > 0}
+    return max(points, key=points.get) if points else ""
 
 
 def _scorecard_from_fixture(fixture: dict[str, Any]) -> dict[str, Any]:
     card = _scorecard_from_fixture_base(fixture)
     card["innings_ids"] = _innings_ids(card)
+    # Nov 11 2026 (Amit: "add the captains from each side and the man of the match in the match result summary"):
+    # a live-scored match takes the captains from its line-ups (Captain / vice-captain / keeper) and the man of the
+    # match a captain or admin picked; until one is picked, an automatic pick is shown and marked as such.
+    try:
+        with _auth_connection() as connection:
+            _ensure_extra_match_tables(connection)
+            row = connection.execute("SELECT lineups_json FROM app_match_lineups WHERE match_id = ?", (str(fixture.get("id") or ""),)).fetchone()
+        saved = json.loads(row["lineups_json"] or "{}") if row else {}
+    except Exception:
+        saved = {}
+    roles = saved.get("roles") if isinstance(saved.get("roles"), dict) else {}
+    home = str(fixture.get("club_name") or "").strip()
+    away = str(fixture.get("opponent") or fixture.get("visiting_team") or "").strip()
+    captains = []
+    for side, team, fallback in (("club", home, fixture.get("heartlake_captain")), ("opponent", away, "")):
+        name = " ".join(str((roles.get(side) or {}).get("captain") or fallback or "").split())
+        captains.append({"team": team, "name": name, "side": side, "squad": [str(n) for n in saved.get(side) or [] if str(n or "").strip()]})  # name "" = not picked yet
+    card["captains"] = captains if any(item["name"] for item in captains) or card.get("innings") else []
+    chosen = " ".join(str(saved.get("man_of_match") or "").split())
+    card["man_of_match"] = chosen
+    card["man_of_match_auto"] = "" if chosen else _auto_man_of_match(card)
     return card
+
+
+class ScorecardPeopleRequest(BaseModel):
+    team_1_captain: str | None = None
+    team_2_captain: str | None = None
+    man_of_match: str = ""
+
+
+@app.post("/api/scorecards/{upload_id}/people")
+def save_scorecard_people(upload_id: str, request: ScorecardPeopleRequest, x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
+    """Nov 11 2026 (Amit: "please add the captains from each side and the man of the match in the match Result
+    Summary"): set them on an uploaded scorecard when the photo didn't have them (or they were misread)."""
+    user_row, current_club_id, store, upload, is_admin = _scorecard_upload_access(x_auth_token, upload_id)
+    mine = int(upload.get("uploaded_by_user_id") or 0) == int(user_row["id"])
+    if not (is_admin or mine or set(_user_role_names(user_row, current_club_id)) & {"captain", "club_admin", "superadmin"}):
+        raise HTTPException(status_code=403, detail="Only a captain, club admin, the uploader or the superadmin can change this.")
+    template = deepcopy(_scorecard_pick_template(upload) or {})
+    if not template.get("innings"):
+        raise HTTPException(status_code=409, detail="This scorecard has no innings yet.")
+    match = template.setdefault("match", {})
+    captains = match.get("captains") if isinstance(match.get("captains"), dict) else {}
+    for key, value in (("team_1", request.team_1_captain), ("team_2", request.team_2_captain)):
+        if value is not None:
+            captains[key] = " ".join(str(value).split())[:80] or None
+    match["captains"] = captains
+    match["man_of_match"] = " ".join(str(request.man_of_match or "").split())[:80] or None
+    upload["extraction_template"] = deepcopy(template)
+    upload["review_template_json"] = json.dumps(template, indent=2)
+    upload["review_source_json"] = json.dumps(template)[:12000]
+    save_store(store)
+    _audit_event("archive.people", "archive_upload", str(upload.get("id") or ""), actor=user_row, details={"captains": captains, "man_of_match": match["man_of_match"]}, source="api")
+    card = _scorecard_from_archive(upload)
+    return {"message": "Saved captains and man of the match.", "captains": card.get("captains"), "man_of_match": card.get("man_of_match") or ""}
+
+
+class ManOfMatchRequest(BaseModel):
+    name: str = ""
+    # Nov 11 2026: the captain of each side can be set from the scorecard page too (None = leave as it is)
+    club_captain: str | None = None
+    opponent_captain: str | None = None
+
+
+@app.post("/api/matches/{match_id}/man-of-match")
+def set_man_of_match(match_id: str, request: ManOfMatchRequest, x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
+    """A playing club's captain / club admin or the superadmin picks the man of the match of a scored match."""
+    user_row, current_club_id = _auth_user_from_token(x_auth_token)
+    store = load_store()
+    match_id = match_id[2:] if match_id.startswith("f-") else match_id
+    match = next((item for item in store.get("fixtures", []) or [] if str(item.get("id") or "") == match_id), None)
+    if not match:
+        raise HTTPException(status_code=404, detail="Match not found.")
+    if not _match_score_editor_is_authorized(store, user_row, current_club_id, match):
+        raise HTTPException(status_code=403, detail="Only a playing club's captain, club admin or the superadmin can pick the man of the match.")
+    name = " ".join(str(request.name or "").split())[:80]
+    with _auth_connection() as connection:
+        _ensure_extra_match_tables(connection)
+        row = connection.execute("SELECT lineups_json FROM app_match_lineups WHERE match_id = ?", (match_id,)).fetchone()
+        data = json.loads(row["lineups_json"] or "{}") if row else {}
+        data["man_of_match"] = name
+        roles = data.get("roles") if isinstance(data.get("roles"), dict) else {}
+        for side, value in (("club", request.club_captain), ("opponent", request.opponent_captain)):
+            if value is not None:
+                side_roles = roles.get(side) if isinstance(roles.get(side), dict) else {}
+                side_roles["captain"] = " ".join(str(value).split())[:80]
+                roles[side] = side_roles
+        data["roles"] = roles
+        connection.execute(
+            "INSERT INTO app_match_lineups (match_id, lineups_json, updated_at, updated_by) VALUES (?, ?, ?, ?) "
+            "ON CONFLICT(match_id) DO UPDATE SET lineups_json = excluded.lineups_json, updated_at = excluded.updated_at, updated_by = excluded.updated_by",
+            (match_id, json.dumps(data), now_iso(), str(user_row["display_name"] or "")),
+        )
+    _audit_event("match.man_of_match", "fixture", match_id, actor=user_row, details={"name": name}, source="api")
+    return {"message": "Saved captains and man of the match.", "man_of_match": name}
 
 
 def _public_scorecards(store: dict[str, Any]) -> list[dict[str, Any]]:
@@ -6332,6 +6572,8 @@ def public_player_profile(player_key: str) -> dict[str, Any]:
             "role": member.get("role") or "",
             "batting_style": member.get("batting_style") or "",
             "bowling_style": member.get("bowling_style") or "",
+            "city": member.get("city") or "",
+            "country": member.get("country") or "",
             "aliases": [alias for alias in member.get("aliases") or [] if alias],
             "clubs": [str(link.get("club_name") or "") for link in member.get("club_memberships", []) or [] if isinstance(link, dict) and link.get("club_name")],
             "picture_url": member.get("picture_url") or "",
@@ -6348,6 +6590,17 @@ def public_player_profile(player_key: str) -> dict[str, Any]:
         "fielding": _member_run_outs(store, member, club_names),
         "read_only": True,
     }
+
+
+def _overs_to_balls(value: Any) -> int:
+    text = str(value if value is not None else "").strip()
+    if not text:
+        return 0
+    try:
+        whole, _, part = text.partition(".")
+        return int(whole or 0) * 6 + min(int(part[:1] or 0), 5)
+    except ValueError:
+        return 0
 
 
 @app.get("/api/public/scorecards/{scorecard_id}")
@@ -6809,7 +7062,7 @@ def _admin_center_html(request: Request) -> HTMLResponse:
         <link rel="stylesheet" href="/assets/styles.css?v=20261111tablealign" />
         <link rel="stylesheet" href="/assets/app_polish.css?v=20261006a" />
         <link rel="stylesheet" href="/assets/sports-system.css?v=20260926a" />
-        <link rel="stylesheet" href="/assets/scorecards.css?v=20261111tablealign" />
+        <link rel="stylesheet" href="/assets/scorecards.css?v=20261115a" />
       </head>
       <body>
         <div class="page-shell">
@@ -6975,10 +7228,10 @@ def _admin_center_html(request: Request) -> HTMLResponse:
             </div>
           </section>
         </div>
-        <script src="/assets/multipage.js?v=20261025a"></script>
-        <script src="/assets/scorecard_view.js?v=20261109a"></script>
-        <script src="/assets/scorecard.js?v=20261111a"></script>
-        <script src="/assets/admin_center.js?v=20261111d"></script>
+        <script src="/assets/multipage.js?v=20261115a"></script>
+        <script src="/assets/scorecard_view.js?v=20261115a"></script>
+        <script src="/assets/scorecard.js?v=20261115c"></script>
+        <script src="/assets/admin_center.js?v=20261114a"></script>
         <script src="/assets/admin_reread.js?v=20261024a"></script>
       </body>
     </html>
@@ -7636,7 +7889,8 @@ def _register_played_fixture_teams(store: dict[str, Any]) -> bool:
                 home_club.get("short_name"),
                 home_club.get("id"),
                 "club",
-                "heartlake",
+                # Nov 10 2026: "heartlake" was listed here for every club, so a Heartlake innings on another club's
+                # card was filed under that club; Heartlake's own name / short name already cover it.
             )
             if normalize_name(str(value or ""))
         }
@@ -7803,7 +8057,9 @@ def _register_played_fixture_teams(store: dict[str, Any]) -> bool:
                             isinstance(item, dict) and item.get("is_primary") and item.get("club_id")
                             for item in memberships
                         )
-                        or existing_team_name not in {"", "club"}
+                        # Nov 10 2026: a scorecard auto-added player's team name is only the uploading club's
+                        # guess, not a club he chose - the club he actually played for becomes his primary
+                        or (existing_team_name not in {"", "club"} and "auto-added" not in str(member.get("notes") or "").lower())
                     )
                     memberships.append(
                         {
@@ -8063,6 +8319,8 @@ def register(request: RegisterRequest, response: Response) -> dict[str, Any]:
                 "aliases": aliases,
                 "role": role,
                 "date_of_birth": _validated_date_of_birth(request.date_of_birth),
+                "city": request.city.strip()[:80],
+                "country": request.country.strip()[:80],
                 "created_at": now_iso(),
             }
 
@@ -8119,6 +8377,12 @@ def register(request: RegisterRequest, response: Response) -> dict[str, Any]:
                 member_id = member.get("id")
                 if request.date_of_birth.strip():
                     member["date_of_birth"] = _validated_date_of_birth(request.date_of_birth)
+                    save_store(store)
+                if request.city.strip() or request.country.strip():
+                    if request.city.strip():
+                        member["city"] = request.city.strip()[:80]
+                    if request.country.strip():
+                        member["country"] = request.country.strip()[:80]
                     save_store(store)
 
             if created_club and member:
@@ -8231,6 +8495,17 @@ def register(request: RegisterRequest, response: Response) -> dict[str, Any]:
             },
             source="api",
         )
+
+        # Nov 10 2026 (Amit: "once the player links to his primary club, all other clubs his name appears in become
+        # his secondary clubs"): the clubs he played FOR on published scorecards and scored matches are added as
+        # secondary clubs now (the primary club stays primary; clubs he only played against are not added).
+        try:
+            _register_played_fixture_teams(load_store())
+            refreshed_member = next((item for item in load_store().get("members", []) if str(item.get("id") or "") == str(member_id or "")), None)
+            if refreshed_member:
+                member = refreshed_member
+        except Exception:
+            logger.exception("Linking played clubs after registration failed")
 
         return {
             "token": token,
@@ -8739,6 +9014,7 @@ def create_season_fixture(request: SeasonFixtureRequest, x_auth_token: str | Non
         request.opponent,
         user_row["display_name"] or user_row["mobile"] or "user",
     )
+    _check_league_for_club(str(request.league_id or "").strip(), str(club.get("id") or ""))
     season_year = int(request.season_year)
     if season_year < MIN_SEASON_SETUP_YEAR:
         raise HTTPException(
@@ -8838,6 +9114,8 @@ def create_season_fixture(request: SeasonFixtureRequest, x_auth_token: str | Non
         },
         source="api",
     )
+    if str(request.league_id or "").strip():
+        _link_match_to_league(str(request.league_id).strip(), f"f:{new_fixture['id']}", _league_actor(user_row))
     if request.notify:
         _announce_new_fixture(new_fixture)
     return season_setup_data(x_auth_token, str(club.get("id") or ""))
@@ -9854,6 +10132,12 @@ def admin_decide_name_claim(claim_id: int, request: NameClaimDecisionRequest, x_
             "UPDATE app_name_claims SET status = ?, decided_at = ?, decided_by_user_id = ?, decision_note = ? WHERE id = ?",
             (status, now_iso(), int(user_row["id"]), str(request.note or "").strip()[:500], claim_id),
         )
+    if status == "approved":
+        # Nov 10 2026 (Amit): the clubs he played for under the claimed name become his (secondary) clubs too
+        try:
+            _register_played_fixture_teams(load_store())
+        except Exception:
+            logger.exception("Linking played clubs after a name claim failed")
     _audit_event("player.claim_" + status, "member", member_id, actor=user_row, club_id="", club_name="", details={"name": claimed_name, "claim_id": claim_id}, source="api")
     return {"status": status, "claim_id": claim_id}
 
@@ -10219,6 +10503,8 @@ def save_player_profile(request: PlayerSelfProfileRequest, x_auth_token: str | N
     updates["full_name"] = str(updates.get("full_name", "") or "").strip()
     updates["gender"] = _normalize_gender(updates.get("gender", ""))
     updates["date_of_birth"] = _validated_date_of_birth(updates.get("date_of_birth", ""))
+    updates["city"] = str(updates.get("city", "") or "").strip()[:80]
+    updates["country"] = str(updates.get("country", "") or "").strip()[:80]
     updates["role"] = str(updates.get("role", "") or "").strip()
     updates["batting_style"] = str(updates.get("batting_style", "") or "").strip()
     updates["bowling_style"] = str(updates.get("bowling_style", "") or "").strip()
@@ -10807,6 +11093,542 @@ def _set_club_disabled_core(club_id: str, token: str | None, disabled: bool, con
     return {"message": f"{club_name} {'disabled' if disabled else 're-enabled'}.", "club_id": str(club.get("id") or ""), "club_name": club_name}
 
 
+# ---------------------------------------------------------------------------
+# Nov 10 2026 (Amit: "Website should support league games / series - 8-9 teams play under a series. Create a league
+# with unique id and name and then assign the teams under different groups A, B, C with unique league-group id").
+# Decisions (Dhruvika, Nov 10): only the superadmin makes leagues and groups; a match joins a league when it is made
+# (pick the league on "Add fixture" or "Upload a scorecard") - the superadmin can also add an already played match;
+# points: win 2, tie / no result 1, loss 0, then net run rate. README "Leagues and series".
+# Own tables (leagues, league_groups, league_group_teams, league_matches) - save_store never touches them.
+# ---------------------------------------------------------------------------
+class LeagueRequest(BaseModel):
+    name: str = ""
+    season: str = ""
+
+
+class LeagueGroupRequest(BaseModel):
+    name: str = ""
+
+
+class LeagueTeamRequest(BaseModel):
+    club_id: str = ""
+
+
+class LeagueMatchRequest(BaseModel):
+    match_ref: str = ""
+
+
+def _league_db() -> sqlite3.Connection:
+    connection = _auth_connection()
+    connection.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS leagues (
+            id TEXT PRIMARY KEY, name TEXT NOT NULL, season TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL DEFAULT '', created_by TEXT NOT NULL DEFAULT '');
+        CREATE TABLE IF NOT EXISTS league_groups (
+            id TEXT PRIMARY KEY, league_id TEXT NOT NULL, name TEXT NOT NULL, position INTEGER NOT NULL DEFAULT 0);
+        CREATE TABLE IF NOT EXISTS league_group_teams (
+            group_id TEXT NOT NULL, club_id TEXT NOT NULL, PRIMARY KEY (group_id, club_id));
+        CREATE TABLE IF NOT EXISTS league_matches (
+            match_ref TEXT PRIMARY KEY, league_id TEXT NOT NULL, added_at TEXT NOT NULL DEFAULT '', added_by TEXT NOT NULL DEFAULT '');
+        """
+    )
+    return connection
+
+
+def _new_league_id(connection: sqlite3.Connection) -> str:
+    alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+    while True:
+        candidate = "L-" + "".join(secrets.choice(alphabet) for _ in range(5))
+        if not connection.execute("SELECT 1 FROM leagues WHERE id = ?", (candidate,)).fetchone():
+            return candidate
+
+
+def _league_rows(connection: sqlite3.Connection, league_id: str = "") -> list[dict[str, Any]]:
+    where, args = ("WHERE id = ?", (league_id,)) if league_id else ("", ())
+    leagues = [dict(row) for row in connection.execute(f"SELECT * FROM leagues {where} ORDER BY created_at DESC, name", args)]
+    for league in leagues:
+        league["groups"] = [dict(row) for row in connection.execute("SELECT * FROM league_groups WHERE league_id = ? ORDER BY position, name", (league["id"],))]
+        for group in league["groups"]:
+            group["club_ids"] = [row["club_id"] for row in connection.execute("SELECT club_id FROM league_group_teams WHERE group_id = ?", (group["id"],))]
+        league["match_refs"] = [row["match_ref"] for row in connection.execute("SELECT match_ref FROM league_matches WHERE league_id = ? ORDER BY added_at", (league["id"],))]
+    return leagues
+
+
+def _store_helpers() -> Any:
+    return importlib.import_module(card_sides_are_swapped.__module__)
+
+
+def _league_match_info(store: dict[str, Any], match_ref: str) -> dict[str, Any] | None:
+    """Teams, scores, overs and result of one league match. ref = 'a:<scorecard id>' or 'f:<fixture id>'."""
+    helpers = _store_helpers()
+    kind, _, ref_id = str(match_ref or "").partition(":")
+    if kind == "a":
+        try:
+            upload = get_archive_or_404(store, ref_id)
+        except Exception:
+            return None
+        status = str(upload.get("status") or "").strip().lower()
+        published = not (status.startswith(("pending", "needs")) or status in {"rejected", "duplicate", "ready for review"})
+        teams, outcome = helpers._archive_outcome(upload)
+        template = helpers._template_of_archive(upload)
+        innings = [item for item in template.get("innings") or [] if isinstance(item, dict)]
+        sides: dict[str, dict[str, Any]] = {}
+        for item in innings:
+            summary = item.get("summary") or {}
+            team = str(item.get("batting_team") or "")
+            if team and summary.get("runs") is not None:
+                sides[team] = {"runs": helpers._runs_of(summary.get("runs")), "overs": summary.get("overs"), "wickets": summary.get("wickets")}
+        match = template.get("match") if isinstance(template.get("match"), dict) else {}
+        return {
+            "ref": f"a:{upload.get('id')}", "kind": "scorecard", "id": upload.get("id"), "published": published,
+            "fixture_id": str(upload.get("match_id") or ""),
+            "date": str(match.get("date") or upload.get("archive_date") or upload.get("scorecard_date") or "")[:10],
+            "teams": teams, "outcome": outcome, "sides": sides,
+            "overs_limit": match.get("overs_limit") or upload.get("overs_limit"),
+            "url": f"/scorecards/{upload.get('id')}",
+        }
+    if kind == "f":
+        fixture = next((item for item in store.get("fixtures", []) or [] if str(item.get("id") or "") == ref_id), None)
+        if not fixture:
+            return None
+        teams, outcome = helpers._fixture_outcome(fixture)
+        card = fixture.get("scorecard") or {}
+        sides = {}
+        for team, runs, overs, wickets in (
+            (teams[0], fixture.get("heartlake_score") or card.get("heartlake_runs"), card.get("heartlake_overs"), card.get("heartlake_wickets")),
+            (teams[1], fixture.get("opponent_score") or card.get("opponent_runs"), card.get("opponent_overs"), card.get("opponent_wickets")),
+        ):
+            if team and helpers._runs_of(runs) is not None:
+                sides[team] = {"runs": helpers._runs_of(runs), "overs": overs, "wickets": wickets}
+        return {
+            "ref": f"f:{fixture.get('id')}", "kind": "fixture", "id": fixture.get("id"), "published": True, "fixture_id": str(fixture.get("id") or ""),
+            "date": str(fixture.get("date") or "")[:10], "teams": teams, "outcome": outcome, "sides": sides,
+            "overs_limit": (fixture.get("details") or {}).get("overs") or fixture.get("overs"),
+            "url": f"/live/{fixture.get('id')}",
+        }
+    return None
+
+
+def _league_payload(store: dict[str, Any], league: dict[str, Any]) -> dict[str, Any]:
+    helpers = _store_helpers()
+    clubs_by_id = {str(club.get("id") or ""): club for club in store.get("clubs", []) or []}
+
+    def club_of(team_name: str, candidates: list[str]) -> str:
+        for club_id in candidates:
+            club = clubs_by_id.get(club_id)
+            if club and helpers._team_is_club(team_name, club):
+                return club_id
+        found = _find_club_by_name(store, team_name)
+        return str(found.get("id") or "") if found else ""
+
+    all_club_ids = [club_id for group in league["groups"] for club_id in group["club_ids"]]
+    infos = [info for info in (_league_match_info(store, ref) for ref in league["match_refs"]) if info]
+    # the same game as a fixture AND a scorecard counts once (the scorecard)
+    def game_key(info: dict[str, Any]) -> tuple[str, frozenset[str]]:
+        return info["date"], frozenset(club_of(name, all_club_ids) or normalize_name(name) for name in info["teams"] if name)
+
+    card_fixture_ids = {info["fixture_id"] for info in infos if info["kind"] == "scorecard" and info["fixture_id"]}
+    card_keys = {game_key(info) for info in infos if info["kind"] == "scorecard"}
+    infos = [info for info in infos if not (info["kind"] == "fixture" and (info["id"] in card_fixture_ids or game_key(info) in card_keys))]
+    tables: dict[str, dict[str, dict[str, Any]]] = {
+        group["id"]: {club_id: {"club_id": club_id, "club_name": str((clubs_by_id.get(club_id) or {}).get("name") or club_id), "played": 0, "won": 0, "lost": 0, "tied": 0, "no_result": 0, "points": 0, "runs_for": 0, "balls_for": 0, "runs_against": 0, "balls_against": 0} for club_id in group["club_ids"]}
+        for group in league["groups"]
+    }
+    group_of = {club_id: group["id"] for group in league["groups"] for club_id in group["club_ids"]}
+    matches = []
+    for info in infos:
+        team_names = [name for name in info["teams"] if name][:2]
+        ids = [club_of(name, all_club_ids) for name in team_names]
+        groups = {group_of.get(club_id) for club_id in ids if club_id in group_of}
+        group_id = next(iter(groups)) if len(groups) == 1 else ("" if not groups else group_of.get(ids[0], ""))
+        outcome = info["outcome"]
+        result = "Result not in yet" if outcome is None else ("Tied" if outcome[0] == "tie" else "No result" if outcome[0] == "nr" else f"{outcome[1]} won")
+        if not info["published"]:
+            result = "Scorecard waiting for approval"
+        matches.append({
+            "ref": info["ref"], "date": info["date"], "teams": team_names, "club_ids": ids, "group_id": group_id,
+            "result": result, "url": info["url"],
+            "scores": {name: (f"{side['runs']}" + (f"/{side['wickets']}" if side.get("wickets") not in (None, "") else "") + (f" ({side['overs']} ov)" if side.get("overs") not in (None, "") else "")) for name, side in info["sides"].items()},
+        })
+        if not info["published"] or outcome is None or len(ids) != 2 or not all(ids):
+            continue
+        overs_limit_balls = _overs_to_balls(info.get("overs_limit")) if info.get("overs_limit") else 0
+        for index, club_id in enumerate(ids):
+            row = tables.get(group_of.get(club_id, ""), {}).get(club_id)
+            if row is None:
+                continue
+            mine, theirs = team_names[index], team_names[1 - index]
+            row["played"] += 1
+            if outcome[0] == "win":
+                won = helpers._same_side_name(outcome[1], mine) and not helpers._same_side_name(outcome[1], theirs)
+                row["won" if won else "lost"] += 1
+                row["points"] += 2 if won else 0
+            else:
+                row["tied" if outcome[0] == "tie" else "no_result"] += 1
+                row["points"] += 1
+            if outcome[0] == "nr":
+                continue  # no-result games don't count toward net run rate
+            figures = []
+            for side_name in (mine, theirs):
+                side = info["sides"].get(side_name) or {}
+                balls = _overs_to_balls(side.get("overs"))
+                if str(side.get("wickets") or "") == "10" and overs_limit_balls:
+                    balls = overs_limit_balls  # all out: counted as batting the full overs (usual NRR rule)
+                figures.append((side.get("runs"), balls))
+            # only when both innings have runs and overs (a card with one innings would skew NRR)
+            if all(runs is not None and balls for runs, balls in figures):
+                row["runs_for"] += int(figures[0][0])
+                row["balls_for"] += figures[0][1]
+                row["runs_against"] += int(figures[1][0])
+                row["balls_against"] += figures[1][1]
+    groups_out = []
+    for group in league["groups"]:
+        rows = list(tables[group["id"]].values())
+        for row in rows:
+            rate_for = row["runs_for"] * 6 / row["balls_for"] if row["balls_for"] else 0
+            rate_against = row["runs_against"] * 6 / row["balls_against"] if row["balls_against"] else 0
+            row["nrr"] = round(rate_for - rate_against, 3) if (row["balls_for"] or row["balls_against"]) else None
+        rows.sort(key=lambda row: (-row["points"], -(row["nrr"] if row["nrr"] is not None else -99), -row["won"], row["club_name"].casefold()))
+        groups_out.append({"id": group["id"], "name": group["name"], "standings": rows})
+    matches.sort(key=lambda item: item["date"] or "", reverse=True)
+    return {"id": league["id"], "name": league["name"], "season": league.get("season") or "", "groups": groups_out, "matches": matches}
+
+
+def _league_actor(user_row: sqlite3.Row) -> str:
+    return str(user_row["display_name"] or user_row["mobile"] or "superadmin")
+
+
+@app.get("/leagues")
+def leagues_page() -> FileResponse:
+    return _page_response("leagues.html")
+
+
+@app.get("/api/leagues")
+def list_leagues() -> dict[str, Any]:
+    store = load_store()
+    with _league_db() as connection:
+        leagues = _league_rows(connection)
+    return {"leagues": [_league_payload(store, league) for league in leagues]}
+
+
+@app.get("/api/leagues/choices")
+def league_choices(club_id: str = "") -> dict[str, Any]:
+    """Leagues for the 'League (optional)' pickers; with club_id, only leagues that club is in."""
+    with _league_db() as connection:
+        leagues = _league_rows(connection)
+    out = []
+    for league in leagues:
+        if club_id and not any(club_id in group["club_ids"] for group in league["groups"]):
+            continue
+        out.append({"id": league["id"], "name": league["name"], "season": league.get("season") or ""})
+    return {"leagues": out}
+
+
+@app.post("/api/leagues")
+def create_league(request: LeagueRequest, x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
+    user_row, _ = _require_superadmin(x_auth_token)
+    name = " ".join(str(request.name or "").split())[:80]
+    if len(name) < 2:
+        raise HTTPException(status_code=400, detail="Enter the league's name.")
+    with _league_db() as connection:
+        season = " ".join(str(request.season or "").split())[:20]
+        if connection.execute("SELECT 1 FROM leagues WHERE lower(name) = lower(?) AND season = ?", (name, season)).fetchone():
+            raise HTTPException(status_code=409, detail=f"There is already a league called '{name}'{' for ' + season if season else ''}.")
+        league_id = _new_league_id(connection)
+        connection.execute("INSERT INTO leagues (id, name, season, created_at, created_by) VALUES (?, ?, ?, ?, ?)", (league_id, name, season, now_iso(), _league_actor(user_row)))
+    _audit_event("league.create", "league", league_id, actor=user_row, details={"name": name, "season": season}, source="api")
+    return {"message": f"League '{name}' created (ID {league_id}). Now add groups A, B, C...", "league_id": league_id}
+
+
+@app.post("/api/leagues/{league_id}")
+def update_league(league_id: str, request: LeagueRequest, x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
+    _require_superadmin(x_auth_token)
+    name = " ".join(str(request.name or "").split())[:80]
+    if len(name) < 2:
+        raise HTTPException(status_code=400, detail="Enter the league's name.")
+    with _league_db() as connection:
+        if not connection.execute("UPDATE leagues SET name = ?, season = ? WHERE id = ?", (name, " ".join(str(request.season or "").split())[:20], league_id)).rowcount:
+            raise HTTPException(status_code=404, detail="League not found.")
+    return {"message": "League saved."}
+
+
+@app.delete("/api/leagues/{league_id}")
+def delete_league(league_id: str, x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
+    user_row, _ = _require_superadmin(x_auth_token)
+    with _league_db() as connection:
+        group_ids = [row["id"] for row in connection.execute("SELECT id FROM league_groups WHERE league_id = ?", (league_id,))]
+        for group_id in group_ids:
+            connection.execute("DELETE FROM league_group_teams WHERE group_id = ?", (group_id,))
+        connection.execute("DELETE FROM league_groups WHERE league_id = ?", (league_id,))
+        connection.execute("DELETE FROM league_matches WHERE league_id = ?", (league_id,))
+        if not connection.execute("DELETE FROM leagues WHERE id = ?", (league_id,)).rowcount:
+            raise HTTPException(status_code=404, detail="League not found.")
+    _audit_event("league.delete", "league", league_id, actor=user_row, source="api")
+    return {"message": "League deleted. Its matches and scorecards are not touched."}
+
+
+@app.post("/api/leagues/{league_id}/groups")
+def add_league_group(league_id: str, request: LeagueGroupRequest, x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
+    _require_superadmin(x_auth_token)
+    with _league_db() as connection:
+        if not connection.execute("SELECT 1 FROM leagues WHERE id = ?", (league_id,)).fetchone():
+            raise HTTPException(status_code=404, detail="League not found.")
+        existing = [row["name"] for row in connection.execute("SELECT name FROM league_groups WHERE league_id = ?", (league_id,))]
+        name = " ".join(str(request.name or "").split())[:20].upper()
+        if not name:
+            name = next(letter for letter in "ABCDEFGHIJKLMNOPQRSTUVWXYZ" if letter not in existing)
+        if name in existing:
+            raise HTTPException(status_code=409, detail=f"Group {name} already exists in this league.")
+        group_id = f"{league_id}-{re.sub(r'[^A-Z0-9]+', '', name) or len(existing) + 1}"
+        while connection.execute("SELECT 1 FROM league_groups WHERE id = ?", (group_id,)).fetchone():
+            group_id += "X"
+        connection.execute("INSERT INTO league_groups (id, league_id, name, position) VALUES (?, ?, ?, ?)", (group_id, league_id, name, len(existing)))
+    return {"message": f"Group {name} added (ID {group_id}).", "group_id": group_id}
+
+
+@app.delete("/api/leagues/groups/{group_id}")
+def delete_league_group(group_id: str, x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
+    _require_superadmin(x_auth_token)
+    with _league_db() as connection:
+        connection.execute("DELETE FROM league_group_teams WHERE group_id = ?", (group_id,))
+        if not connection.execute("DELETE FROM league_groups WHERE id = ?", (group_id,)).rowcount:
+            raise HTTPException(status_code=404, detail="Group not found.")
+    return {"message": "Group removed."}
+
+
+@app.post("/api/leagues/groups/{group_id}/teams")
+def add_league_team(group_id: str, request: LeagueTeamRequest, x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
+    _require_superadmin(x_auth_token)
+    store = load_store()
+    club = next((item for item in store.get("clubs", []) or [] if str(item.get("id") or "") == request.club_id), None)
+    if not club:
+        raise HTTPException(status_code=404, detail="Club not found.")
+    with _league_db() as connection:
+        group = connection.execute("SELECT * FROM league_groups WHERE id = ?", (group_id,)).fetchone()
+        if not group:
+            raise HTTPException(status_code=404, detail="Group not found.")
+        clash = connection.execute(
+            "SELECT g.name FROM league_group_teams t JOIN league_groups g ON g.id = t.group_id WHERE g.league_id = ? AND t.club_id = ?",
+            (group["league_id"], request.club_id),
+        ).fetchone()
+        if clash:
+            raise HTTPException(status_code=409, detail=f"{club.get('name')} is already in group {clash['name']} of this league.")
+        connection.execute("INSERT INTO league_group_teams (group_id, club_id) VALUES (?, ?)", (group_id, request.club_id))
+    return {"message": f"{club.get('name')} added to group {group['name']}."}
+
+
+@app.delete("/api/leagues/groups/{group_id}/teams/{club_id}")
+def remove_league_team(group_id: str, club_id: str, x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
+    _require_superadmin(x_auth_token)
+    with _league_db() as connection:
+        connection.execute("DELETE FROM league_group_teams WHERE group_id = ? AND club_id = ?", (group_id, club_id))
+    return {"message": "Team removed from the group."}
+
+
+def _link_match_to_league(league_id: str, match_ref: str, actor: str) -> None:
+    with _league_db() as connection:
+        if not connection.execute("SELECT 1 FROM leagues WHERE id = ?", (league_id,)).fetchone():
+            raise HTTPException(status_code=404, detail="League not found.")
+        connection.execute(
+            "INSERT INTO league_matches (match_ref, league_id, added_at, added_by) VALUES (?, ?, ?, ?) "
+            "ON CONFLICT(match_ref) DO UPDATE SET league_id = excluded.league_id",
+            (match_ref, league_id, now_iso(), actor),
+        )
+
+
+def _check_league_for_club(league_id: str, club_id: str) -> None:
+    """A captain / club admin can only put his own club's match in a league his club plays in."""
+    if not league_id:
+        return
+    with _league_db() as connection:
+        leagues = _league_rows(connection, league_id)
+    if not leagues:
+        raise HTTPException(status_code=404, detail="That league no longer exists. Pick another league or none.")
+    if club_id and not any(club_id in group["club_ids"] for group in leagues[0]["groups"]):
+        raise HTTPException(status_code=400, detail=f"Your club isn't in a group of '{leagues[0]['name']}'. Ask the superadmin to add it, or pick no league.")
+
+
+@app.post("/api/leagues/{league_id}/matches")
+def add_league_match(league_id: str, request: LeagueMatchRequest, x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
+    user_row, _ = _require_superadmin(x_auth_token)
+    if not _league_match_info(load_store(), request.match_ref):
+        raise HTTPException(status_code=404, detail="Match not found.")
+    _link_match_to_league(league_id, request.match_ref, _league_actor(user_row))
+    return {"message": "Match added to the league."}
+
+
+@app.delete("/api/leagues/{league_id}/matches/{match_ref}")
+def remove_league_match(league_id: str, match_ref: str, x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
+    _require_superadmin(x_auth_token)
+    with _league_db() as connection:
+        connection.execute("DELETE FROM league_matches WHERE league_id = ? AND match_ref = ?", (league_id, match_ref))
+    return {"message": "Match taken out of the league (the match itself is not deleted)."}
+
+
+@app.get("/api/leagues/{league_id}/candidates")
+def league_match_candidates(league_id: str, x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
+    """Played matches between two of the league's teams that aren't in any league yet (superadmin 'Add a played match')."""
+    _require_superadmin(x_auth_token)
+    helpers = _store_helpers()
+    store = load_store()
+    with _league_db() as connection:
+        leagues = _league_rows(connection, league_id)
+        taken = {row["match_ref"] for row in connection.execute("SELECT match_ref FROM league_matches")}
+    if not leagues:
+        raise HTTPException(status_code=404, detail="League not found.")
+    clubs = [club for club in store.get("clubs", []) or [] if str(club.get("id") or "") in {cid for group in leagues[0]["groups"] for cid in group["club_ids"]}]
+
+    def in_league(name: str) -> bool:
+        return any(helpers._team_is_club(name, club) for club in clubs)
+
+    refs = [f"a:{upload.get('id')}" for upload in canonical_archive_uploads(store.get("archive_uploads", []) or [])]
+    refs += [f"f:{fixture.get('id')}" for fixture in store.get("fixtures", []) or [] if isinstance(fixture, dict)]
+    card_fixture_ids = {str(upload.get("match_id") or "") for upload in store.get("archive_uploads", []) or []}
+    def club_key(name: str) -> str:
+        found = next((club for club in clubs if helpers._team_is_club(name, club)), None) or _find_club_by_name(store, name)
+        return str(found.get("id") or "") if found else normalize_name(name)
+
+    out = []
+    card_games: set[tuple[str, frozenset[str]]] = set()
+    for ref in refs:  # scorecards come first, so a fixture of the same game (date + teams) is left out
+        if ref.startswith("f:") and ref[2:] in card_fixture_ids:
+            continue
+        info = _league_match_info(store, ref)
+        if not info or info["outcome"] is None or not info["published"]:
+            continue
+        teams = [name for name in info["teams"] if name]
+        if len(teams) != 2 or not all(in_league(name) for name in teams):
+            continue
+        game = (info["date"], frozenset(club_key(name) for name in teams))
+        if info["kind"] == "scorecard":
+            card_games.add(game)
+        elif game in card_games:
+            continue
+        if ref not in taken:
+            out.append({"ref": ref, "date": info["date"], "label": f"{info['date'] or 'No date'} - {teams[0]} v {teams[1]}"})
+    out.sort(key=lambda item: item["date"] or "", reverse=True)
+    return {"matches": out[:200]}
+
+
+# ---------------------------------------------------------------------------
+# Nov 10 2026 (Amit: "each club admin should be able to change his club name, and tag his city / country"):
+# a club admin (of that club) or the superadmin edits the club's name, short name, city and country. The old name
+# is kept as an alias, so scorecards and fixtures that wrote the old name still belong to the club, and every place
+# that shows the club's name (players' club lists, teams, fixtures, scorecards) is updated.
+# ---------------------------------------------------------------------------
+class ClubSettingsRequest(BaseModel):
+    name: str = ""
+    short_name: str = ""
+    city: str = ""
+    country: str = ""
+
+
+def _can_edit_club(user_row: sqlite3.Row, club_id: str) -> bool:
+    """Superadmin, or an admin OF THIS club. The user's base role (e.g. club_admin) is not tied to a club, so a club
+    admin counts only for the club he was made admin of (club role) or his own primary club."""
+    base_role = str(user_row["role"] or "").strip()
+    if base_role == "superadmin":
+        return True
+    with _auth_connection() as connection:
+        club_roles = {
+            str(row["role_name"] or "").strip()
+            for row in connection.execute("SELECT role_name FROM app_user_club_roles WHERE user_id = ? AND club_id = ?", (int(user_row["id"]), club_id))
+        }
+    if club_roles & {"superadmin", "club_admin"}:
+        return True
+    return base_role == "club_admin" and str(user_row["primary_club_id"] or "").strip() == str(club_id or "").strip()
+
+
+@app.get("/api/clubs/{club_id}/settings")
+def club_settings(club_id: str, x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
+    user_row, _ = _auth_user_from_token(x_auth_token)
+    store = load_store()
+    club = next((item for item in store.get("clubs", []) or [] if str(item.get("id") or "") == club_id), None)
+    if not club:
+        raise HTTPException(status_code=404, detail="Club not found.")
+    return {
+        "club": {key: club.get(key) or "" for key in ("id", "name", "short_name", "city", "country")},
+        "aliases": [alias for alias in club.get("aliases") or [] if alias],
+        "can_edit": _can_edit_club(user_row, club_id),
+    }
+
+
+@app.post("/api/clubs/{club_id}/settings")
+def save_club_settings(club_id: str, request: ClubSettingsRequest, x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
+    user_row, _ = _auth_user_from_token(x_auth_token)
+    if not _can_edit_club(user_row, club_id):
+        raise HTTPException(status_code=403, detail="Only this club's admins or the superadmin can change the club's details.")
+    store = load_store()
+    club = next((item for item in store.get("clubs", []) or [] if str(item.get("id") or "") == club_id), None)
+    if not club:
+        raise HTTPException(status_code=404, detail="Club not found.")
+    new_name = " ".join(str(request.name or "").split())[:80] or str(club.get("name") or "")
+    new_short = " ".join(str(request.short_name or "").split())[:40]
+    if len(new_name) < 2:
+        raise HTTPException(status_code=400, detail="Enter the club's name.")
+    other = _find_club_by_name(store, new_name)
+    if other and str(other.get("id") or "") != club_id:
+        raise HTTPException(status_code=409, detail=f"'{new_name}' is already the name of another club.")
+    old_name, old_short = str(club.get("name") or ""), str(club.get("short_name") or "")
+    renamed = normalize_name(new_name) != normalize_name(old_name)
+    aliases = [alias for alias in club.get("aliases") or [] if alias]
+    for previous in (old_name, old_short):
+        if previous and normalize_name(previous) not in {normalize_name(new_name), normalize_name(new_short)} and normalize_name(previous) not in {normalize_name(a) for a in aliases}:
+            aliases.append(previous)
+    club["name"] = new_name
+    if new_short or renamed:
+        club["short_name"] = new_short or (new_name if normalize_name(old_short) == normalize_name(old_name) else old_short) or new_name
+    club["city"] = " ".join(str(request.city or "").split())[:80]
+    club["country"] = " ".join(str(request.country or "").split())[:80]
+    club["aliases"] = aliases
+    if renamed:
+        old_keys = {normalize_name(old_name), normalize_name(old_short)} - {""}
+
+        def fix(value: Any) -> Any:
+            return new_name if isinstance(value, str) and normalize_name(value) in old_keys else value
+
+        for member in store.get("members", []) or []:
+            for field in ("team_memberships", "club_memberships"):
+                for link in member.get(field) or []:
+                    if isinstance(link, dict) and str(link.get("club_id") or "") == club_id:
+                        for key in ("club_name", "display_name"):
+                            if key in link:
+                                link[key] = new_name
+                        if "team_name" in link and normalize_name(str(link.get("team_name") or "")) in old_keys:
+                            link["team_name"] = club["short_name"]
+            if str(member.get("primary_club_id") or "") == club_id and member.get("primary_club_name"):
+                member["primary_club_name"] = new_name
+        for team in store.get("teams", []) or []:
+            if isinstance(team, dict) and str(team.get("club_id") or "") == club_id:
+                team["club_name"] = new_name
+                team["display_name"] = new_name
+                if normalize_name(str(team.get("name") or "")) in old_keys:
+                    team["name"] = club["short_name"]
+        for fixture in store.get("fixtures", []) or []:
+            if not isinstance(fixture, dict):
+                continue
+            if str(fixture.get("club_id") or "") == club_id:
+                fixture["club_name"] = new_name
+            for key in ("opponent", "visiting_team"):
+                fixture[key] = fix(fixture.get(key))
+        for upload in store.get("archive_uploads", []) or []:
+            if not isinstance(upload, dict):
+                continue
+            if str(upload.get("club_id") or "") == club_id:
+                upload["club_name"] = new_name
+            names = upload.get("club_names")
+            if isinstance(names, list):
+                upload["club_names"] = [fix(name) for name in names]
+    save_store(store)
+    _audit_event("club.settings", "club", club_id, actor=user_row, club_id=club_id, club_name=new_name, details={"old_name": old_name, "name": new_name, "city": club["city"], "country": club["country"]}, source="api")
+    return {
+        "message": f"Saved. {'The club is now called ' + new_name + '; the old name still finds it.' if renamed else 'Club details updated.'}",
+        "club": {key: club.get(key) or "" for key in ("id", "name", "short_name", "city", "country")},
+        "aliases": aliases,
+    }
+
+
 @app.post("/api/admin/clubs/{club_id}/disable")
 def disable_club_form(request: Request, club_id: str, confirmation: str = Form(default="")) -> Response:
     try:
@@ -11328,7 +12150,7 @@ def edit_scorebook(match_id: str, request: ScorebookEditRequest, x_auth_token: s
             _ensure_extra_match_tables(connection)
             connection.execute(
                 "UPDATE app_match_lineups SET lineups_json = ?, updated_at = ? WHERE match_id = ?",
-                (json.dumps({"club": lineups.get("club") or [], "opponent": lineups.get("opponent") or [], "roles": lineups.get("roles") or {}}), now_iso(), match_id),
+                (json.dumps({"club": lineups.get("club") or [], "opponent": lineups.get("opponent") or [], "roles": lineups.get("roles") or {}, "man_of_match": lineups.get("man_of_match") or ""}), now_iso(), match_id),
             )
     # the result is worked out again (team names may have changed)
     scorecard = dict(match.get("scorecard") or {})
@@ -13107,7 +13929,7 @@ def _match_lineups(match_id: str) -> dict[str, list[str]]:
     except ValueError:
         return {}
     club_side, opponent_side = _clean_lineup(data.get("club")), _clean_lineup(data.get("opponent"))
-    return {"club": club_side, "opponent": opponent_side, "roles": _clean_lineup_roles(data.get("roles"), club_side, opponent_side)}
+    return {"club": club_side, "opponent": opponent_side, "roles": _clean_lineup_roles(data.get("roles"), club_side, opponent_side), "man_of_match": str(data.get("man_of_match") or "")}
 
 
 def _lineups_ready(lineups: dict[str, list[str]]) -> bool:
@@ -13151,12 +13973,13 @@ def save_match_lineups(match_id: str, request: LineupsRequest, x_auth_token: str
     for side, label in (("club", str(match.get("club_name") or "Your team")), ("opponent", str(match.get("opponent") or "The other team"))):
         if roles[side].get("captain") and roles[side].get("captain") == roles[side].get("vice_captain"):
             raise HTTPException(status_code=400, detail=f"{label}: the captain and vice-captain must be different players.")
+    man_of_match = str((_match_lineups(match_id) or {}).get("man_of_match") or "")  # kept when the line-ups change
     with _auth_connection() as connection:
         _ensure_extra_match_tables(connection)
         connection.execute(
             """INSERT INTO app_match_lineups (match_id, lineups_json, updated_at, updated_by) VALUES (?, ?, ?, ?)
                ON CONFLICT(match_id) DO UPDATE SET lineups_json = excluded.lineups_json, updated_at = excluded.updated_at, updated_by = excluded.updated_by""",
-            (match_id, json.dumps({"club": club_side, "opponent": opponent_side, "roles": roles}), now_iso(), str(user_row["display_name"] or "")),
+            (match_id, json.dumps({"club": club_side, "opponent": opponent_side, "roles": roles, "man_of_match": man_of_match}), now_iso(), str(user_row["display_name"] or "")),
         )
     return {"lineups": {"club": club_side, "opponent": opponent_side, "roles": roles}, "ready": True}
 
@@ -14125,11 +14948,15 @@ async def upload_scorecard(
     focus_club_id: str | None = None,
     link_match_code: str | None = None,
     innings_number: int | None = None,
+    league_id: str | None = None,
     x_auth_token: str | None = Header(default=None),
     file: UploadFile = File(...),
 ) -> dict[str, Any]:
     token = _auth_token_from_request(request, x_auth_token)
     user_row, upload_club_id = _require_permission(token, "score_matches")
+    league_id = str(league_id or "").strip()
+    if league_id:
+        _check_league_for_club(league_id, str(focus_club_id or upload_club_id or ""))
     plan_info = _plan_for(user_row, upload_club_id)
     upload_limit = plan_info.get("upload_limit")
     if upload_limit is not None and int(plan_info.get("uploads_used") or 0) >= int(upload_limit):
@@ -14236,6 +15063,8 @@ async def upload_scorecard(
     if other_half is not None:
         checks = _join_halves(store, other_half, record, user_row)
         save_store(store)
+        if league_id:
+            _link_match_to_league(league_id, f"a:{other_half.get('id')}", _league_actor(user_row))
         title = (checks.get("scorecard") or {}).get("title") or "this match"
         return {
             "message": f"This is the other innings of {title} (same date and teams). Both innings are now one scorecard.",
@@ -14248,6 +15077,8 @@ async def upload_scorecard(
         }
     checks = _scorecard_upload_checks(store, record)
     save_store(store)
+    if league_id:
+        _link_match_to_league(league_id, f"a:{record.get('id')}", _league_actor(user_row))
     logger.debug("Scorecard upload saved. archive_id=%s club_id=%s file=%s", record.get("id", ""), record.get("club_id", ""), record.get("file_name", ""))
     _audit_event(
         "archive.upload",
@@ -14617,6 +15448,10 @@ def _canonical_team_names(store: dict[str, Any], template: dict[str, Any]) -> No
         text = str(name or "").strip()
         if not text:
             return name
+        # Nov 11 2026: a club with exactly this name / alias first ("Police Community" stayed "Police" before)
+        exact = _find_club_by_name(store, text)
+        if exact and exact.get("name"):
+            return str(exact["name"])
         club = next((club for club in clubs if _same_team_name(text, club.get("name")) or _same_team_name(text, club.get("short_name"))), None)
         return str(club["name"]) if club else name
 
@@ -14742,6 +15577,59 @@ def _is_duplicate_upload(record: dict[str, Any], other: dict[str, Any]) -> bool:
     return _same_photo(record, other) or _same_innings(record, other)
 
 
+def _card_batting_side(card: dict[str, Any], innings: dict[str, Any]) -> str:
+    """The team batting in an upload's one innings: as written, else the card's only innings with a total."""
+    written = str(innings.get("batting_team") or "")
+    if written:
+        return written
+    played = [item for item in card.get("innings") or [] if item.get("runs") is not None] or [
+        item for item in card.get("innings") or [] if len(item.get("batting") or []) > 1
+    ]
+    return str(played[0].get("team") or "") if len(played) == 1 else ""
+
+
+def _halves_match_loose(record: dict[str, Any], other: dict[str, Any]) -> bool:
+    """Nov 11 2026 (Dhruvika: "some of them have been scored but it says no result"): the two innings of one match
+    whose OTHER team was written differently on each page - Coca Cola v "Police" (195/5) and "TPCC Community" v
+    Coca Cola (189/5) on 6 Jun; Coca Cola v "TPC" and "Police Community" v Coca Cola on 29 Sep 2024. Same date,
+    one innings each, one team the same on both pages, and that team bats on one page and fields on the other.
+    Only used when it is the ONE such pair for that team on that day (see _loose_other_half)."""
+    mine, theirs = _single_innings(record), _single_innings(other)
+    if not mine or not theirs:
+        return False
+    try:
+        card_a, card_b = _scorecard_from_archive(record), _scorecard_from_archive(other)
+    except Exception:
+        return False
+    if not card_a.get("date") or card_a.get("date") != card_b.get("date"):
+        return False
+    teams_a = [team for team in card_a.get("teams") or [] if str(team or "").strip()][:2]
+    teams_b = [team for team in card_b.get("teams") or [] if str(team or "").strip()][:2]
+    if len(teams_a) < 2 or len(teams_b) < 2:
+        return False
+    shared = [team for team in teams_a if any(_same_team_name(team, item) for item in teams_b)]
+    if len(shared) != 1:
+        return False
+    bat_a, bat_b = _card_batting_side(card_a, mine), _card_batting_side(card_b, theirs)
+    if not bat_a or not bat_b or _same_team_name(bat_a, bat_b):
+        return False
+    # the shared team bats on exactly one of the two pages
+    return _same_team_name(bat_a, shared[0]) != _same_team_name(bat_b, shared[0])
+
+
+def _loose_other_half(store: dict[str, Any], record: dict[str, Any], *, published_only: bool = False) -> dict[str, Any] | None:
+    candidates = []
+    for other in store.get("archive_uploads", []) or []:
+        if other is record or str(other.get("id")) == str(record.get("id")) or other.get("second_photo_file"):
+            continue
+        status = str(other.get("status") or "").lower()
+        if status in {"rejected", "duplicate"} or (published_only and status != "approved"):
+            continue
+        if _halves_match_loose(record, other):
+            candidates.append(other)
+    return candidates[0] if len(candidates) == 1 else None
+
+
 def _find_other_half(store: dict[str, Any], record: dict[str, Any]) -> dict[str, Any] | None:
     """Amit / Dhruvika, Nov 2 2026: each team may upload its own innings photo (or one team both). Find the
     upload that holds the other innings of this match, so the two are joined into one scorecard."""
@@ -14762,6 +15650,10 @@ def _find_other_half(store: dict[str, Any], record: dict[str, Any]) -> dict[str,
             continue
         if _halves_match(record, other):
             return other
+    # the other team's name written differently on the two pages: only when it is the one possible pair
+    other = _loose_other_half(store, record)
+    if other is not None and _loose_other_half(store, other) is record:
+        return other
     return None
 
 
@@ -14773,7 +15665,15 @@ def _chasing_side(first_template: dict[str, Any], second_template: dict[str, Any
         for template in (first_template, second_template)
     ).lower()
     if "won" not in result:
-        return ""
+        # Nov 11 2026: no result written - the totals tell the order. A chase stops once the target is passed, so
+        # it ends at most 6 runs past the other total: more than 6 runs ahead = batted first; 1-6 ahead = chased.
+        runs_1 = _scorecard_int((first_inn.get("summary") or {}).get("runs"))
+        runs_2 = _scorecard_int((second_inn.get("summary") or {}).get("runs"))
+        if runs_1 is None or runs_2 is None or runs_1 == runs_2:
+            return ""
+        higher = "first" if runs_1 > runs_2 else "second"
+        lower = "second" if higher == "first" else "first"
+        return higher if abs(runs_1 - runs_2) <= 6 else lower
     team_a, team_b = str(first_inn.get("batting_team") or ""), str(second_inn.get("batting_team") or "")
     winner = ""
     for team, side in ((team_a, "first"), (team_b, "second")):
@@ -14800,6 +15700,21 @@ def _join_halves(store: dict[str, Any], keep: dict[str, Any], half: dict[str, An
     second_template = _scorecard_pick_template(half) or {}
     # the innings written as innings 1 on its photo goes first
     first_inn, second_inn = _single_innings(keep) or {}, _single_innings(half) or {}
+    # Nov 11 2026: older cards often don't name the batting team on the innings, and each page may write the other
+    # team differently ("Police" / "TPCC Community"): each page's batting team is taken as it is on that page, and
+    # the other page's batting team is its bowling team.
+    usable_1, usable_2 = _usable_innings(first_template), _usable_innings(second_template)
+    if len(usable_1) == 1 and len(usable_2) == 1:
+        inn_1, inn_2 = usable_1[0], usable_2[0]
+        try:
+            bat_1 = _card_batting_side(_scorecard_from_archive(keep), inn_1)
+            bat_2 = _card_batting_side(_scorecard_from_archive(half), inn_2)
+        except Exception:
+            bat_1 = bat_2 = ""
+        if bat_1 and bat_2 and not _same_team_name(bat_1, bat_2):
+            inn_1["batting_team"], inn_1["bowling_team"] = bat_1, bat_2
+            inn_2["batting_team"], inn_2["bowling_team"] = bat_2, bat_1
+            first_inn, second_inn = inn_1, inn_2
     first_no = int(first_inn.get("inning_number") or 1)
     second_no = int(second_inn.get("inning_number") or 1)
     if first_no == second_no:
@@ -14813,6 +15728,9 @@ def _join_halves(store: dict[str, Any], keep: dict[str, Any], half: dict[str, An
         joined = _join_innings_photos(second_template, first_template)
     else:
         joined = _join_innings_photos(first_template, second_template)
+    joined_innings = _usable_innings(joined)
+    if len(joined_innings) == 2 and all(item.get("batting_team") for item in joined_innings):
+        joined.setdefault("match", {})["teams"] = {"team_1": joined_innings[0]["batting_team"], "team_2": joined_innings[1]["batting_team"]}
     _canonical_team_names(store, joined)
     was_published = _archive_scorecard_is_published(keep) or _archive_scorecard_is_published(half)
     old_status = keep.get("status") if _archive_scorecard_is_published(keep) else half.get("status")
@@ -15601,7 +16519,7 @@ def scorecard_upload_join(upload_id: str, other_id: str, x_auth_token: str | Non
         other = get_archive_or_404(store, other_id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
-    if not _halves_match(upload, other):
+    if not (_halves_match(upload, other) or _halves_match_loose(upload, other)):
         raise HTTPException(status_code=409, detail="These two uploads don't look like the two innings of one match (date, teams, venue and batting side must fit).")
     # the older upload keeps its address; the newer one is joined into it
     keep, half = (upload, other) if str(upload.get("created_at") or "") <= str(other.get("created_at") or "") else (other, upload)
@@ -15686,12 +16604,20 @@ def scorecard_upload_manual(upload_id: str, request: ScorecardManualRequest, x_a
     refreshed = load_store()
     checks = _scorecard_upload_checks(refreshed, get_archive_or_404(refreshed, str(upload.get("id"))))
     save_store(refreshed)
-    _audit_event("archive.manual", "archive_upload", upload_id, actor=user_row, club_id=str(upload.get("club_id") or ""), club_name=str(upload.get("club_name") or ""), details={"flags": len(checks["flags"])}, source="api")
+    # Nov 11 2026 (Amit: "RAG ... less of manual intervention"): a fixed card that adds up becomes an example the AI
+    # sees the next time it reads a card of these clubs (README "How the AI reader learns" -> "Learned examples").
+    taught = False
+    photo_path = _upload_file_path(upload)
+    if photo_path is not None and not upload.get("second_photo_file"):
+        teams = [str(value or "") for value in ((template.get("match") or {}).get("teams") or {}).values()]
+        taught = ai_vision.save_learned_example(str(upload.get("id") or ""), photo_path, template, [str(upload.get("club_name") or ""), *teams])
+    _audit_event("archive.manual", "archive_upload", upload_id, actor=user_row, club_id=str(upload.get("club_id") or ""), club_name=str(upload.get("club_name") or ""), details={"flags": len(checks["flags"]), "learned_example": taught}, source="api")
     if checks["needs_review"]:
         _scorecard_check_alerts(get_archive_or_404(refreshed, str(upload.get("id"))), checks, user_row)
     return {
         "message": ("Saved. A site admin will check the points listed." if checks["needs_review"] else "Saved. Everything checks out: tap Publish if it matches the photo.")
-        + (f" The AI will remember: {', '.join(right for _, right in learned)}." if learned else ""),
+        + (f" The AI will remember: {', '.join(right for _, right in learned)}." if learned else "")
+        + (" The AI keeps this card as an example for the next cards of these clubs." if taught else ""),
         "checks": {key: value for key, value in checks.items() if key != "scorecard"},
         "learned": [{"wrong": wrong, "right": right} for wrong, right in learned],
     }

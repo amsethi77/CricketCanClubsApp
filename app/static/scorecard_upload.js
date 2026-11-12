@@ -104,6 +104,8 @@
     const linkEl = document.getElementById("scuLink");
     if (linkEl && linkEl.value.trim()) qs.set("link_match_code", linkEl.value.trim());
     if (onlySecond) qs.set("innings_number", "2");
+    const leagueEl = document.getElementById("scuLeague");
+    if (leagueEl && leagueEl.value) qs.set("league_id", leagueEl.value);
     try {
       const response = await fetch(`/api/scorecards/upload?${qs}`, { method: "POST", headers: { "X-Auth-Token": token() }, body });
       const data = await response.json().catch(() => ({}));
@@ -156,4 +158,30 @@
       gate.hidden = false;
     }
   })();
+})();
+
+
+// Nov 10 2026 (Amit): leagues / series - offer the leagues the chosen club plays in. README "Leagues and series".
+(function leaguePicker() {
+  const clubEl = document.getElementById("scuClub");
+  const leagueEl = document.getElementById("scuLeague");
+  const label = document.getElementById("scuLeagueLabel");
+  if (!clubEl || !leagueEl || !label) return;
+  const fill = async () => {
+    const data = await fetch(`/api/leagues/choices?club_id=${encodeURIComponent(clubEl.value || "")}`).then((r) => (r.ok ? r.json() : { leagues: [] })).catch(() => ({ leagues: [] }));
+    const leagues = data.leagues || [];
+    const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+    leagueEl.innerHTML = `<option value="">Not a league match</option>` + leagues.map((l) => `<option value="${esc(l.id)}">${esc(l.name)}${l.season ? ` (${esc(l.season)})` : ""}</option>`).join("");
+    label.hidden = !leagues.length;
+  };
+  clubEl.addEventListener("change", fill);
+  // the club list is filled after sign-in is checked; wait for it
+  let tries = 0;
+  const wait = setInterval(() => {
+    tries += 1;
+    if (clubEl.value || tries > 40) {
+      clearInterval(wait);
+      fill();
+    }
+  }, 250);
 })();

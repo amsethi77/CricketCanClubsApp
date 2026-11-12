@@ -32,7 +32,7 @@ function putJson(url, payload, authenticated = false) {
   return shared.putJson(url, payload, authenticated);
 }
 
-const SHARED_HEADER_URL = "/assets/shared_header.html?v=20261027a";
+const SHARED_HEADER_URL = "/assets/shared_header.html?v=20261115a";
 let sharedHeaderTemplate = null;
 let sharedHeaderTemplateInFlight = null;
 

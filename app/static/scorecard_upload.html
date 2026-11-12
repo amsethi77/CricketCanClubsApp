@@ -14,7 +14,7 @@
     <link rel="stylesheet" href="/assets/tailwind.css" />
     <link rel="stylesheet" href="/assets/styles.css?v=20261111tablealign" />
     <link rel="stylesheet" href="/assets/live.css?v=20261030m" />
-    <link rel="stylesheet" href="/assets/scorecards.css?v=20261111tablealign" />
+    <link rel="stylesheet" href="/assets/scorecards.css?v=20261115a" />
     <link rel="stylesheet" href="/assets/sports-system.css?v=20261030m" />
   </head>
   <body class="public-fixtures-page scorecards-page scorecard-upload-page">
@@ -49,6 +49,9 @@
             <label>Other team's Match ID <small>(optional - if they already uploaded the other innings)</small>
               <input id="scuLink" type="text" placeholder="e.g. M-8A311D9B" autocomplete="off" />
             </label>
+            <label id="scuLeagueLabel" hidden>League / series <small>(optional - pick it if this match is part of a league)</small>
+              <select id="scuLeague"><option value="">Not a league match</option></select>
+            </label>
             <label>Season <small>(optional)</small>
               <input id="scuSeason" type="text" placeholder="e.g. 2026 Season" autocomplete="off" />
             </label>
@@ -58,7 +61,7 @@
         </div>
       </section>
     </main>
-    <script src="/assets/public_header.js?v=20261030f"></script>
-    <script src="/assets/scorecard_upload.js?v=20261106a"></script>
+    <script src="/assets/public_header.js?v=20261115a"></script>
+    <script src="/assets/scorecard_upload.js?v=20261115a"></script>
   </body>
 </html>

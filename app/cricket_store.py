@@ -1132,6 +1132,9 @@ def normalize_member(member: dict[str, Any]) -> dict[str, Any]:
     player_id = str(member.get("player_id") or "").strip()
     member["player_id"] = player_id if len(player_id) == 4 and player_id.isdigit() else ""
     member["date_of_birth"] = str(member.get("date_of_birth") or "").strip()
+    # Nov 10 2026 (Amit): where the player lives - asked on the registration page
+    member["city"] = str(member.get("city") or "").strip()
+    member["country"] = str(member.get("country") or "").strip()
     member.setdefault("picture", member_initials(member.get("name", "")))
     for key, value in DEFAULT_MEMBER_FIELDS.items():
         member.setdefault(key, value)
@@ -1582,14 +1585,40 @@ def auto_register_players_from_archive(
     new_members: list[str] = []
     source_note = f"Auto-added from reviewed scorecard {upload.get('file_name', '').strip()}.".strip()
 
+    # Nov 10 2026 (Amit: "the club uploading the scorecard has all the players getting registered to it - they should
+    # go to the opponent team"): read which side each name is on from the card itself. A name on the other side gets
+    # that side's team; a name on neither side is left without a club (the played-teams pass gives it the right one).
+    own_keys = {normalize_name(value) for value in (club_name, club_short_name, club.get("id"), *(club.get("aliases") or [])) if normalize_name(str(value or ""))}
+    side_of: dict[str, str] = {}
+    template = upload.get("extraction_template") if isinstance(upload.get("extraction_template"), dict) else {}
+    for innings in template.get("innings") or []:
+        if not isinstance(innings, dict):
+            continue
+        for list_key, team_key in (("batting", "batting_team"), ("bowling", "bowling_team")):
+            team = str(innings.get(team_key) or "").strip()
+            if not team:
+                continue
+            for row in innings.get(list_key) or []:
+                player = row.get("player") if isinstance(row, dict) else None
+                name = str((player or {}).get("name") if isinstance(player, dict) else (row.get("name") if isinstance(row, dict) else "") or "").strip()
+                if name:
+                    side_of.setdefault(normalize_name(name), team)
+
     for performance in upload.get("suggested_performances", []):
         raw_name = str(performance.get("player_name", "") or "").strip()
         if not raw_name:
             continue
+        side_team = side_of.get(normalize_name(raw_name), "")
+        if side_team and normalize_name(side_team) not in own_keys:
+            player_team = side_team
+        elif side_team or not side_of:
+            player_team = team_name
+        else:
+            player_team = ""
         canonical_name, created = ensure_member_record(
             store,
             raw_name,
-            team_name=team_name,
+            team_name=player_team,
             note=source_note,
         )
         performance["player_name"] = canonical_name
@@ -4113,7 +4142,9 @@ def _schema_tables() -> str:
       phone TEXT,
       email TEXT,
       picture_url TEXT,
-      jersey_number TEXT
+      jersey_number TEXT,
+      city TEXT,
+      country TEXT
     );
 
     CREATE TABLE IF NOT EXISTS member_aliases (
@@ -4774,8 +4805,8 @@ def _write_relational_state(connection: sqlite3.Connection, store: dict[str, Any
                 """
                 INSERT INTO members (
                   id, player_id, name, full_name, gender, age, date_of_birth, role, batting_style, bowling_style, picture, notes,
-                  phone, email, picture_url, jersey_number
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                  phone, email, picture_url, jersey_number, city, country
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     member.get("id", ""),
@@ -4794,6 +4825,8 @@ def _write_relational_state(connection: sqlite3.Connection, store: dict[str, Any
                     member.get("email", ""),
                     member.get("picture_url", ""),
                     member.get("jersey_number", ""),
+                    member.get("city", ""),
+                    member.get("country", ""),
                 ),
             )
             for alias in member.get("aliases", []):
@@ -5488,6 +5521,8 @@ def _read_relational_state(connection: sqlite3.Connection) -> dict[str, Any]:
             # so every page showed "Player ID: Pending" (Amit's 1000 included).
             "player_id": str(row["player_id"] or "") if "player_id" in row_keys else "",
             "date_of_birth": str(row["date_of_birth"] or "") if "date_of_birth" in row_keys else "",
+            "city": str(row["city"] or "") if "city" in row_keys else "",
+            "country": str(row["country"] or "") if "country" in row_keys else "",
             "name": row["name"],
             "full_name": row["full_name"] or "",
             "gender": row["gender"] or "",
@@ -6224,6 +6259,8 @@ def ensure_database() -> None:
         for column_name, ddl in [
             ("player_id", "ALTER TABLE members ADD COLUMN player_id TEXT"),
             ("date_of_birth", "ALTER TABLE members ADD COLUMN date_of_birth TEXT"),
+            ("city", "ALTER TABLE members ADD COLUMN city TEXT"),
+            ("country", "ALTER TABLE members ADD COLUMN country TEXT"),
         ]:
             if column_name not in existing_columns:
                 connection.execute(ddl)
@@ -7981,6 +8018,11 @@ def _archive_outcome(upload: dict[str, Any]) -> tuple[list[str], tuple[str, str]
     return teams, None
 
 
+def _fixture_has_ball_data(fixture: dict[str, Any]) -> bool:
+    scorebook = fixture.get("scorebook") if isinstance(fixture.get("scorebook"), dict) else {}
+    return any(isinstance(innings, dict) and innings.get("balls") for innings in scorebook.get("innings") or [])
+
+
 def _fixture_outcome(fixture: dict[str, Any]) -> tuple[list[str], tuple[str, str] | None]:
     home = str(fixture.get("club_name") or fixture.get("team_name") or "").strip()
     away = str(fixture.get("opponent") or fixture.get("visiting_team") or "").strip()
@@ -7991,6 +8033,11 @@ def _fixture_outcome(fixture: dict[str, Any]) -> tuple[list[str], tuple[str, str
             return teams, outcome
     if str(fixture.get("status") or "").strip().lower() == "completed":
         mine, theirs = _runs_of(fixture.get("heartlake_score")), _runs_of(fixture.get("opponent_score"))
+        # Nov 11 2026: "0/0" is an innings nobody entered (a scorecard with one team's innings filled the other
+        # side), not a score of 0 - 224/9 v 0/0 is no result yet, not a win
+        blank = {"", "0", "0/0"}
+        if any(str(value or "").strip() in blank for value in (fixture.get("heartlake_score"), fixture.get("opponent_score"))) and not _fixture_has_ball_data(fixture):
+            return teams, None
         if mine is not None and theirs is not None and (mine or theirs):
             if mine == theirs:
                 return teams, ("tie", "")

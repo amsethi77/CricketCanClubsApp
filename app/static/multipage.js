@@ -72,7 +72,7 @@ const ASSISTANT_FAB_ID = "assistantFloatingButton";
     })
     .catch(() => {});
 })();
-const SHARED_HEADER_URL = "/assets/shared_header.html?v=20261027a";
+const SHARED_HEADER_URL = "/assets/shared_header.html?v=20261115a";
 const SESSION_ACTIVITY_DEBOUNCE_MS = 1200;
 const SESSION_TOUCH_INTERVAL_MS = 60000;
 // Soft-launch menu (README: "Simple menu and app tour"). Matches = upcoming games + availability,
@@ -84,6 +84,7 @@ const SHARED_NAV_ITEMS = [
   { href: "/score", label: "Score" },
   { href: "/scorecards", label: "Scorecards" },
   { href: "/dashboard/widgets/performance", label: "Stats" },
+  { href: "/leagues", label: "Leagues" },
   { href: "/pricing", label: "Plans" },
 ];
 // Pages that light up a menu item other than their own address.

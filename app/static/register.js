@@ -142,6 +142,8 @@ document.addEventListener("DOMContentLoaded", () => {
     player_id: document.getElementById("registerPlayerId")?.value.trim() || "",
     aliases: document.getElementById("registerAliases")?.value.trim() || "",
     date_of_birth: document.getElementById("registerDateOfBirth")?.value || "",
+    city: (document.getElementById("registerCity")?.value || "").trim(),
+    country: (document.getElementById("registerCountry")?.value || "").trim(),
     club_name: newClubNameInput?.value.trim() || "",
     club_city: newClubCityInput?.value.trim() || "",
     club_country: newClubCountryInput?.value.trim() || ""

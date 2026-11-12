@@ -595,3 +595,47 @@ function renderClubs() {
 window.CricketClubAppClubSearch = {
   refresh: () => window.location.reload(),
 };
+
+
+// Nov 10 2026 (Amit: "each club admin should be able to change his club name and tag his city / country")
+(async function clubSettings() {
+  const card = document.getElementById("clubSettingsCard");
+  const form = document.getElementById("clubSettingsForm");
+  if (!card || !form) return;
+  let token = "";
+  try {
+    token = localStorage.getItem("cricketClubAppAuthToken") || "";
+  } catch (error) {
+    token = "";
+  }
+  if (!token) return;
+  const headers = { "X-Auth-Token": token, Accept: "application/json" };
+  const me = await fetch("/api/auth/me", { headers }).then((r) => (r.ok ? r.json() : null)).catch(() => null);
+  const clubId = me?.user?.current_club_id || me?.user?.primary_club_id || "";
+  if (!clubId) return;
+  const data = await fetch(`/api/clubs/${encodeURIComponent(clubId)}/settings`, { headers }).then((r) => (r.ok ? r.json() : null)).catch(() => null);
+  if (!data || !data.can_edit) return;
+  const field = (id) => document.getElementById(id);
+  field("clubSettingsName").value = data.club.name || "";
+  field("clubSettingsShort").value = data.club.short_name || "";
+  field("clubSettingsCity").value = data.club.city || "";
+  field("clubSettingsCountry").value = data.club.country || "";
+  card.hidden = false;
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const msg = field("clubSettingsMsg");
+    msg.textContent = "Saving...";
+    const response = await fetch(`/api/clubs/${encodeURIComponent(clubId)}/settings`, {
+      method: "POST",
+      headers: { ...headers, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name: field("clubSettingsName").value,
+        short_name: field("clubSettingsShort").value,
+        city: field("clubSettingsCity").value,
+        country: field("clubSettingsCountry").value,
+      }),
+    }).catch(() => null);
+    const result = response ? await response.json().catch(() => ({})) : {};
+    msg.textContent = response && response.ok ? result.message || "Saved." : result.detail || "Couldn't save. Try again.";
+  });
+})();

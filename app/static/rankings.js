@@ -111,8 +111,10 @@
         { label: "Club", value: (row) => row.club_name || "Club" },
         { label: "Won", value: (row) => formatNumber(row.matches_won), numeric: true },
         { label: "Lost", value: (row) => formatNumber(row.matches_lost || 0), numeric: true },
+        { label: "No result", value: (row) => formatNumber(row.matches_nr || 0), numeric: true },
         { label: "Played", value: (row) => formatNumber(row.matches_played), numeric: true },
-        { label: "Win rate", value: (row) => `${formatNumber(Number(row.win_rate || 0) * 100)}%`, numeric: true },
+        // Nov 11 2026: no decided game yet (only one innings uploaded) -> "-" instead of a misleading 0%
+        { label: "Win rate", value: (row) => (Number(row.matches_won || 0) + Number(row.matches_lost || 0) ? `${formatNumber(Number(row.win_rate || 0) * 100)}%` : "-"), numeric: true },
       ]);
       renderBattingChart(batting, clubScoped);
     } catch (error) {

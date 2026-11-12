@@ -46,25 +46,38 @@
     return bits.length ? `<small class="pm-split">${bits.join(" · ")}</small>` : "";
   }
 
+  // Nov 10 2026 (Amit: "add 1s, 2s, 3s on the right along with 4s and 6s and calculate balls faced and strike rate
+  // from them"): R B 1s 2s 3s 4s 6s SR, plus a dots column when the scorer wrote dots. The 1s-3s / dots columns show
+  // only when the innings has them (a typed-in card keeps R B 4s 6s SR).
   function battingTable(inn) {
-    const rows = (inn.batting || [])
+    const batters = inn.batting || [];
+    const has = (key) => batters.some((b) => b[key] !== null && b[key] !== undefined && b[key] !== "");
+    const extra = [
+      ["dots", "0s"],
+      ["ones", "1s"],
+      ["twos", "2s"],
+      ["threes", "3s"],
+    ].filter(([key]) => has(key));
+    const cols = [["runs", "R", "pm-r"], ["balls", "B", ""], ...extra.map(([key, label]) => [key, label, ""]), ["fours", "4s", ""], ["sixes", "6s", ""], ["strike_rate", "SR", ""]];
+    const rows = batters
       .map((b) => {
         const how = howOutText(b.dismissal) || (b.not_out ? "not out" : "");
         return `<tr class="${b.not_out ? "pm-notout" : ""}">
-          <th scope="row">${nameHtml(b.name, b.player_key)}${how ? `<small>${escapeHtml(how)}</small>` : ""}${ballSplit(b, [["dots", "Dots"], ["ones", "1s"], ["twos", "2s"], ["threes", "3s"]])}</th>
-          <td class="pm-r">${num(b.runs)}</td><td>${num(b.balls)}</td><td>${num(b.fours)}</td><td>${num(b.sixes)}</td><td>${num(b.strike_rate)}</td></tr>`;
+          <th scope="row">${nameHtml(b.name, b.player_key)}${how ? `<small>${escapeHtml(how)}</small>` : ""}</th>
+          ${cols.map(([key, , cls]) => `<td${cls ? ` class="${cls}"` : ""}>${num(b[key])}</td>`).join("")}</tr>`;
       })
       .join("");
+    const span = cols.length;
     const rr = rate(inn.runs, inn.overs);
     const totalBits = [inn.wickets !== null && inn.wickets !== undefined ? `${escapeHtml(inn.wickets)} wkts` : "", inn.overs ? `${escapeHtml(inn.overs)} Ov` : "", rr ? `RR ${rr}` : ""].filter(Boolean).join(", ");
     return `
       <div class="pm-table-wrap">
         <table class="pm-table">
-          <thead><tr><th scope="col">Batter</th><th scope="col">R</th><th scope="col">B</th><th scope="col">4s</th><th scope="col">6s</th><th scope="col">SR</th></tr></thead>
-          <tbody>${rows || '<tr><td colspan="6" class="pm-empty">Batting details were not recorded for this innings.</td></tr>'}</tbody>
+          <thead><tr><th scope="col">Batter</th>${cols.map(([, label]) => `<th scope="col">${label}</th>`).join("")}</tr></thead>
+          <tbody>${rows || `<tr><td colspan="${span + 1}" class="pm-empty">Batting details were not recorded for this innings.</td></tr>`}</tbody>
           <tfoot>
-            <tr><th scope="row">Extras${inn.extras_detail ? ` <small>(${escapeHtml(inn.extras_detail)})</small>` : ""}</th><td class="pm-r" colspan="5">${num(inn.extras)}</td></tr>
-            <tr class="pm-total"><th scope="row">Total${totalBits ? ` <small>(${totalBits})</small>` : ""}</th><td class="pm-r" colspan="5">${inn.runs === null || inn.runs === undefined ? DASH : escapeHtml(inn.runs)}</td></tr>
+            <tr><th scope="row">Extras${inn.extras_detail ? ` <small>(${escapeHtml(inn.extras_detail)})</small>` : ""}</th><td class="pm-r" colspan="${span}">${num(inn.extras)}</td></tr>
+            <tr class="pm-total"><th scope="row">Total${totalBits ? ` <small>(${totalBits})</small>` : ""}</th><td class="pm-r" colspan="${span}">${inn.runs === null || inn.runs === undefined ? DASH : escapeHtml(inn.runs)}</td></tr>
           </tfoot>
         </table>
       </div>

@@ -90,7 +90,7 @@ function loadPublicAssistant() {
       document.body.dataset.signedIn = 'true';
       document.dispatchEvent(new CustomEvent('cc:signed-in', { detail: user }));
       const script = document.createElement('script');
-      script.src = '/assets/multipage.js?v=20261030f';
+      script.src = '/assets/multipage.js?v=20261115a';
       document.head.appendChild(script);
       return;
     }
@@ -105,7 +105,7 @@ function loadPublicAssistant() {
   }
 
   try {
-    const response = await fetch('/assets/public_header.html?v=20261027a', {
+    const response = await fetch('/assets/public_header.html?v=20261115a', {
       cache: 'no-store',
     });
     if (!response.ok) return;
@@ -120,6 +120,8 @@ function loadPublicAssistant() {
           ? 'fixtures'
           : path === '/rankings'
             ? 'rankings'
+            : path === '/leagues'
+            ? 'leagues'
             : path === '/scorecards' || path.startsWith('/scorecards/')
             ? 'scorecards'
             : path === '/clubs'

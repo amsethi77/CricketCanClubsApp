@@ -92,6 +92,7 @@
       head.innerHTML = `
         <h1 class="pm-title">${esc(p.name || "Player")}</h1>
         ${p.full_name && p.full_name !== p.name ? `<p class="pm-info">${esc(p.full_name)}</p>` : ""}
+        ${p.city || p.country ? `<p class="pm-info">📍 ${esc([p.city, p.country].filter(Boolean).join(", "))}</p>` : ""}
         ${facts ? `<p class="pm-info">${facts}</p>` : ""}
         ${(p.clubs || []).length ? `<p class="pm-info">Clubs: ${p.clubs.map(esc).join(" · ")}</p>` : ""}
         ${(p.aliases || []).length ? `<p class="pm-info">Also written as: ${p.aliases.map(esc).join(", ")}</p>` : ""}

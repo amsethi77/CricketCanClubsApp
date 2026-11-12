@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, viewport-fit=cover" />
+    <script src="/assets/zoom_lock.js?v=20261030f"></script>
+    <title>Leagues · CricketClubApp</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700;900&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/assets/tailwind.css?v=20261030f" />
+    <link rel="stylesheet" href="/assets/styles.css?v=20261114a" />
+    <link rel="stylesheet" href="/assets/live.css?v=20261030m" />
+    <link rel="stylesheet" href="/assets/sports-system.css?v=20261030m" />
+  </head>
+  <body class="public-rankings-page leagues-page">
+    <!-- Nov 10 2026 (Amit): leagues / series with groups A, B, C. README "Leagues and series". -->
+    <main class="fixtures-shell">
+      <div data-public-header></div>
+      <section class="panel onboarding-panel fixtures-hero-panel">
+        <div class="stack-card fixtures-hero-card">
+          <p class="section-kicker sports-subtitle">Leagues</p>
+          <h1 class="fixtures-title sports-title">Leagues and series</h1>
+          <p class="lede">Points table for each group: win 2, tie or no result 1, loss 0. Teams level on points are split by net run rate (NRR).</p>
+        </div>
+      </section>
+      <section id="leagueAdmin" class="panel onboarding-panel" hidden>
+        <div class="stack-card">
+          <p class="section-kicker">Superadmin</p>
+          <h2>Create a league</h2>
+          <form id="leagueCreateForm" class="toolbar-actions">
+            <input id="leagueName" type="text" maxlength="80" placeholder="League name, e.g. Brampton T20 Series" required />
+            <input id="leagueSeason" type="text" maxlength="20" placeholder="Season, e.g. 2027" />
+            <button class="primary-button" type="submit">Create league</button>
+          </form>
+          <p id="leagueAdminMsg" class="lede" role="status"></p>
+        </div>
+      </section>
+      <section class="panel onboarding-panel">
+        <div class="stack-card">
+          <div id="leaguesList"><p class="lede">Loading leagues...</p></div>
+        </div>
+      </section>
+    </main>
+    <script src="/assets/public_header.js?v=20261115a"></script>
+    <script src="/assets/leagues.js?v=20261115a"></script>
+  </body>
+</html>

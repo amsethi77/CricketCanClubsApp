@@ -53,7 +53,7 @@
 
   function score(value) {
     const text = String(value ?? "").trim();
-    return text && text !== "0" ? text : "";
+    return text && !/^0(\/0)?$/.test(text) ? text : ""; // "0/0" = no score entered
   }
 
   // ---------- Normalise matches from the fixtures API ----------
@@ -220,7 +220,9 @@
       getJson("/api/public/clubs"),
     ]);
 
-    const all = (fixtures?.fixtures || []).map(fromFixture);
+    // Nov 11 2026 (Amit: "results not shown"): a past fixture with no score, no result and no scorecard was never
+    // played / scored - leave it out of Recent results instead of a row of "Result not recorded".
+    const all = (fixtures?.fixtures || []).map(fromFixture).filter((m) => !(m.kind === "result" && m.note === "Result not recorded" && !m.teams.some((t) => t.score)));
     const liveIds = new Set((live?.live_matches || []).map((m) => m.id));
     const liveMatches = (live?.live_matches || []).map((f) => ({ ...fromFixture(f), kind: "live", href: `/live/${encodeURIComponent(f.id)}` }));
     const results = all.filter((m) => m.kind === "result" && !liveIds.has(m.id)).sort((a, b) => String(b.date).localeCompare(String(a.date)));

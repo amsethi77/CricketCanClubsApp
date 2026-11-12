@@ -32,6 +32,7 @@ import difflib
 import io
 import json
 import logging
+import os
 import re
 from pathlib import Path
 from typing import Any
@@ -242,6 +243,10 @@ How a paper scorecard is laid out:
   Wickets in the boxes are written as CT / C, B / BOW, LB / LBW, ST, or a W next to such a word. A plain "W" or
   "w2" in a box is often a WIDE on these cards, not a wicket - so take wickets from the batting BOWLER column
   (caught, bowled, LBW, stumped, hit wicket - not run out or retired) and make the boxes agree with it.
+  BUT when this card writes its wides as "WD" / "wd" (often circled) and the batting BOWLER column is EMPTY, a plain
+  "W" in a bowler's box IS a wicket: that bowler's wickets = the W's in his boxes.
+- Which team is batting: if "INNINGS OF" is blank, the batting team is the team whose players are in the BATSMAN
+  column (the bowlers in the BOWLING ANALYSIS are the other team). Use the player lists you were given to decide.
   Use null for any number you can't work out - never guess.
 - A page usually holds ONE innings. Only add a second innings if it is really on the photo.
 
@@ -322,7 +327,173 @@ EXAMPLES_DIR = Path(__file__).resolve().parent / "ai_examples"
 _EXAMPLES_CACHE: dict[str, Any] = {}
 
 
+# ---------------------------------------------------------------------------
+# Nov 11 2026 (Amit: "We need RAG in AI so that it learns ... less of manual intervention"):
+# 1. Learned examples: every time a person fixes an AI-read card with ✏️ Edit and the fixed card adds up (batters +
+#    extras = total), the photo + the fixed card are kept in app/data/ai_learned_examples/ (not git).
+# 2. Retrieval: each read is sent the examples closest to THIS card - learned examples of the same club first
+#    (same scorebook, same handwriting, same player names), then the checked examples of the clubs on this card,
+#    then the general ones. README "How the AI reader learns".
+# ---------------------------------------------------------------------------
+LEARNED_KEEP = 60
+
+
+def _learned_dir() -> Path:
+    root = os.getenv("CRICKETCLUBAPP_DATA_ROOT") or str(Path(__file__).resolve().parent / "data")
+    return Path(root) / "ai_learned_examples"
+
+
+def _name_tokens(value: Any) -> set[str]:
+    stop = {"cricket", "club", "cc", "xi", "the", "and", "of", "team", "community", "c"}
+    return {word for word in re.findall(r"[a-z0-9]+", str(value or "").lower()) if word not in stop and len(word) > 1}
+
+
+def _template_adds_up(template: dict[str, Any]) -> bool:
+    """Every innings with a total: batters' runs + extras = total (a half-fixed card is not a good example)."""
+    checked = 0
+    for innings in template.get("innings") or []:
+        if not isinstance(innings, dict):
+            continue
+        total = (innings.get("summary") or {}).get("runs")
+        if total in (None, ""):
+            continue
+        batters = sum(int(row.get("runs") or 0) for row in innings.get("batting") or [] if isinstance(row, dict) and str(row.get("runs") or "").lstrip("-").isdigit())
+        extras = (innings.get("extras") or {}).get("total")
+        if extras in (None, "") or not str(total).isdigit() or batters + int(extras or 0) != int(total):
+            return False
+        checked += 1
+    return checked > 0
+
+
+def save_learned_example(upload_id: str, photo: Path, template: dict[str, Any], clubs: list[str]) -> bool:
+    """Keep a person-fixed card as an example for the next reads of these clubs. Never raises."""
+    try:
+        if not photo or not Path(photo).is_file() or not isinstance(template, dict) or not _template_adds_up(template):
+            return False
+        folder = _learned_dir()
+        folder.mkdir(parents=True, exist_ok=True)
+        from PIL import Image, ImageOps
+
+        try:
+            from pillow_heif import register_heif_opener
+
+            register_heif_opener()
+        except Exception:
+            pass
+        safe = re.sub(r"[^A-Za-z0-9_-]", "", str(upload_id))[:40] or "card"
+        image = ImageOps.exif_transpose(Image.open(photo)).convert("RGB")
+        image.thumbnail((1600, 1600))
+        image.save(folder / f"{safe}.jpg", quality=78)
+        answer = json.loads(json.dumps(template))
+        answer.setdefault("meta", {})["source"] = "fixed-by-a-person"
+        (folder / f"{safe}.json").write_text(json.dumps({
+            "upload_id": str(upload_id),
+            "clubs": [club for club in clubs if club],
+            "saved_at": _dt.datetime.utcnow().isoformat(timespec="seconds") + "Z",
+            "source_file": Path(photo).name,
+            "answer": answer,
+        }), encoding="utf-8")
+        # keep the newest LEARNED_KEEP
+        entries = sorted(folder.glob("*.json"), key=lambda item: item.stat().st_mtime, reverse=True)
+        for old in entries[LEARNED_KEEP:]:
+            old.unlink(missing_ok=True)
+            old.with_suffix(".jpg").unlink(missing_ok=True)
+        _EXAMPLES_CACHE.pop("learned_stamp", None)
+        return True
+    except Exception as exc:
+        logger.warning("Learned example not saved for %s: %s", upload_id, exc)
+        return False
+
+
+def _learned_examples() -> list[dict[str, Any]]:
+    folder = _learned_dir()
+    if not folder.is_dir():
+        return []
+    try:
+        stamp = max((item.stat().st_mtime for item in folder.glob("*.json")), default=0)
+        if _EXAMPLES_CACHE.get("learned_stamp") != stamp:
+            items = []
+            for meta_path in sorted(folder.glob("*.json"), key=lambda item: item.stat().st_mtime, reverse=True):
+                photo = meta_path.with_suffix(".jpg")
+                if not photo.is_file():
+                    continue
+                meta = json.loads(meta_path.read_text(encoding="utf-8"))
+                items.append({
+                    "name": photo.name,
+                    "source_file": str(meta.get("source_file") or ""),
+                    "media_type": "image/jpeg",
+                    "photo_path": str(photo),
+                    "answer": json.dumps(meta.get("answer") or {}),
+                    "clubs": [str(club) for club in meta.get("clubs") or []],
+                    "learned": True,
+                    "lessons": ["This card was read by the AI earlier and then FIXED by a person from the photo: this is the right answer. "
+                                "Cards from the same club are written the same way - read the new one like this."],
+                })
+            _EXAMPLES_CACHE.update({"learned_stamp": stamp, "learned_items": items})
+        return list(_EXAMPLES_CACHE.get("learned_items") or [])
+    except Exception as exc:
+        logger.warning("Learned examples not loaded: %s", exc)
+        return []
+
+
+def _example_clubs(example: dict[str, Any]) -> set[str]:
+    words: set[str] = set()
+    for club in example.get("clubs") or []:
+        words |= _name_tokens(club)
+    try:
+        answer = json.loads(example.get("answer") or "{}")
+        teams = ((answer.get("match") or {}).get("teams") or {}) if isinstance(answer, dict) else {}
+        for value in teams.values():
+            words |= _name_tokens(value)
+        for innings in answer.get("innings") or []:
+            words |= _name_tokens(innings.get("batting_team")) | _name_tokens(innings.get("bowling_team"))
+    except Exception:
+        pass
+    return words
+
+
 def worked_examples(skip_photo: Path | None = None) -> list[dict[str, Any]]:
+    """The examples sent with this read, closest first (README "How the AI reader learns"): learned examples of the
+    same club (max 2), then checked examples of the clubs on this card, then the rest - up to AI_WORKED_EXAMPLES."""
+    curated = _curated_examples(skip_photo)
+    limit_text = subscriptions.setting("AI_WORKED_EXAMPLES", "4").strip()
+    limit = int(limit_text) if limit_text.isdigit() else 4
+    hints = _HINTS.get() or {}
+    club_words = _name_tokens(hints.get("club_name"))
+    other_words: set[str] = set()
+    for name in (hints.get("other_clubs") or {}):
+        other_words |= _name_tokens(name)
+    own = Path(skip_photo).name.lower() if skip_photo is not None else ""
+    learned = []
+    if club_words:
+        for item in _learned_examples():
+            if own and own in {item["name"].lower(), item["source_file"].lower()}:
+                continue
+            if _example_clubs(item) & club_words:
+                learned.append(item)
+            if len(learned) >= 2:
+                break
+    for item in learned:
+        if "data" not in item:
+            try:
+                item["data"] = base64.b64encode(Path(item["photo_path"]).read_bytes()).decode("ascii")
+            except Exception:
+                continue
+
+    def score(example: dict[str, Any]) -> int:
+        words = _example_clubs(example)
+        return (2 if words & club_words else 0) + (1 if words & other_words else 0)
+
+    ranked = sorted(enumerate(curated), key=lambda pair: (-score(pair[1]), pair[0]))
+    chosen = [item for item in learned if item.get("data")]
+    for _, item in ranked:
+        if len(chosen) >= limit:
+            break
+        chosen.append(item)
+    return chosen[:limit]
+
+
+def _curated_examples(skip_photo: Path | None = None) -> list[dict[str, Any]]:
     """[{"name", "media_type", "data", "answer" (JSON text), "lessons"}] from app/ai_examples/examples.json.
     The photo being read is skipped if it is one of the examples (it would just copy the answer)."""
     index = EXAMPLES_DIR / "examples.json"
@@ -354,8 +525,7 @@ def worked_examples(skip_photo: Path | None = None) -> list[dict[str, Any]]:
     if skip_photo is not None:
         own = Path(skip_photo).name.lower()
         items = [item for item in items if own not in {item["name"].lower(), item["source_file"].lower()}]
-    limit = subscriptions.setting("AI_WORKED_EXAMPLES", "4").strip()
-    return items[: int(limit) if limit.isdigit() else 4]
+    return items
 
 
 def _example_intro(example: dict[str, Any]) -> str:
@@ -538,22 +708,24 @@ def _fill_from_marks(template: dict[str, Any]) -> list[str]:
         # card (Heartlake page: 3 dots in ~120 marks) must not make "balls faced" out of the runs.
         total_marks = sum(stats["balls"] for stats in with_marks)
         dots_written = len(with_marks) < 3 or (total_marks and sum(stats["dots"] for stats in with_marks) / total_marks >= 0.15)
+        # Nov 10 2026 (Amit: "count the balls faced; if dots are there include them, otherwise just count the balls
+        # and calculate the strike rate"): balls faced = every mark in the ball-by-ball (dots included when the
+        # scorer wrote them). A card without dots gives the scoring balls only, so the note says so.
         if with_marks and not dots_written:
-            notes.append(f"{inn.get('batting_team') or 'This innings'}: no dots are written in the ball-by-ball, so balls faced can't be counted from it - type them in with ✏️ if you know them.")
+            notes.append(f"{inn.get('batting_team') or 'This innings'}: no dots are written in the ball-by-ball - balls faced are the scoring balls counted from it. Correct them with ✏️ if the card has a balls column.")
         for row, stats in counted:
             if not stats:
                 continue
             name = (row.get("player") or {}).get("name") if isinstance(row.get("player"), dict) else ""
-            for key in ("balls", "fours", "sixes") if dots_written else ("fours", "sixes"):
+            for key in ("balls", "fours", "sixes"):
                 if row.get(key) in (None, ""):
                     row[key] = stats[key]
-            for key in ("dots", "ones", "twos", "threes") if dots_written else ("ones", "twos", "threes"):
+            for key in ("ones", "twos", "threes"):
                 row[key] = stats[key]
-            row["ball_runs_sum"] = stats["runs"]
             if dots_written:
-                row["ball_count"] = stats["balls"]
-            else:
-                row.pop("ball_count", None)
+                row["dots"] = stats["dots"]
+            row["ball_runs_sum"] = stats["runs"]
+            row["ball_count"] = stats["balls"]
             if isinstance(row.get("runs"), int) and row["runs"] != stats["runs"]:
                 notes.append(f"Check {name}: the TOTAL column says {row['runs']}, the ball-by-ball adds up to {stats['runs']}.")
             elif row.get("runs") in (None, ""):
@@ -921,7 +1093,9 @@ def read_scorecard(
     *,
     roster: list[str] | None = None,
     club_name: str = "",
-    timeout: float = 120.0,
+    # Nov 11 2026: 240s, not 120s - the best model often needs ~100s with the worked examples, and a timeout
+    # moved the read to a weaker model (accuracy test: 98.6% vs 57.5% on the next card)
+    timeout: float = 240.0,
     known_names: list[str] | None = None,
     corrections: dict[str, str] | None = None,
     photo_date: str = "",
@@ -946,10 +1120,86 @@ def read_scorecard(
         template = result.get("template")
         if template:
             learned = _apply_learning(template, roster)
+            learned += _fix_sides_and_wickets(template, roster, club_name)
             result["notes"] = learned + [note for note in result.get("notes") or [] if note not in learned]
         return result
     finally:
         _HINTS.reset(token)
+
+
+def _fix_sides_and_wickets(template: dict[str, Any], roster: list[str] | None, club_name: str) -> list[str]:
+    """Nov 11 2026 (accuracy test, Imrans XI v Heartlake): two things the reader got wrong that the card itself settles.
+    1. Batting team: when the BATSMAN column holds the other team's players and the BOWLING ANALYSIS holds this
+       club's players, this club was bowling (INNINGS OF was blank, and the reader guessed Heartlake).
+    2. Innings wickets: the batters out in How out / W marks, when the reader took fewer (e.g. from a fall-of-wickets
+       row with only 5 boxes filled while 8 batters were out)."""
+    notes: list[str] = []
+    hints = _HINTS.get() or {}
+    own = {_norm_name(name) for name in [*(roster or []), *(hints.get("known_names") or [])] if _norm_name(name)}
+    for aliases in (hints.get("aliases") or {}).values():
+        own |= {_norm_name(alias) for alias in aliases or [] if _norm_name(alias)}
+    others = {_norm_name(name) for names in (hints.get("other_clubs") or {}).values() for name in names or [] if _norm_name(name)}
+    others -= own
+
+    def is_own(name: Any) -> bool:
+        key = _norm_name(name)
+        first = key.split(" ")[0] if key else ""
+        return bool(key) and (key in own or (len(first) > 2 and any(item.split(" ")[0] == first for item in own)))
+
+    def names(rows: Any) -> list[str]:
+        return [str((row.get("player") or {}).get("name") or "") for row in rows or [] if isinstance(row, dict) and (row.get("player") or {}).get("name")]
+
+    teams = (template.get("match") or {}).get("teams") or {}
+    team_names = [str(value) for value in teams.values() if value]
+    own_team = next((team for team in team_names if club_name and _norm_name(team) and (_norm_name(team) in _norm_name(club_name) or _norm_name(club_name).startswith(_norm_name(team).split(" ")[0]))), "")
+    other_team = next((team for team in team_names if team != own_team), "")
+    # the other team's known players (a club's own list can hold opponents' names from older uploads, so the
+    # other team's list decides)
+    other_words = set(_norm_name(other_team).split()) - {"xi", "cricket", "club", "cc"}
+    other_set = set()
+    for club, players in (hints.get("other_clubs") or {}).items():
+        club_words = set(_norm_name(club).split()) - {"xi", "cricket", "club", "cc"}
+        if any(len(a) > 2 and len(b) > 2 and (a.startswith(b) or b.startswith(a)) for a in other_words for b in club_words):  # "Imrans" = "Imran"
+            other_set |= {_norm_name(name) for name in players or [] if _norm_name(name)}
+
+    def in_set(name: Any, pool: set[str]) -> bool:
+        key = _norm_name(name)
+        return bool(key) and (key in pool or (len(key.split(" ")[0]) > 2 and any(item.split(" ")[0] == key.split(" ")[0] for item in pool)))
+
+    for innings in template.get("innings") or []:
+        if not isinstance(innings, dict):
+            continue
+        batters, bowlers = names(innings.get("batting")), names(innings.get("bowling"))
+        if other_set and own_team and other_team and len(batters) >= 4 and len(bowlers) >= 3:
+            bat_other = sum(in_set(name, other_set) for name in batters) / len(batters)
+            bowl_other = sum(in_set(name, other_set) for name in bowlers) / len(bowlers)
+            batting = str(innings.get("batting_team") or "")
+            if bat_other >= 0.6 and bowl_other <= 0.2 and _norm_name(batting) == _norm_name(own_team):
+                innings["batting_team"], innings["bowling_team"] = other_team, own_team
+                notes.append(f"Batting team set to {other_team}: the batters are {other_team} players and the bowlers aren't.")
+            elif bat_other <= 0.2 and bowl_other >= 0.6 and _norm_name(batting) == _norm_name(other_team):
+                innings["batting_team"], innings["bowling_team"] = own_team, other_team
+                notes.append(f"Batting team set to {own_team}: the bowlers are {other_team} players.")
+        outs = 0
+        for row in innings.get("batting") or []:
+            if not isinstance(row, dict):
+                continue
+            kind = str(((row.get("dismissal") or {}).get("type")) or "").lower().strip()
+            marks = str(row.get("ball_by_ball") or "")
+            if (kind and kind not in {"not out", "retired hurt", "retired not out", "did not bat", "dnb", "absent", "none", "null"}) or marks.rstrip().upper().endswith("W"):
+                outs += 1
+        summary = innings.setdefault("summary", {}) if isinstance(innings.get("summary"), dict) or innings.get("summary") is None else {}
+        current = summary.get("wickets")
+        # only a clear gap (2+): a card's own total can be one off from How out (retired out, a typo) - that is
+        # flagged by the checks for a person, not changed here
+        if 0 < outs <= 10 and (current in (None, "") or (isinstance(current, int) and outs - current >= 2)):
+            summary["wickets"] = outs
+            notes.append(f"{innings.get('batting_team') or 'Innings'}: wickets set to {outs} - the batters out on the card (it said {current}).")
+    return notes
+
+
+def _norm_name(value: Any) -> str:
+    return " ".join(re.findall(r"[a-z0-9]+", str(value or "").lower()))
 
 
 def _read_scorecard(path: Path, *, roster: list[str] | None, club_name: str, timeout: float) -> dict[str, Any]:

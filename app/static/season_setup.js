@@ -155,6 +155,7 @@ form.addEventListener("submit", async (event) => {
       match_type: document.getElementById("fixtureType").value.trim(),
       scheduled_time: document.getElementById("fixtureTime").value.trim(),
       overs: document.getElementById("fixtureOvers").value.trim(),
+      league_id: isEditingFixture() ? "" : document.getElementById("fixtureLeague")?.value || "",
     };
     const editingFixtureId = String(editingFixtureIdInput?.value || "").trim();
     const isEditing = Boolean(editingFixtureId);
@@ -265,3 +266,24 @@ requireAuth()
     setStatus("", "info");
   })
   .catch((error) => setStatus(error.message, "error"));
+
+
+// Nov 10 2026 (Amit): leagues / series - a new fixture can be put in a league the club plays in.
+function isEditingFixture() {
+  return Boolean(String(document.getElementById("editingFixtureId")?.value || "").trim());
+}
+(function fixtureLeaguePicker() {
+  const select = document.getElementById("fixtureLeague");
+  if (!select) return;
+  let lastClub = null;
+  setInterval(async () => {
+    const clubId = (typeof payload !== "undefined" && payload?.club?.id) || "";
+    if (!clubId || clubId === lastClub) return;
+    lastClub = clubId;
+    const data = await fetch(`/api/leagues/choices?club_id=${encodeURIComponent(clubId)}`).then((r) => (r.ok ? r.json() : { leagues: [] })).catch(() => ({ leagues: [] }));
+    const leagues = data.leagues || [];
+    const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+    select.innerHTML = `<option value="">Not a league match</option>` + leagues.map((l) => `<option value="${esc(l.id)}">League: ${esc(l.name)}${l.season ? ` (${esc(l.season)})` : ""}</option>`).join("");
+    select.hidden = !leagues.length;
+  }, 1000);
+})();

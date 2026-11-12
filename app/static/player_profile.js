@@ -72,6 +72,7 @@ function renderSnapshot() {
     summaryCard("Player ID", member.player_id || "Pending"),
     summaryCard("Full Name", member.full_name || member.name || "Player"),
     summaryCard("Date of Birth", member.date_of_birth || "Not provided"),
+    summaryCard("City / Country", [member.city, member.country].filter(Boolean).join(", ") || "Not provided"),
     summaryCard("Mobile", member.phone || "No mobile stored"),
     summaryCard("Email", member.email || "No email stored"),
     summaryCard("Age", member.age || "TBD"),
@@ -89,6 +90,15 @@ function renderSnapshot() {
       stats.wickets || 0,
       `${stats.catches || 0} catches · HS ${stats.highest_score ?? "—"}`
     ),
+    // Nov 10 2026 (Amit): bowling figures on the profile, and a link to the full batting + bowling stats
+    summaryCard(
+      "Bowling",
+      payload?.bowling?.total ? `${payload.bowling.total.wickets} wkts` : "No bowling yet",
+      payload?.bowling?.total
+        ? `${payload.bowling.total.overs} ov · ${payload.bowling.total.runs} runs · Best ${payload.bowling.total.best || "—"} · Econ ${payload.bowling.total.economy ?? "—"} · Avg ${payload.bowling.total.average ?? "—"}`
+        : ""
+    ),
+    member.player_id ? summaryCard("Full stats", `<a href="/players/${encodeURIComponent(member.player_id)}">Batting and bowling by year and club</a>`, "") : "",
     summaryCard(
       "Aliases",
       (member.aliases || []).join(", ") || "No aliases stored",
@@ -137,6 +147,8 @@ function fillForm() {
   document.getElementById("profileFullName").value = member.full_name || "";
   document.getElementById("profilePlayerId").value = member.player_id || "";
   document.getElementById("profileDateOfBirth").value = member.date_of_birth || "";
+  if (document.getElementById("profileCity")) document.getElementById("profileCity").value = member.city || "";
+  if (document.getElementById("profileCountry")) document.getElementById("profileCountry").value = member.country || "";
   genderSelect.value = member.gender || "";
   document.getElementById("profileAge").value = member.age || "";
   document.getElementById("profilePhone").value = member.phone || "";
@@ -190,6 +202,8 @@ form.addEventListener("submit", async (event) => {
         gender: genderSelect.value,
         age: Number(document.getElementById("profileAge").value || 0),
         date_of_birth: document.getElementById("profileDateOfBirth").value || "",
+        city: (document.getElementById("profileCity")?.value || "").trim(),
+        country: (document.getElementById("profileCountry")?.value || "").trim(),
         phone: document.getElementById("profilePhone").value.trim(),
         email: document.getElementById("profileEmail").value.trim(),
         role: document.getElementById("profileRole").value.trim(),

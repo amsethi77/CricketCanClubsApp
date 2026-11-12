@@ -159,7 +159,7 @@
     const kind = kindOverride || (isPast ? "result" : status === "live" ? "live" : status === "completed" ? "result" : "upcoming");
     const sc = (v) => {
       const t = String(v ?? "").trim();
-      return t && t !== "0" ? t : "";
+      return t && !/^0(\/0)?$/.test(t) ? t : ""; // "0/0" = no score entered
     };
     const result = String(f.result || "").replace(/^result:\s*/i, "").trim();
     const clubIsOpponent = Boolean(viewerClubKey && teamKey(f.opponent) === viewerClubKey && teamKey(f.club_name) !== viewerClubKey);
@@ -356,6 +356,9 @@
     const liveIds = new Set(liveList.map((m) => m.id));
     const all = (bundle.fixtures?.fixtures || [])
       .map((f) => fromFixture(f))
+      // Nov 11 2026 (Amit: "results not shown"): a past fixture with no score, no result and no scorecard was never
+      // played / scored - leave it out of Recent results instead of a row of "Result not recorded".
+      .filter((m) => !(m.kind === "result" && m.note === "Result not recorded" && !m.teams.some((t) => t.score)))
       .filter((m) => !liveIds.has(m.id) && isMine(m.club, m.teams.map((t) => t.name)));
     const results = all.filter((m) => m.kind === "result").sort((a, b) => String(b.date).localeCompare(String(a.date)));
     const today = todayIso();

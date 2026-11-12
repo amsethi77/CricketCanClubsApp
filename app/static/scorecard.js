@@ -82,11 +82,24 @@
       <div class="pm-head-top">${sc.result ? '<span class="pm-state done">RESULT</span>' : '<span class="pm-state">SCORECARD</span>'}</div>
       <div class="pm-teams">${row(first)}${row(second)}</div>
       <p class="pm-status done">${escapeHtml(sc.result || "Result not recorded")}</p>
+      ${peopleLine(sc)}
       <p class="pm-info">${info}</p>
       ${sc.match_code ? `<p class="pm-info sc-match-id">Match ID <b>${escapeHtml(sc.match_code)}</b></p>` : ""}
       ${(sc.innings_ids || []).length ? `<ul class="sc-innings-ids" aria-label="Innings of this match">${sc.innings_ids
         .map((i) => `<li class="${i.status === "missing" ? "missing" : "ok"}"><b>${escapeHtml(i.id)}</b> ${escapeHtml(i.team || `Innings ${i.number}`)} ${i.status === "missing" ? "· <em>missing</em>" : `· ${escapeHtml(i.score || "")}`}</li>`)
         .join("")}</ul>` : ""}`;
+  }
+
+  // Nov 11 2026 (Amit: "add the captains from each side and the man of the match in the match Result Summary")
+  function manOfMatch(sc) {
+    if (sc.man_of_match) return sc.man_of_match;
+    return sc.man_of_match_auto ? `${sc.man_of_match_auto} (auto pick)` : "";
+  }
+  function peopleLine(sc) {
+    const caps = (sc.captains || []).map((c) => `${c.name ? escapeHtml(c.name) : "<em>not picked</em>"}${c.team ? ` <small>(${escapeHtml(shortCode(c.team))})</small>` : ""}`).join(" · ");
+    const mom = manOfMatch(sc);
+    if (!caps && !mom) return "";
+    return `<p class="pm-info sc-people">${caps ? `<span>🧢 Captains: ${caps}</span>` : ""}${caps && mom ? " &nbsp;|&nbsp; " : ""}${mom ? `<span>🏅 Man of the match: <b>${escapeHtml(mom)}</b></span>` : ""}</p>`;
   }
 
   function renderHeader(sc) {
@@ -105,8 +118,8 @@
       ["Season", sc.season],
       ["Result", sc.result],
       // Nov 7 2026: read from the card's CAPTS. and MAN OF MATCH boxes
-      ["Captains", (sc.captains || []).map((c) => (c.team ? `${c.name} (${c.team})` : c.name)).join(" · ")],
-      ["Man of the match", sc.man_of_match],
+      ["Captains", (sc.captains || []).filter((c) => c.name || c.team).map((c) => `${c.name || "not picked"}${c.team ? ` (${c.team})` : ""}`).join(" · ")],
+      ["Man of the match", manOfMatch(sc)],
     ].filter(([, value]) => value);
     return `<div class="pm-subhead"><h2>Match details</h2></div>
       <dl class="pm-details">${rows.map(([k, v]) => `<div><dt>${escapeHtml(k)}</dt><dd>${escapeHtml(v)}</dd></div>`).join("")}</dl>`;
@@ -146,6 +159,75 @@
     cardPanel.innerHTML = scorecardMarkup(sc);
     photoPanel.innerHTML = photoMarkup(sc);
     if (location.hash === "#photo") showTab("photo");
+    offerManOfMatchPicker(sc);
+  }
+
+  // Nov 11 2026: a playing club's captain / club admin (or the superadmin) picks each side's captain and the man of the match of a
+  // live-scored match; the same check as editing its ball-by-ball (/api/quick-score/<id>).
+  async function offerManOfMatchPicker(sc) {
+    const matchId = sc.fixture_id || (String(sc.id || "").startsWith("f-") ? String(sc.id).slice(2) : "");
+    const uploadId = String(sc.id || "").startsWith("a-") ? String(sc.id).slice(2) : "";
+    if (!token() || !(sc.source === "fixture" ? matchId : uploadId)) return;
+    // live-scored match: whoever may edit its ball-by-ball; uploaded card: whoever may fix it
+    const allowed =
+      sc.source === "fixture"
+        ? await fetch(`/api/quick-score/${encodeURIComponent(matchId)}`, { headers: { "X-Auth-Token": token(), Accept: "application/json" } }).then((r) => r.ok).catch(() => false)
+        : await fetch(`/api/scorecards/${encodeURIComponent(uploadId)}/preview`, { headers: { "X-Auth-Token": token(), Accept: "application/json" } })
+            .then((r) => (r.ok ? r.json() : null))
+            .then((d) => Boolean(d && d.can_edit))
+            .catch(() => false);
+    if (!allowed) return;
+    const names = [...new Set([
+      ...(sc.innings || []).flatMap((inn) => [...(inn.batting || []), ...(inn.bowling || [])].map((row) => row.name)),
+      ...(sc.captains || []).flatMap((c) => c.squad || []),
+    ].filter(Boolean))].sort();
+    if (!names.length) return;
+    // players of one team: its batters, and the bowlers of the other team's innings
+    const teamPlayers = (team) =>
+      [...new Set((sc.innings || []).flatMap((inn) => (inn.team === team ? inn.batting || [] : inn.bowling || []).map((row) => row.name)).filter(Boolean))].sort();
+    const options = (list, current, blank) => ["", ...list].map((n) => `<option value="${escapeHtml(n)}"${n === (current || "") ? " selected" : ""}>${n ? escapeHtml(n) : blank}</option>`).join("");
+    const caps = sc.captains || [];
+    const box = document.createElement("form");
+    box.className = "sc-mom-picker";
+    box.innerHTML = `${caps
+      .map((c) => `<label>🧢 ${escapeHtml(c.team)} captain<select data-captain="${escapeHtml(c.side || "")}">${options([...new Set([...(c.squad || []), ...teamPlayers(c.team), ...(c.name ? [c.name] : [])])].sort(), c.name, "Not picked")}</select></label>`)
+      .join("")}
+      <label>🏅 Man of the match
+        <select data-mom>${options(names, sc.man_of_match, "Not picked (show the auto pick)")}</select>
+      </label>
+      <button class="sc-btn primary" type="submit">Save</button>
+      <span class="sc-mom-msg" role="status"></span>`;
+    cardPanel.appendChild(box);
+    box.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const msg = box.querySelector(".sc-mom-msg");
+      const pick = (side) => box.querySelector(`[data-captain="${side}"]`)?.value ?? null;
+      const response = await fetch(
+        sc.source === "fixture" ? `/api/matches/${encodeURIComponent(matchId)}/man-of-match` : `/api/scorecards/${encodeURIComponent(uploadId)}/people`,
+        {
+          method: "POST",
+          headers: { "X-Auth-Token": token(), "Content-Type": "application/json" },
+          body: JSON.stringify(
+            sc.source === "fixture"
+              ? { name: box.querySelector("[data-mom]").value, club_captain: pick("club"), opponent_captain: pick("opponent") }
+              : { man_of_match: box.querySelector("[data-mom]").value, team_1_captain: pick("team_1"), team_2_captain: pick("team_2") }
+          ),
+        }
+      ).catch(() => null);
+      const data = response ? await response.json().catch(() => ({})) : {};
+      msg.textContent = response && response.ok ? data.message || "Saved." : data.detail || "Couldn't save.";
+      if (response && response.ok) {
+        sc.man_of_match = data.man_of_match ?? box.querySelector("[data-mom]").value;
+        (sc.captains || []).forEach((c) => {
+          const picked = box.querySelector(`[data-captain="${c.side}"]`);
+          if (picked) c.name = picked.value;
+        });
+        if (sc.man_of_match) sc.man_of_match_auto = "";
+        renderHeader(sc);
+        cardPanel.innerHTML = scorecardMarkup(sc);
+        cardPanel.appendChild(box);
+      }
+    });
   }
 
   // Shared renderer (Amit, Oct 15): Admin Center review shows the same snapshot + original image.
@@ -153,7 +235,7 @@
     if (!document.querySelector('link[href*="public_match.css"]')) {
       const link = document.createElement("link");
       link.rel = "stylesheet";
-      link.href = "/assets/public_match.css?v=20261030k";
+      link.href = "/assets/public_match.css?v=20261114a";
       document.head.appendChild(link);
     }
     root.innerHTML = `
@@ -264,7 +346,7 @@
   function batRow(row = {}) {
     const d = splitDismissal(row.dismissal, row.not_out);
     return `<div class="sce-row sce-bat">
-      <input data-f="name" placeholder="Batter" value="${escapeHtml(row.name || "")}" aria-label="Batter name" />
+      <input data-f="name" placeholder="Batter" value="${escapeHtml(row.name || "")}" data-orig="${escapeHtml(row.name || "")}" aria-label="Batter name" />
       <select data-f="how" aria-label="How out">${HOW_OUT.map((h) => `<option value="${h}"${h === d.how ? " selected" : ""}>${h || "How out"}</option>`).join("")}</select>
       <input data-f="bowler" placeholder="Bowler" value="${escapeHtml(d.bowler)}" aria-label="Bowler" />
       <input data-f="runs" type="number" min="0" inputmode="numeric" placeholder="R" value="${isBlank(row.runs) ? "" : row.runs}" aria-label="Runs" />
@@ -277,7 +359,7 @@
 
   function bowlRow(row = {}) {
     return `<div class="sce-row sce-bowl">
-      <input data-f="name" placeholder="Bowler" value="${escapeHtml(row.name || "")}" aria-label="Bowler name" />
+      <input data-f="name" placeholder="Bowler" value="${escapeHtml(row.name || "")}" data-orig="${escapeHtml(row.name || "")}" aria-label="Bowler name" />
       <input data-f="overs" inputmode="decimal" placeholder="Overs" value="${isBlank(row.overs) ? "" : escapeHtml(row.overs)}" aria-label="Overs" />
       <input data-f="maidens" type="number" min="0" inputmode="numeric" placeholder="M" value="${isBlank(row.maidens) ? "" : row.maidens}" aria-label="Maidens" />
       <input data-f="runs" type="number" min="0" inputmode="numeric" placeholder="R" value="${isBlank(row.runs) ? "" : row.runs}" aria-label="Runs given" />
@@ -311,11 +393,19 @@
     </fieldset>`;
   }
 
-  function openEditor() {
+  let editorSwapped = false;
+  function openEditor(swap) {
+    if (swap === true) editorSwapped = !editorSwapped;
     const sc = (lastPreview && lastPreview.scorecard) || {};
     const unreadable = Boolean(lastPreview && lastPreview.unreadable);
-    const innings = (sc.innings || []).slice(0, 2).map((inn) => (unreadable ? { team: inn.team } : inn));
+    let innings = (sc.innings || []).slice(0, 2).map((inn) => (unreadable ? { team: inn.team } : inn));
     while (innings.length < 2) innings.push({});
+    // Nov 10 2026 (Amit: "This is second innings"): the innings written as "(2nd)" on the card is the 2nd innings here
+    const written = (inn) => Number(inn.written_inning_number || inn.number || 0);
+    if (written(innings[0]) === 2 && !innings[1].has_data && !(innings[1].batting || []).some((b) => b.name)) innings = [innings[1], innings[0]];
+    // Nov 11 2026 (Amit, again "This is second innings"): the reader called it the 1st innings - one tap swaps them
+    if (editorSwapped) innings = [innings[1], innings[0]];
+    editorSource = innings;
     const teams = [innings[0].team || "", innings[1].team || ""].map((t) => (/^opponent$/i.test(t) ? "" : t));
     let editor = document.getElementById("scEditor");
     if (!editor) {
@@ -330,6 +420,7 @@
         <h2>Enter what's written on the card</h2>
         <p class="sc-check-lede">Copy the names and numbers from the photo (open it with the button below). Leave anything you can't read empty. Batters' runs + extras must add up to the total.</p>
         ${sc.photo_url ? `<p><a class="sc-btn ghost" href="${escapeHtml(sc.photo_url)}" target="_blank" rel="noopener">📷 Open the photo in a new tab</a></p>` : ""}
+        <p><button type="button" class="sc-btn ghost" data-sce="swap">⇅ Wrong order? Swap 1st and 2nd innings</button> <small>(do this first - it starts the form again)</small></p>
         <div class="sce-match">
           <label>Team batting first <input data-m="team1" value="${escapeHtml(teams[0])}" placeholder="e.g. Heartlake Cricket Club" required /></label>
           <label>Team batting second <input data-m="team2" value="${escapeHtml(teams[1])}" placeholder="Opponent team name" required /></label>
@@ -407,6 +498,27 @@
     }
   }
 
+  // Nov 10 2026: saving an edit keeps what the form doesn't show - 1s/2s/3s/dots, runs per over, wides, no balls,
+  // captains and man of the match - for every row whose player is the same (renamed rows keep them too).
+  let editorSource = [];
+  function sourceRow(index, kind, original) {
+    const key = String(original || "").trim().toLowerCase();
+    if (!key) return {};
+    const lists = [editorSource[index], ...editorSource.filter((_, i) => i !== index)].map((inn) => (inn && inn[kind]) || []);
+    for (const list of lists) {
+      const found = list.find((row) => String(row.name || "").trim().toLowerCase() === key);
+      if (found) return found;
+    }
+    return {};
+  }
+  function kept(row, keys) {
+    const out = {};
+    keys.forEach((key) => {
+      if (row[key] !== null && row[key] !== undefined && row[key] !== "") out[key] = row[key];
+    });
+    return out;
+  }
+
   function buildTemplate(form) {
     const val = (sel) => (form.querySelector(sel)?.value || "").trim();
     const team1 = val('[data-m="team1"]');
@@ -417,6 +529,7 @@
           const name = row.querySelector('[data-f="name"]').value.trim();
           if (!name) return null;
           return {
+            ...kept(sourceRow(index, "batting", row.querySelector('[data-f="name"]').dataset.orig || name), ["dots", "ones", "twos", "threes"]),
             player: { name, normalized_name: name.toLowerCase(), member_id: null },
             runs: fieldNum(row.querySelector('[data-f="runs"]')),
             balls: fieldNum(row.querySelector('[data-f="balls"]')),
@@ -433,6 +546,7 @@
           if (!name) return null;
           const overs = row.querySelector('[data-f="overs"]').value.trim();
           return {
+            ...kept(sourceRow(index, "bowling", row.querySelector('[data-f="name"]').dataset.orig || name), ["over_runs", "dots", "wides", "no_balls", "fours", "sixes"]),
             player: { name, normalized_name: name.toLowerCase() },
             overs: overs === "" ? null : Number(overs),
             maidens: fieldNum(row.querySelector('[data-f="maidens"]')),
@@ -462,6 +576,13 @@
         venue: val('[data-m="venue"]') || null,
         teams: { team_1: team1, team_2: team2 },
         overs_limit: fieldNum(form.querySelector('[data-m="overs"]')),
+        captains: (() => {
+          const caps = (lastPreview && lastPreview.scorecard && lastPreview.scorecard.captains) || [];
+          const same = (a, b) => String(a || "").trim().toLowerCase() === String(b || "").trim().toLowerCase();
+          const pick = (team) => (caps.find((c) => same(c.team, team)) || {}).name || null;
+          return { team_1: pick(team1), team_2: pick(team2) };
+        })(),
+        man_of_match: (lastPreview && lastPreview.scorecard && lastPreview.scorecard.man_of_match) || null,
       },
       innings,
       validation: { inning_1_total: innings[0]?.summary.runs ?? null, inning_2_total: innings[1]?.summary.runs ?? null, expected_result: val('[data-m="result"]'), is_consistent: null, notes: "Typed in on the scorecard page." },
@@ -489,6 +610,11 @@
     if (action === "close") {
       document.getElementById("scEditor")?.remove();
       editorShown = false;
+      editorSwapped = false;
+    }
+    if (action === "swap") {
+      openEditor(true);
+      return;
     }
     updateSums();
   });
