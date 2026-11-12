@@ -4458,9 +4458,7 @@ def _side_score_text(scorecard: dict[str, Any], side: str, fallback: Any) -> str
 
 
 def _sync_fixture_results_from_scorecards(store: dict[str, Any]) -> bool:
-    """Nov 9 2026 (/live/2026-08-23-carl was empty while /scorecards/a-fa879005 had the full scorecard): a past
-    fixture linked to one published scorecard takes that game's result and innings scores, so the live page,
-    Recent results and fixtures show the same thing. Fixtures that already have scores (scored in the app) are kept."""
+    """Reconcile published scorecards with unambiguous fixtures and their participants."""
     fixtures = [fixture for fixture in store.get("fixtures", []) or [] if isinstance(fixture, dict)]
     if not fixtures:
         return False
@@ -4474,10 +4472,11 @@ def _sync_fixture_results_from_scorecards(store: dict[str, Any]) -> bool:
         archive = archives.get(url.rsplit("/a-", 1)[-1]) if url else None
         if not archive or not _archive_scorecard_is_published(archive):
             continue
+        card = _scorecard_from_archive(archive)
+        changed = _record_scorecard_participation(store, fixture, card) or changed
         view = _public_fixture_card_payload(fixture)
         if _fixture_has_recorded_score_data(view):
             continue
-        card = _scorecard_from_archive(archive)
         innings = [item for item in card.get("innings") or [] if isinstance(item, dict)]
         ours = next((item for item in innings if _same_team_name(view["club_name"], item.get("team"))), None)
         theirs = next((item for item in innings if _same_team_name(view["opponent"], item.get("team"))), None)
@@ -4486,10 +4485,12 @@ def _sync_fixture_results_from_scorecards(store: dict[str, Any]) -> bool:
         ours_runs, ours_wickets = _split_innings_score((ours or {}).get("score"))
         theirs_runs, theirs_wickets = _split_innings_score((theirs or {}).get("score"))
         result = str(card.get("result") or "").strip()
+        if not result and str(fixture.get("date") or "")[:10] == _current_local_date().isoformat():
+            continue
         # Nov 10 2026 (Amit: "same here not showing results"): a card with only one team's innings still gives the
         # fixture that score and its result line ("Heartlake Cricket Club 215/9 in 35 overs"), so the game shows in
         # Recent results instead of staying "Scheduled"; the other score fills in when its innings is added.
-        if not (ours_runs or theirs_runs) or not result or result.upper() == "TBD":
+        if not (ours_runs or theirs_runs):
             continue
         scorecard = dict(fixture.get("scorecard") or {})
         scorecard.update(
@@ -4498,7 +4499,7 @@ def _sync_fixture_results_from_scorecards(store: dict[str, Any]) -> bool:
                 "heartlake_wickets": ours_wickets,
                 "opponent_runs": theirs_runs,
                 "opponent_wickets": theirs_wickets,
-                "result": result,
+                "result": result or "TBD",
             }
         )
         fixture["scorecard"] = scorecard
@@ -4969,12 +4970,12 @@ def _public_fixture_card_payload(fixture: dict[str, Any]) -> dict[str, Any]:
 
 
 def _past_fixture_scorecard_urls(store: dict[str, Any], fixtures: list[dict[str, Any]]) -> dict[str, str]:
-    """Return only unambiguous links from past fixtures to approved archive scorecards."""
-    today = datetime.utcnow().date().isoformat()
+    """Return unambiguous links from fixtures through today to published archive scorecards."""
+    today = _current_local_date().isoformat()
     approved_archives = [
         archive
         for archive in (store.get("archive_uploads", []) or [])
-        if isinstance(archive, dict) and _scorecard_text(archive.get("status")).lower() == "approved"
+        if isinstance(archive, dict) and _archive_scorecard_is_published(archive)
     ]
     links: dict[str, str] = {}
 
@@ -4982,7 +4983,7 @@ def _past_fixture_scorecard_urls(store: dict[str, Any], fixtures: list[dict[str,
         fixture_id = str(fixture.get("id") or "").strip()
         fixture_date = str(fixture.get("date") or "")[:10]
         club_id = str(fixture.get("club_id") or "").strip()
-        if not fixture_id or not club_id or not re.fullmatch(r"20\d{2}-\d{2}-\d{2}", fixture_date) or fixture_date >= today:
+        if not fixture_id or not club_id or not re.fullmatch(r"20\d{2}-\d{2}-\d{2}", fixture_date) or fixture_date > today:
             continue
 
         scoped_archives = []
@@ -5014,6 +5015,9 @@ def _past_fixture_scorecard_urls(store: dict[str, Any], fixtures: list[dict[str,
         fixture_club_name = normalize_name(str(fixture.get("club_name") or ""))
         matched = []
         for archive in scoped_archives:
+            # A card linked to a different fixture must not also be inferred onto this one.
+            if archive.get("match_id") or archive.get("applied_to_match_id"):
+                continue
             # Photo metadata may be the upload date, not the game date. Only use
             # scorecard-extracted or explicitly assigned archive dates for inference.
             date_source = str(archive.get("archive_date_source") or "").strip().lower()
@@ -5022,7 +5026,7 @@ def _past_fixture_scorecard_urls(store: dict[str, Any], fixtures: list[dict[str,
             card = _scorecard_from_archive(archive)
             if str(card.get("date") or "")[:10] != fixture_date:
                 continue
-            card_teams = [
+            card_teams = list(card.get("teams") or []) + [
                 str(team.get("team") or "")
                 for team in (card.get("innings") or [])
                 if isinstance(team, dict) and team.get("team")
@@ -5037,7 +5041,15 @@ def _past_fixture_scorecard_urls(store: dict[str, Any], fixtures: list[dict[str,
                 matched.append(archive)
 
         # Ambiguous same-day fixtures deliberately remain unlinked.
-        if len(matched) == 1:
+        competing = [
+            other for other in fixtures
+            if str(other.get("id") or "") != fixture_id
+            and str(other.get("club_id") or "") == club_id
+            and str(other.get("date") or "")[:10] == fixture_date
+            and _same_team_name(other.get("club_name"), fixture.get("club_name"))
+            and _same_team_name(other.get("opponent"), fixture.get("opponent"))
+        ]
+        if len(matched) == 1 and not competing:
             links[fixture_id] = f"/scorecards/a-{_scorecard_text(matched[0].get('id'))}"
 
     return links
@@ -6356,6 +6368,69 @@ def _member_for_card_name(store: dict[str, Any], name: Any, team: Any) -> dict[s
         if len(found) > 1:
             return None
     return None
+
+
+def _scorecard_team_club(store: dict[str, Any], team: str) -> dict[str, Any] | None:
+    clubs = [
+        club for club in store.get("clubs", []) or []
+        if any(
+            _same_team_name(team, name)
+            for name in [club.get("name"), club.get("short_name"), *(club.get("aliases") or [])]
+            if name
+        )
+    ]
+    return clubs[0] if len(clubs) == 1 else None
+
+
+def _scorecard_participant_ids(store: dict[str, Any], fixture: dict[str, Any], card: dict[str, Any], club: dict[str, Any] | None = None) -> set[str]:
+    participants: set[str] = set()
+    members = store.get("members", []) or []
+    for innings in card.get("innings") or []:
+        if not isinstance(innings, dict):
+            continue
+        batting_team = str(innings.get("team") or "").strip()
+        bowling_team = str(innings.get("bowling_team") or "").strip()
+        fielders = []
+        for row in innings.get("batting") or []:
+            if not isinstance(row, dict):
+                continue
+            dismissal = str(row.get("dismissal") or "").strip()
+            match = _RUN_OUT_FIELDER.match(dismissal) or _CATCH_AND_BOWLED.match(dismissal) or _CATCH_BY.match(dismissal)
+            if match:
+                fielders.append(match.group(1).strip())
+        for team, names in (
+            (batting_team, [row.get("name") for row in innings.get("batting") or [] if isinstance(row, dict)] + list(innings.get("did_not_bat") or [])),
+            (bowling_team, [row.get("name") for row in innings.get("bowling") or [] if isinstance(row, dict)] + fielders),
+        ):
+            if not team or not any(_same_team_name(team, side) for side in (fixture.get("club_name"), fixture.get("opponent"))):
+                continue
+            team_club = _scorecard_team_club(store, team)
+            if not team_club or (club and str(team_club.get("id") or "") != str(club.get("id") or "")):
+                continue
+            roster = _club_roster(store, str(team_club.get("id") or ""))
+            for name in names:
+                matches = [member for member in roster if name and _member_matches_name(member, name)]
+                if len(matches) != 1 or not str(matches[0].get("name") or "").strip():
+                    continue
+                member = matches[0]
+                # Fixture availability is persisted by canonical name, so duplicate names cannot safely be written.
+                if sum(1 for item in members if item.get("name") == member.get("name")) == 1:
+                    participants.add(str(member.get("id") or ""))
+    participants.discard("")
+    return participants
+
+
+def _record_scorecard_participation(store: dict[str, Any], fixture: dict[str, Any], card: dict[str, Any]) -> bool:
+    ids = _scorecard_participant_ids(store, fixture, card)
+    if not ids:
+        return False
+    statuses = fixture.setdefault("availability_statuses", {})
+    changed = False
+    for member in store.get("members", []) or []:
+        if str(member.get("id") or "") in ids and statuses.get(member["name"]) != "Available":
+            statuses[member["name"]] = "Available"
+            changed = True
+    return changed
 
 
 def _member_public_key(member: dict[str, Any]) -> str:
@@ -9349,10 +9424,28 @@ def player_availability_data(x_auth_token: str | None = Header(default=None)) ->
     member = _member_for_user(store, user_row)
     changed = False
     fixtures = []
-    for fixture in _club_stat_fixtures(store, club):
-        played = _member_appeared_in_fixture(member, fixture, club) if member else False
+    all_fixtures = [fixture for fixture in store.get("fixtures", []) or [] if isinstance(fixture, dict)]
+    links = _past_fixture_scorecard_urls(store, [_public_fixture_card_payload(fixture) for fixture in all_fixtures])
+    archives = {str(item.get("id") or ""): item for item in store.get("archive_uploads", []) or [] if isinstance(item, dict)}
+    relevant = _club_stat_fixtures(store, club)
+    relevant_ids = {str(fixture.get("id") or "") for fixture in relevant}
+    for fixture in all_fixtures:
+        fixture_id = str(fixture.get("id") or "")
+        sides = [_scorecard_team_club(store, str(side or "")) for side in (fixture.get("club_name"), fixture.get("opponent"))]
+        if fixture_id not in relevant_ids and fixture_id in links and any(
+            side and str(side.get("id") or "") == str(club.get("id") or "") for side in sides
+        ):
+            relevant.append(fixture)
+            relevant_ids.add(fixture_id)
+    for fixture in relevant:
+        url = links.get(str(fixture.get("id") or ""), "")
+        archive = archives.get(url.rsplit("/a-", 1)[-1]) if url else None
+        card = _scorecard_from_archive(archive) if archive else None
+        participant_ids = _scorecard_participant_ids(store, fixture, card, club) if card else set()
+        if card:
+            changed = _record_scorecard_participation(store, fixture, card) or changed
+        played = bool(member and (str(member.get("id") or "") in participant_ids or _member_appeared_in_fixture(member, fixture, club)))
         is_past = _fixture_is_past(fixture)
-        fixture_view = _club_dashboard_fixture_view(fixture, club)
         if played:
             statuses = fixture.get("availability_statuses")
             if not isinstance(statuses, dict):
@@ -9361,6 +9454,7 @@ def player_availability_data(x_auth_token: str | None = Header(default=None)) ->
             if statuses.get(member["name"]) != "Available":
                 statuses[member["name"]] = "Available"
                 changed = True
+            fixture_view = _club_dashboard_fixture_view(fixture, club)
             fixtures.append({**fixture_view, "availability_read_only": True})
             continue
         if (
@@ -9368,7 +9462,7 @@ def player_availability_data(x_auth_token: str | None = Header(default=None)) ->
             and str(fixture.get("status") or "").lower() != "completed"
             and not is_past
         ):
-            fixtures.append({**fixture_view, "availability_read_only": False})
+            fixtures.append({**_club_dashboard_fixture_view(fixture, club), "availability_read_only": False})
     if changed:
         save_store(store)
     fixtures.sort(key=lambda fixture: (str(fixture.get("date") or ""), str(fixture.get("opponent") or "")))
@@ -9399,6 +9493,15 @@ def save_player_availability(request: PlayerAvailabilitySelfRequest, x_auth_toke
     if str(match.get("club_id") or "").strip() and str(match.get("club_id") or "").strip() != str(club.get("id") or "").strip():
         raise HTTPException(status_code=403, detail="This match is not in your selected club.")
     _require_feature(user_row, current_club_id, "availability", club_id=str(club.get("id") or ""))
+    all_fixtures = [fixture for fixture in store.get("fixtures", []) or [] if isinstance(fixture, dict)]
+    links = _past_fixture_scorecard_urls(store, [_public_fixture_card_payload(fixture) for fixture in all_fixtures])
+    url = links.get(str(match.get("id") or ""), "")
+    archive_id = url.rsplit("/a-", 1)[-1] if url else ""
+    archive = next((item for item in store.get("archive_uploads", []) or [] if isinstance(item, dict) and str(item.get("id") or "") == archive_id), None)
+    if _member_appeared_in_fixture(member, match, club) or (
+        archive and str(member.get("id") or "") in _scorecard_participant_ids(store, match, _scorecard_from_archive(archive), club)
+    ):
+        raise HTTPException(status_code=409, detail="Availability cannot be changed after participation is recorded.")
     match["availability_statuses"][member["name"]] = request.status
     if request.note.strip():
         match["availability_notes"][member["name"]] = request.note.strip()
@@ -16067,10 +16170,7 @@ def _mark_archive_approved(store: dict[str, Any], upload: dict[str, Any], user_r
         _register_played_fixture_teams(store)
     except Exception:
         logger.exception("Club registration from scorecard %s failed", upload.get("id"))
-    try:
-        _sync_fixture_results_from_scorecards(store)
-    except Exception:
-        logger.exception("Fixture result sync from scorecard %s failed", upload.get("id"))
+    _sync_fixture_results_from_scorecards(store)
 
 
 class ScorecardReportRequest(BaseModel):
@@ -17085,10 +17185,7 @@ def approve_archive(
         _register_played_fixture_teams(store)
     except Exception:
         logger.exception("Club registration from scorecard %s failed", upload.get("id"))
-    try:
-        _sync_fixture_results_from_scorecards(store)
-    except Exception:
-        logger.exception("Fixture result sync from scorecard %s failed", upload.get("id"))
+    _sync_fixture_results_from_scorecards(store)
     save_store(store)
     refreshed = load_store()
     updated = get_archive_or_404(refreshed, upload_id)

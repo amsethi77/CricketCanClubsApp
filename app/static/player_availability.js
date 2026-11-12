@@ -59,7 +59,7 @@ function renderFixtures() {
           <p>${fixture.details?.venue || "Venue TBD"} · ${fixture.details?.scheduled_time || "Time TBD"}</p>
           <small>${fixture.date || "Date TBD"}</small>
           <small class="availability-current-status">Current status: <span class="status-pill ${selectedStatus === "available" ? "yes" : selectedStatus === "maybe" ? "maybe" : selectedStatus === "unavailable" ? "no" : "neutral"}">${statusLabel(selectedStatus)}</span></small>
-          ${readOnly ? `<small>Past match · participation recorded</small>` : `<div class="availability-slider" role="group" aria-label="Availability selection">
+          ${readOnly ? `<small>Participation recorded</small>` : `<div class="availability-slider" role="group" aria-label="Availability selection">
             <form class="inline-actions" data-fixture-form="${fixture.id}">
               <div class="availability-quick-actions">
                 <button class="status-toggle available ${selectedStatus === "available" ? "is-selected" : ""}" type="button" data-set-availability="available" aria-pressed="${selectedStatus === "available"}">Available</button>

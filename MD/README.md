@@ -69,6 +69,9 @@ These rules are the source of truth for the current implementation. If older log
 
 This section captures the user requirements in the order they were given and refined during the build.
 
+### November 2026 scorecards and player availability
+- Fix Player Availability so players who played are marked Available and a matching uploaded scorecard updates the scheduled fixture, whether the fixture was created by a captain or a club admin.
+
 ### November 2026 exclude databases from Git
 - Update Git ignore rules so database files and backups do not get pushed to GitHub.
 
@@ -601,7 +604,8 @@ Request (Amit, Nov 5 2026): "We need a backup plan for the DB, once we go live w
 - The signed-in `/clubs` page limits superadmins to their current club; they manage and select other registered clubs through Admin Center. The Admin Center club selector continues to include all registered clubs.
 - The club dashboard is now club-focused and removes the in-page club picker so it reflects the selected club only.
 - Season setup stores fixtures with their own season year so `2026` and `2027` schedules can coexist.
-- Player availability is shown against the selected club's active season fixtures after login. Historical scorebook appearances are persisted as Available and displayed read-only in My availability.
+- Player availability is shown against the selected club's active season fixtures after login. Historical scorebook appearances and participants on matched published uploaded scorecards are persisted as Available and displayed read-only in My availability, including for the opposing club. Named batters, bowlers, fielders in recognizable dismissals and players listed as did not bat are included when their identity and side can be resolved.
+- Published scorecards reconcile with fixtures created by either captains or club admins: an explicit fixture reference wins; otherwise the card needs a trusted match date, both teams and an unambiguous same-day fixture and scorecard. Future fixtures and unpublished cards are not matched. Existing fixture scores are not overwritten. A same-day card without a result records participation but does not complete the fixture. Previously recorded availability is not automatically removed if a card is later changed or unpublished.
 - The clubs page now shows a player snapshot plus year-wise and club-wise summary tables using cached SQLite stats.
 - The clubs page Player Snapshot is resolved from the signed-in player's canonical `member_id`, and it should not fall back to another roster member.
 - Player profile club memberships are deduplicated before display so the same club does not appear multiple times.
@@ -1389,6 +1393,7 @@ Model (soft launch, Oct 2026): keep the core cricket experience free; one paid p
 
 ## Change log
 
+- 2026-11-11: Reconcile published uploaded scorecards with matching fixtures and record confidently identified participants as Available for both clubs; show played matches read-only in My availability, preserve existing scores and avoid ambiguous matches.
 - 2026-11-11: Accuracy run on the checked Imrans XI card (70.5%, read by the oldest model gemini-3-flash-preview because 3.8 and 3.6 were busy): fixed what the card itself settles, in `ai_vision._fix_sides_and_wickets` after every read - (1) batting team: when the BATSMAN column holds the other team's known players (60%+) and the bowlers aren't, the other team was batting ("INNINGS OF" was blank and the reader said Heartlake); "Imrans XI" = "Imran XI"; (2) innings wickets: when the batters out on the card are 2+ more than the total the reader gave (it counted the 5 filled fall-of-wickets boxes, 8 were out). Checked on all of Amit's and Dhruvika's cards: no other card changes. Prompt: when a card writes wides as "WD" and the batting BOWLER column is empty, a plain W in a bowler's box is a wicket; with "INNINGS OF" blank, the batting team is the one whose players are in the BATSMAN column.
 - 2026-11-11: Imrans XI v Heartlake (25 Aug 2024, d922564e) checked from the photo: the published card was an old AI read (RAJ 3 fours where the photo has two 4s and a 6, Farhan 31, every bowler 4 overs 1 wicket, 29 overs, innings 1). Checked card: Imrans XI 2nd innings 145/8 in 30 overs; batters 124 (Raj 30, Haris 27, Farhan 23 not out, Hamza 19, Rohail 16 retired hurt...) + extras 21 (leg byes 3, wides 18 strokes) = 145; bowling runs only where every over has its number (Sam 32, Chuck 18). `scripts/apply_checked_card.py <id> <json>` puts a checked card on an upload like ✏️ Edit does (keeps its status, counts as typed in by a person, becomes a learned example). The accuracy test now uses only cards typed in / fixed by a person.
 - 2026-11-11: First accuracy run (2 cards): Strike Force v Canadian Eagles 98.6% (the only misses were overs written as 21.5 v 21 + 5 balls - now compared as the same), Imrans XI v Heartlake 57.5% because the best Gemini model took more than 120 s with the examples and the read fell back to a weaker model. AI reads now wait up to 240 s (`read_scorecard(timeout=240)`); the accuracy script shows progress, stops cleanly on Ctrl+C and hides the app's debug lines.
