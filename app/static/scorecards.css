@@ -784,8 +784,8 @@ html[data-theme="dark"] .sc-photo img {
 .sce-innings legend { padding: 0 6px; font-weight: 800; }
 .sce-totals { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
 .sce-row, .sce-head { display: grid; gap: 6px; align-items: center; }
-.sce-bat { grid-template-columns: minmax(0, 2fr) minmax(0, 1.4fr) minmax(0, 1.4fr) repeat(4, minmax(0, 0.6fr)) 36px; }
-.sce-bowl { grid-template-columns: minmax(0, 2.5fr) repeat(4, minmax(0, 0.8fr)) 36px; }
+.sce-bat { grid-template-columns: minmax(0, 2fr) minmax(0, 1.3fr) minmax(0, 1.3fr) repeat(8, minmax(0, 0.55fr)) 36px; }
+.sce-bowl { grid-template-columns: minmax(0, 2.5fr) repeat(6, minmax(0, 0.7fr)) 36px; }
 .sce-head span { font-size: 0.72rem; font-weight: 800; color: var(--sc-muted); text-transform: uppercase; }
 .sce-x { min-height: 36px; border: 0; border-radius: 10px; background: #f1f5f9; color: #64748b; cursor: pointer; }
 .sce-sum { margin: 0; font-weight: 700; font-size: 0.88rem; }
@@ -1165,3 +1165,14 @@ body.scorecard-detail-page .sc-header h1.sc-title {
 .sc-mom-picker label { display: grid; gap: 4px; font-weight: 600; font-size: 0.9rem; }
 .sc-mom-picker select { min-width: 220px; padding: 6px 8px; border-radius: 8px; border: 1px solid #cbd5e1; }
 .sc-mom-msg { font-size: 0.85rem; color: #475569; }
+
+/* Nov 12 2026: each number box in ✏️ Edit carries its own small label (R, B, 4s, 6s, 0s, 1s, 2s, 3s / O, M, R, W),
+   shown on phones where the column headings are hidden */
+.sce-num { display: block; min-width: 0; }
+.sce-num > span { display: none; font-size: 0.72rem; font-weight: 700; color: #64748b; margin: 0 0 2px 4px; }
+.sce-num > input { width: 100%; }
+@media (max-width: 640px) {
+  .sce-num > span { display: block; }
+}
+.sce-extras { margin-top: -4px; }
+.sce-extras label { font-size: 0.85rem; color: #475569; }

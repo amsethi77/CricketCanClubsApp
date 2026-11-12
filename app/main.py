@@ -4177,24 +4177,36 @@ def _register_played_teams_in_background() -> None:
     threading.Thread(target=_work, name="register-played-teams", daemon=True).start()
 
 
-STATS_REFRESH_VERSION = "one-club-per-match-5"  # Nov 10 2026: rebuild again - app/data/.stats_version (with -3) was pushed to git, so the -3 rebuild never ran
+STATS_REFRESH_VERSION = "one-club-per-match-6"  # Nov 12 2026: the "done" mark now lives in the database (see below)
+
+
+def _stats_refresh_done() -> str:
+    with _auth_connection() as connection:
+        connection.execute("CREATE TABLE IF NOT EXISTS app_flags (key TEXT PRIMARY KEY, value TEXT NOT NULL DEFAULT '')")
+        row = connection.execute("SELECT value FROM app_flags WHERE key = 'stats_refresh_version'").fetchone()
+    return str(row["value"]) if row else ""
 
 
 def _refresh_player_stats_once() -> None:
-    """Rebuild the saved player stats once after a stats formula change (runs in the background)."""
-    marker = Path(__file__).resolve().parent / "data" / ".stats_version"
+    """Rebuild the saved player stats once after a stats formula change (runs in the background).
+    Nov 12 2026: the mark that it ran is kept in the database (table app_flags), not in app/data/.stats_version -
+    that file kept being committed to git, so a deploy carried "already done" and the rebuild never ran on Azure."""
     try:
-        if marker.exists() and marker.read_text(encoding="utf-8").strip() == STATS_REFRESH_VERSION:
+        if _stats_refresh_done() == STATS_REFRESH_VERSION:
             return
-    except OSError:
-        return
+    except Exception:
+        logger.exception("Couldn't read the stats refresh mark; refreshing anyway.")
 
     def _work() -> None:
         try:
             logger.info("Refreshing saved player stats (%s)...", STATS_REFRESH_VERSION)
             save_store(load_store())
-            marker.parent.mkdir(parents=True, exist_ok=True)
-            marker.write_text(STATS_REFRESH_VERSION, encoding="utf-8")
+            with _auth_connection() as connection:
+                connection.execute("CREATE TABLE IF NOT EXISTS app_flags (key TEXT PRIMARY KEY, value TEXT NOT NULL DEFAULT '')")
+                connection.execute(
+                    "INSERT INTO app_flags (key, value) VALUES ('stats_refresh_version', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                    (STATS_REFRESH_VERSION,),
+                )
             logger.info("Player stats refreshed.")
         except Exception:
             logger.exception("Player stats refresh failed; it will be retried on next start.")
@@ -5697,6 +5709,8 @@ def _scorecard_from_archive_base(archive: dict[str, Any]) -> dict[str, Any]:
                 "score": (f"{runs}" + (f"/{wickets}" if wickets is not None else "")) if runs is not None else "",
                 "extras": extras_total,
                 "extras_detail": extras_detail,
+                # Nov 12 2026: the parts too, so ✏️ Edit shows wides / no balls / byes / leg byes as read
+                "extras_parts": {key: _scorecard_int(extras.get(key)) for key in ("wides", "no_balls", "byes", "leg_byes", "penalties") if _scorecard_int(extras.get(key)) is not None},
                 "batting": batting,
                 "did_not_bat": did_not_bat,
                 "bowling": bowling,
@@ -7137,7 +7151,7 @@ def _admin_center_html(request: Request) -> HTMLResponse:
         <link rel="stylesheet" href="/assets/styles.css?v=20261111tablealign" />
         <link rel="stylesheet" href="/assets/app_polish.css?v=20261006a" />
         <link rel="stylesheet" href="/assets/sports-system.css?v=20260926a" />
-        <link rel="stylesheet" href="/assets/scorecards.css?v=20261115a" />
+        <link rel="stylesheet" href="/assets/scorecards.css?v=20261116b" />
       </head>
       <body>
         <div class="page-shell">
@@ -7305,7 +7319,7 @@ def _admin_center_html(request: Request) -> HTMLResponse:
         </div>
         <script src="/assets/multipage.js?v=20261115a"></script>
         <script src="/assets/scorecard_view.js?v=20261115a"></script>
-        <script src="/assets/scorecard.js?v=20261115c"></script>
+        <script src="/assets/scorecard.js?v=20261116b"></script>
         <script src="/assets/admin_center.js?v=20261114a"></script>
         <script src="/assets/admin_reread.js?v=20261024a"></script>
       </body>
@@ -15201,10 +15215,11 @@ async def upload_scorecard(
     name_matches = _card_name_matches(load_store(), checks.get("scorecard") or {}, user_row, str(selected_club.get("id") or ""))
     name_notice = _name_match_notice(name_matches)
     left = "" if upload_limit is None else f" {max(0, int(upload_limit) - int(plan_info.get('uploads_used') or 0) - 1)} of {upload_limit} uploads left this month."
+    lite = ("⚠️ " + ai_vision.LITE_NOTE + " ") if ai_vision.LITE_NOTE in (record.get("ai_flags") or []) else ""
     if checks["needs_review"]:
-        message = f"Scorecard '{record.get('original_file_name') or file.filename or file_token}' uploaded. Some things need checking, so a site admin will review it." + name_notice + left
+        message = lite + f"Scorecard '{record.get('original_file_name') or file.filename or file_token}' uploaded. Some things need checking, so a site admin will review it." + name_notice + left
     else:
-        message = f"Scorecard '{record.get('original_file_name') or file.filename or file_token}' uploaded. Check the digital scorecard and tap Publish." + name_notice + left
+        message = lite + f"Scorecard '{record.get('original_file_name') or file.filename or file_token}' uploaded. Check the digital scorecard and tap Publish." + name_notice + left
     return {
                 "message": message,
                 "dashboard": current_dashboard(load_store(), selected_club.get("id", "")),
@@ -16364,6 +16379,9 @@ def scorecard_upload_preview(upload_id: str, x_auth_token: str | None = Header(d
         "is_site_admin": is_admin,
         "uploaded_by": upload.get("uploaded_by") or "",
         "match_code": _match_code(upload.get("id")),
+        # Nov 12 2026 (Amit: "Match date is missing in the edit score screen"): when the card has no date, Edit
+        # offers the day the photo was taken (camera / phone file name), marked so the scorer checks it
+        "photo_date": _photo_date(upload) if _photo_date(upload) != str(upload.get("created_at") or "")[:10] else "",  # not the upload day
         # possible same matches that are missing this card's other innings: offered as "Link as the other innings"
         "link_candidates": [
             {"id": item.get("id"), "match_code": _match_code(item.get("id")), "file_name": item.get("file_name") or ""}
@@ -16486,7 +16504,8 @@ def scorecard_upload_ai_read(upload_id: str, x_auth_token: str | None = Header(d
     if checks["needs_review"]:
         _scorecard_check_alerts(get_archive_or_404(refreshed, archive_id), checks, user_row)
     return {
-        "message": "Read by AI. Check it against the photo." + (" A site admin will look at the points listed." if checks["needs_review"] else " Everything adds up: tap Publish if it matches."),
+        "message": (("⚠️ " + ai_vision.LITE_NOTE + " ") if ai_vision.LITE_NOTE in (get_archive_or_404(refreshed, archive_id).get("ai_flags") or []) else "")
+        + "Read by AI. Check it against the photo." + (" A site admin will look at the points listed." if checks["needs_review"] else " Everything adds up: tap Publish if it matches."),
         "checks": {key: value for key, value in checks.items() if key != "scorecard"},
     }
 

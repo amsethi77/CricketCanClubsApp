@@ -56,7 +56,12 @@ GEMINI_FALLBACK_MODELS = ("gemini-3.6-flash", "gemini-3-flash-preview", "gemini-
 # Scorecard photos are never read with the "lite" model: in the Oct 22 re-read it got extras and totals wrong
 # (e.g. extras 52 instead of 43). When the better models hit today's free limit, reading stops and is tried
 # again later instead (README "How the AI reader learns").
-GEMINI_SCORECARD_MODELS = ("gemini-3.8-flash", "gemini-3.6-flash", "gemini-3-flash-preview")
+# Nov 12 2026 (Dhruvika: "once this is reached can we show a message that lower ai model is used and not showing
+# this message"): the lite model is now the LAST resort (500 free reads a day vs 20 for each better model), and a
+# card it read says so and asks for every number to be checked.
+GEMINI_SCORECARD_MODELS = ("gemini-3.8-flash", "gemini-3.6-flash", "gemini-3-flash-preview", "gemini-3.5-flash-lite")
+LITE_NOTE = ("Read by the backup AI (Gemini Flash Lite) because today's free limit for the better AI models is used up. "
+             "It is less accurate - check every number against the photo, or tap “Read with AI” again tomorrow.")
 # Bump when the reading instructions/checks change, so "Re-read all" can skip cards the newest reader already read.
 READER_VERSION = "2026-10-27"
 
@@ -1096,6 +1101,7 @@ def read_scorecard(
     # Nov 11 2026: 240s, not 120s - the best model often needs ~100s with the worked examples, and a timeout
     # moved the read to a weaker model (accuracy test: 98.6% vs 57.5% on the next card)
     timeout: float = 240.0,
+    budget: float | None = None,
     known_names: list[str] | None = None,
     corrections: dict[str, str] | None = None,
     photo_date: str = "",
@@ -1107,6 +1113,10 @@ def read_scorecard(
     known_names / corrections / photo_date are what the app learned about this club (see _prompt).
     If the batters' runs + extras don't add up to the total, the model is asked once more to look at
     the photo again, told exactly which numbers don't add up (a second "checking" pass)."""
+    # Nov 12 2026 (uploads failed on Azure): the whole read must finish inside ~200 s - Azure cuts a web request at
+    # 230 s, and with 240 s per model the upload itself failed. Scripts pass a bigger budget.
+    total = float(budget if budget is not None else (subscriptions.setting("AI_READ_BUDGET_SECONDS", "200") or 200))
+    deadline_token = _DEADLINE.set(__import__("time").time() + max(30.0, total))
     token = _HINTS.set({
         "known_names": list(known_names or []),
         "corrections": dict(corrections or {}),
@@ -1119,12 +1129,228 @@ def read_scorecard(
         result = _read_scorecard(path, roster=roster, club_name=club_name, timeout=timeout)
         template = result.get("template")
         if template:
+            if _bowling_gaps(template) >= 2 and provider() == "gemini" and not result.get("fallback"):
+                filled = _merge_bowling(template, _read_bowling_only(Path(path)))
+                if filled:
+                    result.setdefault("notes", [])
+                    result["notes"] = [*result["notes"], f"Bowling read again from a close-up of the bowling analysis ({filled} figures filled) - check them."]
             learned = _apply_learning(template, roster)
             learned += _fix_sides_and_wickets(template, roster, club_name)
+            learned += _fill_bowling_from_totals(template)
             result["notes"] = learned + [note for note in result.get("notes") or [] if note not in learned]
         return result
     finally:
         _HINTS.reset(token)
+        _DEADLINE.reset(deadline_token)
+
+
+_DEADLINE: contextvars.ContextVar[float] = contextvars.ContextVar("ai_read_deadline", default=0.0)
+
+
+def _time_left() -> float:
+    """Seconds left for this read (a big number when no deadline is set)."""
+    deadline = _DEADLINE.get()
+    return 10_000.0 if not deadline else deadline - __import__("time").time()
+
+
+# ---------------------------------------------------------------------------
+# Nov 12 2026 (Amit: "Bowling stats are not getting picked and requires editing" - "improve this fully"):
+# 1. a focused second read of ONLY the bowling analysis, on a sharp crop of the bottom of the page, when the first
+#    read left bowlers' overs / runs empty (only while the upload has time left, 1 extra request);
+# 2. figures the card itself settles: overs and maidens from the runs written per over, the last bowler's runs or
+#    overs from the innings total, wickets from the batting BOWLER column (already in _fill_from_marks).
+# ---------------------------------------------------------------------------
+BOWLING_PROMPT = """This photo is a page of a handwritten cricket scorebook. Read ONLY the BOWLING ANALYSIS section
+(the bowlers' names on the left and a grid of boxes, one box per over, usually numbered 1, 2, 3 ... across the top),
+plus the BOWLING SUMMARY columns next to it if they are filled in (OVERS, MDNS, WIDES, NO BALLS, WKTS, RUNS).
+
+For EVERY bowler row that has a name or marks:
+- "name": as written.
+- "over_marks": one string per used box, in order, one token per delivery: "." dot, 1-6 runs, "W" wicket ball,
+  "wd" wide ("wd2" for 2 wides), "nb" no ball ("nb4" if 4 was hit off it), "b1"/"lb1" byes / leg byes.
+- "over_runs": the runs of each over if the scorer wrote them under or in the corner of the box (a list of numbers,
+  one per used box). If a running total is written (5, 12, 23 ...), give the per-over differences. null if not written.
+- "overs": the number of used boxes (a box with only a few balls = part of an over, e.g. 4.3).
+- "maidens": overs with no runs at all; "wickets": wickets in his boxes (W, CT, C, B, LBW, ST) - but if the card
+  writes wides as "WD", a plain W is a wicket; if it writes wides as a plain w / W, that W is a wide.
+- "runs_conceded": the RUNS column if written, else the sum of his over_runs, else every run in his boxes (wides and
+  no balls count; byes and leg byes don't).
+- Copy the BOWLING SUMMARY columns exactly when they are filled in - they win over anything you count.
+Use null for anything you can't read. Never invent a bowler.
+
+Reply with JSON only: {"bowling": [{"name": "...", "overs": null, "maidens": null, "runs_conceded": null,
+"wickets": null, "wides": null, "no_balls": null, "over_marks": [], "over_runs": []}]}"""
+
+
+def _bowling_gaps(template: dict[str, Any]) -> int:
+    """How many bowlers have no overs or no runs (in the innings with bowlers)."""
+    gaps = 0
+    for innings in template.get("innings") or []:
+        rows = [row for row in innings.get("bowling") or [] if isinstance(row, dict) and (row.get("player") or {}).get("name")] if isinstance(innings, dict) else []
+        gaps += sum(1 for row in rows if row.get("overs") in (None, "") or row.get("runs_conceded") in (None, ""))
+        if isinstance(innings, dict) and not rows and innings.get("batting"):
+            gaps += 3  # batting read, no bowlers at all
+    return gaps
+
+
+def _bowling_crop(path: Path) -> tuple[str, str] | None:
+    try:
+        from PIL import Image, ImageOps
+
+        try:
+            from pillow_heif import register_heif_opener
+
+            register_heif_opener()
+        except Exception:
+            pass
+        with Image.open(path) as image:
+            image = ImageOps.exif_transpose(image).convert("RGB")
+            width, height = image.size
+            part = image.crop((0, int(height * 0.40), width, height))
+            part.thumbnail((3072, 3072))
+            buffer = io.BytesIO()
+            part.save(buffer, format="JPEG", quality=90)
+            return ("image/jpeg", base64.b64encode(buffer.getvalue()).decode("ascii"))
+    except Exception:
+        return None
+
+
+def _read_bowling_only(path: Path) -> list[dict[str, Any]]:
+    """The bowlers read from a crop of the bowling analysis (Gemini). [] when it can't be done."""
+    import time
+
+    key = gemini_key()
+    if not key or _time_left() < 60:
+        return []
+    crop = _bowling_crop(path)
+    whole = _image_payload(path)
+    parts: list[dict[str, Any]] = []
+    for media, data in [item for item in (whole, crop) if item]:
+        parts.append({"inline_data": {"mime_type": media, "data": data}})
+    if len(parts) == 2:
+        parts.append({"text": "Image 1 is the whole page, image 2 a sharp copy of its lower part (the bowling analysis).\n\n" + BOWLING_PROMPT})
+    else:
+        parts.append({"text": BOWLING_PROMPT})
+    body = {"contents": [{"role": "user", "parts": parts}], "generationConfig": {"temperature": 0, "responseMimeType": "application/json"}}
+    base = subscriptions.setting("GEMINI_BASE_URL", "https://generativelanguage.googleapis.com").rstrip("/")
+    configured = subscriptions.setting("GEMINI_VISION_MODEL")
+    models = [configured] if configured else list(GEMINI_SCORECARD_MODELS)
+    models = [model for model in models if _GEMINI_SKIP.get(model, 0) <= time.time()] or models
+    for model in models:
+        left = _time_left()
+        if left < 30:
+            break
+        try:
+            response = httpx.post(
+                f"{base}/v1beta/models/{model}:generateContent",
+                json=body,
+                headers={"x-goog-api-key": key, "content-type": "application/json"},
+                timeout=max(20.0, min(150.0, left - 5)),
+            )
+        except httpx.HTTPError:
+            continue
+        if response.status_code != 200:
+            if response.status_code == 429:
+                _GEMINI_SKIP[model] = time.time() + 30 * 60
+            continue
+        try:
+            payload = response.json()
+            parts_out = (((payload.get("candidates") or [{}])[0].get("content") or {}).get("parts") or [])
+            text = "".join(str(part.get("text") or "") for part in parts_out if not part.get("thought"))
+        except Exception:
+            continue
+        data = _parse_json(text) or {}
+        rows = data.get("bowling") if isinstance(data.get("bowling"), list) else []
+        if rows:
+            return [row for row in rows if isinstance(row, dict) and str(row.get("name") or "").strip()]
+    return []
+
+
+def _merge_bowling(template: dict[str, Any], rows: list[dict[str, Any]]) -> int:
+    """Fill the empty bowling figures of the innings these bowlers belong to. Returns the number of filled values."""
+    innings_list = [item for item in template.get("innings") or [] if isinstance(item, dict)]
+    if not innings_list or not rows:
+        return 0
+
+    def key(value: Any) -> str:
+        return _norm_name(value).replace(" ", "")
+
+    def similar(a: str, b: str) -> bool:
+        return bool(a and b) and (a == b or a.startswith(b) or b.startswith(a) or difflib.SequenceMatcher(None, a, b).ratio() >= 0.8)
+
+    # the innings whose bowlers best match (or the only innings with batters and no bowlers)
+    def overlap(innings: dict[str, Any]) -> int:
+        names = [key((row.get("player") or {}).get("name")) for row in innings.get("bowling") or [] if isinstance(row, dict)]
+        return sum(1 for row in rows if any(similar(key(row.get("name")), name) for name in names))
+
+    target = max(innings_list, key=overlap)
+    if overlap(target) == 0:
+        empty = [item for item in innings_list if item.get("batting") and not item.get("bowling")]
+        if len(innings_list) != 1 and len(empty) != 1:
+            return 0
+        target = empty[0] if empty else innings_list[0]
+    filled = 0
+    existing = [row for row in target.get("bowling") or [] if isinstance(row, dict)]
+    for row in rows:
+        name = str(row.get("name") or "").strip()
+        match = next((item for item in existing if similar(key((item.get("player") or {}).get("name")), key(name))), None)
+        if match is None:
+            if existing and len(existing) >= 8:
+                continue
+            match = {"player": {"name": name}, "overs": None, "maidens": None, "runs_conceded": None, "wickets": None}
+            existing.append(match)
+            filled += 1
+        for field in ("overs", "maidens", "runs_conceded", "wickets", "wides", "no_balls"):
+            if match.get(field) in (None, "") and row.get(field) not in (None, ""):
+                match[field] = row[field]
+                filled += 1
+        for field in ("over_marks", "over_runs"):
+            if not match.get(field) and isinstance(row.get(field), list) and row.get(field):
+                match[field] = row[field]
+                filled += 1
+    target["bowling"] = existing
+    return filled
+
+
+def _overs_balls(value: Any) -> int | None:
+    text = str(value if value is not None else "").strip()
+    if not text:
+        return None
+    try:
+        whole, _, part = text.partition(".")
+        return int(float(whole or 0)) * 6 + min(int(part[:1] or 0), 5)
+    except ValueError:
+        return None
+
+
+def _fill_bowling_from_totals(template: dict[str, Any]) -> list[str]:
+    """The one bowler whose runs or overs are missing gets what is left of the innings (total minus byes and leg
+    byes minus the other bowlers' runs; innings overs minus the other bowlers' overs)."""
+    notes: list[str] = []
+    for innings in template.get("innings") or []:
+        if not isinstance(innings, dict):
+            continue
+        rows = [row for row in innings.get("bowling") or [] if isinstance(row, dict) and (row.get("player") or {}).get("name")]
+        if len(rows) < 2:
+            continue
+        summary = innings.get("summary") or {}
+        extras = innings.get("extras") or {}
+        total = summary.get("runs")
+        missing = [row for row in rows if row.get("runs_conceded") in (None, "")]
+        if len(missing) == 1 and isinstance(total, int):
+            byes = sum(int(extras.get(item) or 0) for item in ("byes", "leg_byes", "penalties") if str(extras.get(item) or "0").isdigit())
+            rest = total - byes - sum(int(row["runs_conceded"]) for row in rows if row is not missing[0] and str(row.get("runs_conceded")).isdigit())
+            if 0 <= rest <= 150:
+                missing[0]["runs_conceded"] = rest
+                notes.append(f"{missing[0]['player']['name']}'s runs ({rest}) worked out from the innings total - check it.")
+        innings_balls = _overs_balls(summary.get("overs"))
+        no_overs = [row for row in rows if _overs_balls(row.get("overs")) is None]
+        if len(no_overs) == 1 and innings_balls:
+            rest = innings_balls - sum(_overs_balls(row.get("overs")) or 0 for row in rows if row is not no_overs[0])
+            if 0 < rest <= 60:
+                no_overs[0]["overs"] = f"{rest // 6}.{rest % 6}" if rest % 6 else rest // 6
+                notes.append(f"{no_overs[0]['player']['name']}'s overs ({no_overs[0]['overs']}) worked out from the innings overs - check it.")
+    return notes
 
 
 def _fix_sides_and_wickets(template: dict[str, Any], roster: list[str] | None, club_name: str) -> list[str]:
@@ -1203,6 +1429,14 @@ def _norm_name(value: Any) -> str:
 
 
 def _read_scorecard(path: Path, *, roster: list[str] | None, club_name: str, timeout: float) -> dict[str, Any]:
+    result = _read_scorecard_inner(path, roster=roster, club_name=club_name, timeout=timeout)
+    if result.get("template") and "lite" in str(result.get("model") or "").lower():
+        result["lite"] = True
+        result["notes"] = [LITE_NOTE] + [note for note in result.get("notes") or [] if note != LITE_NOTE]
+    return result
+
+
+def _read_scorecard_inner(path: Path, *, roster: list[str] | None, club_name: str, timeout: float) -> dict[str, Any]:
     first = _read_once(Path(path), roster=roster, club_name=club_name, timeout=timeout)
     template = first.get("template")
     if not template:
@@ -1230,6 +1464,10 @@ def _read_scorecard(path: Path, *, roster: list[str] | None, club_name: str, tim
         "(wides, no balls, byes, leg byes) and the grand total. Correct the mistakes and reply with the "
         "full corrected JSON in the same format. If it really is written that way, keep it."
     )
+    if _time_left() < 90:
+        # no time for a second look inside the upload: keep the first read, the checks flag what doesn't add up
+        first["notes"] = review_notes(template)
+        return first
     second = _read_once(Path(path), roster=roster, club_name=club_name, timeout=timeout, extra=extra)
     if second.get("template"):
         _fix_team_names(second["template"], club_name)
@@ -1248,7 +1486,7 @@ def _read_once(path: Path, *, roster: list[str] | None, club_name: str, timeout:
         error = str(result.get("error") or "").lower()
         # Gemini's free daily limit used up (or Google busy): carry on with Ollama on this computer when it's
         # installed - free and unlimited, slower and less accurate (README "Ollama backup when Gemini's limit runs out").
-        if error and any(word in error for word in ("limit", "busy", "couldn't reach", "no gemini vision model")) and ollama_model():
+        if error and any(word in error for word in ("limit", "busy", "couldn't reach", "no gemini vision model")) and ollama_model() and _time_left() > 60:
             backup = _read_with_ollama(path, roster=roster, club_name=club_name, extra=extra)
             if backup.get("template"):
                 backup["fallback"] = "ollama"
@@ -1573,8 +1811,14 @@ def _read_with_gemini(path: Path, *, roster: list[str] | None, club_name: str, t
     # doesn't wait minutes on the same model again (README "Faster photo reading"). Last resort: try them anyway.
     ready = [model for model in models if _GEMINI_SKIP.get(model, 0) <= now]
     models = ready or models
+    full_timeout = timeout
     for model in models:
         response = None
+        if _time_left() < 25:
+            last_error = last_error or "the read took too long"
+            tried.append(f"{model}: not tried, no time left in this upload")
+            break
+        timeout = max(20.0, min(full_timeout, _time_left() - 5))
         # "High demand" (503) and similar hiccups are usually gone within seconds: wait and retry once,
         # then try the next free model instead of giving up. A timeout moves straight to the next model.
         for attempt, pause in enumerate((0, 4)):

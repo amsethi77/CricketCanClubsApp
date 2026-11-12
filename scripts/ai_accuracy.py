@@ -30,6 +30,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "app"))
 os.chdir(ROOT)
+# the app's uploads stop a read after ~200 s (Azure's request limit); this script can wait longer for the best model
+os.environ.setdefault("AI_READ_BUDGET_SECONDS", "900")
 
 
 def norm(value) -> str:

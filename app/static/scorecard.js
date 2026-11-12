@@ -349,10 +349,14 @@
       <input data-f="name" placeholder="Batter" value="${escapeHtml(row.name || "")}" data-orig="${escapeHtml(row.name || "")}" aria-label="Batter name" />
       <select data-f="how" aria-label="How out">${HOW_OUT.map((h) => `<option value="${h}"${h === d.how ? " selected" : ""}>${h || "How out"}</option>`).join("")}</select>
       <input data-f="bowler" placeholder="Bowler" value="${escapeHtml(d.bowler)}" aria-label="Bowler" />
-      <input data-f="runs" type="number" min="0" inputmode="numeric" placeholder="R" value="${isBlank(row.runs) ? "" : row.runs}" aria-label="Runs" />
-      <input data-f="balls" type="number" min="0" inputmode="numeric" placeholder="B" value="${isBlank(row.balls) ? "" : row.balls}" aria-label="Balls" />
-      <input data-f="fours" type="number" min="0" inputmode="numeric" placeholder="4s" value="${isBlank(row.fours) ? "" : row.fours}" aria-label="Fours" />
-      <input data-f="sixes" type="number" min="0" inputmode="numeric" placeholder="6s" value="${isBlank(row.sixes) ? "" : row.sixes}" aria-label="Sixes" />
+      <label class="sce-num"><span>R</span><input data-f="runs" type="number" min="0" inputmode="numeric" placeholder="R" value="${isBlank(row.runs) ? "" : row.runs}" aria-label="Runs" /></label>
+      <label class="sce-num"><span>B</span><input data-f="balls" type="number" min="0" inputmode="numeric" placeholder="B" value="${isBlank(row.balls) ? "" : row.balls}" aria-label="Balls" /></label>
+      <label class="sce-num"><span>4s</span><input data-f="fours" type="number" min="0" inputmode="numeric" placeholder="4s" value="${isBlank(row.fours) ? "" : row.fours}" aria-label="Fours" /></label>
+      <label class="sce-num"><span>6s</span><input data-f="sixes" type="number" min="0" inputmode="numeric" placeholder="6s" value="${isBlank(row.sixes) ? "" : row.sixes}" aria-label="Sixes" /></label>
+      <label class="sce-num"><span>0s</span><input data-f="dots" type="number" min="0" inputmode="numeric" placeholder="0s" value="${isBlank(row.dots) ? "" : row.dots}" aria-label="Dot balls" /></label>
+      <label class="sce-num"><span>1s</span><input data-f="ones" type="number" min="0" inputmode="numeric" placeholder="1s" value="${isBlank(row.ones) ? "" : row.ones}" aria-label="Ones" /></label>
+      <label class="sce-num"><span>2s</span><input data-f="twos" type="number" min="0" inputmode="numeric" placeholder="2s" value="${isBlank(row.twos) ? "" : row.twos}" aria-label="Twos" /></label>
+      <label class="sce-num"><span>3s</span><input data-f="threes" type="number" min="0" inputmode="numeric" placeholder="3s" value="${isBlank(row.threes) ? "" : row.threes}" aria-label="Threes" /></label>
       <button type="button" class="sce-x" data-sce="remove" aria-label="Remove row">✕</button>
     </div>`;
   }
@@ -360,10 +364,12 @@
   function bowlRow(row = {}) {
     return `<div class="sce-row sce-bowl">
       <input data-f="name" placeholder="Bowler" value="${escapeHtml(row.name || "")}" data-orig="${escapeHtml(row.name || "")}" aria-label="Bowler name" />
-      <input data-f="overs" inputmode="decimal" placeholder="Overs" value="${isBlank(row.overs) ? "" : escapeHtml(row.overs)}" aria-label="Overs" />
-      <input data-f="maidens" type="number" min="0" inputmode="numeric" placeholder="M" value="${isBlank(row.maidens) ? "" : row.maidens}" aria-label="Maidens" />
-      <input data-f="runs" type="number" min="0" inputmode="numeric" placeholder="R" value="${isBlank(row.runs) ? "" : row.runs}" aria-label="Runs given" />
-      <input data-f="wickets" type="number" min="0" max="10" inputmode="numeric" placeholder="W" value="${isBlank(row.wickets) ? "" : row.wickets}" aria-label="Wickets" />
+      <label class="sce-num"><span>O</span><input data-f="overs" inputmode="decimal" placeholder="Overs" value="${isBlank(row.overs) ? "" : escapeHtml(row.overs)}" aria-label="Overs" /></label>
+      <label class="sce-num"><span>M</span><input data-f="maidens" type="number" min="0" inputmode="numeric" placeholder="M" value="${isBlank(row.maidens) ? "" : row.maidens}" aria-label="Maidens" /></label>
+      <label class="sce-num"><span>R</span><input data-f="runs" type="number" min="0" inputmode="numeric" placeholder="R" value="${isBlank(row.runs) ? "" : row.runs}" aria-label="Runs given" /></label>
+      <label class="sce-num"><span>W</span><input data-f="wickets" type="number" min="0" max="10" inputmode="numeric" placeholder="W" value="${isBlank(row.wickets) ? "" : row.wickets}" aria-label="Wickets" /></label>
+      <label class="sce-num"><span>Wd</span><input data-f="wides" type="number" min="0" inputmode="numeric" placeholder="Wd" value="${isBlank(row.wides) ? "" : row.wides}" aria-label="Wides" /></label>
+      <label class="sce-num"><span>Nb</span><input data-f="no_balls" type="number" min="0" inputmode="numeric" placeholder="Nb" value="${isBlank(row.no_balls) ? "" : row.no_balls}" aria-label="No balls" /></label>
       <button type="button" class="sce-x" data-sce="remove" aria-label="Remove row">✕</button>
     </div>`;
   }
@@ -381,16 +387,28 @@
         <label>Overs <input data-t="overs" inputmode="decimal" value="${isBlank(inn.overs) ? "" : escapeHtml(inn.overs)}" /></label>
         <label>Extras <input data-t="extras" type="number" min="0" inputmode="numeric" value="${isBlank(inn.extras) ? "" : inn.extras}" /></label>
       </div>
+      <div class="sce-totals sce-extras">
+        ${[["wides", "Wides"], ["no_balls", "No balls"], ["byes", "Byes"], ["leg_byes", "Leg byes"]]
+          .map(([key, label]) => `<label>${label} <input data-x="${key}" type="number" min="0" inputmode="numeric" value="${isBlank((inn.extras_parts || {})[key]) ? "" : inn.extras_parts[key]}" /></label>`)
+          .join("")}
+      </div>
       <p class="sce-sum" data-sce-sum></p>
       <h4>Batting</h4>
-      <div class="sce-head sce-bat"><span>Batter</span><span>How out</span><span>Bowler</span><span>R</span><span>B</span><span>4s</span><span>6s</span><span></span></div>
+      <div class="sce-head sce-bat"><span>Batter</span><span>How out</span><span>Bowler</span><span>R</span><span>B</span><span>4s</span><span>6s</span><span>0s</span><span>1s</span><span>2s</span><span>3s</span><span></span></div>
       <div data-rows="bat">${batting.map(batRow).join("")}</div>
       <button type="button" class="sc-btn ghost" data-sce="add-bat">+ Add batter</button>
       <h4>Bowling <small>(the other team's bowlers)</small></h4>
-      <div class="sce-head sce-bowl"><span>Bowler</span><span>O</span><span>M</span><span>R</span><span>W</span><span></span></div>
+      <div class="sce-head sce-bowl"><span>Bowler</span><span>O</span><span>M</span><span>R</span><span>W</span><span>Wd</span><span>Nb</span><span></span></div>
       <div data-rows="bowl">${bowling.map(bowlRow).join("")}</div>
       <button type="button" class="sc-btn ghost" data-sce="add-bowl">+ Add bowler</button>
     </fieldset>`;
+  }
+
+  // Nov 12 2026 (Amit: "make it same as ai read"): the editor shows everything the AI reads - captains, man of the
+  // match, extras by kind, bowlers' wides / no balls - so saving an edit keeps the card as complete as the read
+  function capOf(sc, team) {
+    const same = (a, b) => String(a || "").trim().toLowerCase() === String(b || "").trim().toLowerCase();
+    return ((sc.captains || []).find((c) => same(c.team, team)) || {}).name || "";
   }
 
   let editorSwapped = false;
@@ -424,9 +442,17 @@
         <div class="sce-match">
           <label>Team batting first <input data-m="team1" value="${escapeHtml(teams[0])}" placeholder="e.g. Heartlake Cricket Club" required /></label>
           <label>Team batting second <input data-m="team2" value="${escapeHtml(teams[1])}" placeholder="Opponent team name" required /></label>
-          <label>Match date <input data-m="date" type="date" value="${escapeHtml(lastPreview && lastPreview.typed_in ? sc.date || "" : "")}" required /></label>
+          ${(() => {
+            const cardDate = /^\d{4}-\d{2}-\d{2}$/.test(String(sc.date || "")) ? sc.date : "";
+            const photoDate = !cardDate && lastPreview && /^\d{4}-\d{2}-\d{2}$/.test(String(lastPreview.photo_date || "")) ? lastPreview.photo_date : "";
+            return `<label>Match date ${photoDate ? "<small>(not on the card - this is the day the photo was taken, check it)</small>" : cardDate ? "" : "<small>(not on the card - enter it)</small>"}
+              <input data-m="date" type="date" value="${escapeHtml(cardDate || photoDate)}" required /></label>`;
+          })()}
           <label>Venue <input data-m="venue" value="${escapeHtml(sc.venue || "")}" placeholder="Ground" /></label>
           <label>Overs per side <input data-m="overs" type="number" min="1" inputmode="numeric" value="${escapeHtml(sc.overs_limit || "")}" /></label>
+          <label>Captain - team batting first <input data-m="cap1" value="${escapeHtml(capOf(sc, teams[0]))}" placeholder="Captain" /></label>
+          <label>Captain - team batting second <input data-m="cap2" value="${escapeHtml(capOf(sc, teams[1]))}" placeholder="Captain" /></label>
+          <label>Man of the match <input data-m="mom" value="${escapeHtml(sc.man_of_match || "")}" placeholder="Player" /></label>
           <label>Result <input data-m="result" value="${escapeHtml(sc.result && !/review|not recorded|read the handwriting|pending/i.test(sc.result) ? sc.result : "")}" placeholder="e.g. Heartlake won by 20 runs" /></label>
         </div>
         ${innings.map((inn, i) => inningsEditor(inn, i, teams)).join("")}
@@ -529,8 +555,12 @@
           const name = row.querySelector('[data-f="name"]').value.trim();
           if (!name) return null;
           return {
-            ...kept(sourceRow(index, "batting", row.querySelector('[data-f="name"]').dataset.orig || name), ["dots", "ones", "twos", "threes"]),
             player: { name, normalized_name: name.toLowerCase(), member_id: null },
+            // Nov 12 2026 (Amit: "1s, 2s missing" in Edit): 0s / 1s / 2s / 3s are typed in the form now
+            dots: fieldNum(row.querySelector('[data-f="dots"]')),
+            ones: fieldNum(row.querySelector('[data-f="ones"]')),
+            twos: fieldNum(row.querySelector('[data-f="twos"]')),
+            threes: fieldNum(row.querySelector('[data-f="threes"]')),
             runs: fieldNum(row.querySelector('[data-f="runs"]')),
             balls: fieldNum(row.querySelector('[data-f="balls"]')),
             fours: fieldNum(row.querySelector('[data-f="fours"]')),
@@ -546,7 +576,9 @@
           if (!name) return null;
           const overs = row.querySelector('[data-f="overs"]').value.trim();
           return {
-            ...kept(sourceRow(index, "bowling", row.querySelector('[data-f="name"]').dataset.orig || name), ["over_runs", "dots", "wides", "no_balls", "fours", "sixes"]),
+            ...kept(sourceRow(index, "bowling", row.querySelector('[data-f="name"]').dataset.orig || name), ["over_runs", "dots", "fours", "sixes"]),
+            wides: fieldNum(row.querySelector('[data-f="wides"]')),
+            no_balls: fieldNum(row.querySelector('[data-f="no_balls"]')),
             player: { name, normalized_name: name.toLowerCase() },
             overs: overs === "" ? null : Number(overs),
             maidens: fieldNum(row.querySelector('[data-f="maidens"]')),
@@ -564,7 +596,13 @@
         summary: { runs: fieldNum(box.querySelector('[data-t="runs"]')), wickets: fieldNum(box.querySelector('[data-t="wickets"]')), overs: overs === "" ? null : Number(overs), balls: null },
         batting,
         bowling,
-        extras: { wides: null, no_balls: null, byes: null, leg_byes: null, penalties: null, total: fieldNum(box.querySelector('[data-t="extras"]')) },
+        extras: (() => {
+          const part = (key) => fieldNum(box.querySelector(`[data-x="${key}"]`));
+          const parts = { wides: part("wides"), no_balls: part("no_balls"), byes: part("byes"), leg_byes: part("leg_byes") };
+          const typed = fieldNum(box.querySelector('[data-t="extras"]'));
+          const sum = Object.values(parts).reduce((total, value) => total + (value || 0), 0);
+          return { ...parts, penalties: null, total: typed ?? (Object.values(parts).some((value) => value !== null) ? sum : null) };
+        })(),
       };
     });
     return {
@@ -576,13 +614,8 @@
         venue: val('[data-m="venue"]') || null,
         teams: { team_1: team1, team_2: team2 },
         overs_limit: fieldNum(form.querySelector('[data-m="overs"]')),
-        captains: (() => {
-          const caps = (lastPreview && lastPreview.scorecard && lastPreview.scorecard.captains) || [];
-          const same = (a, b) => String(a || "").trim().toLowerCase() === String(b || "").trim().toLowerCase();
-          const pick = (team) => (caps.find((c) => same(c.team, team)) || {}).name || null;
-          return { team_1: pick(team1), team_2: pick(team2) };
-        })(),
-        man_of_match: (lastPreview && lastPreview.scorecard && lastPreview.scorecard.man_of_match) || null,
+        captains: { team_1: val('[data-m="cap1"]') || null, team_2: val('[data-m="cap2"]') || null },
+        man_of_match: val('[data-m="mom"]') || null,
       },
       innings,
       validation: { inning_1_total: innings[0]?.summary.runs ?? null, inning_2_total: innings[1]?.summary.runs ?? null, expected_result: val('[data-m="result"]'), is_consistent: null, notes: "Typed in on the scorecard page." },
@@ -590,6 +623,12 @@
   }
 
   document.addEventListener("input", (event) => {
+    const part = event.target.closest("#scEditor [data-x]");
+    if (part) {
+      const box = part.closest("[data-innings]");
+      const values = Array.from(box.querySelectorAll("[data-x]")).map((el) => fieldNum(el));
+      if (values.some((value) => value !== null)) box.querySelector('[data-t="extras"]').value = values.reduce((total, value) => total + (value || 0), 0);
+    }
     if (event.target.closest("#scEditor")) updateSums();
   });
 
