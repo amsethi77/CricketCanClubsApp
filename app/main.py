@@ -17318,21 +17318,30 @@ def delete_archive(upload_id: str, published: bool = False, x_auth_token: str | 
 # ---------------------------------------------------------------------------
 # Database backups (Amit, Nov 5 2026: "We need a backup plan for the DB, once we go live we cannot afford to
 # lose the data"). README "Database backups".
-#   * a verified copy of the live SQLite file is made at start-up and every BACKUP_EVERY_HOURS (default 6),
+#   * a verified copy of the live SQLite file is made every BACKUP_EVERY_HOURS (default 24 since Nov 12), compressed,
 #     with SQLite's own backup API (safe while the app is running), checked with PRAGMA integrity_check, and
 #     kept in BACKUP_DIR (Azure: next to the live file on /home, which survives restarts and deploys)
-#   * kept: the newest 48 copies + one per day for 30 days
+#   * kept: the last BACKUP_KEEP_DAYS days (default 3 since Nov 12; the newest copy is always kept)
 #   * optional off-site copy: set CRICKETCLUBAPP_BACKUP_BLOB_SAS to an Azure Blob container SAS URL and every
 #     backup is also uploaded there (survives even if the App Service storage is lost)
 #   * the live file is checked at start-up; if it is damaged, site admins are told straight away
 #   * superadmin page /admin/backups: list, "Back up now", download any copy
 # ---------------------------------------------------------------------------
 BACKUP_DIR = Path(os.getenv("CRICKETCLUBAPP_BACKUP_DIR", str(DATABASE_FILE.parent / "backups")))
-BACKUP_EVERY_HOURS = max(1.0, float(os.getenv("CRICKETCLUBAPP_BACKUP_EVERY_HOURS", "6") or 6))
-BACKUP_KEEP_RECENT = 48
-BACKUP_KEEP_DAYS = 30
+# Nov 12 2026 (Amit: "Azure mount volume is full" - "reduce the frequency on daily basis from 6 hours", "keep just
+# last 3 days"): one backup a day, only the last 3 days kept, and every copy is compressed (.db.gz, 51 MB -> ~3 MB).
+BACKUP_EVERY_HOURS = max(1.0, float(os.getenv("CRICKETCLUBAPP_BACKUP_EVERY_HOURS", "24") or 24))
+BACKUP_KEEP_DAYS = max(1, int(os.getenv("CRICKETCLUBAPP_BACKUP_KEEP_DAYS", "3") or 3))
 _BACKUP_LOCK = threading.Lock()
-_BACKUP_NAME_RE = re.compile(r"^cricketclubapp-\d{8}T\d{6}Z-[a-z0-9-]{1,30}\.db$")
+_BACKUP_NAME_RE = re.compile(r"^cricketclubapp-\d{8}T\d{6}Z-[a-z0-9-]{1,30}\.db(\.gz)?$")
+
+
+def _backup_files() -> list[Path]:
+    """Kept backups, newest first (compressed .db.gz and older uncompressed .db)."""
+    if not BACKUP_DIR.exists():
+        return []
+    files = [item for item in BACKUP_DIR.iterdir() if item.is_file() and _BACKUP_NAME_RE.match(item.name)]
+    return sorted(files, key=lambda item: item.name, reverse=True)
 
 
 def _database_is_healthy(path: Path) -> tuple[bool, str]:
@@ -17371,22 +17380,31 @@ def _upload_backup_offsite(path: Path) -> str:
         return f"off-site upload failed ({exc.__class__.__name__})"
 
 
-def _prune_backups() -> None:
-    files = sorted(BACKUP_DIR.glob("cricketclubapp-*.db"), key=lambda item: item.name, reverse=True)
-    keep: set[str] = {item.name for item in files[:BACKUP_KEEP_RECENT]}
-    days_seen: set[str] = set()
-    cutoff = (datetime.utcnow() - timedelta(days=BACKUP_KEEP_DAYS)).strftime("%Y%m%d")
-    for item in files:
-        day = item.name.split("-")[1][:8]
-        if day >= cutoff and day not in days_seen:
-            days_seen.add(day)
-            keep.add(item.name)
-    for item in files:
-        if item.name not in keep:
+def _prune_backups() -> int:
+    """Delete backups older than BACKUP_KEEP_DAYS days (the newest one is always kept), and leftover .partial files.
+    Returns the bytes freed."""
+    files = _backup_files()
+    cutoff = (datetime.utcnow() - timedelta(days=BACKUP_KEEP_DAYS)).strftime("%Y%m%dT%H%M%S")
+    freed = 0
+    for index, item in enumerate(files):
+        stamp = item.name.split("-")[1][:15]
+        if index > 0 and stamp < cutoff:
             try:
+                size = item.stat().st_size
                 item.unlink()
+                freed += size
             except OSError:
                 logger.warning("Couldn't remove old backup %s", item.name)
+    if BACKUP_DIR.exists():
+        for leftover in BACKUP_DIR.glob("*.partial*"):
+            try:
+                freed += leftover.stat().st_size
+                leftover.unlink()
+            except OSError:
+                pass
+    if freed:
+        logger.info("Old database backups removed: %.1f MB freed", freed / 1e6)
+    return freed
 
 
 def make_database_backup(reason: str = "scheduled") -> dict[str, Any]:
@@ -17398,6 +17416,17 @@ def make_database_backup(reason: str = "scheduled") -> dict[str, Any]:
         BACKUP_DIR.mkdir(parents=True, exist_ok=True)
         if not DATABASE_FILE.exists():
             return {"ok": False, "error": "no database file yet"}
+        _prune_backups()  # free space first
+        try:
+            import shutil as shutil_module
+
+            free = shutil_module.disk_usage(BACKUP_DIR).free
+            if free < DATABASE_FILE.stat().st_size * 2 + 50 * 1024 * 1024:
+                logger.error("Backup skipped: only %.0f MB free on the disk.", free / 1e6)
+                _notify_site_admins("system", "Disk nearly full: backup skipped", f"Only {free // (1024 * 1024)} MB free. Delete old files from the Azure storage.", "/admin/backups")
+                return {"ok": False, "error": f"only {free // (1024 * 1024)} MB free on the disk"}
+        except OSError:
+            pass
         name = f"cricketclubapp-{datetime.utcnow().strftime('%Y%m%dT%H%M%SZ')}-{reason}.db"
         target = BACKUP_DIR / name
         partial = BACKUP_DIR / (name + ".partial")
@@ -17417,7 +17446,16 @@ def make_database_backup(reason: str = "scheduled") -> dict[str, Any]:
             logger.error("Backup NOT kept: the copy failed its check (%s). The live database may be damaged.", detail)
             _notify_site_admins("system", "Database backup failed its check", f"The copy didn't pass the integrity check: {detail}. Check the live database now.", "/admin/backups")
             return {"ok": False, "error": f"copy failed its check: {detail}"}
-        partial.replace(target)
+        # compressed: a 51 MB database is a ~3 MB backup
+        import gzip
+        import shutil as shutil_module
+
+        target = BACKUP_DIR / (name + ".gz")
+        with partial.open("rb") as source, gzip.open(str(target) + ".partial", "wb", compresslevel=6) as packed:
+            shutil_module.copyfileobj(source, packed, 1024 * 1024)
+        Path(str(target) + ".partial").replace(target)
+        partial.unlink(missing_ok=True)
+        name = target.name
         offsite = _upload_backup_offsite(target)
         _prune_backups()
         logger.info("Database backup %s (%s bytes). %s", name, target.stat().st_size, offsite or "Off-site copy uploaded.")
@@ -17430,10 +17468,8 @@ def make_database_backup(reason: str = "scheduled") -> dict[str, Any]:
 
 
 def _list_database_backups() -> list[dict[str, Any]]:
-    if not BACKUP_DIR.exists():
-        return []
     rows = []
-    for item in sorted(BACKUP_DIR.glob("cricketclubapp-*.db"), key=lambda path: path.name, reverse=True):
+    for item in _backup_files():
         stat = item.stat()
         rows.append({"file": item.name, "bytes": stat.st_size, "created_at": datetime.utcfromtimestamp(stat.st_mtime).strftime("%Y-%m-%dT%H:%M:%SZ")})
     return rows
@@ -17448,7 +17484,12 @@ def _backup_loop() -> None:
                 logger.error("The live database failed its start-up check: %s", detail)
                 _notify_site_admins("system", "The database failed its start-up check", f"{detail}. Restore the newest good copy from /admin/backups (README 'Database backups').", "/admin/backups")
             else:
-                make_database_backup("startup")
+                _prune_backups()
+                # a restart doesn't need a new copy when there is one from the last BACKUP_EVERY_HOURS
+                newest = next(iter(_backup_files()), None)
+                fresh = newest is not None and (time_module.time() - newest.stat().st_mtime) < BACKUP_EVERY_HOURS * 3600
+                if not fresh:
+                    make_database_backup("startup")
     except Exception:
         logger.exception("Start-up database check failed")
     while True:
@@ -17488,7 +17529,7 @@ def admin_backup_download(file_name: str, request: Request, x_auth_token: str | 
     path = BACKUP_DIR / file_name
     if not path.is_file():
         raise HTTPException(status_code=404, detail="Backup not found.")
-    return FileResponse(path, media_type="application/octet-stream", filename=file_name)
+    return FileResponse(path, media_type="application/gzip" if file_name.endswith(".gz") else "application/octet-stream", filename=file_name)
 
 
 @app.get("/admin/backups")
@@ -17524,7 +17565,7 @@ button {{ min-height: 44px; padding: 0 16px; border-radius: 12px; border: 0; bac
 <h1>Database backups</h1>
 <section class="card">
 <p>Live database: <span class="{'ok' if healthy else 'bad'}">{'healthy' if healthy else 'DAMAGED: ' + html.escape(detail)}</span></p>
-<p>Automatic backups: at start-up and every {BACKUP_EVERY_HOURS:g} hours, each one checked before it is kept. Kept: newest {BACKUP_KEEP_RECENT} + one per day for {BACKUP_KEEP_DAYS} days.</p>
+<p>Automatic backups: once every {BACKUP_EVERY_HOURS:g} hours, each one checked and compressed (.db.gz). Kept: the last {BACKUP_KEEP_DAYS} days. To restore one: unzip the .db.gz (7-Zip on Windows) and put the .db in place of the live file while the app is stopped.</p>
 <p>Off-site copy: {html.escape(offsite)}</p>
 <button type="button" id="backupNow">Back up now</button> <span id="backupMsg" role="status"></span>
 </section>
