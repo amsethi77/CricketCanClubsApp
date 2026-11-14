@@ -602,3 +602,25 @@ body[data-dashboard-widget="overview"] .home-strip-row.is-grouped {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
+
+/* Nov 14 2026: current weather under the greeting (app.js showHeroWeather) */
+.hero-weather {
+  display: inline-flex;
+  width: fit-content;
+  align-self: flex-start;
+  justify-self: start;
+  align-items: center;
+  gap: 4px;
+  margin: 2px 0 10px;
+  padding: 4px 12px;
+  border-radius: 999px;
+  background: #eef4ff;
+  border: 1px solid #d6e4ff;
+  color: #1e3a8a !important;
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.hero-weather[hidden] {
+  display: none;
+}

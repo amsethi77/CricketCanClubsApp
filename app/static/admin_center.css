@@ -1,0 +1,805 @@
+/* Admin Center look (Nov 13 2026, Amit: "We need to revamp the admin center ... look and feel needs improvement").
+   Loaded only on /admin-center, after the shared styles. acx- = page frame, acm- = Clubs section (admin_clubs.js). */
+.acx-page {
+  --acx-ink: #0f1f38;
+  --acx-muted: #5c6f8a;
+  --acx-line: #e3e9f2;
+  --acx-soft: #f4f7fb;
+  --acx-blue: #1f6fe5;
+  --acx-blue-soft: #e6f0ff;
+  --acx-red: #c62839;
+  --acx-green: #18824c;
+  --acx-radius: 16px;
+  background: linear-gradient(180deg, #eef3fa 0, #f7f9fc 340px);
+}
+
+.acx-page .acx-shell {
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+  padding: 0;
+  display: grid;
+  gap: 18px;
+}
+
+.acx-hero {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  gap: 16px;
+  flex-wrap: wrap;
+  padding: 26px 28px;
+  border-radius: 20px;
+  color: #fff;
+  background: radial-gradient(120% 140% at 100% 0, #2f7cf0 0, #163a7a 48%, #0d2147 100%);
+  box-shadow: 0 18px 40px rgba(13, 33, 71, 0.22);
+}
+
+.acx-page .acx-hero h1 {
+  max-width: none;
+  color: #fff;
+  font-size: clamp(1.5rem, 3.4vw, 2.2rem);
+  background: none;
+  -webkit-text-fill-color: #fff;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+  margin: 4px 0 6px;
+  font-size: clamp(1.5rem, 3.4vw, 2.2rem);
+  line-height: 1.15;
+  color: #fff;
+}
+
+.acx-kicker {
+  margin: 0;
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.72);
+}
+
+.acx-lede {
+  margin: 0;
+  max-width: 62ch;
+  color: rgba(255, 255, 255, 0.85);
+}
+
+.acx-hero .admin-role-badge {
+  background: rgba(255, 255, 255, 0.14);
+  color: #fff;
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  border-radius: 999px;
+  padding: 6px 14px;
+  font-weight: 600;
+}
+
+/* tabs: one scrollable row of pills */
+.acx-page .admin-section-nav {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 6px;
+  overflow-x: auto;
+  padding: 6px;
+  margin: 0;
+  background: #fff;
+  border: 1px solid var(--acx-line);
+  border-radius: 999px;
+  box-shadow: 0 6px 18px rgba(15, 31, 56, 0.06);
+  scrollbar-width: none;
+  position: sticky;
+  top: 8px;
+  z-index: 5;
+}
+
+.acx-page .admin-section-nav::-webkit-scrollbar {
+  display: none;
+}
+
+.acx-page .admin-section-nav button,
+.acx-page .admin-section-nav .secondary-button {
+  flex: 0 0 auto;
+  border: 0;
+  background: transparent;
+  color: var(--acx-muted);
+  border-radius: 999px;
+  padding: 9px 16px;
+  font-weight: 600;
+  box-shadow: none;
+  min-height: 0;
+  white-space: nowrap;
+}
+
+.acx-page .admin-section-nav .secondary-button:hover {
+  background: var(--acx-soft);
+  color: var(--acx-ink);
+}
+
+.acx-page .admin-section-nav .secondary-button.is-active {
+  background: var(--acx-blue);
+  color: #fff;
+  box-shadow: 0 6px 14px rgba(31, 111, 229, 0.3);
+}
+
+.acx-page .detail-stack {
+  gap: 18px;
+}
+
+.acx-page .admin-section > .stack-card,
+.acx-page .admin-section .stack-card {
+  background: #fff;
+  border: 1px solid var(--acx-line);
+  border-radius: var(--acx-radius);
+  box-shadow: 0 8px 24px rgba(15, 31, 56, 0.05);
+}
+
+.acx-page .section-kicker {
+  color: var(--acx-blue);
+  letter-spacing: 0.08em;
+}
+
+.acx-page .status-banner {
+  border-radius: 12px;
+}
+
+/* ---------- Clubs section ---------- */
+.acm {
+  display: grid;
+  gap: 16px;
+}
+
+.acm-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.5fr) minmax(300px, 1fr);
+  gap: 18px;
+  align-items: start;
+}
+
+@media (max-width: 960px) {
+  .acm-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.acm-card {
+  background: #fff;
+  border: 1px solid var(--acx-line, #e3e9f2);
+  border-radius: 16px;
+  padding: 18px;
+  box-shadow: 0 8px 24px rgba(15, 31, 56, 0.05);
+  min-width: 0;
+}
+
+.acm-merge {
+  position: sticky;
+  top: 72px;
+}
+
+@media (max-width: 960px) {
+  .acm-merge {
+    position: static;
+  }
+}
+
+.acm-card-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+
+.acm-card-head h2 {
+  margin: 2px 0 0;
+  font-size: 1.2rem;
+  color: var(--acx-ink, #0f1f38);
+}
+
+.acm-kicker {
+  margin: 0;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--acx-blue, #1f6fe5);
+}
+
+.acm-search {
+  flex: 1 1 220px;
+  max-width: 320px;
+  border: 1px solid var(--acx-line, #e3e9f2);
+  border-radius: 999px;
+  padding: 9px 14px;
+  background: var(--acx-soft, #f4f7fb);
+  font: inherit;
+}
+
+.acm-list {
+  display: grid;
+  gap: 8px;
+  max-height: 70vh;
+  overflow-y: auto;
+  padding-right: 2px;
+}
+
+.acm-club {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 8px 14px;
+  align-items: center;
+  padding: 12px 14px;
+  border: 1px solid var(--acx-line, #e3e9f2);
+  border-radius: 12px;
+  background: #fff;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.acm-club:hover {
+  border-color: #c9d6ea;
+  box-shadow: 0 4px 12px rgba(15, 31, 56, 0.06);
+}
+
+.acm-club.is-mine {
+  border-color: #b9d2fb;
+  background: linear-gradient(90deg, var(--acx-blue-soft, #e6f0ff) 0, #fff 60%);
+}
+
+@media (max-width: 640px) {
+  .acm-club {
+    grid-template-columns: 1fr;
+  }
+}
+
+.acm-club-main {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  min-width: 0;
+}
+
+.acm-club-main strong {
+  color: var(--acx-ink, #0f1f38);
+}
+
+.acm-club-main small {
+  display: block;
+  color: var(--acx-muted, #5c6f8a);
+}
+
+.acm-avatar {
+  flex: 0 0 40px;
+  height: 40px;
+  border-radius: 12px;
+  display: grid;
+  place-items: center;
+  font-weight: 800;
+  font-size: 0.85rem;
+  color: #fff;
+  background: linear-gradient(135deg, #2f7cf0, #163a7a);
+}
+
+.acm-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 4px;
+}
+
+.acm-chip {
+  display: inline-block;
+  font-size: 0.72rem;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--acx-soft, #f4f7fb);
+  border: 1px solid var(--acx-line, #e3e9f2);
+  color: var(--acx-muted, #5c6f8a);
+}
+
+.acm-chip.is-off {
+  background: #fdecee;
+  border-color: #f6c7cd;
+  color: var(--acx-red, #c62839);
+}
+
+.acm-club-stats {
+  display: flex;
+  gap: 12px;
+  font-size: 0.82rem;
+  color: var(--acx-muted, #5c6f8a);
+  white-space: nowrap;
+}
+
+.acm-club-stats b {
+  color: var(--acx-ink, #0f1f38);
+}
+
+.acm-club-actions {
+  display: flex;
+  gap: 6px;
+  justify-content: flex-end;
+}
+
+.acm-btn {
+  border: 1px solid #c9d6ea;
+  background: #fff;
+  color: var(--acx-ink, #0f1f38);
+  border-radius: 10px;
+  padding: 7px 12px;
+  font: inherit;
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.acm-btn:hover {
+  background: var(--acx-soft, #f4f7fb);
+}
+
+.acm-btn.is-ghost {
+  border-color: transparent;
+  color: var(--acx-blue, #1f6fe5);
+}
+
+.acm-btn.is-primary {
+  background: var(--acx-blue, #1f6fe5);
+  border-color: var(--acx-blue, #1f6fe5);
+  color: #fff;
+}
+
+.acm-btn.is-danger {
+  background: var(--acx-red, #c62839);
+  border-color: var(--acx-red, #c62839);
+  color: #fff;
+}
+
+.acm-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.acm-edit {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 10px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--acx-line, #e3e9f2);
+}
+
+.acm-edit[hidden] {
+  display: none;
+}
+
+.acm-edit label,
+.acm-merge-pick label,
+.acm-confirm label {
+  display: grid;
+  gap: 4px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--acx-muted, #5c6f8a);
+}
+
+.acm-edit input,
+.acm-merge-pick select,
+.acm-confirm input {
+  border: 1px solid #cfd9e8;
+  border-radius: 10px;
+  padding: 9px 11px;
+  font: inherit;
+  color: var(--acx-ink, #0f1f38);
+  background: #fff;
+  min-width: 0;
+  width: 100%;
+}
+
+.acm-edit-actions {
+  display: flex;
+  gap: 6px;
+  align-items: end;
+}
+
+.acm-edit .acm-note,
+.acm-edit .acm-msg {
+  grid-column: 1 / -1;
+}
+
+.acm-help,
+.acm-note {
+  margin: 0 0 12px;
+  color: var(--acx-muted, #5c6f8a);
+  font-size: 0.88rem;
+}
+
+.acm-note {
+  font-size: 0.8rem;
+  margin: 8px 0 0;
+}
+
+.acm-merge-pick {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  gap: 8px;
+  align-items: end;
+}
+
+@media (max-width: 480px) {
+  .acm-merge-pick {
+    grid-template-columns: 1fr;
+  }
+
+  .acm-arrow {
+    transform: rotate(90deg);
+    justify-self: center;
+  }
+}
+
+.acm-arrow {
+  font-size: 1.3rem;
+  color: var(--acx-blue, #1f6fe5);
+  padding-bottom: 8px;
+}
+
+.acm-compare {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin: 14px 0 10px;
+}
+
+.acm-side {
+  border-radius: 12px;
+  padding: 10px 12px;
+  background: #fdf1f2;
+  border: 1px solid #f6d3d8;
+}
+
+.acm-side.is-stays {
+  background: #eaf7f0;
+  border-color: #c3e8d3;
+}
+
+.acm-side strong {
+  display: block;
+  color: var(--acx-ink, #0f1f38);
+}
+
+.acm-side small {
+  color: var(--acx-muted, #5c6f8a);
+}
+
+.acm-facts {
+  margin: 0 0 12px;
+  padding-left: 18px;
+  font-size: 0.86rem;
+  color: var(--acx-ink, #0f1f38);
+  display: grid;
+  gap: 4px;
+}
+
+.acm-facts .is-warn {
+  color: #8a5300;
+}
+
+.acm-name-choice {
+  border: 1px solid var(--acx-line, #e3e9f2);
+  border-radius: 12px;
+  padding: 10px 12px;
+  margin: 0 0 12px;
+  display: grid;
+  gap: 6px;
+}
+
+.acm-name-choice legend {
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: var(--acx-muted, #5c6f8a);
+  padding: 0 4px;
+}
+
+.acm-name-choice label {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  cursor: pointer;
+}
+
+.acm-name-choice small {
+  color: var(--acx-muted, #5c6f8a);
+}
+
+.acm-confirm {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px;
+  align-items: end;
+}
+
+.acm-msg {
+  margin: 8px 0 0;
+  font-size: 0.86rem;
+  color: var(--acx-muted, #5c6f8a);
+}
+
+.acm-msg:empty {
+  display: none;
+}
+
+.acm-msg.is-error {
+  color: var(--acx-red, #c62839);
+}
+
+.acm-flash {
+  margin: 0;
+  padding: 12px 14px;
+  border-radius: 12px;
+  font-weight: 600;
+}
+
+.acm-flash.is-success {
+  background: #eaf7f0;
+  color: var(--acx-green, #18824c);
+  border: 1px solid #c3e8d3;
+}
+
+.acm-empty {
+  color: var(--acx-muted, #5c6f8a);
+  margin: 8px 0;
+}
+
+.acm-name-choice input[type="radio"] {
+  width: auto;
+  min-width: 0;
+  margin: 0;
+  flex: 0 0 auto;
+}
+
+.acm-name-choice label {
+  justify-content: flex-start;
+  text-align: left;
+}
+
+.acm-confirm label > span {
+  display: block;
+}
+
+/* the shared styles (sports-system.css / app_polish.css) force h1 sizes and button looks with !important */
+body.acx-page .page-shell .acx-hero h1 {
+  font-size: clamp(1.5rem, 3.4vw, 2.2rem) !important;
+  line-height: 1.15 !important;
+  color: #fff !important;
+}
+
+body.acx-page .page-shell .admin-section-nav .secondary-button {
+  border: 0 !important;
+  border-radius: 999px !important;
+  background: transparent !important;
+  color: var(--acx-muted) !important;
+  box-shadow: none !important;
+}
+
+body.acx-page .page-shell .admin-section-nav .secondary-button:hover {
+  background: var(--acx-soft) !important;
+  color: var(--acx-ink) !important;
+}
+
+body.acx-page .page-shell .admin-section-nav .secondary-button.is-active {
+  background: var(--acx-blue) !important;
+  color: #fff !important;
+  box-shadow: 0 6px 14px rgba(31, 111, 229, 0.3) !important;
+}
+
+/* ---------- Nov 13 2026 (Amit: "improve the look and feel of admin center, make it more better") ---------- */
+.acx-hero {
+  position: relative;
+  overflow: hidden;
+}
+
+.acx-hero::after {
+  content: "";
+  position: absolute;
+  right: -60px;
+  top: -80px;
+  width: 280px;
+  height: 280px;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(255, 255, 255, 0.16), transparent 70%);
+  pointer-events: none;
+}
+
+.acx-stats {
+  flex: 1 0 100%;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.acx-stat {
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 14px;
+  padding: 10px 14px;
+  backdrop-filter: blur(4px);
+}
+
+.acx-stat strong {
+  display: block;
+  font-size: 1.45rem;
+  font-weight: 800;
+  line-height: 1.1;
+  color: #fff;
+}
+
+.acx-stat span {
+  font-size: 0.78rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.72);
+}
+
+.acx-tab-icon {
+  margin-right: 6px;
+  font-size: 1rem;
+}
+
+/* section cards: one clean white card, no boxes inside boxes */
+body.acx-page .page-shell .admin-section .stack-card {
+  padding: 22px;
+}
+
+body.acx-page .page-shell .admin-section .stack-card .stack-card,
+body.acx-page .page-shell .admin-section .detail-card {
+  background: var(--acx-soft);
+  border: 1px solid var(--acx-line);
+  border-radius: 12px;
+  box-shadow: none;
+}
+
+body.acx-page .page-shell .admin-section .section-kicker {
+  color: var(--acx-blue) !important;
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+}
+
+body.acx-page .page-shell .admin-section h2 {
+  font-size: 1.3rem !important;
+  color: var(--acx-ink);
+}
+
+body.acx-page .page-shell .admin-section .lede {
+  max-width: 75ch;
+  color: var(--acx-muted);
+  font-size: 0.92rem;
+}
+
+/* number tiles (Overview, Visitors): big numbers, small labels */
+body.acx-page .page-shell .admin-section .summary-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 12px;
+}
+
+body.acx-page .page-shell .admin-section .summary-card {
+  background: #fff;
+  border: 1px solid var(--acx-line);
+  border-left: 4px solid var(--acx-blue);
+  border-radius: 12px;
+  padding: 14px 16px;
+  box-shadow: 0 4px 12px rgba(15, 31, 56, 0.04);
+}
+
+body.acx-page .page-shell .admin-section .summary-card span {
+  display: block;
+  font-size: 0.74rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--acx-muted);
+}
+
+body.acx-page .page-shell .admin-section .summary-card strong {
+  display: block;
+  margin-top: 4px;
+  font-size: 1.7rem;
+  font-weight: 800;
+  line-height: 1.15;
+  color: var(--acx-ink);
+}
+
+body.acx-page .page-shell .admin-section .summary-card p {
+  margin: 2px 0 0;
+  font-size: 0.82rem;
+  color: var(--acx-muted);
+}
+
+/* inputs, selects and buttons inside the sections */
+body.acx-page .page-shell .admin-section input:not([type="checkbox"]):not([type="radio"]),
+body.acx-page .page-shell .admin-section select,
+body.acx-page .page-shell .admin-section textarea {
+  border: 1px solid #cfd9e8;
+  border-radius: 10px;
+  background: #fff;
+}
+
+body.acx-page .page-shell .admin-section input:focus,
+body.acx-page .page-shell .admin-section select:focus,
+body.acx-page .page-shell .admin-section textarea:focus {
+  outline: 2px solid rgba(31, 111, 229, 0.25);
+  border-color: var(--acx-blue);
+}
+
+body.acx-page .page-shell .admin-section .secondary-button {
+  border-radius: 10px !important;
+}
+
+body.acx-page .page-shell .admin-section .primary-button {
+  border-radius: 10px !important;
+}
+
+body.acx-page .page-shell .admin-section .empty-state {
+  padding: 18px;
+  text-align: center;
+  color: var(--acx-muted);
+  background: var(--acx-soft);
+  border: 1px dashed var(--acx-line);
+  border-radius: 12px;
+}
+
+/* photo storage numbers */
+.acx-photo-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 10px;
+  margin: 12px 0 14px;
+}
+
+.acx-photo-stats > div {
+  background: var(--acx-soft);
+  border: 1px solid var(--acx-line);
+  border-radius: 12px;
+  padding: 10px 14px;
+}
+
+.acx-photo-stats strong {
+  display: block;
+  font-size: 1.35rem;
+  font-weight: 800;
+  color: var(--acx-ink);
+}
+
+.acx-photo-stats span {
+  font-size: 0.8rem;
+  color: var(--acx-muted);
+}
+
+body.acx-page .page-shell .admin-section .stack-card + .stack-card {
+  margin-top: 16px;
+}
+
+@media (max-width: 640px) {
+  .acx-hero {
+    padding: 20px;
+  }
+
+  .acx-stat strong {
+    font-size: 1.15rem;
+  }
+}
+
+@media (min-width: 900px) {
+  .acx-page .admin-section-nav {
+    flex-wrap: wrap;
+    border-radius: 18px;
+  }
+}
+
+body.acx-page .page-shell .admin-section #adminClubStats .summary-card:first-child strong {
+  font-size: 1.15rem;
+}
+
+body.acx-page .page-shell .admin-section .primary-button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}

@@ -102,14 +102,15 @@ document.addEventListener("DOMContentLoaded", () => {
 
       const roles = (data.roles || []).filter((r) => r.role_name);
 
-      if (roleSelect) {
+      if (roleSelect && roles.length) {
+        const picked = roleSelect.value; // the page already shows Player / Captain / Club admin: keep the choice
         roleSelect.innerHTML = optionMarkup(
           roles,
           "role_name",
           (r) => r.display_name || r.role_name
         );
-
-        if (!roleSelect.value) roleSelect.value = "player";
+        roleSelect.value = roles.some((r) => r.role_name === picked) ? picked : "player";
+        if (typeof syncRoleVisibility === "function") syncRoleVisibility();
       }
 
     } catch (error) {

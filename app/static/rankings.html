@@ -15,6 +15,13 @@
     <link rel="stylesheet" href="/assets/styles.css?v=20261111tablealign" />
     <link rel="stylesheet" href="/assets/live.css?v=20261030m" />
     <link rel="stylesheet" href="/assets/sports-system.css?v=20261030m" />
+      <style>
+      /* Nov 14 2026: the signed-in player's own row */
+      .rankings-me td { background: #fff4d6; font-weight: 700; }
+      .rankings-you { display: inline-block; margin-left: 6px; padding: 1px 8px; border-radius: 999px; background: #d32f2f; color: #fff; font-size: 0.72rem; font-weight: 700; vertical-align: middle; }
+      .rankings-gap td { text-align: center; color: #8a94a6; padding: 2px; }
+      .rankings-note { margin: 8px 0 0; color: #5f7491; font-size: 0.86rem; }
+    </style>
   </head>
   <body class="public-rankings-page">
     <main class="fixtures-shell">
@@ -26,14 +33,14 @@
             <div>
               <p class="section-kicker sports-subtitle">Rankings</p>
               <h1 class="fixtures-title sports-title">League leaders</h1>
-              <p class="lede">Public batting, bowling, and club standings from the current season.</p>
+              <p class="lede" id="rankingsLede">Top 10 batters and bowlers of all clubs in the latest season.</p>
             </div>
           </div>
           <div class="summary-grid fixtures-summary-grid">
             <article class="summary-card stat-card"><span>Batting</span><strong id="rankingsBattingCount">--</strong></article>
             <article class="summary-card stat-card"><span>Bowling</span><strong id="rankingsBowlingCount">--</strong></article>
             <article class="summary-card stat-card"><span>Clubs</span><strong id="rankingsClubCount">--</strong></article>
-            <article class="summary-card stat-card"><span>Mode</span><strong>Public</strong></article>
+            <article class="summary-card stat-card"><span>Season</span><strong id="rankingsSeason">--</strong></article>
           </div>
         </div>
       </section>
@@ -80,6 +87,6 @@
     </main>
     <script src="/assets/public_header.js?v=20261115a"></script>
     <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
-    <script src="/assets/rankings.js?v=20261115a"></script>
+    <script src="/assets/rankings.js?v=20261118a"></script>
   </body>
 </html>

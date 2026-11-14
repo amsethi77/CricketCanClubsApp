@@ -284,12 +284,41 @@ function syncClubBadge(clubName) {
   `;
 }
 
+// Nov 14 2026 (Amit): the weather of the club's city under the greeting ("Good morning -2°C ❄️ Snow · Brampton").
+// The server asks Open-Meteo at most every 20 minutes per city; nothing shows if it can't be reached.
+let heroWeatherFor = "";
+function showHeroWeather(city, country) {
+  const title = elements.heroGreetingTitle;
+  if (!title) return;
+  let line = document.getElementById("heroWeather");
+  if (!line) {
+    line = document.createElement("p");
+    line.id = "heroWeather";
+    line.className = "hero-weather";
+    line.hidden = true;
+    title.insertAdjacentElement("afterend", line);
+  }
+  const key = `${city}|${country}`;
+  if (heroWeatherFor === key) return;
+  heroWeatherFor = key;
+  fetch(`/api/weather?city=${encodeURIComponent(city)}&country=${encodeURIComponent(country)}`, { headers: { Accept: "application/json" } })
+    .then((response) => (response.ok ? response.json() : null))
+    .then((weather) => {
+      if (!weather || !weather.ok || heroWeatherFor !== key) return;
+      line.textContent = `${weather.temperature}${weather.unit} ${weather.icon} ${weather.text} · ${weather.city}`;
+      line.title = `Current weather in ${weather.city} (Open-Meteo)`;
+      line.hidden = false;
+    })
+    .catch(() => null);
+}
+
 function syncAdminOnlyElements(user = state.viewerAuth?.user || state.dashboard?.user || null) {
   const role = String(user?.effective_role || user?.role || "").trim();
   const isAdmin = role === "superadmin";
   document.querySelectorAll("[data-admin-only]").forEach((node) => {
-    node.hidden = !isAdmin;
-    if (isAdmin) {
+    const show = isAdmin || (role === "club_admin" && node.getAttribute("href") === "/admin-center");
+    node.hidden = !show;
+    if (show) {
       node.removeAttribute("aria-hidden");
     } else {
       node.setAttribute("aria-hidden", "true");
@@ -2907,6 +2936,7 @@ function renderViewerProfile(dashboard) {
     const greeting = hour < 12 ? "Good morning" : hour < 17 ? "Good afternoon" : "Good evening";
     const firstName = String(viewerName || "").trim().split(/\s+/)[0];
     elements.heroGreetingTitle.textContent = firstName && firstName !== "Captain" ? `${greeting}, ${firstName}` : greeting;
+    showHeroWeather(focusClub.city || dashboard.club?.city || "", focusClub.country || dashboard.club?.country || "");
   }
   syncClubBadge(clubName);
   syncUserBadge(dashboard?.user || state.viewerAuth?.user || null);

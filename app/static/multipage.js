@@ -537,7 +537,8 @@ function syncHeaderAdminLinks(user) {
   const role = String(user?.effective_role || user?.role || "").trim();
   const isAdmin = role === "superadmin";
   document.querySelectorAll(".shared-topbar-host [data-admin-only]").forEach((node) => {
-    node.hidden = !isAdmin;
+    // Nov 13 2026: club admins also get the Admin Center link (their club's management only)
+    node.hidden = !(isAdmin || (role === "club_admin" && node.getAttribute("href") === "/admin-center"));
   });
   syncPlanNav(user);
   scheduleSignedInNavFit();
@@ -723,7 +724,7 @@ let signedInAccountMenuReady = false;
 
 function isAdminUser() {
   const role = String(signedInMenuUser?.effective_role || signedInMenuUser?.role || "").trim();
-  if (role) return role === "superadmin";
+  if (role) return role === "superadmin" || role === "club_admin"; // Nov 13 2026: club admins manage their club there
   const adminLink = document.querySelector('.shared-topbar-host .top-nav a[href="/admin-center"]');
   return Boolean(adminLink && !adminLink.hidden);
 }
@@ -1005,7 +1006,7 @@ async function syncAdminOnlyElements() {
     const role = String(auth?.user?.effective_role || auth?.user?.role || "").trim();
     const isAdmin = role === "superadmin";
     nodes.forEach((node) => {
-      if (isAdmin) {
+      if (isAdmin || (role === "club_admin" && node.getAttribute("href") === "/admin-center")) {
         node.hidden = false;
         node.removeAttribute("aria-hidden");
       } else {

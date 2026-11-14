@@ -79,7 +79,7 @@
                 <legend><span class="rg-num">2</span> Your role</legend>
                 <label class="si-field rg-full" for="registerRole">
                   <span class="si-label">I am a…</span>
-                  <select id="registerRole" class="rg-select"><option value="">Loading roles...</option></select>
+                  <select id="registerRole" class="rg-select"><option value="player" selected>Player</option><option value="captain">Captain</option><option value="club_admin">Club admin</option></select>
                   <span class="si-hint rg-hint">Each club can have up to two club admins.</span>
                 </label>
               </fieldset>
@@ -92,7 +92,7 @@
                 </label>
                 <label class="si-field rg-full" for="registerClub">
                   <span class="si-label">Club</span>
-                  <select id="registerClub" class="rg-select"></select>
+                  <select id="registerClub" class="rg-select"><option value="">Loading clubs...</option></select>
                 </label>
                 <div id="registerMemberRow" class="wide rg-full">
                   <label class="si-field" for="registerPlayerId">
@@ -149,26 +149,8 @@
       })();
     </script>
     <script src="/assets/public_header.js?v=20261115a"></script>
-    <script src="/assets/multipage.js?v=20261115a"></script>
-    <script>
-      // Inline fallback: populate `#registerRole` if external JS fails or is stale
-      (async function populateRolesFallback() {
-        try {
-          const sel = document.getElementById('registerRole');
-          if (!sel) return;
-          // If roles already populated, skip
-          if (sel.options && sel.options.length > 1) return;
-          const resp = await fetch('/api/auth/options');
-          if (!resp.ok) return;
-          const data = await resp.json();
-          const roles = (data.roles || []).filter((r) => r.role_name);
-          sel.innerHTML = roles.map((r) => `<option value="${r.role_name}">${r.display_name || r.role_name}</option>`).join('');
-          if (!sel.value) sel.value = 'player';
-        } catch (e) {
-          console.warn('roles fallback failed', e);
-        }
-      })();
-    </script>
-    <script src="/assets/register.js?v=20261115a"></script>
+    <script src="/assets/multipage.js?v=20261117a"></script>
+    <!-- Nov 14 2026: the roles are written in the page (no "Loading roles..."); register.js loads clubs and players once -->
+    <script src="/assets/register.js?v=20261118a"></script>
   </body>
 </html>

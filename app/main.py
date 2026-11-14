@@ -8,6 +8,7 @@ import re
 import secrets
 import sqlite3
 import shutil
+import sys
 import threading
 import time as time_module
 import httpx
@@ -1055,19 +1056,6 @@ def _clubs_page_html(request: Request, search: str = "", focus_club_id: str = ""
                 <div id="clubsSearchSummary" class="clubs-search-summary">{html.escape(summary)}</div>
                 <div id="clubsList" class="clubs-tiles" data-server-rendered="true">{cards}</div>
               </section>
-              <!-- Nov 10 2026 (Amit): club admins edit their club's name, city and country -->
-              <section id="clubSettingsCard" class="clubs-section" hidden>
-                <div class="pm-subhead"><h2>Your club's details</h2></div>
-                <p class="pm-info">Club admins can change the club's name, city and country. The old name keeps working for old scorecards.</p>
-                <form id="clubSettingsForm" class="clubs-search">
-                  <input id="clubSettingsName" type="text" required maxlength="80" placeholder="Club name" aria-label="Club name" />
-                  <input id="clubSettingsShort" type="text" maxlength="40" placeholder="Short name, e.g. Heartlake" aria-label="Short name" />
-                  <input id="clubSettingsCity" type="text" maxlength="80" placeholder="City, e.g. Brampton" aria-label="City" />
-                  <input id="clubSettingsCountry" type="text" maxlength="80" placeholder="Country, e.g. Canada" aria-label="Country" />
-                  <button class="primary-button" type="submit">Save club details</button>
-                </form>
-                <p id="clubSettingsMsg" class="pm-info" role="status"></p>
-              </section>
               <section class="clubs-section">
                 <div class="pm-subhead"><h2>Player snapshot</h2></div>
                 <div class="clubs-player">
@@ -1158,8 +1146,8 @@ def _clubs_page_html(request: Request, search: str = "", focus_club_id: str = ""
             </div>
           </main>
         </div>
-        <script src="/assets/multipage.js?v=20261115a"></script>
-        <script src="/assets/clubs.js?v=20261115a"></script>
+        <script src="/assets/multipage.js?v=20261117a"></script>
+        <script src="/assets/clubs.js?v=20261117a"></script>
       </body>
     </html>
     """
@@ -1863,6 +1851,9 @@ def _selected_club(store: dict[str, Any], focus_club_id: str | None = None) -> d
         ),
         None,
     )
+    if not club and requested:
+        merged_into = _merged_club_target(requested)
+        club = next((item for item in store.get("clubs", []) if str(item.get("id") or "").strip() == merged_into), None) if merged_into else None
 
     if not club:
         logger.warning("Club not found. Fallback club used.")
@@ -4573,6 +4564,145 @@ def _public_live_page_payload(store: dict[str, Any]) -> dict[str, Any]:
 _SIGNIN_STATS_CACHE: tuple[str, dict[str, Any]] | None = None
 
 
+# ---------------------------------------------------------------------------------------------------------------
+# Rankings page (Nov 14 2026, Amit): signed out -> top 10 batters and bowlers of all clubs for the latest season;
+# signed in -> the same top 10 + the player's own rank (11 rows when he is not in the top 10). The season is the
+# latest calendar year with a played match, so it starts again with the first match of the new year (until then
+# last year's table stays up instead of an empty one). README "Rankings".
+# ---------------------------------------------------------------------------------------------------------------
+_RANKINGS_CACHE: dict[str, Any] = {"key": None, "payload": None}
+
+
+def _season_rankings(store: dict[str, Any]) -> dict[str, Any]:
+    key = str(store.get("_cache_signature") or "")
+    if key and _RANKINGS_CACHE["key"] == key:
+        return _RANKINGS_CACHE["payload"]
+    this_year = datetime.now(ZoneInfo(APP_TIMEZONE)).year
+    rows = [row for row in store.get("member_year_stats", []) or [] if isinstance(row, dict) and int(row.get("matches") or 0) > 0]
+    years = sorted({int(str(row.get("season_year"))) for row in rows if str(row.get("season_year") or "").isdigit() and int(str(row.get("season_year"))) <= this_year})
+    season = years[-1] if years else this_year
+    season_rows = [row for row in rows if str(row.get("season_year") or "") == str(season)]
+
+    def name(row: dict[str, Any]) -> str:
+        return str(row.get("player_name") or row.get("full_name") or "Player")
+
+    batting = sorted(
+        (row for row in season_rows if int(row.get("runs") or 0) > 0),
+        key=lambda row: (-int(row.get("runs") or 0), -float(row.get("batting_average") or 0), int(row.get("matches") or 0), name(row).casefold()),
+    )
+    bowling = sorted(
+        (row for row in season_rows if int(row.get("wickets") or 0) > 0),
+        key=lambda row: (-int(row.get("wickets") or 0), int(row.get("matches") or 0), name(row).casefold()),
+    )
+
+    def bat(row: dict[str, Any], rank: int) -> dict[str, Any]:
+        return {"rank": rank, "member_id": row.get("member_id"), "player_name": name(row), "runs": int(row.get("runs") or 0),
+                "batting_average": float(row.get("batting_average") or 0), "strike_rate": float(row.get("strike_rate") or 0),
+                "highest_score": row.get("highest_score"), "matches": int(row.get("matches") or 0)}
+
+    def bowl(row: dict[str, Any], rank: int) -> dict[str, Any]:
+        matches = int(row.get("matches") or 0)
+        return {"rank": rank, "member_id": row.get("member_id"), "player_name": name(row), "wickets": int(row.get("wickets") or 0),
+                "wickets_per_match": round(int(row.get("wickets") or 0) / matches, 2) if matches else 0.0, "matches": matches}
+
+    payload = {
+        "season": str(season),
+        "batting": [bat(row, index + 1) for index, row in enumerate(batting)],
+        "bowling": [bowl(row, index + 1) for index, row in enumerate(bowling)],
+        "season_rows": {str(row.get("member_id")): row for row in season_rows},
+    }
+    if key:
+        _RANKINGS_CACHE.update({"key": key, "payload": payload})
+    return payload
+
+
+@app.get("/api/rankings")
+def rankings(request: Request, x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
+    store = load_store()
+    full = _season_rankings(store)
+    member_id = ""
+    token = _auth_token_from_request(request, x_auth_token)
+    if token:
+        try:
+            user_row, _ = _auth_user_from_token(token, touch=False)
+            member_id = str(user_row["member_id"] or "").strip()
+        except HTTPException:
+            member_id = ""
+
+    def top(kind: str) -> dict[str, Any]:
+        rows = full[kind]
+        shown = [dict(row, is_me=bool(member_id) and row["member_id"] == member_id) for row in rows[:10]]
+        me = None
+        if member_id:
+            mine = next((row for row in rows if row["member_id"] == member_id), None)
+            if mine is not None and mine["rank"] > 10:
+                me = dict(mine, is_me=True)
+            elif mine is None:
+                own = full["season_rows"].get(member_id) or {}
+                me = {"rank": None, "is_me": True, "member_id": member_id, "player_name": str(own.get("player_name") or "You"),
+                      "matches": int(own.get("matches") or 0), "runs": int(own.get("runs") or 0), "wickets": int(own.get("wickets") or 0),
+                      "batting_average": float(own.get("batting_average") or 0), "wickets_per_match": 0.0}
+        return {"top": [{k: v for k, v in row.items() if k != "member_id" or row.get("is_me")} for row in shown],
+                "me": me, "ranked_players": len(rows)}
+
+    return {"season": full["season"], "signed_in": bool(member_id) or bool(token), "linked_player": bool(member_id),
+            "batting": top("batting"), "bowling": top("bowling")}
+
+
+# ---------------------------------------------------------------------------------------------------------------
+# Weather under the Home greeting (Nov 14 2026, Amit: "Good Morning -2, ❄️"). Open-Meteo (free, no key): the club's
+# city is looked up once (geocoding) and the current weather is kept for 20 minutes per city, so the page never
+# waits on it and Open-Meteo is asked at most 3 times an hour per club city. README "Weather on Home".
+# ---------------------------------------------------------------------------------------------------------------
+_WEATHER_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
+_GEOCODE_CACHE: dict[str, tuple[float, float, str] | None] = {}
+_WMO_WEATHER = [
+    ((0,), "☀️", "🌙", "Clear"), ((1,), "🌤️", "🌙", "Mostly clear"), ((2,), "⛅", "☁️", "Partly cloudy"), ((3,), "☁️", "☁️", "Cloudy"),
+    ((45, 48), "🌫️", "🌫️", "Fog"), ((51, 53, 55, 56, 57), "🌦️", "🌧️", "Drizzle"), ((61, 63, 65, 66, 67, 80, 81, 82), "🌧️", "🌧️", "Rain"),
+    ((71, 73, 75, 77, 85, 86), "❄️", "❄️", "Snow"), ((95, 96, 99), "⛈️", "⛈️", "Thunderstorm"),
+]
+
+
+def _weather_label(code: int, is_day: bool) -> tuple[str, str]:
+    for codes, day_icon, night_icon, text in _WMO_WEATHER:
+        if code in codes:
+            return (day_icon if is_day else night_icon), text
+    return "🌡️", "Weather"
+
+
+@app.get("/api/weather")
+def current_weather(city: str = "", country: str = "") -> dict[str, Any]:
+    city = " ".join(str(city or "").split())[:60] or "Brampton"
+    country = " ".join(str(country or "").split())[:60]
+    key = f"{city}|{country}".casefold()
+    cached = _WEATHER_CACHE.get(key)
+    if cached and time_module.time() - cached[0] < 20 * 60:
+        return cached[1]
+    import httpx
+
+    try:
+        if key not in _GEOCODE_CACHE:
+            found = httpx.get("https://geocoding-api.open-meteo.com/v1/search", params={"name": city, "count": 5, "language": "en"}, timeout=6).json().get("results") or []
+            if country:
+                found = [item for item in found if normalize_name(str(item.get("country") or "")) == normalize_name(country) or normalize_name(str(item.get("country_code") or "")) == normalize_name(country)] or found
+            _GEOCODE_CACHE[key] = (float(found[0]["latitude"]), float(found[0]["longitude"]), str(found[0].get("name") or city)) if found else None
+        place = _GEOCODE_CACHE[key]
+        if place is None:
+            return {"ok": False, "error": f"Couldn't find {city} on the map."}
+        current = httpx.get(
+            "https://api.open-meteo.com/v1/forecast",
+            params={"latitude": place[0], "longitude": place[1], "current": "temperature_2m,weather_code,is_day", "timezone": "auto"},
+            timeout=6,
+        ).json().get("current") or {}
+        icon, text = _weather_label(int(current.get("weather_code") or 0), bool(current.get("is_day", 1)))
+        result = {"ok": True, "city": place[2], "temperature": round(float(current.get("temperature_2m"))), "unit": "°C", "icon": icon, "text": text}
+    except Exception as exc:
+        logger.warning("Weather lookup failed for %s: %s", city, exc)
+        result = {"ok": False, "error": "Weather is not available right now."}
+    _WEATHER_CACHE[key] = (time_module.time() if result.get("ok") else time_module.time() - 15 * 60, result)  # retry a failure after 5 min
+    return result
+
+
 @app.get("/api/public/signin-stats")
 def public_signin_stats() -> dict[str, Any]:
     # Leaders only change when the store changes, so they are cached against the store's signature.
@@ -6867,7 +6997,10 @@ def live_match_stats_page(match_id: str) -> RedirectResponse:
 def _admin_center_html(request: Request) -> HTMLResponse:
     user_row, current_club_id = _auth_user_from_token(_auth_token_from_request(request))
     if _effective_role_name(user_row, current_club_id) != "superadmin":
-        raise HTTPException(status_code=403, detail="Only superadmin can open the admin center.")
+        # Nov 13 2026 (Amit): club admins open the Admin Center too, but only to manage their own club
+        if _managed_club_ids(user_row, load_store()):
+            return _club_admin_center_html()
+        raise HTTPException(status_code=403, detail="Only club admins and the superadmin can open the admin center.")
     store = load_store()
     selected_club_id = str(request.query_params.get("club_id") or current_club_id or "").strip()
     club = _selected_club(store, selected_club_id)
@@ -7152,31 +7285,45 @@ def _admin_center_html(request: Request) -> HTMLResponse:
         <link rel="stylesheet" href="/assets/app_polish.css?v=20261006a" />
         <link rel="stylesheet" href="/assets/sports-system.css?v=20260926a" />
         <link rel="stylesheet" href="/assets/scorecards.css?v=20261116b" />
+        <link rel="stylesheet" href="/assets/admin_center.css?v=20261117b" />
       </head>
-      <body>
+      <body class="acx-page">
         <div class="page-shell">
           <header class="page-topbar"></header>
-          <section class="panel onboarding-panel">
-            <div class="stack-card">
-              <p class="section-kicker">Admin center</p>
-              <h1>{html.escape(club.get('name', 'Selected club'))} control room</h1>
+          <section class="panel onboarding-panel acx-shell">
+            <div class="acx-hero">
+              <div>
+                <p class="acx-kicker">Admin Center · Superadmin</p>
+                <h1>{html.escape(club.get('name', 'Selected club'))}</h1>
+                <p class="acx-lede">Clubs, scorecards, visitors, name matches, audit history and fixtures - pick a section below.</p>
+              </div>
               <div id="adminRoleBadge" class="hero-badge admin-role-badge">Loading role...</div>
-              <p class="lede">Manage a club, then use the section menu to open visitor analytics, scorecards, archives, audit history, or fixtures.</p>
-              <div id="adminCenterStatus" class="status-banner {notice_tone}"{" hidden" if not notice else ""}>{notice}</div>
+              <div class="acx-stats">
+                <div class="acx-stat"><strong>{len(store.get("clubs") or [])}</strong><span>clubs</span></div>
+                <div class="acx-stat"><strong>{len(store.get("members") or [])}</strong><span>players</span></div>
+                <div class="acx-stat"><strong>{len(store.get("archive_uploads") or [])}</strong><span>scorecards</span></div>
+                <div class="acx-stat"><strong>{len(store.get("fixtures") or [])}</strong><span>fixtures</span></div>
+                <div class="acx-stat"><strong>{sum(item.stat().st_size for item in _photo_files()) / 1048576:.0f} MB</strong><span>photos</span></div>
+              </div>
             </div>
+            <div id="adminCenterStatus" class="status-banner {notice_tone}"{" hidden" if not notice else ""}>{notice}</div>
 
             <div class="detail-stack">
               <nav class="admin-section-nav" aria-label="Admin Center sections" role="tablist">
-                <button class="secondary-button is-active" type="button" role="tab" aria-selected="true" aria-controls="adminSectionClubMaintenance" data-admin-section="club-maintenance">Club Maintenance</button>
-                <button class="secondary-button" type="button" role="tab" aria-selected="false" aria-controls="adminSectionOverview" data-admin-section="overview">Overview</button>
-                <button class="secondary-button" type="button" role="tab" aria-selected="false" aria-controls="adminSectionVisitors" data-admin-section="visitors">Unique Visitors</button>
-                <button class="secondary-button" type="button" role="tab" aria-selected="false" aria-controls="adminSectionScorecards" data-admin-section="scorecards">Scorecard Tools</button>
-                <button class="secondary-button" type="button" role="tab" aria-selected="false" aria-controls="adminSectionArchives" data-admin-section="archives">Archives</button>
-                <button class="secondary-button" type="button" role="tab" aria-selected="false" aria-controls="adminSectionNameMatches" data-admin-section="name-matches">Name Matches</button>
-                <button class="secondary-button" type="button" role="tab" aria-selected="false" aria-controls="adminSectionAudit" data-admin-section="audit">Audit Log</button>
-                <button class="secondary-button" type="button" role="tab" aria-selected="false" aria-controls="adminSectionFixtures" data-admin-section="fixtures">Fixtures</button>
+                <button class="secondary-button is-active" type="button" role="tab" aria-selected="true" aria-controls="adminSectionClubs" data-admin-section="clubs"><span class="acx-tab-icon" aria-hidden="true">🏏</span>Clubs</button>
+                <button class="secondary-button" type="button" role="tab" aria-selected="false" aria-controls="adminSectionClubMaintenance" data-admin-section="club-maintenance"><span class="acx-tab-icon" aria-hidden="true">🛡️</span>Disable / delete</button>
+                <button class="secondary-button" type="button" role="tab" aria-selected="false" aria-controls="adminSectionOverview" data-admin-section="overview"><span class="acx-tab-icon" aria-hidden="true">📊</span>Overview</button>
+                <button class="secondary-button" type="button" role="tab" aria-selected="false" aria-controls="adminSectionVisitors" data-admin-section="visitors"><span class="acx-tab-icon" aria-hidden="true">👥</span>Visitors</button>
+                <button class="secondary-button" type="button" role="tab" aria-selected="false" aria-controls="adminSectionScorecards" data-admin-section="scorecards"><span class="acx-tab-icon" aria-hidden="true">🧰</span>Scorecard tools</button>
+                <button class="secondary-button" type="button" role="tab" aria-selected="false" aria-controls="adminSectionArchives" data-admin-section="archives"><span class="acx-tab-icon" aria-hidden="true">🗂️</span>Archives</button>
+                <button class="secondary-button" type="button" role="tab" aria-selected="false" aria-controls="adminSectionNameMatches" data-admin-section="name-matches"><span class="acx-tab-icon" aria-hidden="true">🔗</span>Name matches</button>
+                <button class="secondary-button" type="button" role="tab" aria-selected="false" aria-controls="adminSectionAudit" data-admin-section="audit"><span class="acx-tab-icon" aria-hidden="true">🕘</span>Audit log</button>
+                <button class="secondary-button" type="button" role="tab" aria-selected="false" aria-controls="adminSectionFixtures" data-admin-section="fixtures"><span class="acx-tab-icon" aria-hidden="true">📅</span>Fixtures</button>
               </nav>
-              <section class="admin-section" id="adminSectionClubMaintenance" data-admin-section-panel="club-maintenance" role="tabpanel">
+              <section class="admin-section" id="adminSectionClubs" data-admin-section-panel="clubs" role="tabpanel">
+                <div id="clubManager" class="acm" data-superadmin="1"><p class="acm-empty">Loading clubs...</p></div>
+              </section>
+              <section class="admin-section" id="adminSectionClubMaintenance" data-admin-section-panel="club-maintenance" role="tabpanel" hidden>
                 <div class="stack-card admin-controls-panel">
                   <div class="panel-head compact-head"><div><p class="section-kicker">Club Maintenance</p><h2>Manage clubs and rosters</h2></div></div>
                   <p class="lede">Superadmin only. Disable a club to preserve its history while blocking member access, re-enable it later, or permanently delete it.</p>
@@ -7225,6 +7372,18 @@ def _admin_center_html(request: Request) -> HTMLResponse:
                 <label style="display:flex;gap:10px;align-items:flex-start;margin:6px 0"><input type="checkbox" id="adminRereadProblems" style="width:auto;margin-top:4px" /> Only cards with problems (runs or wickets don't add up, other team missing) - saves the free daily limit</label>
                 <div class="toolbar-actions"><button id="adminRereadButton" class="primary-button" type="button">🤖 Re-read all scorecards</button> <a class="secondary-button" href="/admin/backups">🗄️ Database backups</a></div>
                 <div id="adminRereadStatus" class="status-banner info" hidden></div>
+              </div>
+              <div class="stack-card" id="adminPhotoCard">
+                <div class="panel-head compact-head">
+                  <div>
+                    <p class="section-kicker">Storage</p>
+                    <h2>Make scorecard photos smaller</h2>
+                  </div>
+                </div>
+                <p class="lede">Phone photos are 4-9 MB each. This keeps every photo at most {PHOTO_MAX_EDGE} px wide (about 0.6-1 MB, handwriting still clear for the AI) - same file, same scorecard. New uploads are made smaller automatically after the AI reads them.</p>
+                <div class="acx-photo-stats" id="adminPhotoStats"><span>Checking photos...</span></div>
+                <div class="toolbar-actions"><button id="adminPhotoShrink" class="primary-button" type="button" disabled>🗜️ Make photos smaller</button></div>
+                <div id="adminPhotoStatus" class="status-banner info" hidden></div>
               </div>
               </section>
               <section class="admin-section" id="adminSectionArchives" data-admin-section-panel="archives" role="tabpanel" hidden>
@@ -7317,11 +7476,13 @@ def _admin_center_html(request: Request) -> HTMLResponse:
             </div>
           </section>
         </div>
-        <script src="/assets/multipage.js?v=20261115a"></script>
+        <script src="/assets/multipage.js?v=20261117a"></script>
         <script src="/assets/scorecard_view.js?v=20261115a"></script>
         <script src="/assets/scorecard.js?v=20261116b"></script>
-        <script src="/assets/admin_center.js?v=20261114a"></script>
+        <script src="/assets/admin_center.js?v=20261113b"></script>
         <script src="/assets/admin_reread.js?v=20261024a"></script>
+        <script src="/assets/admin_clubs.js?v=20261117b"></script>
+        <script src="/assets/admin_photos.js?v=20261117a"></script>
       </body>
     </html>
     """
@@ -7332,6 +7493,43 @@ def _admin_center_html(request: Request) -> HTMLResponse:
             "Pragma": "no-cache",
         },
     )
+
+
+def _club_admin_center_html() -> HTMLResponse:
+    """Admin Center for a club admin: only the management of his own club(s) (name, city, country, merging)."""
+    body = """<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, viewport-fit=cover" />
+    <script src="/assets/zoom_lock.js?v=20261014a"></script>
+    <title>Admin center · CricketClubApp</title>
+    <link rel="stylesheet" href="/assets/styles.css?v=20261111tablealign" />
+    <link rel="stylesheet" href="/assets/app_polish.css?v=20261006a" />
+    <link rel="stylesheet" href="/assets/sports-system.css?v=20260926a" />
+    <link rel="stylesheet" href="/assets/admin_center.css?v=20261117b" />
+  </head>
+  <body class="acx-page">
+    <div class="page-shell">
+      <header class="page-topbar"></header>
+      <section class="panel onboarding-panel acx-shell">
+        <div class="acx-hero">
+          <div>
+            <p class="acx-kicker">Admin Center · Club admin</p>
+            <h1>Your club</h1>
+            <p class="acx-lede">Change your club's name, city and country, or merge a duplicate club into yours. Everything else stays with the superadmin.</p>
+          </div>
+        </div>
+        <section class="admin-section" data-admin-section-panel="clubs">
+          <div id="clubManager" class="acm"><p class="acm-empty">Loading your club...</p></div>
+        </section>
+      </section>
+    </div>
+    <script src="/assets/multipage.js?v=20261117a"></script>
+    <script src="/assets/admin_clubs.js?v=20261117b"></script>
+  </body>
+</html>"""
+    return HTMLResponse(body, headers={"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0", "Pragma": "no-cache"})
 
 
 @app.get("/admin-center")
@@ -7752,14 +7950,31 @@ def dashboard(
     return dashboard_data
 
 
+_AUTH_OPTIONS_CACHE: dict[str, Any] = {"key": None, "payload": None, "registered_key": None}
+
+
 @app.get("/api/auth/options")
 def auth_options() -> dict[str, Any]:
+    """Roles, clubs and players for the Register page.
+    Nov 14 2026 (Dhruvika: "on registration loading roles and club is taking too much time"): this used to register
+    clubs from played games AND save (rebuilding every player's stats) inside the request - 14 s on Amit's data, more
+    on Azure, and the page asked twice. Now it only reads; the registering runs at start-up, when scorecards are
+    published, and in the background here when the data changed. The answer is kept until the data changes."""
     store = load_store()
-    if _register_played_fixture_teams(store):
-        try:
-            save_store(store)
-        except Exception:
-            logger.exception("Saving registered clubs and players failed")
+    key = str(store.get("_cache_signature") or "")
+    if key and _AUTH_OPTIONS_CACHE["registered_key"] != key:
+        _AUTH_OPTIONS_CACHE["registered_key"] = key
+        _register_played_teams_in_background()  # one run at a time; saves only if it adds a club or player
+    # kept at most a minute: which players are already linked to an account lives in the accounts table
+    if key and _AUTH_OPTIONS_CACHE["key"] == key and _AUTH_OPTIONS_CACHE["payload"] is not None and time_module.time() - _AUTH_OPTIONS_CACHE.get("at", 0) < 60:
+        return _AUTH_OPTIONS_CACHE["payload"]
+    payload = _auth_options_payload(store)
+    if key:
+        _AUTH_OPTIONS_CACHE.update({"key": key, "payload": payload, "at": time_module.time()})
+    return payload
+
+
+def _auth_options_payload(store: dict[str, Any]) -> dict[str, Any]:
     linked_member_ids: set[str] = set()
     linked_member_name_keys: set[str] = set()
     with _auth_connection() as connection:
@@ -9207,6 +9422,7 @@ def create_season_fixture(request: SeasonFixtureRequest, x_auth_token: str | Non
         _link_match_to_league(str(request.league_id).strip(), f"f:{new_fixture['id']}", _league_actor(user_row))
     if request.notify:
         _announce_new_fixture(new_fixture)
+        _whatsapp_fixture_alert(new_fixture)  # Nov 14 2026: WhatsApp to every player of the club (when set up)
     return season_setup_data(x_auth_token, str(club.get("id") or ""))
 
 
@@ -10697,11 +10913,14 @@ def export_database(x_auth_token: str | None = Header(default=None)) -> FileResp
     # A complete snapshot (including changes still in the -wal file), deleted after it is sent.
     snapshot = DATABASE_FILE.with_name(f"{DATABASE_FILE.stem}.export-{uuid.uuid4().hex[:8]}{DATABASE_FILE.suffix}")
     _sqlite_copy(DATABASE_FILE, snapshot)
+    # Nov 14 2026 (Amit: "zip the backup db file so that it takes less space"): the download is gzip-compressed
+    # (51 MB -> ~4 MB); import takes the .db.gz as it is.
+    packed = _gzip_file(snapshot)
     return FileResponse(
-        path=snapshot,
-        filename=DATABASE_FILE.name,
-        media_type="application/x-sqlite3",
-        background=BackgroundTask(lambda: snapshot.unlink(missing_ok=True)),
+        path=packed,
+        filename=f"{DATABASE_FILE.stem}-{datetime.utcnow().strftime('%Y%m%dT%H%M%SZ')}.db.gz",
+        media_type="application/gzip",
+        background=BackgroundTask(lambda: packed.unlink(missing_ok=True)),
     )
 
 
@@ -10712,12 +10931,19 @@ async def import_database(
 ) -> dict[str, Any]:
     _require_superadmin(x_auth_token)
     filename = str(database.filename or "").strip().lower()
-    if not filename.endswith((".db", ".sqlite", ".sqlite3")):
-        raise HTTPException(status_code=400, detail="Upload a SQLite database file.")
+    if not filename.endswith((".db", ".sqlite", ".sqlite3", ".db.gz", ".gz")):
+        raise HTTPException(status_code=400, detail="Upload a SQLite database file (.db or a compressed .db.gz backup).")
 
     payload = await database.read()
     if not payload:
         raise HTTPException(status_code=400, detail="Uploaded database file is empty.")
+    if payload[:2] == b"\x1f\x8b":  # a compressed backup / export
+        import gzip
+
+        try:
+            payload = gzip.decompress(payload)
+        except OSError as exc:
+            raise HTTPException(status_code=400, detail=f"The .gz file couldn't be unzipped: {exc}") from exc
 
     incoming_path = DATABASE_FILE.with_suffix(f"{DATABASE_FILE.suffix}.incoming")
     backup_path = _validated_database_backup_path()
@@ -10749,7 +10975,12 @@ async def import_database(
     try:
         old_version = 0
         if DATABASE_FILE.exists():
-            _sqlite_copy(DATABASE_FILE, backup_path)
+            # Nov 14 2026: the copy of the current data is a normal compressed backup in the backups folder
+            # (it used to be an uncompressed cricketclubapp.backup-<time>.db next to the live file, never removed)
+            saved = make_database_backup("before-import")
+            if not saved.get("ok"):
+                raise HTTPException(status_code=500, detail=f"Couldn't back up the current data first ({saved.get('error')}), so nothing was imported.")
+            backup_path = BACKUP_DIR / str(saved.get("file"))
             with sqlite3.connect(str(DATABASE_FILE), timeout=60) as live:
                 try:
                     row = live.execute("SELECT version FROM app_store_version WHERE id = 1").fetchone()
@@ -10771,7 +11002,8 @@ async def import_database(
         finally:
             live.close()
     finally:
-        incoming_path.unlink(missing_ok=True)
+        for leftover in (incoming_path, Path(str(incoming_path) + "-wal"), Path(str(incoming_path) + "-shm")):
+            leftover.unlink(missing_ok=True)
 
     refreshed_store = load_store()
     return {
@@ -11657,6 +11889,57 @@ def _can_edit_club(user_row: sqlite3.Row, club_id: str) -> bool:
     return base_role == "club_admin" and str(user_row["primary_club_id"] or "").strip() == str(club_id or "").strip()
 
 
+def _propagate_club_rename(store: dict[str, Any], club: dict[str, Any], old_keys: set[str]) -> None:
+    """Write the club's (new) name everywhere its old names were stored as text: player links, teams, fixtures,
+    scorecards. Used when a club is renamed and when two clubs are merged (Nov 13 2026)."""
+    club_id = str(club.get("id") or "")
+    new_name = str(club.get("name") or "")
+    short_name = str(club.get("short_name") or new_name)
+    old_keys = {key for key in old_keys if key} - {normalize_name(new_name)}
+
+    def fix(value: Any) -> Any:
+        return new_name if isinstance(value, str) and normalize_name(value) in old_keys else value
+
+    for member in store.get("members", []) or []:
+        for field in ("team_memberships", "club_memberships"):
+            for link in member.get(field) or []:
+                if isinstance(link, dict) and str(link.get("club_id") or "") == club_id:
+                    for key in ("club_name", "display_name"):
+                        if key in link:
+                            link[key] = new_name
+                    if "team_name" in link and normalize_name(str(link.get("team_name") or "")) in old_keys:
+                        link["team_name"] = short_name
+                    if isinstance(link.get("teams"), list):
+                        link["teams"] = list(dict.fromkeys(short_name if normalize_name(str(t)) in old_keys else t for t in link["teams"]))
+        if str(member.get("primary_club_id") or "") == club_id and member.get("primary_club_name"):
+            member["primary_club_name"] = new_name
+        if normalize_name(str(member.get("team_name") or "")) in old_keys:
+            member["team_name"] = short_name
+    for team in store.get("teams", []) or []:
+        if isinstance(team, dict) and str(team.get("club_id") or "") == club_id:
+            team["club_name"] = new_name
+            team["display_name"] = new_name
+            if normalize_name(str(team.get("name") or "")) in old_keys:
+                team["name"] = short_name
+    for fixture in store.get("fixtures", []) or []:
+        if not isinstance(fixture, dict):
+            continue
+        if str(fixture.get("club_id") or "") == club_id:
+            fixture["club_name"] = new_name
+        for key in ("opponent", "visiting_team"):
+            fixture[key] = fix(fixture.get(key))
+    for upload in store.get("archive_uploads", []) or []:
+        if not isinstance(upload, dict):
+            continue
+        if str(upload.get("club_id") or "") == club_id:
+            upload["club_name"] = new_name
+        names = upload.get("club_names")
+        if isinstance(names, list):
+            upload["club_names"] = list(dict.fromkeys(fix(name) for name in names))
+    if isinstance(store.get("club"), dict) and str(store["club"].get("id") or "") == club_id:
+        store["club"] = dict(club)
+
+
 @app.get("/api/clubs/{club_id}/settings")
 def club_settings(club_id: str, x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
     user_row, _ = _auth_user_from_token(x_auth_token)
@@ -11700,49 +11983,323 @@ def save_club_settings(club_id: str, request: ClubSettingsRequest, x_auth_token:
     club["country"] = " ".join(str(request.country or "").split())[:80]
     club["aliases"] = aliases
     if renamed:
-        old_keys = {normalize_name(old_name), normalize_name(old_short)} - {""}
-
-        def fix(value: Any) -> Any:
-            return new_name if isinstance(value, str) and normalize_name(value) in old_keys else value
-
-        for member in store.get("members", []) or []:
-            for field in ("team_memberships", "club_memberships"):
-                for link in member.get(field) or []:
-                    if isinstance(link, dict) and str(link.get("club_id") or "") == club_id:
-                        for key in ("club_name", "display_name"):
-                            if key in link:
-                                link[key] = new_name
-                        if "team_name" in link and normalize_name(str(link.get("team_name") or "")) in old_keys:
-                            link["team_name"] = club["short_name"]
-            if str(member.get("primary_club_id") or "") == club_id and member.get("primary_club_name"):
-                member["primary_club_name"] = new_name
-        for team in store.get("teams", []) or []:
-            if isinstance(team, dict) and str(team.get("club_id") or "") == club_id:
-                team["club_name"] = new_name
-                team["display_name"] = new_name
-                if normalize_name(str(team.get("name") or "")) in old_keys:
-                    team["name"] = club["short_name"]
-        for fixture in store.get("fixtures", []) or []:
-            if not isinstance(fixture, dict):
-                continue
-            if str(fixture.get("club_id") or "") == club_id:
-                fixture["club_name"] = new_name
-            for key in ("opponent", "visiting_team"):
-                fixture[key] = fix(fixture.get(key))
-        for upload in store.get("archive_uploads", []) or []:
-            if not isinstance(upload, dict):
-                continue
-            if str(upload.get("club_id") or "") == club_id:
-                upload["club_name"] = new_name
-            names = upload.get("club_names")
-            if isinstance(names, list):
-                upload["club_names"] = [fix(name) for name in names]
+        _propagate_club_rename(store, club, {normalize_name(old_name), normalize_name(old_short)})
     save_store(store)
     _audit_event("club.settings", "club", club_id, actor=user_row, club_id=club_id, club_name=new_name, details={"old_name": old_name, "name": new_name, "city": club["city"], "country": club["country"]}, source="api")
     return {
         "message": f"Saved. {'The club is now called ' + new_name + '; the old name still finds it.' if renamed else 'Club details updated.'}",
         "club": {key: club.get(key) or "" for key in ("id", "name", "short_name", "city", "country")},
         "aliases": aliases,
+    }
+
+
+# ---------------------------------------------------------------------------------------------------------------
+# Club management in the Admin Center (Nov 13 2026, Amit): club admins change their club's name/city/country or merge
+# another club into theirs; the superadmin can do this for every club. README "Club management and merging clubs".
+# ---------------------------------------------------------------------------------------------------------------
+
+
+def _club_admin_user_ids(club_id: str) -> set[int]:
+    with _auth_connection() as connection:
+        rows = connection.execute(
+            """
+            SELECT id AS user_id FROM app_users WHERE primary_club_id = ? AND role = 'club_admin'
+            UNION SELECT user_id FROM app_user_club_roles WHERE club_id = ? AND role_name = 'club_admin'
+            """,
+            (club_id, club_id),
+        ).fetchall()
+    return {int(row["user_id"]) for row in rows}
+
+
+def _managed_club_ids(user_row: sqlite3.Row, store: dict[str, Any]) -> list[str] | None:
+    """None = every club (superadmin); otherwise the ids of the clubs this user is a club admin of."""
+    if str(user_row["role"] or "").strip() == "superadmin":
+        return None
+    return [str(club.get("id") or "") for club in store.get("clubs", []) or [] if _can_edit_club(user_row, str(club.get("id") or ""))]
+
+
+def _club_member_ids(store: dict[str, Any], club: dict[str, Any]) -> set[str]:
+    return {str(member.get("id") or "") for member in store.get("members", []) or [] if member_in_club(member, str(club.get("id") or ""), str(club.get("name") or ""))}
+
+
+def _club_match_count(store: dict[str, Any], club: dict[str, Any]) -> int:
+    club_id = str(club.get("id") or "")
+    keys = _club_identity_keys(club)
+    count = 0
+    for upload in store.get("archive_uploads", []) or []:
+        ids = {str(upload.get("club_id") or ""), *(str(item) for item in _coerce_archive_string_list(upload.get("club_ids")))}
+        names = {normalize_name(str(item)) for item in _coerce_archive_string_list(upload.get("club_names"))}
+        if club_id in ids or names & keys:
+            count += 1
+    return count + sum(1 for fixture in store.get("fixtures", []) or [] if str(fixture.get("club_id") or "") == club_id and not fixture.get("archive_upload_id"))
+
+
+def _club_row(store: dict[str, Any], club: dict[str, Any]) -> dict[str, Any]:
+    club_id = str(club.get("id") or "")
+    return {
+        "id": club_id,
+        "name": club.get("name") or "",
+        "short_name": club.get("short_name") or "",
+        "city": club.get("city") or "",
+        "country": club.get("country") or "",
+        "aliases": [alias for alias in club.get("aliases") or [] if alias],
+        "players": len(_club_member_ids(store, club)),
+        "matches": _club_match_count(store, club),
+        "admins": len(_club_admin_user_ids(club_id)),
+        "disabled": bool(club.get("disabled")),
+    }
+
+
+@app.get("/api/admin/club-management")
+def club_management(x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
+    user_row, _ = _auth_user_from_token(x_auth_token)
+    store = load_store()
+    managed = _managed_club_ids(user_row, store)
+    if managed is not None and not managed:
+        raise HTTPException(status_code=403, detail="Only club admins and the superadmin can manage clubs.")
+    clubs = sorted((club for club in store.get("clubs", []) or [] if isinstance(club, dict)), key=lambda c: normalize_name(str(c.get("name") or "")))
+    return {
+        "is_superadmin": managed is None,
+        "managed_club_ids": managed if managed is not None else [str(c.get("id") or "") for c in clubs],
+        "clubs": [_club_row(store, club) for club in clubs],
+    }
+
+
+def _merge_permission(user_row: sqlite3.Row, source_id: str, target_id: str) -> None:
+    if str(user_row["role"] or "").strip() == "superadmin":
+        return
+    if not _can_edit_club(user_row, target_id):
+        raise HTTPException(status_code=403, detail="You can only merge a club into a club you are an admin of.")
+    other_admins = _club_admin_user_ids(source_id) - {int(user_row["id"])}
+    if other_admins and not _can_edit_club(user_row, source_id):
+        raise HTTPException(status_code=403, detail="That club has its own club admin. Ask the superadmin (or that club's admin) to merge it.")
+
+
+def _merge_pair(store: dict[str, Any], source_id: str, target_id: str) -> tuple[dict[str, Any], dict[str, Any]]:
+    if not source_id or not target_id or source_id == target_id:
+        raise HTTPException(status_code=400, detail="Pick two different clubs.")
+    clubs = {str(club.get("id") or ""): club for club in store.get("clubs", []) or []}
+    if source_id not in clubs or target_id not in clubs:
+        raise HTTPException(status_code=404, detail="Club not found.")
+    return clubs[source_id], clubs[target_id]
+
+
+def _merge_plan(store: dict[str, Any], source: dict[str, Any], target: dict[str, Any]) -> dict[str, Any]:
+    source_members, target_members = _club_member_ids(store, source), _club_member_ids(store, target)
+    by_id = {str(m.get("id") or ""): m for m in store.get("members", []) or []}
+    common = sorted(source_members & target_members)
+    # same name, different player records: they stay two players (use "Name matches" to join them)
+    target_names = {normalize_name(str(by_id[i].get("name") or "")): i for i in target_members - source_members if i in by_id}
+    look_alike = sorted({str(by_id[i].get("name") or "") for i in source_members - target_members if i in by_id and normalize_name(str(by_id[i].get("name") or "")) in target_names})
+    keys_s, keys_t = _club_identity_keys(source), _club_identity_keys(target)
+    between = 0
+    for upload in store.get("archive_uploads", []) or []:
+        names = {normalize_name(str(item)) for item in _coerce_archive_string_list(upload.get("club_names"))}
+        ids = {str(item) for item in _coerce_archive_string_list(upload.get("club_ids"))}
+        if (names & keys_s or str(source.get("id")) in ids) and (names & keys_t or str(target.get("id")) in ids):
+            between += 1
+    return {
+        "source": _club_row(store, source),
+        "target": _club_row(store, target),
+        "players_after": len(source_members | target_members),
+        "common_players": [str(by_id[i].get("name") or "") for i in common if i in by_id],
+        "look_alike_players": look_alike,
+        "matches_between": between,
+    }
+
+
+@app.get("/api/admin/clubs/merge-preview")
+def club_merge_preview(source_id: str, target_id: str, x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
+    user_row, _ = _auth_user_from_token(x_auth_token)
+    store = load_store()
+    source, target = _merge_pair(store, source_id, target_id)
+    _merge_permission(user_row, source_id, target_id)
+    return _merge_plan(store, source, target)
+
+
+class ClubMergeRequest(BaseModel):
+    source_id: str
+    target_id: str
+    keep_name: str = "target"  # "target" or "source": which name the merged club uses; the other becomes an alias
+    confirmation: str = ""
+
+
+def _dedupe_links(links: list[Any], key_fields: tuple[str, ...]) -> list[Any]:
+    seen: dict[tuple, dict[str, Any]] = {}
+    out: list[Any] = []
+    for link in links:
+        if not isinstance(link, dict):
+            out.append(link)
+            continue
+        key = tuple(str(link.get(field) or "") for field in key_fields)
+        if key in seen:
+            kept = seen[key]
+            if link.get("is_primary"):
+                kept["is_primary"] = True
+            if isinstance(kept.get("teams"), list) and isinstance(link.get("teams"), list):
+                kept["teams"] = list(dict.fromkeys([*kept["teams"], *link["teams"]]))
+            continue
+        seen[key] = link
+        out.append(link)
+    return out
+
+
+def _merge_clubs_in_store(store: dict[str, Any], source: dict[str, Any], target: dict[str, Any], keep_name: str) -> dict[str, Any]:
+    """Move everything of `source` onto `target` (target's id survives). Player records are not touched apart from
+    their club links, so every player keeps all his matches and stats - they now count for one club."""
+    source_id, target_id = str(source.get("id") or ""), str(target.get("id") or "")
+    old_keys = {normalize_name(str(v)) for v in (source.get("name"), source.get("short_name"), target.get("name"), target.get("short_name")) if v}
+    if keep_name == "source":
+        final_name, final_short = str(source.get("name") or ""), str(source.get("short_name") or source.get("name") or "")
+    else:
+        final_name, final_short = str(target.get("name") or ""), str(target.get("short_name") or target.get("name") or "")
+    aliases: list[str] = []
+    for value in [*(target.get("aliases") or []), *(source.get("aliases") or []), target.get("name"), target.get("short_name"), source.get("name"), source.get("short_name")]:
+        value = str(value or "").strip()
+        if value and normalize_name(value) not in {normalize_name(final_name), normalize_name(final_short)} and normalize_name(value) not in {normalize_name(a) for a in aliases}:
+            aliases.append(value)
+    target["name"], target["short_name"], target["aliases"] = final_name, final_short, aliases
+    for key, value in source.items():  # fill the target's empty details (city, ground, about...) from the source
+        if key not in {"id", "name", "short_name", "aliases"} and value not in (None, "", [], {}) and target.get(key) in (None, "", [], {}):
+            target[key] = value
+
+    # teams: the source's teams move to the target; a team with the same name as one of the target's is joined into it
+    target_teams = {normalize_name(str(t.get("name") or "")): t for t in store.get("teams", []) or [] if str(t.get("club_id") or "") == target_id}
+    target_club_team = next((t for t in store.get("teams", []) or [] if str(t.get("club_id") or "") == target_id and str(t.get("type") or "club") == "club"), None)
+    team_map: dict[str, dict[str, Any]] = {}
+    kept_teams = []
+    for team in store.get("teams", []) or []:
+        if str(team.get("club_id") or "") != source_id:
+            kept_teams.append(team)
+            continue
+        name_key = normalize_name(str(team.get("name") or ""))
+        same = target_teams.get(name_key)
+        if same is None and name_key in old_keys and target_club_team is not None:
+            same = target_club_team  # "Police Community" (the club's own team) joins "Police"'s club team
+        if same is not None:
+            team_map[str(team.get("id") or "")] = same
+            continue
+        team["club_id"], team["club_name"] = target_id, final_name
+        kept_teams.append(team)
+    store["teams"] = kept_teams
+
+    common = 0
+    for member in store.get("members", []) or []:
+        touched = False
+        was_in_both = member_in_club(member, source_id) and member_in_club(member, target_id)
+        for link in member.get("team_memberships") or []:
+            if isinstance(link, dict) and str(link.get("club_id") or "") == source_id:
+                link["club_id"], link["club_name"] = target_id, final_name
+                joined = team_map.get(str(link.get("team_id") or ""))
+                if joined is not None:
+                    link["team_id"], link["team_name"] = joined.get("id"), joined.get("name")
+                    if "display_name" in link:
+                        link["display_name"] = joined.get("display_name") or joined.get("name")
+                touched = True
+        for link in member.get("club_memberships") or []:
+            if isinstance(link, dict) and str(link.get("club_id") or "") == source_id:
+                link["club_id"], link["club_name"] = target_id, final_name
+                touched = True
+        if str(member.get("primary_club_id") or "") == source_id:
+            member["primary_club_id"], member["primary_club_name"] = target_id, final_name
+            touched = True
+        if touched:
+            member["team_memberships"] = _dedupe_links(member.get("team_memberships") or [], ("team_id",))
+            member["club_memberships"] = _dedupe_links(member.get("club_memberships") or [], ("club_id",))
+            primaries = [l for l in member["team_memberships"] if isinstance(l, dict) and l.get("is_primary")]
+            for extra in primaries[1:]:
+                extra["is_primary"] = False
+        common += int(was_in_both)
+
+    for fixture in store.get("fixtures", []) or []:
+        if str(fixture.get("club_id") or "") == source_id:
+            fixture["club_id"], fixture["club_name"] = target_id, final_name
+    for upload in store.get("archive_uploads", []) or []:
+        if str(upload.get("club_id") or "") == source_id:
+            upload["club_id"], upload["club_name"] = target_id, final_name
+        ids = _coerce_archive_string_list(upload.get("club_ids"))
+        if source_id in ids:
+            upload["club_ids"] = list(dict.fromkeys(target_id if item == source_id else item for item in ids))
+    store["clubs"] = [club for club in store.get("clubs", []) or [] if str(club.get("id") or "") != source_id]
+    if isinstance(store.get("club"), dict) and str(store["club"].get("id") or "") == source_id:
+        store["club"] = dict(target)
+    viewer = store.get("viewer_profile")
+    if isinstance(viewer, dict):
+        for key, value in list(viewer.items()):
+            if value == source_id:
+                viewer[key] = target_id
+    _propagate_club_rename(store, target, old_keys)
+    return {"name": final_name, "aliases": aliases, "common_players": common}
+
+
+_MERGED_CLUB_IDS: dict[str, str] | None = None
+
+
+def _merged_club_target(old_id: str) -> str:
+    """A link to a club that was merged away (/clubs?club=club-police) opens the club it was merged into."""
+    global _MERGED_CLUB_IDS
+    if _MERGED_CLUB_IDS is None:
+        try:
+            with _auth_connection() as connection:
+                _MERGED_CLUB_IDS = {row["old_id"]: row["new_id"] for row in connection.execute("SELECT old_id, new_id FROM app_club_merges")}
+        except sqlite3.OperationalError:
+            _MERGED_CLUB_IDS = {}
+    seen, current = set(), str(old_id or "")
+    while current in _MERGED_CLUB_IDS and current not in seen:
+        seen.add(current)
+        current = _MERGED_CLUB_IDS[current]
+    return current if seen else ""
+
+
+def _merge_clubs_in_db(source_id: str, target_id: str, actor: str = "") -> None:
+    global _MERGED_CLUB_IDS
+    with _auth_connection() as connection:
+        connection.execute("CREATE TABLE IF NOT EXISTS app_club_merges (old_id TEXT PRIMARY KEY, new_id TEXT NOT NULL, merged_at TEXT NOT NULL, merged_by TEXT NOT NULL DEFAULT '')")
+        connection.execute("INSERT OR REPLACE INTO app_club_merges VALUES (?, ?, ?, ?)", (source_id, target_id, datetime.now(timezone.utc).isoformat(timespec="seconds"), actor))
+        connection.execute("UPDATE app_club_merges SET new_id = ? WHERE new_id = ?", (target_id, source_id))
+        for table, column in (("app_users", "primary_club_id"), ("app_user_profile", "primary_club_id"), ("app_auth_sessions", "current_club_id"), ("app_notifications", "club_id"), ("llm_documents", "club_id")):
+            try:
+                connection.execute(f"UPDATE {table} SET {column} = ? WHERE {column} = ?", (target_id, source_id))
+            except sqlite3.OperationalError:
+                pass  # older database without this table
+        for table in ("app_user_club_roles", "app_player_season_availability", "app_ai_corrections"):
+            try:
+                connection.execute(f"UPDATE OR IGNORE {table} SET club_id = ? WHERE club_id = ?", (target_id, source_id))
+                connection.execute(f"DELETE FROM {table} WHERE club_id = ?", (source_id,))
+            except sqlite3.OperationalError:
+                pass
+    with _league_db() as connection:
+        connection.execute("UPDATE OR IGNORE league_group_teams SET club_id = ? WHERE club_id = ?", (target_id, source_id))
+        connection.execute("DELETE FROM league_group_teams WHERE club_id = ?", (source_id,))
+    _MERGED_CLUB_IDS = None
+
+
+@app.post("/api/admin/clubs/merge")
+def merge_clubs(request: ClubMergeRequest, x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
+    user_row, _ = _auth_user_from_token(x_auth_token)
+    store = load_store()
+    source, target = _merge_pair(store, request.source_id.strip(), request.target_id.strip())
+    _merge_permission(user_row, str(source.get("id")), str(target.get("id")))
+    if request.keep_name not in {"source", "target"}:
+        raise HTTPException(status_code=400, detail="Choose which name the merged club keeps.")
+    if normalize_name(request.confirmation) != "merge":
+        raise HTTPException(status_code=400, detail='Type MERGE to confirm.')
+    before = _merge_plan(store, source, target)
+    source_name, target_name = str(source.get("name") or ""), str(target.get("name") or "")
+    result = _merge_clubs_in_store(store, source, target, request.keep_name)
+    _merge_clubs_in_db(str(source.get("id")), str(target.get("id")), str(user_row["display_name"] if "display_name" in user_row.keys() else user_row["id"]))
+    save_store(store)
+    # the saved stats were rebuilt in the database; make this worker read them again instead of its in-memory copy
+    setattr(sys.modules[save_store.__module__], "_STORE_CACHE_PAYLOAD", None)
+    _audit_event(
+        "club.merge", "club", str(target.get("id")), actor=user_row, club_id=str(target.get("id")), club_name=result["name"],
+        details={"merged": source_name, "merged_id": source.get("id"), "into": target_name, "name": result["name"], "aliases": result["aliases"], "players_after": before["players_after"]},
+        source="api",
+    )
+    return {
+        "message": f"Merged {source_name} into {target_name}. The club is now called {result['name']}; "
+        f"{', '.join(result['aliases']) or 'the old name'} still finds it. {before['players_after']} players, all their matches and stats are now under one club.",
+        "club": _club_row(store, target),
     }
 
 
@@ -12531,6 +13088,174 @@ def _announce_new_fixture(fixture: dict[str, Any]) -> None:
         return
     if _reminder_claim(str(fixture.get("id")), "ask"):
         _ask_availability(fixture, "New match · are you available?")
+
+
+# ---------------------------------------------------------------------------------------------------------------
+# WhatsApp alerts (Nov 14 2026, Amit: "Whenever a new scorecard is uploaded or a fixture is created for a club, fire
+# off a WhatsApp alert to every player in that club. You can use Meta WhatsApp cloud API").
+# Meta only lets a business START a chat with an approved message TEMPLATE, so two templates are made once in Meta
+# WhatsApp Manager (README "WhatsApp alerts" has the exact text). Set in Azure (never in git):
+#   WHATSAPP_TOKEN            permanent access token (System user) with whatsapp_business_messaging
+#   WHATSAPP_PHONE_NUMBER_ID  the sender number's id (WhatsApp Manager -> API setup)
+#   WHATSAPP_TEMPLATE_FIXTURE / WHATSAPP_TEMPLATE_SCORECARD   template names (default new_fixture / new_scorecard)
+#   WHATSAPP_TEMPLATE_LANG    template language code (default en)
+#   WHATSAPP_DEFAULT_COUNTRY_CODE  added to 10-digit numbers (default 1 = Canada/US)
+# Without WHATSAPP_TOKEN + WHATSAPP_PHONE_NUMBER_ID nothing is sent (the bell notification still is).
+# Who gets it: every player of the club with a mobile number (the player's own phone, or the mobile of his account),
+# once per number per scorecard / fixture (table app_whatsapp_log, which also shows what was sent and any error).
+# Sent in the background, so uploading / saving a fixture never waits for Meta.
+# ---------------------------------------------------------------------------------------------------------------
+WHATSAPP_API_VERSION = os.getenv("WHATSAPP_API_VERSION", "v21.0")
+# links in the messages point here (set CRICKETCLUBAPP_PUBLIC_URL if the site moves)
+PUBLIC_SITE_URL = str(os.getenv("CRICKETCLUBAPP_PUBLIC_URL") or "https://cricketcanclubs-web.azurewebsites.net").rstrip("/")
+_WHATSAPP_LOG_TABLE = (
+    "CREATE TABLE IF NOT EXISTS app_whatsapp_log (ref TEXT NOT NULL, phone TEXT NOT NULL, kind TEXT NOT NULL, club_id TEXT NOT NULL DEFAULT '', "
+    "status TEXT NOT NULL DEFAULT '', detail TEXT NOT NULL DEFAULT '', sent_at TEXT NOT NULL DEFAULT '', PRIMARY KEY (ref, phone))"
+)
+
+
+def _whatsapp_settings() -> dict[str, str] | None:
+    token = str(os.getenv("WHATSAPP_TOKEN") or "").strip()
+    phone_id = str(os.getenv("WHATSAPP_PHONE_NUMBER_ID") or "").strip()
+    if not token or not phone_id:
+        return None
+    return {
+        "token": token,
+        "phone_id": phone_id,
+        "fixture": str(os.getenv("WHATSAPP_TEMPLATE_FIXTURE") or "new_fixture").strip(),
+        "scorecard": str(os.getenv("WHATSAPP_TEMPLATE_SCORECARD") or "new_scorecard").strip(),
+        "lang": str(os.getenv("WHATSAPP_TEMPLATE_LANG") or "en").strip(),
+        "country": re.sub(r"\D", "", str(os.getenv("WHATSAPP_DEFAULT_COUNTRY_CODE") or "1")) or "1",
+    }
+
+
+def _whatsapp_number(raw: Any, country: str) -> str:
+    """'(416) 555-0123' -> '14165550123'; '' when it isn't a usable mobile number."""
+    text = str(raw or "").strip()
+    digits = re.sub(r"\D", "", text)
+    if text.startswith("00"):
+        digits = digits[2:]
+    if len(digits) == 10:
+        digits = country + digits
+    return digits if 11 <= len(digits) <= 15 else ""
+
+
+def _club_whatsapp_numbers(store: dict[str, Any], club_id: str, country: str) -> list[str]:
+    club = next((item for item in store.get("clubs", []) or [] if str(item.get("id") or "") == club_id), None)
+    if not club:
+        return []
+    member_ids = _club_member_ids(store, club)
+    numbers: list[str] = []
+    for member in store.get("members", []) or []:
+        if str(member.get("id") or "") in member_ids:
+            numbers.append(_whatsapp_number(member.get("phone"), country))
+    try:
+        with _auth_connection() as connection:
+            for row in connection.execute("SELECT mobile, member_id, primary_club_id FROM app_users WHERE COALESCE(mobile, '') != ''"):
+                if str(row["member_id"] or "") in member_ids or str(row["primary_club_id"] or "") == club_id:
+                    numbers.append(_whatsapp_number(row["mobile"], country))
+            for row in connection.execute(
+                "SELECT u.mobile FROM app_users u JOIN app_user_club_roles r ON r.user_id = u.id WHERE r.club_id = ? AND COALESCE(u.mobile, '') != ''", (club_id,)
+            ):
+                numbers.append(_whatsapp_number(row["mobile"], country))
+    except sqlite3.Error:
+        logger.exception("Couldn't read account mobile numbers for WhatsApp alerts")
+    return [number for number in dict.fromkeys(numbers) if number]
+
+
+def _whatsapp_send_template(settings: dict[str, str], phone: str, template: str, params: list[str]) -> tuple[bool, str]:
+    import httpx
+
+    body = {
+        "messaging_product": "whatsapp",
+        "to": phone,
+        "type": "template",
+        "template": {
+            "name": template,
+            "language": {"code": settings["lang"]},
+            "components": [{"type": "body", "parameters": [{"type": "text", "text": (str(value or "-")[:300] or "-")} for value in params]}],
+        },
+    }
+    try:
+        response = httpx.post(
+            f"https://graph.facebook.com/{WHATSAPP_API_VERSION}/{settings['phone_id']}/messages",
+            json=body,
+            headers={"Authorization": f"Bearer {settings['token']}"},
+            timeout=15,
+        )
+        if response.status_code < 300:
+            message_id = ((response.json().get("messages") or [{}])[0] or {}).get("id", "")
+            return True, str(message_id)
+        error = (response.json().get("error") or {}) if response.headers.get("content-type", "").startswith("application/json") else {}
+        return False, f"{response.status_code} {error.get('message') or response.text[:200]}"
+    except Exception as exc:
+        return False, f"{exc.__class__.__name__}: {exc}"
+
+
+def _whatsapp_club_alert(club_id: str, kind: str, ref: str, params: list[str]) -> None:
+    """kind 'fixture' or 'scorecard'; ref = 'fixture:<id>' / 'scorecard:<id>' (each number gets it once)."""
+    settings = _whatsapp_settings()
+    if not settings or not club_id:
+        return
+
+    def _work() -> None:
+        try:
+            numbers = _club_whatsapp_numbers(load_store(), club_id, settings["country"])
+            sent = failed = 0
+            for phone in numbers:
+                with _auth_connection() as connection:
+                    connection.execute(_WHATSAPP_LOG_TABLE)
+                    claimed = connection.execute(
+                        "INSERT OR IGNORE INTO app_whatsapp_log (ref, phone, kind, club_id, status, sent_at) VALUES (?, ?, ?, ?, 'sending', ?)",
+                        (ref, phone, kind, club_id, now_iso()),
+                    ).rowcount
+                if not claimed:
+                    continue  # this number already got this alert
+                ok, detail = _whatsapp_send_template(settings, phone, settings[kind], params)
+                with _auth_connection() as connection:
+                    connection.execute("UPDATE app_whatsapp_log SET status = ?, detail = ?, sent_at = ? WHERE ref = ? AND phone = ?", ("sent" if ok else "failed", detail, now_iso(), ref, phone))
+                sent += int(ok)
+                failed += int(not ok)
+                time_module.sleep(0.2)  # stay well under Meta's per-second limit
+            logger.info("WhatsApp %s alert %s: %s sent, %s failed, %s numbers.", kind, ref, sent, failed, len(numbers))
+        except Exception:
+            logger.exception("WhatsApp alert %s failed", ref)
+
+    threading.Thread(target=_work, name=f"whatsapp-{kind}", daemon=True).start()
+
+
+def _whatsapp_fixture_alert(fixture: dict[str, Any]) -> None:
+    club_id = str(fixture.get("club_id") or "")
+    venue = _fixture_venue(fixture)
+    _whatsapp_club_alert(
+        club_id,
+        "fixture",
+        f"fixture:{fixture.get('id')}",
+        [str(fixture.get("club_name") or "Your club"), _fixture_when(fixture) + (f" at {venue}" if venue else ""),
+         f"{PUBLIC_SITE_URL}/player-availability?fixture_id={fixture.get('id')}"],
+    )
+
+
+def _whatsapp_scorecard_alert(upload: dict[str, Any], title: str) -> None:
+    for club_id in dict.fromkeys([str(upload.get("club_id") or ""), *(str(item) for item in _coerce_archive_string_list(upload.get("club_ids")))]):
+        club = next((item for item in load_store().get("clubs", []) or [] if str(item.get("id") or "") == club_id), None)
+        if club is None:
+            continue
+        _whatsapp_club_alert(club_id, "scorecard", f"scorecard:{upload.get('id')}", [str(club.get("name") or "Your club"), title or "A new scorecard", f"{PUBLIC_SITE_URL}/scorecards/a-{upload.get('id')}"])
+
+
+@app.get("/api/admin/whatsapp")
+def admin_whatsapp_status(x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
+    _require_superadmin(x_auth_token)
+    settings = _whatsapp_settings()
+    with _auth_connection() as connection:
+        connection.execute(_WHATSAPP_LOG_TABLE)
+        rows = [dict(row) for row in connection.execute("SELECT ref, kind, club_id, status, detail, sent_at, substr(phone, -4) AS phone_end FROM app_whatsapp_log ORDER BY sent_at DESC LIMIT 50")]
+    return {
+        "configured": bool(settings),
+        "templates": {key: settings[key] for key in ("fixture", "scorecard", "lang")} if settings else {},
+        "recent": rows,
+    }
 
 
 def _announce_fixture_change(fixture: dict[str, Any], what: str) -> None:
@@ -15161,6 +15886,15 @@ async def upload_scorecard(
         if not _is_scorecard_template_payload(record.get("extraction_template")):
             record["extraction_template"] = scorecard_template_from_archive(record)
         record["review_template_json"] = json.dumps(record["extraction_template"], indent=2)
+    # Nov 13 2026 (Amit: photos "need to be shrunk from MB to KB"): the photo was read at full size above; keep a
+    # smaller copy (record["file_hash"] stays the hash of the original, so the same photo is still caught as a duplicate)
+    if _shrink_photo(destination):
+        record["file_size"] = destination.stat().st_size
+    # Nov 14 2026 (Amit): WhatsApp alert to every player of the club(s) on the card (when WhatsApp is set up)
+    try:
+        _whatsapp_scorecard_alert(record, str(_scorecard_from_archive(record).get("title") or "New scorecard"))
+    except Exception:
+        logger.exception("WhatsApp scorecard alert failed")
     # Nov 6 2026 (Amit: "should allow if I have only 2nd innings scorecard"): the photo was put in the
     # "2nd innings" box, so its one innings is innings 2 (the 1st innings shows as missing until it's added).
     if innings_number == 2:
@@ -16047,6 +16781,134 @@ def _apply_ai_template(store: dict[str, Any], record: dict[str, Any], template: 
     return ""
 
 
+# ---------------------------------------------------------------------------
+# Smaller scorecard photos (Nov 13 2026, Amit: "in the uploads folder we have all the images that needs to be shrink
+# in the size from Mb to kb"). Phone photos are 4000-5000 px and 4-9 MB; the AI sends at most 1568 px for the page
+# and 3072 px for each half, so a 2400 px JPEG (about 600-900 KB) keeps the handwriting readable.
+# New uploads are shrunk right after they are read; old ones with Admin Center -> Scorecard Tools -> Shrink photos.
+# The file keeps its name (every scorecard, preview and learned example points at it) and its date; the scorecard
+# keeps the hash of the original photo, so uploading that photo again is still refused as a duplicate.
+# README "Smaller scorecard photos".
+# ---------------------------------------------------------------------------
+PHOTO_MAX_EDGE = int(os.getenv("CRICKETCLUBAPP_PHOTO_MAX_EDGE") or 2400)
+PHOTO_QUALITY = int(os.getenv("CRICKETCLUBAPP_PHOTO_QUALITY") or 80)
+PHOTO_SHRINK_ABOVE = 700 * 1024  # photos already smaller than this are left alone
+_PHOTO_SUFFIXES = {".png", ".jpg", ".jpeg", ".heic", ".heif", ".webp"}
+_SHRINK_JOB: dict[str, Any] = {"running": False}
+
+
+def _needs_shrink(path: Path) -> bool:
+    """Bigger than PHOTO_SHRINK_ABOVE and not already a JPEG of at most PHOTO_MAX_EDGE px (reads only the header)."""
+    try:
+        if not path.is_file() or path.suffix.lower() not in _PHOTO_SUFFIXES or path.stat().st_size <= PHOTO_SHRINK_ABOVE:
+            return False
+        from PIL import Image
+
+        try:
+            from pillow_heif import register_heif_opener
+
+            register_heif_opener()
+        except Exception:
+            pass
+        with Image.open(path) as image:
+            return not (image.format in {"JPEG", "MPO"} and max(image.size) <= PHOTO_MAX_EDGE)
+    except Exception:
+        return False
+
+
+def _shrink_photo(path: Path) -> int:
+    """Shrink one photo in place (at most PHOTO_MAX_EDGE px, JPEG). Returns the bytes saved (0 = left as it was)."""
+    try:
+        if not _needs_shrink(path):
+            return 0
+        info = path.stat()
+        from PIL import Image, ImageOps
+
+        try:
+            from pillow_heif import register_heif_opener
+
+            register_heif_opener()
+        except Exception:
+            pass
+        with Image.open(path) as source:
+            exif = source.getexif()
+            image = ImageOps.exif_transpose(source).convert("RGB")
+        image.thumbnail((PHOTO_MAX_EDGE, PHOTO_MAX_EDGE), Image.LANCZOS)
+        if 0x0112 in exif:
+            exif[0x0112] = 1  # the picture is already turned the right way up
+        temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex[:6]}.shrinking")
+        try:
+            image.save(temporary, format="JPEG", quality=PHOTO_QUALITY, optimize=True, progressive=True, exif=exif.tobytes())
+            if temporary.stat().st_size >= info.st_size * 0.85:
+                return 0  # hardly smaller: keep the original
+            saved = info.st_size - temporary.stat().st_size
+            os.replace(temporary, path)
+            os.utime(path, (info.st_atime, info.st_mtime))  # the file date can be the photo date
+            return saved
+        finally:
+            temporary.unlink(missing_ok=True)
+    except Exception:
+        logger.exception("Couldn't shrink photo %s; it was left as it was.", path)
+        return 0
+
+
+def _photo_files() -> list[Path]:
+    if not UPLOAD_DIR.is_dir():
+        return []
+    return sorted(item for item in UPLOAD_DIR.iterdir() if item.is_file() and item.suffix.lower() in _PHOTO_SUFFIXES)
+
+
+def _photo_storage() -> dict[str, Any]:
+    files = _photo_files()
+    big = [item.stat().st_size for item in files if _needs_shrink(item)]
+    return {"photos": len(files), "bytes": sum(item.stat().st_size for item in files), "big_photos": len(big), "big_bytes": sum(big), "max_edge": PHOTO_MAX_EDGE}
+
+
+def _shrink_all_photos(actor: str) -> None:
+    job = _SHRINK_JOB
+    try:
+        files = [item for item in _photo_files() if _needs_shrink(item)]
+        job.update({"total": len(files), "done": 0, "saved": 0})
+        sizes: dict[str, int] = {}
+        for item in files:
+            job["saved"] += _shrink_photo(item)
+            job["done"] += 1
+            sizes[item.name.lower()] = item.stat().st_size
+        store = load_store()
+        changed = False
+        for upload in store.get("archive_uploads", []) or []:
+            path = _upload_file_path(upload)
+            if path is not None and path.name.lower() in sizes and upload.get("file_size") != sizes[path.name.lower()]:
+                upload["file_size"] = sizes[path.name.lower()]
+                changed = True
+        if changed:
+            save_store(store)
+        _audit_event("uploads.shrink", "uploads", "photos", details={"photos": job["total"], "saved_bytes": job["saved"], "by": actor}, source="admin")
+        job["message"] = f"Done: {job['total']} photos made smaller, {job['saved'] / 1048576:.1f} MB freed."
+    except Exception as exc:
+        logger.exception("Shrinking photos failed.")
+        job["message"] = f"Stopped: {exc}"
+    finally:
+        job["running"] = False
+
+
+@app.get("/api/admin/uploads/storage")
+def admin_photo_storage(x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
+    _require_superadmin(x_auth_token)
+    return {**_photo_storage(), "job": dict(_SHRINK_JOB)}
+
+
+@app.post("/api/admin/uploads/shrink")
+def admin_shrink_photos(x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
+    user_row, _ = _require_superadmin(x_auth_token)
+    if _SHRINK_JOB.get("running"):
+        return {"message": "Already making the photos smaller.", "job": dict(_SHRINK_JOB)}
+    _SHRINK_JOB.clear()
+    _SHRINK_JOB.update({"running": True, "total": 0, "done": 0, "saved": 0, "message": ""})
+    threading.Thread(target=_shrink_all_photos, args=(str(user_row["display_name"] or "admin"),), name="shrink-photos", daemon=True).start()
+    return {"message": "Making the photos smaller in the background. You can keep using the app.", "job": dict(_SHRINK_JOB)}
+
+
 def _upload_file_path(upload: dict[str, Any]) -> Path | None:
     for raw in (upload.get("file_path"), upload.get("file_name")):
         name = Path(str(raw or "").replace("\\", "/")).name
@@ -16583,6 +17445,7 @@ async def scorecard_upload_second_photo(
             message = f"2nd innings photo added, but it couldn't be read ({result.get('error') or 'AI reading failed'}). Type the 2nd innings in with ✏️."
     else:
         message = "2nd innings photo added. Type the 2nd innings in with ✏️ (AI reading isn't available for this account)."
+    _shrink_photo(UPLOAD_DIR / file_token)  # after the AI read, which used the full-size photo
     upload["status"] = "Pending review"
     upload["review_flags"] = []
     save_store(store)
@@ -17380,9 +18243,56 @@ def _upload_backup_offsite(path: Path) -> str:
         return f"off-site upload failed ({exc.__class__.__name__})"
 
 
+def _gzip_file(path: Path, target: Path | None = None) -> Path:
+    """Compress `path` to `target` (default path + ".gz"), keep its date, delete the uncompressed file."""
+    import gzip
+    import shutil as shutil_module
+
+    target = target or path.with_name(path.name + ".gz")
+    stamp = path.stat().st_mtime
+    temporary = target.with_name(target.name + ".partial")
+    with path.open("rb") as source, gzip.open(temporary, "wb", compresslevel=6) as packed:
+        shutil_module.copyfileobj(source, packed, 1024 * 1024)
+    temporary.replace(target)
+    os.utime(target, (stamp, stamp))
+    path.unlink(missing_ok=True)
+    return target
+
+
+def _compress_old_backup_files() -> int:
+    """Nov 14 2026 (Amit: "zip the backup db file so that it takes less space"): backups made before Nov 13 were plain
+    .db files, and every import left a cricketclubapp.backup-<time>.db next to the live database. Compress them into
+    the backups folder (as cricketclubapp-<time>-<reason>.db.gz, so the 3-day clean-up covers them). Returns bytes freed."""
+    freed = 0
+    BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+    candidates = [item for item in BACKUP_DIR.glob("cricketclubapp-*.db") if _BACKUP_NAME_RE.match(item.name)]
+    for item in DATABASE_FILE.parent.glob(f"{DATABASE_FILE.stem}.backup*{DATABASE_FILE.suffix}"):
+        if item.is_file() and item.resolve() != DATABASE_FILE.resolve():
+            candidates.append(item)
+    for item in candidates:
+        try:
+            before = item.stat().st_size
+            if item.parent == BACKUP_DIR and _BACKUP_NAME_RE.match(item.name):
+                target = item.with_name(item.name + ".gz")
+            else:
+                stamp = datetime.utcfromtimestamp(item.stat().st_mtime).strftime("%Y%m%dT%H%M%SZ")
+                target = BACKUP_DIR / f"cricketclubapp-{stamp}-old-copy.db.gz"
+            packed = _gzip_file(item, target)
+            freed += before - packed.stat().st_size
+        except OSError:
+            logger.warning("Couldn't compress old backup %s", item)
+    if freed:
+        logger.info("Old uncompressed backups compressed: %.1f MB freed", freed / 1e6)
+    return freed
+
+
 def _prune_backups() -> int:
     """Delete backups older than BACKUP_KEEP_DAYS days (the newest one is always kept), and leftover .partial files.
     Returns the bytes freed."""
+    try:
+        _compress_old_backup_files()  # plain .db copies from before: compress them first (then they are pruned by date too)
+    except Exception:
+        logger.exception("Compressing old backups failed")
     files = _backup_files()
     cutoff = (datetime.utcnow() - timedelta(days=BACKUP_KEEP_DAYS)).strftime("%Y%m%dT%H%M%S")
     freed = 0
