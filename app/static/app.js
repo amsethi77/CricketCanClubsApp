@@ -284,10 +284,45 @@ function syncClubBadge(clubName) {
   `;
 }
 
-// Nov 14 2026 (Amit): the weather of the club's city under the greeting ("Good morning -2°C ❄️ Snow · Brampton").
-// The server asks Open-Meteo at most every 20 minutes per city; nothing shows if it can't be reached.
+// Nov 14 2026 (Amit): the weather under the greeting ("Good morning -2°C ❄️ Snow · Brampton").
+// Where: the device's own location when the person allows it (the browser asks once and remembers the answer;
+// Amit: "Isn't there an api to identify the location?"), otherwise the club's city. The town name for a location
+// comes from BigDataCloud's free reverse-geocoding (no key). The server asks Open-Meteo at most every 20 minutes
+// per place; nothing shows if it can't be reached.
 let heroWeatherFor = "";
-function showHeroWeather(city, country) {
+
+function deviceLocation() {
+  return new Promise((resolve) => {
+    if (!navigator.geolocation) return resolve(null);
+    const done = (value) => resolve(value);
+    const ask = () =>
+      navigator.geolocation.getCurrentPosition(
+        (position) => done({ lat: position.coords.latitude, lon: position.coords.longitude }),
+        () => done(null),
+        { enableHighAccuracy: false, timeout: 8000, maximumAge: 30 * 60 * 1000 }
+      );
+    if (navigator.permissions?.query) {
+      navigator.permissions
+        .query({ name: "geolocation" })
+        .then((status) => (status.state === "denied" ? done(null) : ask()))
+        .catch(ask);
+    } else {
+      ask();
+    }
+  });
+}
+
+async function placeName(lat, lon) {
+  try {
+    const response = await fetch(`https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=${lat}&longitude=${lon}&localityLanguage=en`);
+    const data = response.ok ? await response.json() : null;
+    return String(data?.city || data?.locality || data?.principalSubdivision || "").trim();
+  } catch (error) {
+    return "";
+  }
+}
+
+async function showHeroWeather(city, country) {
   const title = elements.heroGreetingTitle;
   if (!title) return;
   let line = document.getElementById("heroWeather");
@@ -301,15 +336,23 @@ function showHeroWeather(city, country) {
   const key = `${city}|${country}`;
   if (heroWeatherFor === key) return;
   heroWeatherFor = key;
-  fetch(`/api/weather?city=${encodeURIComponent(city)}&country=${encodeURIComponent(country)}`, { headers: { Accept: "application/json" } })
-    .then((response) => (response.ok ? response.json() : null))
-    .then((weather) => {
-      if (!weather || !weather.ok || heroWeatherFor !== key) return;
-      line.textContent = `${weather.temperature}${weather.unit} ${weather.icon} ${weather.text} · ${weather.city}`;
-      line.title = `Current weather in ${weather.city} (Open-Meteo)`;
-      line.hidden = false;
-    })
-    .catch(() => null);
+  let query = `city=${encodeURIComponent(city)}&country=${encodeURIComponent(country)}`;
+  const here = await deviceLocation();
+  if (here) {
+    const lat = here.lat.toFixed(2);
+    const lon = here.lon.toFixed(2);
+    query += `&lat=${lat}&lon=${lon}&place=${encodeURIComponent(await placeName(lat, lon))}`;
+  }
+  try {
+    const response = await fetch(`/api/weather?${query}`, { headers: { Accept: "application/json" } });
+    const weather = response.ok ? await response.json() : null;
+    if (!weather || !weather.ok || heroWeatherFor !== key) return;
+    line.textContent = `${weather.temperature}${weather.unit} ${weather.icon} ${weather.text} · ${weather.city}`;
+    line.title = here ? "Current weather where you are (Open-Meteo)" : `Current weather in ${weather.city}, your club's city (Open-Meteo). Allow location to see the weather where you are.`;
+    line.hidden = false;
+  } catch (error) {
+    // no weather line
+  }
 }
 
 function syncAdminOnlyElements(user = state.viewerAuth?.user || state.dashboard?.user || null) {

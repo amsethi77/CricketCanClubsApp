@@ -1414,6 +1414,51 @@ def _scoring_locked(func):
     return wrapper
 
 
+import contextlib as _contextlib
+
+
+@_contextlib.contextmanager
+def _store_write_lock():
+    """Nov 14 2026: the same one-at-a-time lock for any load-change-save of the data (scorecard uploads read in
+    the background save while other requests do). Use: with _store_write_lock(): store = load_store(); ...; save_store(store)"""
+    holder = _ScoringLockHolder()
+    holder.__enter__()
+    try:
+        yield
+    finally:
+        holder.__exit__(None, None, None)
+
+
+class _ScoringLockHolder:
+    def __enter__(self) -> "_ScoringLockHolder":
+        _SCORING_THREAD_LOCK.acquire()
+        self.depth = getattr(_SCORING_DEPTH, "value", 0)
+        self.connection = None
+        if self.depth == 0:
+            lock_file = DATABASE_FILE.with_name(f"{DATABASE_FILE.name}.scorelock")
+            try:
+                lock_file.parent.mkdir(parents=True, exist_ok=True)
+                self.connection = sqlite3.connect(lock_file, timeout=60, isolation_level=None)
+                self.connection.execute("BEGIN IMMEDIATE")
+            except sqlite3.Error:
+                logger.warning("Store lock not available; saving without it.", exc_info=True)
+                if self.connection is not None:
+                    self.connection.close()
+                    self.connection = None
+        _SCORING_DEPTH.value = self.depth + 1
+        return self
+
+    def __exit__(self, *exc: Any) -> None:
+        _SCORING_DEPTH.value = self.depth
+        if self.connection is not None:
+            try:
+                self.connection.execute("COMMIT")
+            except sqlite3.Error:
+                pass
+            self.connection.close()
+        _SCORING_THREAD_LOCK.release()
+
+
 def _apply_ball_edit(innings: dict[str, Any], ball: dict[str, Any], ball_id: str) -> bool:
     """Fixing a scored ball (README "Easier live scoring"): keep its id, place and time. Returns True when editing."""
     ball_id = str(ball_id or "").strip()
@@ -4139,6 +4184,7 @@ def startup_tasks() -> None:
     except Exception:
         logger.exception("Syncing fixture results from scorecards failed")
     threading.Thread(target=_seed_learned_examples, name="ai-learned-examples", daemon=True).start()
+    _start_upload_worker()  # scorecards uploaded before a restart are read now
     threading.Thread(target=_backup_loop, name="database-backups", daemon=True).start()
     threading.Thread(target=_reminder_loop, name="match-reminders", daemon=True).start()
 
@@ -4671,10 +4717,17 @@ def _weather_label(code: int, is_day: bool) -> tuple[str, str]:
 
 
 @app.get("/api/weather")
-def current_weather(city: str = "", country: str = "") -> dict[str, Any]:
+def current_weather(city: str = "", country: str = "", lat: float | None = None, lon: float | None = None, place: str = "") -> dict[str, Any]:
+    """Nov 14 2026 (Amit: "Isn't there an api to identify the location?"): the browser's location (lat / lon, asked
+    once - the browser remembers the answer) is used when the person allows it; otherwise the club's city."""
     city = " ".join(str(city or "").split())[:60] or "Brampton"
     country = " ".join(str(country or "").split())[:60]
     key = f"{city}|{country}".casefold()
+    if lat is not None and lon is not None and -90 <= lat <= 90 and -180 <= lon <= 180:
+        # rounded to about 1 km, so nearby people share one cached answer (and the exact spot is never kept)
+        lat, lon = round(lat, 2), round(lon, 2)
+        key = f"@{lat},{lon}"
+        _GEOCODE_CACHE.setdefault(key, (lat, lon, " ".join(str(place or "").split())[:60] or "your location"))
     cached = _WEATHER_CACHE.get(key)
     if cached and time_module.time() - cached[0] < 20 * 60:
         return cached[1]
@@ -7284,46 +7337,37 @@ def _admin_center_html(request: Request) -> HTMLResponse:
         <link rel="stylesheet" href="/assets/styles.css?v=20261111tablealign" />
         <link rel="stylesheet" href="/assets/app_polish.css?v=20261006a" />
         <link rel="stylesheet" href="/assets/sports-system.css?v=20260926a" />
-        <link rel="stylesheet" href="/assets/scorecards.css?v=20261116b" />
-        <link rel="stylesheet" href="/assets/admin_center.css?v=20261117b" />
+        <link rel="stylesheet" href="/assets/scorecards.css?v=20261118c" />
+        <link rel="stylesheet" href="/assets/admin_clubs.css?v=20261119a" />
       </head>
-      <body class="acx-page">
+      <body>
         <div class="page-shell">
           <header class="page-topbar"></header>
-          <section class="panel onboarding-panel acx-shell">
-            <div class="acx-hero">
-              <div>
-                <p class="acx-kicker">Admin Center · Superadmin</p>
-                <h1>{html.escape(club.get('name', 'Selected club'))}</h1>
-                <p class="acx-lede">Clubs, scorecards, visitors, name matches, audit history and fixtures - pick a section below.</p>
-              </div>
+          <section class="panel onboarding-panel">
+            <div class="stack-card">
+              <p class="section-kicker">Admin center</p>
+              <h1>{html.escape(club.get('name', 'Selected club'))} control room</h1>
               <div id="adminRoleBadge" class="hero-badge admin-role-badge">Loading role...</div>
-              <div class="acx-stats">
-                <div class="acx-stat"><strong>{len(store.get("clubs") or [])}</strong><span>clubs</span></div>
-                <div class="acx-stat"><strong>{len(store.get("members") or [])}</strong><span>players</span></div>
-                <div class="acx-stat"><strong>{len(store.get("archive_uploads") or [])}</strong><span>scorecards</span></div>
-                <div class="acx-stat"><strong>{len(store.get("fixtures") or [])}</strong><span>fixtures</span></div>
-                <div class="acx-stat"><strong>{sum(item.stat().st_size for item in _photo_files()) / 1048576:.0f} MB</strong><span>photos</span></div>
-              </div>
+              <p class="lede">Manage a club, then use the section menu to open visitor analytics, scorecards, archives, audit history, or fixtures.</p>
+              <div id="adminCenterStatus" class="status-banner {notice_tone}"{" hidden" if not notice else ""}>{notice}</div>
             </div>
-            <div id="adminCenterStatus" class="status-banner {notice_tone}"{" hidden" if not notice else ""}>{notice}</div>
 
             <div class="detail-stack">
               <nav class="admin-section-nav" aria-label="Admin Center sections" role="tablist">
-                <button class="secondary-button is-active" type="button" role="tab" aria-selected="true" aria-controls="adminSectionClubs" data-admin-section="clubs"><span class="acx-tab-icon" aria-hidden="true">🏏</span>Clubs</button>
-                <button class="secondary-button" type="button" role="tab" aria-selected="false" aria-controls="adminSectionClubMaintenance" data-admin-section="club-maintenance"><span class="acx-tab-icon" aria-hidden="true">🛡️</span>Disable / delete</button>
-                <button class="secondary-button" type="button" role="tab" aria-selected="false" aria-controls="adminSectionOverview" data-admin-section="overview"><span class="acx-tab-icon" aria-hidden="true">📊</span>Overview</button>
-                <button class="secondary-button" type="button" role="tab" aria-selected="false" aria-controls="adminSectionVisitors" data-admin-section="visitors"><span class="acx-tab-icon" aria-hidden="true">👥</span>Visitors</button>
-                <button class="secondary-button" type="button" role="tab" aria-selected="false" aria-controls="adminSectionScorecards" data-admin-section="scorecards"><span class="acx-tab-icon" aria-hidden="true">🧰</span>Scorecard tools</button>
-                <button class="secondary-button" type="button" role="tab" aria-selected="false" aria-controls="adminSectionArchives" data-admin-section="archives"><span class="acx-tab-icon" aria-hidden="true">🗂️</span>Archives</button>
-                <button class="secondary-button" type="button" role="tab" aria-selected="false" aria-controls="adminSectionNameMatches" data-admin-section="name-matches"><span class="acx-tab-icon" aria-hidden="true">🔗</span>Name matches</button>
-                <button class="secondary-button" type="button" role="tab" aria-selected="false" aria-controls="adminSectionAudit" data-admin-section="audit"><span class="acx-tab-icon" aria-hidden="true">🕘</span>Audit log</button>
-                <button class="secondary-button" type="button" role="tab" aria-selected="false" aria-controls="adminSectionFixtures" data-admin-section="fixtures"><span class="acx-tab-icon" aria-hidden="true">📅</span>Fixtures</button>
+                <button class="secondary-button is-active" type="button" role="tab" aria-selected="true" aria-controls="adminSectionClubMaintenance" data-admin-section="club-maintenance">Club Maintenance</button>
+                <button class="secondary-button" type="button" role="tab" aria-selected="false" aria-controls="adminSectionClubs" data-admin-section="clubs">Club details &amp; merge</button>
+                <button class="secondary-button" type="button" role="tab" aria-selected="false" aria-controls="adminSectionOverview" data-admin-section="overview">Overview</button>
+                <button class="secondary-button" type="button" role="tab" aria-selected="false" aria-controls="adminSectionVisitors" data-admin-section="visitors">Unique Visitors</button>
+                <button class="secondary-button" type="button" role="tab" aria-selected="false" aria-controls="adminSectionScorecards" data-admin-section="scorecards">Scorecard Tools</button>
+                <button class="secondary-button" type="button" role="tab" aria-selected="false" aria-controls="adminSectionArchives" data-admin-section="archives">Archives</button>
+                <button class="secondary-button" type="button" role="tab" aria-selected="false" aria-controls="adminSectionNameMatches" data-admin-section="name-matches">Name Matches</button>
+                <button class="secondary-button" type="button" role="tab" aria-selected="false" aria-controls="adminSectionAudit" data-admin-section="audit">Audit Log</button>
+                <button class="secondary-button" type="button" role="tab" aria-selected="false" aria-controls="adminSectionFixtures" data-admin-section="fixtures">Fixtures</button>
               </nav>
-              <section class="admin-section" id="adminSectionClubs" data-admin-section-panel="clubs" role="tabpanel">
+              <section class="admin-section" id="adminSectionClubs" data-admin-section-panel="clubs" role="tabpanel" hidden>
                 <div id="clubManager" class="acm" data-superadmin="1"><p class="acm-empty">Loading clubs...</p></div>
               </section>
-              <section class="admin-section" id="adminSectionClubMaintenance" data-admin-section-panel="club-maintenance" role="tabpanel" hidden>
+              <section class="admin-section" id="adminSectionClubMaintenance" data-admin-section-panel="club-maintenance" role="tabpanel">
                 <div class="stack-card admin-controls-panel">
                   <div class="panel-head compact-head"><div><p class="section-kicker">Club Maintenance</p><h2>Manage clubs and rosters</h2></div></div>
                   <p class="lede">Superadmin only. Disable a club to preserve its history while blocking member access, re-enable it later, or permanently delete it.</p>
@@ -7478,8 +7522,8 @@ def _admin_center_html(request: Request) -> HTMLResponse:
         </div>
         <script src="/assets/multipage.js?v=20261117a"></script>
         <script src="/assets/scorecard_view.js?v=20261115a"></script>
-        <script src="/assets/scorecard.js?v=20261116b"></script>
-        <script src="/assets/admin_center.js?v=20261113b"></script>
+        <script src="/assets/scorecard.js?v=20261118c"></script>
+        <script src="/assets/admin_center.js?v=20261119a"></script>
         <script src="/assets/admin_reread.js?v=20261024a"></script>
         <script src="/assets/admin_clubs.js?v=20261117b"></script>
         <script src="/assets/admin_photos.js?v=20261117a"></script>
@@ -7507,22 +7551,22 @@ def _club_admin_center_html() -> HTMLResponse:
     <link rel="stylesheet" href="/assets/styles.css?v=20261111tablealign" />
     <link rel="stylesheet" href="/assets/app_polish.css?v=20261006a" />
     <link rel="stylesheet" href="/assets/sports-system.css?v=20260926a" />
-    <link rel="stylesheet" href="/assets/admin_center.css?v=20261117b" />
+    <link rel="stylesheet" href="/assets/admin_clubs.css?v=20261119a" />
   </head>
-  <body class="acx-page">
+  <body>
     <div class="page-shell">
       <header class="page-topbar"></header>
-      <section class="panel onboarding-panel acx-shell">
-        <div class="acx-hero">
-          <div>
-            <p class="acx-kicker">Admin Center · Club admin</p>
-            <h1>Your club</h1>
-            <p class="acx-lede">Change your club's name, city and country, or merge a duplicate club into yours. Everything else stays with the superadmin.</p>
-          </div>
+      <section class="panel onboarding-panel">
+        <div class="stack-card">
+          <p class="section-kicker">Admin center</p>
+          <h1>Your club control room</h1>
+          <p class="lede">Change your club's name, city and country, or merge a duplicate club into yours. Everything else stays with the superadmin.</p>
         </div>
+        <div class="detail-stack">
         <section class="admin-section" data-admin-section-panel="clubs">
           <div id="clubManager" class="acm"><p class="acm-empty">Loading your club...</p></div>
         </section>
+        </div>
       </section>
     </div>
     <script src="/assets/multipage.js?v=20261117a"></script>
@@ -13124,6 +13168,7 @@ def _whatsapp_settings() -> dict[str, str] | None:
         "phone_id": phone_id,
         "fixture": str(os.getenv("WHATSAPP_TEMPLATE_FIXTURE") or "new_fixture").strip(),
         "scorecard": str(os.getenv("WHATSAPP_TEMPLATE_SCORECARD") or "new_scorecard").strip(),
+        "processed": str(os.getenv("WHATSAPP_TEMPLATE_PROCESSED") or "scorecard_processed").strip(),
         "lang": str(os.getenv("WHATSAPP_TEMPLATE_LANG") or "en").strip(),
         "country": re.sub(r"\D", "", str(os.getenv("WHATSAPP_DEFAULT_COUNTRY_CODE") or "1")) or "1",
     }
@@ -13192,17 +13237,19 @@ def _whatsapp_send_template(settings: dict[str, str], phone: str, template: str,
         return False, f"{exc.__class__.__name__}: {exc}"
 
 
-def _whatsapp_club_alert(club_id: str, kind: str, ref: str, params: list[str]) -> None:
-    """kind 'fixture' or 'scorecard'; ref = 'fixture:<id>' / 'scorecard:<id>' (each number gets it once)."""
+def _whatsapp_club_alert(club_id: str, kind: str, ref: str, params: list[str], numbers: list[str] | None = None) -> None:
+    """kind 'fixture', 'scorecard' or 'processed'; ref = 'fixture:<id>' / 'scorecard:<id>' / 'processed:<id>' (each
+    number gets it once). `numbers` given: only those (the uploader); otherwise every player of the club."""
     settings = _whatsapp_settings()
-    if not settings or not club_id:
+    if not settings or not (club_id or numbers):
         return
 
     def _work() -> None:
         try:
-            numbers = _club_whatsapp_numbers(load_store(), club_id, settings["country"])
+            numbers_now = numbers if numbers is not None else _club_whatsapp_numbers(load_store(), club_id, settings["country"])
+            numbers_now = [number for number in (_whatsapp_number(item, settings["country"]) for item in numbers_now) if number]
             sent = failed = 0
-            for phone in numbers:
+            for phone in numbers_now:
                 with _auth_connection() as connection:
                     connection.execute(_WHATSAPP_LOG_TABLE)
                     claimed = connection.execute(
@@ -13217,7 +13264,7 @@ def _whatsapp_club_alert(club_id: str, kind: str, ref: str, params: list[str]) -
                 sent += int(ok)
                 failed += int(not ok)
                 time_module.sleep(0.2)  # stay well under Meta's per-second limit
-            logger.info("WhatsApp %s alert %s: %s sent, %s failed, %s numbers.", kind, ref, sent, failed, len(numbers))
+            logger.info("WhatsApp %s alert %s: %s sent, %s failed, %s numbers.", kind, ref, sent, failed, len(numbers_now))
         except Exception:
             logger.exception("WhatsApp alert %s failed", ref)
 
@@ -13236,12 +13283,41 @@ def _whatsapp_fixture_alert(fixture: dict[str, Any]) -> None:
     )
 
 
+def _whatsapp_scorecard_published(upload: dict[str, Any]) -> None:
+    """A scorecard was published: WhatsApp every player of the club(s) on it (once per scorecard and number)."""
+    try:
+        _whatsapp_scorecard_alert(upload, str(_scorecard_from_archive(upload).get("title") or "New scorecard"))
+    except Exception:
+        logger.exception("WhatsApp scorecard alert failed")
+
+
 def _whatsapp_scorecard_alert(upload: dict[str, Any], title: str) -> None:
     for club_id in dict.fromkeys([str(upload.get("club_id") or ""), *(str(item) for item in _coerce_archive_string_list(upload.get("club_ids")))]):
         club = next((item for item in load_store().get("clubs", []) or [] if str(item.get("id") or "") == club_id), None)
         if club is None:
             continue
         _whatsapp_club_alert(club_id, "scorecard", f"scorecard:{upload.get('id')}", [str(club.get("name") or "Your club"), title or "A new scorecard", f"{PUBLIC_SITE_URL}/scorecards/a-{upload.get('id')}"])
+
+
+def _whatsapp_upload_result(user_row: sqlite3.Row, record: dict[str, Any], store: dict[str, Any]) -> None:
+    """Nov 14 2026 (Amit: "only uploaded needs to know that it has processed or failed"): the person who uploaded a
+    scorecard gets a WhatsApp when it has been read (or couldn't be), so he knows even if he closed the app. The
+    club's players hear about it only when it is published (_whatsapp_scorecard_alert)."""
+    phone = str(user_row["mobile"] or "")
+    if not phone and str(user_row["member_id"] or ""):
+        member = next((m for m in store.get("members", []) or [] if str(m.get("id") or "") == str(user_row["member_id"])), {})
+        phone = str(member.get("phone") or "")
+    if not phone:
+        return
+    template = _scorecard_pick_template(record) or {}
+    innings = _template_innings_count(template)
+    name = str(record.get("original_file_name") or record.get("file_name") or "scorecard")
+    if innings:
+        result = f"read - {innings} innings found. Check it and publish it so your club can see it"
+    else:
+        reason = str((record.get("ai_flags") or [""])[0] or record.get("review_llm_notes") or "").strip()[:120]
+        result = "uploaded but couldn't be read" + (f" ({reason})" if reason else "") + ". Type it in with Edit"
+    _whatsapp_club_alert(str(record.get("club_id") or ""), "processed", f"processed:{record.get('id')}", [name, result, f"{PUBLIC_SITE_URL}/scorecards/{record.get('id')}?preview=1"], numbers=[phone])
 
 
 @app.get("/api/admin/whatsapp")
@@ -15782,6 +15858,306 @@ def _mark_single_innings_number(record: dict[str, Any], number: int) -> None:
             item["inning_number"] = number
 
 
+# ---------------------------------------------------------------------------------------------------------------
+# Scorecard uploads are read in the background (Nov 14 2026, Amit: "uploading the scorecards and then processing
+# them offline and once it's done then we should alert the scorer for next steps ... then we can shrink the image
+# and keep it. Maintain the image and match id for offline processing").
+# The upload saves the photo + the scorecard (with its Match ID, status "Processing") and a job in app_upload_jobs,
+# and answers at once. A worker thread in each app process takes one job at a time (claimed in the database, so
+# two processes never read the same card), reads the photo(s) with the AI, joins it with the other innings, runs
+# the checks, makes the photo smaller and tells the uploader: bell notification + WhatsApp ("read - check it and
+# publish" / "couldn't be read - type it in"). A job that stops halfway (restart) is picked up again after 10
+# minutes, up to 3 tries. README "Scorecards are read in the background".
+# ---------------------------------------------------------------------------------------------------------------
+UPLOAD_PROCESSING = "Processing"
+_UPLOAD_JOBS_TABLE = (
+    "CREATE TABLE IF NOT EXISTS app_upload_jobs (upload_id TEXT PRIMARY KEY, user_id INTEGER NOT NULL, club_id TEXT NOT NULL DEFAULT '', "
+    "options TEXT NOT NULL DEFAULT '{}', state TEXT NOT NULL DEFAULT 'queued', attempts INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL DEFAULT '', "
+    "started_at TEXT NOT NULL DEFAULT '', finished_at TEXT NOT NULL DEFAULT '', result TEXT NOT NULL DEFAULT '')"
+)
+_UPLOAD_JOB_EVENT = threading.Event()
+_UPLOAD_WORKER_STARTED = False
+_UPLOAD_WORKER_LOCK = threading.Lock()
+UPLOAD_JOB_STALE_SECONDS = 600
+
+
+def _queue_upload_job(upload_id: str, user_id: int, club_id: str, options: dict[str, Any]) -> None:
+    with _auth_connection() as connection:
+        connection.execute(_UPLOAD_JOBS_TABLE)
+        existing = connection.execute("SELECT state, options FROM app_upload_jobs WHERE upload_id = ?", (upload_id,)).fetchone()
+        if existing and existing["state"] in {"queued", "running"}:
+            merged = {**json.loads(existing["options"] or "{}"), **options}
+            connection.execute("UPDATE app_upload_jobs SET options = ? WHERE upload_id = ?", (json.dumps(merged), upload_id))
+        else:
+            connection.execute(
+                "INSERT OR REPLACE INTO app_upload_jobs (upload_id, user_id, club_id, options, state, attempts, created_at) VALUES (?, ?, ?, ?, 'queued', 0, ?)",
+                (upload_id, user_id, club_id, json.dumps(options), now_iso()),
+            )
+    _start_upload_worker()
+    _UPLOAD_JOB_EVENT.set()
+
+
+def _upload_job(upload_id: str) -> dict[str, Any] | None:
+    try:
+        with _auth_connection() as connection:
+            connection.execute(_UPLOAD_JOBS_TABLE)
+            row = connection.execute("SELECT * FROM app_upload_jobs WHERE upload_id = ?", (upload_id,)).fetchone()
+        return dict(row) if row else None
+    except sqlite3.Error:
+        return None
+
+
+def _claim_upload_job() -> dict[str, Any] | None:
+    stale = (datetime.now(timezone.utc) - timedelta(seconds=UPLOAD_JOB_STALE_SECONDS)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    with _auth_connection() as connection:
+        connection.execute(_UPLOAD_JOBS_TABLE)
+        rows = connection.execute(
+            "SELECT * FROM app_upload_jobs WHERE (state = 'queued') OR (state = 'running' AND started_at < ? AND attempts < 3) ORDER BY created_at LIMIT 5",
+            (stale,),
+        ).fetchall()
+        for row in rows:
+            claimed = connection.execute(
+                "UPDATE app_upload_jobs SET state = 'running', started_at = ?, attempts = attempts + 1 WHERE upload_id = ? AND state = ? AND started_at = ?",
+                (now_iso(), row["upload_id"], row["state"], row["started_at"]),
+            ).rowcount
+            if claimed:
+                job = dict(row)
+                job["attempts"] = int(row["attempts"]) + 1
+                return job
+        # gave up after 3 tries: the card can still be typed in
+        for row in connection.execute("SELECT upload_id, user_id FROM app_upload_jobs WHERE state = 'running' AND started_at < ? AND attempts >= 3", (stale,)).fetchall():
+            connection.execute("UPDATE app_upload_jobs SET state = 'failed', finished_at = ?, result = ? WHERE upload_id = ?", (now_iso(), json.dumps({"message": "Reading stopped 3 times."}), row["upload_id"]))
+            threading.Thread(target=_upload_job_gave_up, args=(row["upload_id"], int(row["user_id"])), daemon=True).start()
+    return None
+
+
+def _finish_upload_job(upload_id: str, state: str, result: dict[str, Any]) -> None:
+    with _auth_connection() as connection:
+        connection.execute(_UPLOAD_JOBS_TABLE)
+        connection.execute("UPDATE app_upload_jobs SET state = ?, finished_at = ?, result = ? WHERE upload_id = ?", (state, now_iso(), json.dumps(result, default=str), upload_id))
+
+
+def _start_upload_worker() -> None:
+    global _UPLOAD_WORKER_STARTED
+    with _UPLOAD_WORKER_LOCK:
+        if _UPLOAD_WORKER_STARTED:
+            return
+        _UPLOAD_WORKER_STARTED = True
+    threading.Thread(target=_upload_worker_loop, name="scorecard-reader", daemon=True).start()
+
+
+def _upload_worker_loop() -> None:
+    while True:
+        try:
+            job = _claim_upload_job()
+        except Exception:
+            logger.exception("Couldn't check for scorecards to read")
+            job = None
+        if job is None:
+            _UPLOAD_JOB_EVENT.wait(30)
+            _UPLOAD_JOB_EVENT.clear()
+            continue
+        try:
+            result = _process_upload_job(job)
+            _finish_upload_job(job["upload_id"], "done", result)
+        except Exception as exc:
+            logger.exception("Reading scorecard %s failed", job.get("upload_id"))
+            if int(job.get("attempts") or 1) >= 3:
+                _finish_upload_job(job["upload_id"], "failed", {"message": str(exc)})
+                _upload_job_gave_up(job["upload_id"], int(job["user_id"]), str(exc))
+            else:
+                with _auth_connection() as connection:
+                    connection.execute("UPDATE app_upload_jobs SET state = 'queued' WHERE upload_id = ?", (job["upload_id"],))
+                time_module.sleep(20)
+
+
+def _upload_job_user(user_id: int) -> sqlite3.Row | None:
+    with _auth_connection() as connection:
+        return connection.execute("SELECT * FROM app_users WHERE id = ?", (user_id,)).fetchone()
+
+
+def _tell_uploader(user_row: sqlite3.Row | None, record: dict[str, Any], store: dict[str, Any], title: str, body: str) -> None:
+    if user_row is None:
+        return
+    try:
+        with _auth_connection() as connection:
+            muse.create_notification(
+                connection, club_id=str(record.get("club_id") or ""), kind="scorecard_ready", title=title, body=body,
+                link=f"/scorecards/{record.get('id')}?preview=1", match_id=str(record.get("match_id") or ""), target_user_id=int(user_row["id"]), created_by="Scorecard reader",
+            )
+    except Exception:
+        logger.exception("Couldn't save the 'scorecard ready' notification")
+    try:
+        _whatsapp_upload_result(user_row, record, store)
+    except Exception:
+        logger.exception("WhatsApp upload message failed")
+
+
+def _upload_job_gave_up(upload_id: str, user_id: int, error: str = "") -> None:
+    try:
+        store = load_store()
+        record = get_archive_or_404(store, upload_id)
+        if str(record.get("status") or "") == UPLOAD_PROCESSING:
+            record["status"] = "Pending review"
+            record["ai_flags"] = [f"The photo couldn't be read{(' (' + error[:100] + ')') if error else ''}. Type the scorecard in with ✏️ Edit."]
+            save_store(store)
+        _tell_uploader(_upload_job_user(user_id), record, store, f"Scorecard {_match_code(upload_id)} couldn't be read", "Open it and type it in with ✏️ Edit.")
+    except Exception:
+        logger.exception("Couldn't mark scorecard %s as unread", upload_id)
+
+
+def _read_second_photo(store: dict[str, Any], upload: dict[str, Any], user_row: sqlite3.Row, club_id: str) -> str:
+    """Read the 2nd innings photo of a scorecard and join it (was done inside the 2nd-photo upload)."""
+    file_token = str(upload.get("second_photo_file") or "")
+    template = _scorecard_pick_template(upload) or {}
+    upload["second_photo_read"] = True
+    if not (ai_vision.enabled() and _ai_allowed(user_row, club_id, "ai_extraction", f"scorecard:{upload.get('id')}:2")):
+        return "2nd innings photo added. Type the 2nd innings in with ✏️ (AI reading isn't available for this account)."
+    club = _selected_club(store, str(upload.get("club_id") or club_id or ""))
+    result = _read_photo_with_ai(store, upload, UPLOAD_DIR / file_token, club)
+    if not result.get("template"):
+        return f"2nd innings photo added, but it couldn't be read ({result.get('error') or 'AI reading failed'}). Type the 2nd innings in with ✏️."
+    joined = _join_innings_photos(template, result["template"])
+    if _template_innings_count(joined) > _template_innings_count(template):
+        _apply_ai_template(store, upload, joined, result)
+        return "2nd innings photo read and added to the scorecard. Check it against the photos."
+    return "2nd innings photo added, but no new innings was found on it. Check it's the other team's batting page, or type the 2nd innings in with ✏️."
+
+
+def _finish_processed_upload(store: dict[str, Any], record: dict[str, Any], user_row: sqlite3.Row, options: dict[str, Any], destination: Path, selected_club: dict[str, Any], second_note: str) -> dict[str, Any]:
+    """After the reading (inside the store lock): smaller photos, join with the other innings, checks, save."""
+    if str(record.get("status") or "") == UPLOAD_PROCESSING:
+        record["status"] = "Pending review"
+    # the photos were read at full size; keep smaller copies (the scorecard keeps the original photo's hash)
+    if _shrink_photo(destination):
+        record["file_size"] = destination.stat().st_size
+    if record.get("second_photo_file"):
+        _shrink_photo(UPLOAD_DIR / str(record["second_photo_file"]))
+    league_id = str(options.get("league_id") or "")
+    link_match_code = str(options.get("link_match_code") or "")
+    other_half = None
+    if link_match_code:
+        linked = _upload_by_match_code(store, link_match_code)
+        mine, theirs = _single_innings(record), (_single_innings(linked) if linked else None)
+        if linked is not None and mine and theirs and not (
+            mine.get("batting_team") and theirs.get("batting_team") and _same_team_name(mine.get("batting_team"), theirs.get("batting_team"))
+        ):
+            other_half = linked
+    if other_half is None:
+        other_half = _find_other_half(store, record)
+    if other_half is not None:
+        checks = _join_halves(store, other_half, record, user_row)
+        save_store(store)
+        if league_id:
+            _link_match_to_league(league_id, f"a:{other_half.get('id')}", _league_actor(user_row))
+        title = (checks.get("scorecard") or {}).get("title") or "this match"
+        return {"joined": True, "upload": other_half, "title": title, "preview_url": f"/scorecards/{other_half.get('id')}?preview=1&joined=1",
+                "message": f"This is the other innings of {title} (same date and teams). Both innings are now one scorecard."}
+    if record.get("second_photo_file"):
+        record["review_flags"] = []
+    checks = _scorecard_upload_checks(store, record)
+    save_store(store)
+    if league_id:
+        _link_match_to_league(league_id, f"a:{record.get('id')}", _league_actor(user_row))
+    _scorecard_check_alerts(record, checks, user_row)
+    name_matches = _card_name_matches(load_store(), checks.get("scorecard") or {}, user_row, str(selected_club.get("id") or ""))
+    lite = ("⚠️ " + ai_vision.LITE_NOTE + " ") if ai_vision.LITE_NOTE in (record.get("ai_flags") or []) else ""
+    name = record.get("original_file_name") or record.get("file_name") or "scorecard"
+    if checks["needs_review"]:
+        message = lite + f"Scorecard '{name}' was read. Some things need checking, so a site admin will review it." + _name_match_notice(name_matches)
+    else:
+        message = lite + f"Scorecard '{name}' was read. Check the digital scorecard and tap Publish." + _name_match_notice(name_matches)
+    if second_note:
+        message += " " + second_note
+    return {"message": message, "checks": checks, "name": name}
+
+
+def _process_upload_job(job: dict[str, Any]) -> dict[str, Any]:
+    options = json.loads(job.get("options") or "{}")
+    upload_id = str(job["upload_id"])
+    user_row = _upload_job_user(int(job["user_id"]))
+    if user_row is None:
+        return {"message": "The uploader's account was removed."}
+    upload_club_id = str(job.get("club_id") or "")
+    store = load_store()
+    try:
+        record = get_archive_or_404(store, upload_id)
+    except ValueError:
+        return {"message": "The scorecard was deleted before it was read."}
+    selected_club = _selected_club(store, str(options.get("focus_club_id") or record.get("club_id") or ""))
+    destination = _upload_file_path(record) or (UPLOAD_DIR / Path(str(record.get("file_name") or "")).name)
+    second_note = ""
+    if not options.get("second_only"):
+        # ---- the slow part: reading the photo (up to a few minutes) ----
+        ai_note = ""
+        if ai_vision.enabled():
+            if _ai_allowed(user_row, upload_club_id, "ai_extraction", f"scorecard:{record['id']}"):
+                ai_note = _scorecard_ai_read(store, record, destination, selected_club)
+            else:
+                ai_note = "AI reading of photos is a Pro feature (your free AI try is used)."
+                record["ai_flags"] = [ai_note + " Type in the scorecard with ✏️, or upgrade to Pro on /pricing."]
+        if not record.get("ocr_processed_at"):
+            # No AI: Amit's local reader (OCR + Ollama vision with focused crops, Oct 16).
+            record = extract_archive_by_id(store, record["id"])
+            if not _is_scorecard_template_payload(record.get("extraction_template")):
+                record["extraction_template"] = scorecard_template_from_archive(record)
+            record["review_template_json"] = json.dumps(record["extraction_template"], indent=2)
+        if int(options.get("innings_number") or 0) == 2:
+            _mark_single_innings_number(record, 2)
+    while True:
+        if record.get("second_photo_file") and not record.get("second_photo_read"):
+            second_note = _read_second_photo(store, record, user_row, upload_club_id)
+        # Somebody may have saved while the photo was read: put this scorecard's result into the newest data (one
+        # save at a time) instead of saving an older copy over their change.
+        with _store_write_lock():
+            fresh = load_store()
+            try:
+                current = get_archive_or_404(fresh, upload_id)
+            except ValueError:
+                return {"message": "The scorecard was deleted while it was read."}
+            added_later = {key: current[key] for key in ("second_photo_file", "second_photo_hash", "second_photo_name", "second_preview_url") if current.get(key) and not record.get(key)}
+            if added_later:
+                added_later["second_photo_read"] = False
+            current.clear()
+            current.update(record)
+            current.update(added_later)
+            store, record = fresh, current
+            if added_later:
+                save_store(store)
+                continue  # a 2nd innings photo arrived while the 1st was read: read it too, then save
+            result = _finish_processed_upload(store, record, user_row, options, destination, selected_club, second_note)
+        break
+    if result.get("joined"):
+        _tell_uploader(user_row, result["upload"], store, f"Scorecard ready: {result['title']}", result["message"] + " Check it and tap Publish.")
+        return {key: value for key, value in result.items() if key in {"message", "preview_url", "joined"}}
+    message = result["message"]
+    title = str((result["checks"].get("scorecard") or {}).get("title") or result["name"])
+    _tell_uploader(user_row, record, store, f"Scorecard ready: {title}", message)
+    logger.info("Scorecard %s read in the background.", upload_id)
+    return {"message": message, "preview_url": f"/scorecards/{record.get('id')}?preview=1"}
+
+
+@app.get("/api/scorecards/{upload_id}/processing")
+def scorecard_processing(upload_id: str, x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
+    """Is this upload still being read? (The preview page asks every few seconds while it is.)"""
+    _, _, store, upload, _ = _scorecard_upload_access(x_auth_token, upload_id)
+    job = _upload_job(str(upload.get("id"))) or {}
+    processing = str(upload.get("status") or "") == UPLOAD_PROCESSING or job.get("state") in {"queued", "running"}
+    result = json.loads(job.get("result") or "{}") if job.get("result") else {}
+    ahead = 0
+    if processing and job.get("state") == "queued":
+        with _auth_connection() as connection:
+            ahead = int(connection.execute("SELECT COUNT(*) FROM app_upload_jobs WHERE state IN ('queued', 'running') AND created_at < ?", (job.get("created_at") or "",)).fetchone()[0])
+    return {
+        "processing": processing,
+        "state": job.get("state") or ("done" if not processing else "queued"),
+        "ahead": ahead,
+        "match_code": _match_code(upload.get("id")),
+        "message": result.get("message", ""),
+        "preview_url": result.get("preview_url") or f"/scorecards/{upload.get('id')}?preview=1",
+    }
+
+
 @app.post("/api/scorecards/upload")
 async def upload_scorecard(
     request: Request,
@@ -15868,101 +16244,37 @@ async def upload_scorecard(
     record["image_fingerprint"] = fingerprint
     record["uploaded_by_user_id"] = int(user_row["id"])
     record["uploaded_by"] = str(user_row["display_name"] or "")
-    store["archive_uploads"].append(record)
     # Handwritten cards: read the photo with the AI vision model when it is switched on
     # (README: "Reading handwritten scorecards automatically"); otherwise the local reader.
     # Plans (README "Plans: what each group can use"): Pro gets AI reading on every upload; a Free user's
     # first AI reading uses their one free AI try. Otherwise the photo is saved and they type it in.
-    ai_note = ""
-    if ai_vision.enabled():
-        if _ai_allowed(user_row, upload_club_id, "ai_extraction", f"scorecard:{record['id']}"):
-            ai_note = _scorecard_ai_read(store, record, destination, selected_club)
-        else:
-            ai_note = "AI reading of photos is a Pro feature (your free AI try is used)."
-            record["ai_flags"] = [ai_note + " Type in the scorecard with ✏️, or upgrade to Pro on /pricing."]
-    if not record.get("ocr_processed_at"):
-        # No AI: Amit's local reader (OCR + Ollama vision with focused crops, Oct 16).
-        record = extract_archive_by_id(store, record["id"])
-        if not _is_scorecard_template_payload(record.get("extraction_template")):
-            record["extraction_template"] = scorecard_template_from_archive(record)
-        record["review_template_json"] = json.dumps(record["extraction_template"], indent=2)
-    # Nov 13 2026 (Amit: photos "need to be shrunk from MB to KB"): the photo was read at full size above; keep a
-    # smaller copy (record["file_hash"] stays the hash of the original, so the same photo is still caught as a duplicate)
-    if _shrink_photo(destination):
-        record["file_size"] = destination.stat().st_size
-    # Nov 14 2026 (Amit): WhatsApp alert to every player of the club(s) on the card (when WhatsApp is set up)
-    try:
-        _whatsapp_scorecard_alert(record, str(_scorecard_from_archive(record).get("title") or "New scorecard"))
-    except Exception:
-        logger.exception("WhatsApp scorecard alert failed")
-    # Nov 6 2026 (Amit: "should allow if I have only 2nd innings scorecard"): the photo was put in the
-    # "2nd innings" box, so its one innings is innings 2 (the 1st innings shows as missing until it's added).
-    if innings_number == 2:
-        _mark_single_innings_number(record, 2)
-    # The other innings of a match already uploaded (by this club or the other team): join them into one scorecard.
-    other_half = None
-    if link_match_code:
-        # the other team gave us their Match ID: link to it when it holds the other innings
-        linked = _upload_by_match_code(store, link_match_code)
-        mine, theirs = _single_innings(record), (_single_innings(linked) if linked else None)
-        if linked is not None and mine and theirs and not (
-            mine.get("batting_team") and theirs.get("batting_team") and _same_team_name(mine.get("batting_team"), theirs.get("batting_team"))
-        ):
-            other_half = linked
-    if other_half is None:
-        other_half = _find_other_half(store, record)
-    if other_half is not None:
-        checks = _join_halves(store, other_half, record, user_row)
+    # Nov 14 2026 (Amit: "uploading the scorecards and then processing them offline and once it's done alert the
+    # scorer for next steps"): the photo and its Match ID are saved now and the upload returns at once; reading,
+    # joining innings, checks and making the photo smaller happen in the background (_process_upload_job).
+    record["status"] = UPLOAD_PROCESSING
+    with _store_write_lock():
+        store = load_store()
+        store["archive_uploads"].append(record)
         save_store(store)
-        if league_id:
-            _link_match_to_league(league_id, f"a:{other_half.get('id')}", _league_actor(user_row))
-        title = (checks.get("scorecard") or {}).get("title") or "this match"
-        return {
-            "message": f"This is the other innings of {title} (same date and teams). Both innings are now one scorecard.",
-            "dashboard": current_dashboard(load_store(), selected_club.get("id", "")),
-            "upload": other_half,
-            "joined": True,
-            "checks": {key: value for key, value in checks.items() if key != "scorecard"},
-            "digital": checks.get("scorecard"),
-            "preview_url": f"/scorecards/{other_half.get('id')}?preview=1&joined=1",
-        }
-    checks = _scorecard_upload_checks(store, record)
-    save_store(store)
-    if league_id:
-        _link_match_to_league(league_id, f"a:{record.get('id')}", _league_actor(user_row))
-    logger.debug("Scorecard upload saved. archive_id=%s club_id=%s file=%s", record.get("id", ""), record.get("club_id", ""), record.get("file_name", ""))
-    _audit_event(
-        "archive.upload",
-        "archive_upload",
-        str(record.get("id") or ""),
-        actor=user_row,
-        club_id=str(record.get("club_id") or ""),
-        club_name=str(record.get("club_name") or ""),
-        details={
-            "file_name": record.get("file_name") or "",
-            "season": record.get("season") or "",
-            "status": record.get("status") or "",
-        },
-        source="api",
+    _queue_upload_job(
+        str(record["id"]),
+        int(user_row["id"]),
+        str(upload_club_id or ""),
+        {"focus_club_id": str(focus_club_id or ""), "link_match_code": str(link_match_code or ""), "innings_number": int(innings_number or 0), "league_id": league_id},
     )
-    _scorecard_check_alerts(record, checks, user_row)
-    name_matches = _card_name_matches(load_store(), checks.get("scorecard") or {}, user_row, str(selected_club.get("id") or ""))
-    name_notice = _name_match_notice(name_matches)
+    _audit_event(
+        "archive.upload", "archive_upload", str(record.get("id") or ""), actor=user_row, club_id=str(record.get("club_id") or ""),
+        club_name=str(record.get("club_name") or ""), details={"file_name": record.get("file_name") or "", "season": record.get("season") or "", "status": UPLOAD_PROCESSING}, source="api",
+    )
     left = "" if upload_limit is None else f" {max(0, int(upload_limit) - int(plan_info.get('uploads_used') or 0) - 1)} of {upload_limit} uploads left this month."
-    lite = ("⚠️ " + ai_vision.LITE_NOTE + " ") if ai_vision.LITE_NOTE in (record.get("ai_flags") or []) else ""
-    if checks["needs_review"]:
-        message = lite + f"Scorecard '{record.get('original_file_name') or file.filename or file_token}' uploaded. Some things need checking, so a site admin will review it." + name_notice + left
-    else:
-        message = lite + f"Scorecard '{record.get('original_file_name') or file.filename or file_token}' uploaded. Check the digital scorecard and tap Publish." + name_notice + left
+    match_code = _match_code(record.get("id"))
     return {
-                "message": message,
-                "dashboard": current_dashboard(load_store(), selected_club.get("id", "")),
-                "upload": record,
-                "checks": checks,
-                "digital": checks.get("scorecard"),
-                "name_matches": name_matches,
-                "preview_url": f"/scorecards/{record.get('id')}?preview=1",
-            }
+        "message": f"Uploaded ✅ Match ID {match_code}. We're reading it now - you'll get a notification (and a WhatsApp) when it's ready to check. You can close this page." + left,
+        "upload": record,
+        "match_code": match_code,
+        "processing": True,
+        "preview_url": f"/scorecards/{record.get('id')}?preview=1",
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -17039,6 +17351,7 @@ def _mark_archive_approved(store: dict[str, Any], upload: dict[str, Any], user_r
             names.append(str(club_item.get("name") or club_item.get("short_name") or "").strip())
     upload["club_names"] = list(dict.fromkeys(name for name in names if name))
     upload["status"] = "Approved"
+    _whatsapp_scorecard_published(upload)  # Nov 14 2026: players hear about it when it is published
     upload["reviewed_by"] = user_row["display_name"] or user_row["mobile"] or "admin"
     upload["reviewed_at"] = now_iso()
     auto_register_players_from_archive(store, upload, club_id=upload.get("club_id", ""))
@@ -17424,41 +17737,27 @@ async def scorecard_upload_second_photo(
     else:
         file_token = f"{uuid.uuid4().hex[:10]}{suffix}"
         (UPLOAD_DIR / file_token).write_bytes(content)
-    upload["second_photo_file"] = file_token
-    upload["second_photo_hash"] = incoming_hash
-    upload["second_photo_name"] = file.filename or file_token
-    upload["second_preview_url"] = f"/uploads/{file_token}"
-    message = "2nd innings photo added."
-    read = False
-    if ai_vision.enabled() and _ai_allowed(user_row, current_club_id, "ai_extraction", f"scorecard:{upload.get('id')}:2"):
-        club = _selected_club(store, str(upload.get("club_id") or current_club_id or ""))
-        result = _read_photo_with_ai(store, upload, UPLOAD_DIR / file_token, club)
-        if result.get("template"):
-            joined = _join_innings_photos(template, result["template"])
-            if _template_innings_count(joined) > _template_innings_count(template):
-                _apply_ai_template(store, upload, joined, result)
-                read = True
-                message = "2nd innings photo read and added to the scorecard. Check it against the photos."
-            else:
-                message = "2nd innings photo added, but no new innings was found on it. Check it's the other team's batting page, or type the 2nd innings in with ✏️."
-        else:
-            message = f"2nd innings photo added, but it couldn't be read ({result.get('error') or 'AI reading failed'}). Type the 2nd innings in with ✏️."
-    else:
-        message = "2nd innings photo added. Type the 2nd innings in with ✏️ (AI reading isn't available for this account)."
-    _shrink_photo(UPLOAD_DIR / file_token)  # after the AI read, which used the full-size photo
-    upload["status"] = "Pending review"
-    upload["review_flags"] = []
-    save_store(store)
-    refreshed = load_store()
     archive_id = str(upload.get("id"))
-    checks = _scorecard_upload_checks(refreshed, get_archive_or_404(refreshed, archive_id))
-    save_store(refreshed)
-    _audit_event("archive.second_photo", "archive_upload", archive_id, actor=user_row, club_id=str(upload.get("club_id") or ""), details={"read": read, "file": file_token}, source="api")
+    with _store_write_lock():
+        fresh = load_store()
+        if stray_file:
+            fresh["archive_uploads"] = [item for item in fresh.get("archive_uploads", []) or [] if Path(str(item.get("file_path") or item.get("file_name") or "").replace("\\", "/")).name != stray_file]
+        upload = get_archive_or_404(fresh, archive_id)
+        upload["second_photo_file"] = file_token
+        upload["second_photo_hash"] = incoming_hash
+        upload["second_photo_name"] = file.filename or file_token
+        upload["second_preview_url"] = f"/uploads/{file_token}"
+        # Nov 14 2026: read in the background like every upload; the uploader is told when it's done
+        upload["second_photo_read"] = False
+        was_processing = str(upload.get("status") or "") == UPLOAD_PROCESSING
+        upload["status"] = UPLOAD_PROCESSING
+        save_store(fresh)
+    _queue_upload_job(archive_id, int(user_row["id"]), str(current_club_id or ""), {} if was_processing else {"second_only": True})
+    _audit_event("archive.second_photo", "archive_upload", archive_id, actor=user_row, club_id=str(upload.get("club_id") or ""), details={"file": file_token, "queued": True}, source="api")
     return {
-        "message": message,
-        "read": read,
+        "message": "2nd innings photo added. It's being read with the scorecard - you'll get a notification when it's ready.",
+        "processing": True,
         "preview_url": f"/scorecards/{archive_id}?preview=1",
-        "checks": {key: value for key, value in checks.items() if key != "scorecard"},
     }
 
 
@@ -17921,6 +18220,7 @@ def apply_archive(upload_id: str, request: ArchiveApplyRequest, focus_club_id: s
         )
     match["performances"] = existing_performances
     upload["status"] = "Approved"
+    _whatsapp_scorecard_published(upload)  # Nov 14 2026: players hear about it when it is published
     upload["applied_to_match_id"] = request.match_id
     _touch_fixture_audit(match, user_row)
     save_store(store)
@@ -18059,6 +18359,7 @@ def approve_archive(
             club_names.append(str(club_item.get("name") or club_item.get("short_name") or "").strip())
     upload["club_names"] = list(dict.fromkeys(name for name in club_names if name))
     upload["status"] = "Approved"
+    _whatsapp_scorecard_published(upload)  # Nov 14 2026: players hear about it when it is published
     upload["reviewed_by"] = user_row["display_name"] or user_row["mobile"] or "admin"
     upload["reviewed_at"] = now_iso()
     auto_register_players_from_archive(store, upload, club_id=upload.get("club_id", ""))

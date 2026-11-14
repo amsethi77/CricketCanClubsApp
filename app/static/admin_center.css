@@ -803,3 +803,37 @@ body.acx-page .page-shell .admin-section .primary-button:disabled {
   opacity: 0.55;
   cursor: default;
 }
+
+/* all nine tabs on one row on a laptop screen */
+body.acx-page .page-shell .admin-section-nav .secondary-button {
+  padding: 8px 12px !important;
+  font-size: 0.88rem !important;
+}
+
+/* Nov 14 2026 (Amit's phone: only "Clubs" was visible): the shared mobile styles make every button full width, so
+   the other tabs were pushed off the screen to the right. On phones and tablets all tabs now show as a grid. */
+@media (max-width: 899px) {
+  body.acx-page .page-shell .admin-section-nav {
+    display: grid !important;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 6px;
+    overflow: visible;
+    border-radius: 18px;
+    position: static;
+  }
+
+  body.acx-page .page-shell .admin-section-nav .secondary-button {
+    width: 100% !important;
+    min-width: 0 !important;
+    white-space: normal !important;
+    text-align: left;
+    padding: 9px 10px !important;
+    border-radius: 12px !important;
+    font-size: 0.84rem !important;
+    background: var(--acx-soft) !important;
+  }
+
+  body.acx-page .page-shell .admin-section-nav .secondary-button.is-active {
+    background: var(--acx-blue) !important;
+  }
+}

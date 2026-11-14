@@ -784,7 +784,28 @@
     return data;
   }
 
+  // Nov 14 2026 (Amit): uploads are read in the background. While this one is, show where it is and look again
+  // every 5 seconds; the uploader also gets a notification (and a WhatsApp) when it's done, so he can leave.
+  let processingStarted = 0;
+  async function stillProcessing() {
+    const response = await fetch(`/api/scorecards/${encodeURIComponent(id.replace(/^a-/, ""))}/processing`, { headers: { Accept: "application/json", "X-Auth-Token": token() } }).catch(() => null);
+    const data = response && response.ok ? await response.json().catch(() => null) : null;
+    if (!data || !data.processing) return false;
+    processingStarted = processingStarted || Date.now();
+    const secs = Math.round((Date.now() - processingStarted) / 1000);
+    const where = data.state === "queued" && data.ahead ? `${data.ahead} scorecard${data.ahead === 1 ? "" : "s"} ahead of yours` : data.state === "queued" ? "starting" : "reading the photo";
+    headerEl.innerHTML = `
+      <div class="sc-processing" role="status">
+        <p class="sc-processing-title">📄 Reading your scorecard… <small>(${escapeHtml(where)}, ${secs}s)</small></p>
+        <p>Match ID <b>${escapeHtml(data.match_code || "")}</b> is saved with the photo. You'll get a notification (and a WhatsApp) when it's ready to check - you can close this page or <a href="/scorecards/upload">upload another one</a>.</p>
+      </div>`;
+    cardPanel.innerHTML = "";
+    setTimeout(() => loadPreview().catch(() => null), 5000);
+    return true;
+  }
+
   async function loadPreview() {
+    if (await stillProcessing()) return null;
     const response = await fetch(`/api/scorecards/${encodeURIComponent(id.replace(/^a-/, ""))}/preview`, { headers: { Accept: "application/json", "X-Auth-Token": token() } });
     if (response.status === 401) {
       location.href = `/signin?next=${encodeURIComponent(location.pathname + location.search)}`;

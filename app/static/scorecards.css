@@ -1176,3 +1176,8 @@ body.scorecard-detail-page .sc-header h1.sc-title {
 }
 .sce-extras { margin-top: -4px; }
 .sce-extras label { font-size: 0.85rem; color: #475569; }
+
+/* Nov 14 2026: an upload that is still being read in the background */
+.sc-processing { padding: 18px; border-radius: 14px; background: #eef4ff; border: 1px solid #d6e4ff; color: #1e3a8a; }
+.sc-processing-title { margin: 0 0 6px; font-weight: 700; font-size: 1.05rem; }
+.sc-processing small { font-weight: 500; color: #475569; }

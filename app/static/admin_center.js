@@ -169,7 +169,7 @@ function activateAdminSection(sectionName, updateHash = true) {
   const panels = [...document.querySelectorAll("[data-admin-section-panel]")];
   if (!panels.length) return;
   const available = panels.map((panel) => panel.dataset.adminSectionPanel);
-  const active = available.includes(sectionName) ? sectionName : available.includes("clubs") ? "clubs" : "club-maintenance";
+  const active = available.includes(sectionName) ? sectionName : "club-maintenance";
   document.querySelectorAll("[data-admin-section]").forEach((button) => {
     const selected = button.dataset.adminSection === active;
     button.classList.toggle("is-active", selected);
@@ -1289,7 +1289,7 @@ function bindAdminCenterHandlers() {
     buttons[next]?.focus();
     buttons[next]?.click();
   });
-  activateAdminSection(window.location.hash.slice(1) || "clubs", false);
+  activateAdminSection(window.location.hash.slice(1) || "club-maintenance", false);
 
   trafficCard?.addEventListener("click", async (event) => {
     const periodButton = event.target.closest("[data-traffic-period]");

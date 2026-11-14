@@ -92,8 +92,8 @@
     const started = Date.now();
     const tick = () => {
       const secs = Math.round((Date.now() - started) / 1000);
-      const step = secs < 3 ? "📤 Uploading the photo" : secs < 45 ? "📄 Reading the scorecard" : "📄 Still reading - handwritten cards can take a little longer";
-      say(`${step}… ${secs}s (${reader.speed}). Keep this page open.`);
+      // Nov 14 2026: the photo is only uploaded here; it is read in the background afterwards
+      say(`📤 Uploading the photo… ${secs}s`);
     };
     tick();
     const timer = setInterval(tick, 1000);
@@ -127,7 +127,8 @@
       }
       clearInterval(timer);
       say(data.message || "Uploaded.");
-      location.href = previewUrl;
+      // the preview page shows "Reading…" and fills in by itself when the background reading is done
+      setTimeout(() => (location.href = previewUrl), data.processing ? 2500 : 0);
     } catch (error) {
       clearInterval(timer);
       say(error.message, true);
