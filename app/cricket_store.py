@@ -2205,9 +2205,42 @@ def _archive_extra(raw: Any) -> dict[str, Any]:
     return {key: data[key] for key in ARCHIVE_EXTRA_KEYS if key in data} if isinstance(data, dict) else {}
 
 
+_CANONICAL_SCOPE = threading.local()
+
+
+class _canonical_archive_scope:
+    """Nov 14 2026 (login / Clubs page took 8 s, the dashboard 7.6 s): while one dashboard or stats rebuild runs,
+    canonical_archive_uploads() gives back the result it already worked out for the same scorecards (it was redone
+    once per player - 959 times for one Clubs page). The cache lives only for that one build, so it never sees
+    changed data; the result is exactly what it was."""
+
+    def __enter__(self) -> "_canonical_archive_scope":
+        self.outer = getattr(_CANONICAL_SCOPE, "cache", None)
+        if self.outer is None:
+            _CANONICAL_SCOPE.cache = {}
+        return self
+
+    def __exit__(self, *exc: Any) -> None:
+        if self.outer is None:
+            _CANONICAL_SCOPE.cache = None
+
+
 def canonical_archive_uploads(archive_uploads: list[dict[str, Any]]) -> list[dict[str, Any]]:
     if isinstance(archive_uploads, _CanonicalArchiveList):
         return archive_uploads
+    cache = getattr(_CANONICAL_SCOPE, "cache", None)
+    if cache is not None:
+        key = tuple(id(item) for item in archive_uploads)
+        hit = cache.get(key)
+        if hit is not None:
+            return hit[1]
+        result = _canonical_archive_uploads_uncached(archive_uploads)
+        cache[key] = (list(archive_uploads), result)  # keeps the items alive, so their ids stay theirs
+        return result
+    return _canonical_archive_uploads_uncached(archive_uploads)
+
+
+def _canonical_archive_uploads_uncached(archive_uploads: list[dict[str, Any]]) -> list[dict[str, Any]]:
     grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for item in archive_uploads:
         if str((item or {}).get("status") or "").strip().lower() in HIDDEN_ARCHIVE_STATUSES:
@@ -7581,7 +7614,7 @@ def _archive_player_performances(archive: dict[str, Any], members: list[dict[str
     return fallback
 
 
-def _build_materialized_member_stats(store: dict[str, Any]) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+def _build_materialized_member_stats_impl(store: dict[str, Any]) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
     members = _members_with_name_index(store.get("members", []))
     fixtures = list(store.get("fixtures", []))
     archives = canonical_archive_uploads(store.get("archive_uploads", []))
@@ -8179,7 +8212,7 @@ def _club_match_counts(
     }
 
 
-def _build_materialized_club_stats(store: dict[str, Any]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+def _build_materialized_club_stats_impl(store: dict[str, Any]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     clubs = list(store.get("clubs", []) or ([store.get("club", {})] if store.get("club") else []))
     global_archives = canonical_archive_uploads(store.get("archive_uploads", []))
     overall_rows: list[dict[str, Any]] = []
@@ -8805,7 +8838,7 @@ def scoped_store_for_club(store: dict[str, Any], club: dict[str, Any]) -> dict[s
     return focused
 
 
-def build_dashboard(
+def _build_dashboard_impl(
     store: dict[str, Any],
     llm_status: dict[str, Any],
     focus_club_id: str = "",
@@ -9097,3 +9130,18 @@ def build_dashboard(
     _write_text_atomic(DASHBOARD_CACHE_FILE, json.dumps(dashboard, indent=2))
     _DASHBOARD_CACHE[dashboard_cache_key] = _fast_clone(dashboard)
     return dashboard
+
+
+def build_dashboard(*args: Any, **kwargs: Any) -> dict[str, Any]:
+    with _canonical_archive_scope():
+        return _build_dashboard_impl(*args, **kwargs)
+
+
+def _build_materialized_member_stats(*args: Any, **kwargs: Any) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+    with _canonical_archive_scope():
+        return _build_materialized_member_stats_impl(*args, **kwargs)
+
+
+def _build_materialized_club_stats(*args: Any, **kwargs: Any) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    with _canonical_archive_scope():
+        return _build_materialized_club_stats_impl(*args, **kwargs)

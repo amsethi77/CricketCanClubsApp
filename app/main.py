@@ -16578,6 +16578,25 @@ def _join_innings_photos(first: dict[str, Any], second: dict[str, Any]) -> dict[
     pick = next((item for item in extra if not any(_same_team_name(item.get("batting_team"), team) for team in taken if team)), None)
     if pick is None and extra and not all(_team_key_text(item.get("batting_team")) for item in extra):
         pick = extra[0]
+    if pick is None and extra and kept:
+        # Nov 15 2026 (Heartlake v Strikers, 28 Jun 2026: the 2nd photo was not added): the reader gave the other page
+        # the same batting team, because "Heartlake" is printed as the home club at the top of BOTH pages. When its
+        # batters are different players from the 1st photo's, it is the other team's innings: use it.
+        def batters(innings: dict[str, Any]) -> set[str]:
+            return {
+                normalize_name(str((row.get("player") or {}).get("name") if isinstance(row.get("player"), dict) else row.get("name") or ""))
+                for row in innings.get("batting") or []
+                if isinstance(row, dict)
+            } - {""}
+
+        ours = set().union(*(batters(item) for item in kept))
+        for item in extra:
+            theirs = batters(item)
+            if len(theirs) >= 3 and len(theirs & ours) <= len(theirs) // 4:
+                pick = item
+                pick["batting_team"] = ""  # filled in below: the team that bowled in the 1st photo's innings
+                pick["bowling_team"] = ""
+                break
     if pick is None:
         return joined
     teams = (joined.get("match") or {}).get("teams") or {}
