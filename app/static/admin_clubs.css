@@ -457,3 +457,167 @@
   font-size: 0.8rem;
   color: var(--acx-muted);
 }
+
+/* ---------- Club Maintenance -> Club roster (Nov 14 2026, Dhruvika: "improve the ui of club roster") ---------- */
+.acr-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.acr-count {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 10px;
+  border-radius: 999px;
+  background: #e6f0ff;
+  color: #1f6fe5;
+  font-size: 0.85rem;
+  font-weight: 700;
+  vertical-align: middle;
+}
+
+.acr-search {
+  flex: 1 1 240px;
+  max-width: 360px;
+  min-height: 40px;
+  padding: 8px 14px;
+  border: 1px solid #d6e0ee;
+  border-radius: 999px;
+  background: #f4f7fb;
+  font: inherit;
+}
+
+.admin-roster-panel .acr-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  align-items: start;
+  gap: 10px;
+}
+
+.admin-roster-panel .acr-card {
+  display: block;
+  padding: 12px 14px;
+  border: 1px solid #e3e9f2;
+  border-radius: 14px;
+  background: #fff;
+  box-shadow: none;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.admin-roster-panel .acr-card[hidden] {
+  display: none;
+}
+
+.admin-roster-panel .acr-card:hover {
+  border-color: #c9d6ea;
+  box-shadow: 0 4px 12px rgba(15, 31, 56, 0.06);
+}
+
+.admin-roster-panel .acr-card.is-removing {
+  border-color: #f2b8c0;
+  background: #fff8f9;
+}
+
+.acr-main {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.acr-avatar {
+  flex: 0 0 40px;
+  height: 40px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-weight: 800;
+  font-size: 0.85rem;
+  color: #fff;
+  background: linear-gradient(135deg, #e11d48, #9f1239);
+}
+
+.acr-who {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.acr-who strong {
+  display: block;
+  color: #0f1f38;
+  font-size: 1rem;
+}
+
+.acr-who p {
+  margin: 1px 0 0;
+  color: #5c6f8a;
+  font-size: 0.85rem;
+}
+
+.acr-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 6px;
+}
+
+.acr-tag {
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: #f4f7fb;
+  border: 1px solid #e3e9f2;
+  color: #475569;
+  font-size: 0.74rem;
+  white-space: nowrap;
+}
+
+.acr-tag.acr-role {
+  background: #eef6ee;
+  border-color: #cfe7d2;
+  color: #1d6b34;
+  text-transform: capitalize;
+}
+
+.acr-tag.is-empty {
+  color: #94a3b8;
+}
+
+.acr-remove-toggle {
+  flex: 0 0 auto;
+  min-height: 0 !important;
+  padding: 5px 10px !important;
+  border: 1px solid #f2b8c0 !important;
+  border-radius: 8px !important;
+  background: #fff !important;
+  color: #be123c !important;
+  font-size: 0.8rem !important;
+  font-weight: 700;
+  width: auto !important;
+  box-shadow: none !important;
+  cursor: pointer;
+}
+
+.acr-remove-toggle[aria-expanded="true"] {
+  background: #be123c !important;
+  color: #fff !important;
+}
+
+.admin-roster-panel .acr-remove {
+  margin-top: 10px;
+}
+
+.admin-roster-panel .acr-remove[hidden] {
+  display: none;
+}
+
+.acr-remove-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.acr-remove-actions button {
+  flex: 1 1 140px;
+}

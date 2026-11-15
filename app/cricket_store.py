@@ -1,7 +1,9 @@
 import base64
 import difflib
 import hashlib
+import functools
 import json
+import threading
 import logging
 import os
 import re
@@ -1178,16 +1180,30 @@ def canonical_phone(value: str) -> str:
     return digits
 
 
-def player_name_variants(member: dict[str, Any]) -> set[str]:
-    member_name = str(member.get("name", "")).strip()
+def player_name_variants(member: dict[str, Any]) -> frozenset[str]:
+    """Every lower-case way this player's name can be written (name, full name, Player ID, aliases).
+    Nov 14 2026: cached on those values - it was called over a million times per save (two thirds of the time
+    a save took to rebuild the stats). Callers only read the result."""
+    aliases = member.get("aliases", []) or []
+    return _player_name_variants_cached(
+        str(member.get("name", "")),
+        str(member.get("full_name", "")),
+        str(member.get("player_id", "")),
+        tuple(str(alias) for alias in aliases) if isinstance(aliases, (list, tuple)) else (str(aliases),),
+    )
+
+
+@functools.lru_cache(maxsize=20000)
+def _player_name_variants_cached(name: str, full_name_raw: str, player_id_raw: str, aliases: tuple[str, ...]) -> frozenset[str]:
+    member_name = name.strip()
     variants = {member_name.lower()}
-    full_name = str(member.get("full_name", "")).strip().lower()
+    full_name = full_name_raw.strip().lower()
     if full_name:
         variants.add(full_name)
-    player_id = str(member.get("player_id", "")).strip().lower()
+    player_id = player_id_raw.strip().lower()
     if player_id:
         variants.add(player_id)
-    for alias in member.get("aliases", []):
+    for alias in aliases:
         text = str(alias).strip().lower()
         if text:
             variants.add(text)
@@ -1199,7 +1215,7 @@ def player_name_variants(member: dict[str, Any]) -> set[str]:
         normalized_phrase = _normalized_phrase(item)
         if normalized_phrase:
             normalized_variants.add(normalized_phrase)
-    return normalized_variants
+    return frozenset(normalized_variants)
 
 
 def resolve_member_name(store: dict[str, Any], raw_name: str) -> str:
@@ -2515,10 +2531,28 @@ def extract_text_from_image(path: Path) -> str:
             return vision_candidate
 
 
+_CANONICAL_INDEX = threading.local()
+
+
+def _members_with_name_index(members: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Nov 14 2026 (saves were slow): a private copy of the member list with a name -> player lookup, used by
+    _canonical_member_name while the stats are rebuilt (same answer as the loop: the first player that matches)."""
+    copy = list(members)
+    index: dict[str, str] = {}
+    for member in copy:
+        for variant in player_name_variants(member):
+            index.setdefault(variant, member["name"])
+    _CANONICAL_INDEX.value = (copy, index)
+    return copy
+
+
 def _canonical_member_name(members: list[dict[str, Any]], raw_name: str) -> str:
     target = str(raw_name or "").strip().lower()
     if not target:
         return str(raw_name or "").strip()
+    scoped = getattr(_CANONICAL_INDEX, "value", None)
+    if scoped is not None and scoped[0] is members:
+        return scoped[1].get(target, str(raw_name or "").strip())
     for member in members:
         if target in player_name_variants(member):
             return member["name"]
@@ -7354,6 +7388,14 @@ def _member_stat_hints(member: dict[str, Any]) -> set[str]:
     }
 
 
+@functools.lru_cache(maxsize=4096)
+def _parsed_template_json(text: str) -> dict[str, Any]:
+    """Nov 14 2026: a scorecard's JSON parsed once and reused (it was parsed again for every player on every save).
+    Read-only: callers must not change the result."""
+    value = json.loads(text)
+    return value if isinstance(value, dict) else {}
+
+
 def _highest_score_for_member(
     fixtures: list[dict[str, Any]],
     archive_uploads: list[dict[str, Any]],
@@ -7403,7 +7445,7 @@ def _highest_score_for_member(
         performances = [item for item in archive.get("suggested_performances", []) or [] if isinstance(item, dict)]
         if not performances:
             try:
-                template = json.loads(str(archive.get("review_template_json") or "{}"))
+                template = _parsed_template_json(str(archive.get("review_template_json") or "{}"))
             except Exception:
                 template = {}
             for inning in template.get("innings", []) or []:
@@ -7513,7 +7555,7 @@ def _archive_player_performances(archive: dict[str, Any], members: list[dict[str
     if performances:
         return performances
     try:
-        template = json.loads(str(archive.get("review_template_json") or "{}"))
+        template = _parsed_template_json(str(archive.get("review_template_json") or "{}"))
     except Exception:
         return []
     fallback: list[dict[str, Any]] = []
@@ -7540,7 +7582,7 @@ def _archive_player_performances(archive: dict[str, Any], members: list[dict[str
 
 
 def _build_materialized_member_stats(store: dict[str, Any]) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
-    members = list(store.get("members", []))
+    members = _members_with_name_index(store.get("members", []))
     fixtures = list(store.get("fixtures", []))
     archives = canonical_archive_uploads(store.get("archive_uploads", []))
 

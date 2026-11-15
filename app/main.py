@@ -7337,18 +7337,26 @@ def _admin_center_html(request: Request) -> HTMLResponse:
         <link rel="stylesheet" href="/assets/styles.css?v=20261111tablealign" />
         <link rel="stylesheet" href="/assets/app_polish.css?v=20261006a" />
         <link rel="stylesheet" href="/assets/sports-system.css?v=20260926a" />
-        <link rel="stylesheet" href="/assets/scorecards.css?v=20261118c" />
-        <link rel="stylesheet" href="/assets/admin_clubs.css?v=20261119a" />
+        <link rel="stylesheet" href="/assets/scorecards.css?v=20261119d" />
+        <link rel="stylesheet" href="/assets/admin_clubs.css?v=20261119b" />
+        <link rel="stylesheet" href="/assets/admin_center.css?v=20261119c" />
       </head>
-      <body>
+      <body class="acx-page">
         <div class="page-shell">
           <header class="page-topbar"></header>
-          <section class="panel onboarding-panel">
-            <div class="stack-card">
+          <section class="panel onboarding-panel acx-shell">
+            <div class="stack-card acx-hero">
               <p class="section-kicker">Admin center</p>
               <h1>{html.escape(club.get('name', 'Selected club'))} control room</h1>
               <div id="adminRoleBadge" class="hero-badge admin-role-badge">Loading role...</div>
               <p class="lede">Manage a club, then use the section menu to open visitor analytics, scorecards, archives, audit history, or fixtures.</p>
+              <div class="acx-stats">
+                <div class="acx-stat"><strong>{len(store.get("clubs") or [])}</strong><span>clubs</span></div>
+                <div class="acx-stat"><strong>{len(store.get("members") or [])}</strong><span>players</span></div>
+                <div class="acx-stat"><strong>{len(store.get("archive_uploads") or [])}</strong><span>scorecards</span></div>
+                <div class="acx-stat"><strong>{len(store.get("fixtures") or [])}</strong><span>fixtures</span></div>
+                <div class="acx-stat"><strong>{sum(item.stat().st_size for item in _photo_files()) / 1048576:.0f} MB</strong><span>photos</span></div>
+              </div>
               <div id="adminCenterStatus" class="status-banner {notice_tone}"{" hidden" if not notice else ""}>{notice}</div>
             </div>
 
@@ -7522,8 +7530,8 @@ def _admin_center_html(request: Request) -> HTMLResponse:
         </div>
         <script src="/assets/multipage.js?v=20261117a"></script>
         <script src="/assets/scorecard_view.js?v=20261115a"></script>
-        <script src="/assets/scorecard.js?v=20261118c"></script>
-        <script src="/assets/admin_center.js?v=20261119a"></script>
+        <script src="/assets/scorecard.js?v=20261119d"></script>
+        <script src="/assets/admin_center.js?v=20261119b"></script>
         <script src="/assets/admin_reread.js?v=20261024a"></script>
         <script src="/assets/admin_clubs.js?v=20261117b"></script>
         <script src="/assets/admin_photos.js?v=20261117a"></script>
@@ -7551,13 +7559,14 @@ def _club_admin_center_html() -> HTMLResponse:
     <link rel="stylesheet" href="/assets/styles.css?v=20261111tablealign" />
     <link rel="stylesheet" href="/assets/app_polish.css?v=20261006a" />
     <link rel="stylesheet" href="/assets/sports-system.css?v=20260926a" />
-    <link rel="stylesheet" href="/assets/admin_clubs.css?v=20261119a" />
+    <link rel="stylesheet" href="/assets/admin_clubs.css?v=20261119b" />
+    <link rel="stylesheet" href="/assets/admin_center.css?v=20261119c" />
   </head>
-  <body>
+  <body class="acx-page">
     <div class="page-shell">
       <header class="page-topbar"></header>
-      <section class="panel onboarding-panel">
-        <div class="stack-card">
+      <section class="panel onboarding-panel acx-shell">
+        <div class="stack-card acx-hero">
           <p class="section-kicker">Admin center</p>
           <h1>Your club control room</h1>
           <p class="lede">Change your club's name, city and country, or merge a duplicate club into yours. Everything else stays with the superadmin.</p>

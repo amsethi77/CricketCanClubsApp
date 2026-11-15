@@ -1181,3 +1181,13 @@ body.scorecard-detail-page .sc-header h1.sc-title {
 .sc-processing { padding: 18px; border-radius: 14px; background: #eef4ff; border: 1px solid #d6e4ff; color: #1e3a8a; }
 .sc-processing-title { margin: 0 0 6px; font-weight: 700; font-size: 1.05rem; }
 .sc-processing small { font-weight: 500; color: #475569; }
+
+/* Nov 14 2026: the scorecard editor in parts (match details / 1st innings / 2nd innings) */
+.sce-tabs { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; margin: 10px 0 14px; position: sticky; top: 70px; z-index: 4; padding: 6px; background: #fff; border: 1px solid #e3e9f2; border-radius: 14px; box-shadow: 0 6px 16px rgba(15, 31, 56, 0.08); }
+.sce-tabs button { min-height: 44px; padding: 6px 8px; border: 0; border-radius: 10px; background: #f4f7fb; color: #334155; font: inherit; font-weight: 700; font-size: 0.85rem; cursor: pointer; line-height: 1.2; }
+.sce-tabs button small { display: block; font-weight: 500; font-size: 0.72rem; color: inherit; opacity: 0.8; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sce-tabs button.on { background: #1f6fe5; color: #fff; }
+.sce-tabs i { font-style: normal; font-weight: 800; }
+.sce-step[hidden] { display: none; }
+.sce-next { display: flex; justify-content: flex-end; gap: 8px; flex-wrap: wrap; margin: 12px 0 0; }
+.sce-save-bar { margin-top: 16px; }

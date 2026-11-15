@@ -797,25 +797,44 @@ function renderClubDetail(dashboard) {
         </label>
         <button class="secondary-button" type="submit">Disable club</button>
       </form>`;
+  // Nov 14 2026 (Dhruvika: "improve the ui of club roster"): a compact, searchable grid of players. Each player's
+  // removal form is the same as before (type the exact name, "Remove from club"); it opens from the "Remove" button.
+  const initials = (name) => String(name || "?").trim().split(/\s+/).map((part) => part[0] || "").join("").slice(0, 2).toUpperCase() || "?";
   const memberCards = members.length
     ? members
-        .map(
-          (member) => `
-            <article class="detail-card admin-member-card" data-admin-member="${escapeHtml(member.id || "")}">
-              <strong>${escapeHtml(member.name || "Player")}</strong>
-              <p>${escapeHtml(member.full_name || "")}</p>
-              <small>${escapeHtml(member.role || "player")} · ${escapeHtml(member.phone || "No mobile")}</small>
-              <small>${escapeHtml(member.team_name || "")}</small>
-              <form class="admin-delete-form" method="post" action="/api/admin/clubs/${encodeURIComponent(club.id || "")}/members/${encodeURIComponent(member.id || "")}/delete">
+        .map((member) => {
+          const fullName = String(member.full_name || "").trim();
+          const showFull = fullName && fullName.toLowerCase() !== String(member.name || "").trim().toLowerCase();
+          const search = [member.name, fullName, member.role, member.phone, member.team_name, member.player_id].filter(Boolean).join(" ").toLowerCase();
+          return `
+            <article class="detail-card admin-member-card acr-card" data-admin-member="${escapeHtml(member.id || "")}" data-search="${escapeHtml(search)}">
+              <div class="acr-main">
+                <span class="acr-avatar" aria-hidden="true">${escapeHtml(initials(member.name))}</span>
+                <div class="acr-who">
+                  <strong>${escapeHtml(member.name || "Player")}</strong>
+                  ${showFull ? `<p>${escapeHtml(fullName)}</p>` : ""}
+                  <div class="acr-tags">
+                    <span class="acr-tag acr-role">${escapeHtml(member.role || "player")}</span>
+                    ${member.player_id ? `<span class="acr-tag">ID ${escapeHtml(member.player_id)}</span>` : ""}
+                    <span class="acr-tag${member.phone ? "" : " is-empty"}">${member.phone ? "📱 " + escapeHtml(member.phone) : "No mobile"}</span>
+                    ${member.team_name ? `<span class="acr-tag">🏏 ${escapeHtml(member.team_name)}</span>` : ""}
+                  </div>
+                </div>
+                <button class="acr-remove-toggle" type="button" data-roster-remove aria-expanded="false">Remove</button>
+              </div>
+              <form class="admin-delete-form acr-remove" method="post" action="/api/admin/clubs/${encodeURIComponent(club.id || "")}/members/${encodeURIComponent(member.id || "")}/delete" hidden>
                 <label class="stack-label">
                   Type the exact player name to confirm removal
                   <input name="confirmation" type="text" placeholder="${escapeHtml(member.name || "")}" autocomplete="off" required />
                 </label>
-                <button class="danger-button" type="submit">Remove from club</button>
+                <div class="acr-remove-actions">
+                  <button class="danger-button" type="submit">Remove from club</button>
+                  <button class="secondary-button" type="button" data-roster-cancel>Cancel</button>
+                </div>
               </form>
             </article>
-          `
-        )
+          `;
+        })
         .join("")
     : `<p class="empty-state">No club members are linked to this club yet.</p>`;
   clubDetail.innerHTML = `
@@ -835,18 +854,49 @@ function renderClubDetail(dashboard) {
       </form>
     </article>
     <article class="stack-card admin-roster-panel">
-      <div class="panel-head compact-head">
+      <div class="panel-head compact-head acr-head">
         <div>
           <p class="section-kicker">Players</p>
-          <h3>Club roster</h3>
+          <h3>Club roster <span class="acr-count">${members.length}</span></h3>
         </div>
+        ${members.length ? `<input class="acr-search" type="search" placeholder="Search name, mobile, team, Player ID..." aria-label="Search the club roster" data-roster-search />` : ""}
       </div>
-      <div class="archive-list">
+      <div class="archive-list acr-grid">
         ${memberCards}
       </div>
+      <p class="empty-state" data-roster-none hidden>No player matches your search.</p>
     </article>
   `;
+  bindRosterControls();
   applyClubDeleteCheck(club);
+}
+
+// Club roster: search box, and each player's "Remove" button opens / closes his removal form.
+function bindRosterControls() {
+  const search = clubDetail.querySelector("[data-roster-search]");
+  search?.addEventListener("input", () => {
+    const query = search.value.trim().toLowerCase();
+    let shown = 0;
+    clubDetail.querySelectorAll(".acr-card").forEach((card) => {
+      const match = !query || String(card.dataset.search || "").includes(query);
+      card.hidden = !match;
+      shown += match ? 1 : 0;
+    });
+    const none = clubDetail.querySelector("[data-roster-none]");
+    if (none) none.hidden = shown > 0;
+  });
+  clubDetail.querySelectorAll(".acr-card").forEach((card) => {
+    const form = card.querySelector(".acr-remove");
+    const toggle = card.querySelector("[data-roster-remove]");
+    const setOpen = (open) => {
+      form.hidden = !open;
+      toggle.setAttribute("aria-expanded", String(open));
+      card.classList.toggle("is-removing", open);
+      if (open) form.querySelector("input")?.focus();
+    };
+    toggle?.addEventListener("click", () => setOpen(form.hidden));
+    card.querySelector("[data-roster-cancel]")?.addEventListener("click", () => setOpen(false));
+  });
 }
 
 // A club with players or matches cannot be deleted: hide the delete form and say what blocks it.

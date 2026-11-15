@@ -433,11 +433,19 @@
       checkEl.after(editor);
     }
     editor.innerHTML = `
-      <form class="stack-card sce" data-sce-form>
+      <form class="stack-card sce" data-sce-form novalidate>
         <p class="section-kicker">Type in the scorecard</p>
         <h2>Enter what's written on the card</h2>
         <p class="sc-check-lede">Copy the names and numbers from the photo (open it with the button below). Leave anything you can't read empty. Batters' runs + extras must add up to the total.</p>
         ${sc.photo_url ? `<p><a class="sc-btn ghost" href="${escapeHtml(sc.photo_url)}" target="_blank" rel="noopener">📷 Open the photo in a new tab</a></p>` : ""}
+        <!-- Nov 14 2026 (Amit: "Editing the match innings is not an easy job. We should allow it to be edited
+             separately"): one part at a time - match details, 1st innings, 2nd innings. Save keeps all of them. -->
+        <nav class="sce-tabs" role="tablist" aria-label="Part of the scorecard to edit">
+          <button type="button" role="tab" data-sce-tab="match" class="on" aria-selected="true">📋 Match details</button>
+          <button type="button" role="tab" data-sce-tab="inn0" aria-selected="false">🏏 1st innings <small data-sce-tab-team="0">${escapeHtml(teams[0])}</small> <i data-sce-tab-ok="0"></i></button>
+          <button type="button" role="tab" data-sce-tab="inn1" aria-selected="false">🏏 2nd innings <small data-sce-tab-team="1">${escapeHtml(teams[1])}</small> <i data-sce-tab-ok="1"></i></button>
+        </nav>
+        <div class="sce-step" data-sce-step="match">
         <p><button type="button" class="sc-btn ghost" data-sce="swap">⇅ Wrong order? Swap 1st and 2nd innings</button> <small>(do this first - it starts the form again)</small></p>
         <div class="sce-match">
           <label>Team batting first <input data-m="team1" value="${escapeHtml(teams[0])}" placeholder="e.g. Heartlake Cricket Club" required /></label>
@@ -455,8 +463,12 @@
           <label>Man of the match <input data-m="mom" value="${escapeHtml(sc.man_of_match || "")}" placeholder="Player" /></label>
           <label>Result <input data-m="result" value="${escapeHtml(sc.result && !/review|not recorded|read the handwriting|pending/i.test(sc.result) ? sc.result : "")}" placeholder="e.g. Heartlake won by 20 runs" /></label>
         </div>
-        ${innings.map((inn, i) => inningsEditor(inn, i, teams)).join("")}
-        <div class="sc-check-actions">
+        <p class="sce-next"><button type="submit" class="sc-btn ghost">💾 Save</button> <button type="button" class="sc-btn" data-sce-go="inn0">Next: 1st innings →</button></p>
+        </div>
+        ${innings.map((inn, i) => `<div class="sce-step" data-sce-step="inn${i}" hidden>${inningsEditor(inn, i, teams)}
+          <p class="sce-next">${i === 0 ? '<button type="button" class="sc-btn ghost" data-sce-go="match">← Match details</button> <button type="submit" class="sc-btn ghost">💾 Save</button> <button type="button" class="sc-btn" data-sce-go="inn1">Next: 2nd innings →</button>' : '<button type="button" class="sc-btn ghost" data-sce-go="inn0">← 1st innings</button> <button type="submit" class="sc-btn">💾 Save</button>'}</p>
+        </div>`).join("")}
+        <div class="sc-check-actions sce-save-bar">
           <button type="submit" class="sc-btn primary">Save scorecard</button>
           <button type="button" class="sc-btn" data-sce="close">Cancel</button>
         </div>
@@ -465,7 +477,28 @@
     editorShown = true;
     updateSums();
     wireRenameEverywhere(editor);
+    wireEditorSteps(editor);
     editor.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
+  function showEditorStep(editor, name) {
+    editor.querySelectorAll("[data-sce-step]").forEach((step) => (step.hidden = step.dataset.sceStep !== name));
+    editor.querySelectorAll("[data-sce-tab]").forEach((tab) => {
+      const on = tab.dataset.sceTab === name;
+      tab.classList.toggle("on", on);
+      tab.setAttribute("aria-selected", on ? "true" : "false");
+    });
+  }
+
+  function wireEditorSteps(editor) {
+    if (editor.dataset.stepsWired) return;
+    editor.dataset.stepsWired = "1";
+    editor.addEventListener("click", (event) => {
+      const target = event.target.closest("[data-sce-tab], [data-sce-go]");
+      if (!target) return;
+      showEditorStep(editor, target.dataset.sceTab || target.dataset.sceGo);
+      editor.querySelector(".sce-tabs")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
   }
 
   // Nov 7 2026 (Amit: "if we update at 1 place then it should replace in other places while editing the scorecard
@@ -513,6 +546,8 @@
       }
       const ok = total === null || runs + extras === total;
       out.className = `sce-sum ${ok ? "ok" : "bad"}`;
+      const mark = document.querySelector(`#scEditor [data-sce-tab-ok="${box.dataset.innings}"]`);
+      if (mark) mark.textContent = ok ? "✓" : "!";
       out.textContent = `Batters ${runs} + extras ${extras} = ${runs + extras}${total === null ? "" : ok ? ` ✓ matches the total ${total}` : ` ✗ but the total is ${total}`}`;
     });
     const t1 = document.querySelector('#scEditor [data-m="team1"]');
@@ -522,6 +557,9 @@
       labels[0].textContent = t1.value;
       labels[1].textContent = t2.value;
     }
+    document.querySelectorAll("#scEditor [data-sce-tab-team]").forEach((small) => {
+      small.textContent = (small.dataset.sceTabTeam === "0" ? t1 : t2)?.value || "";
+    });
   }
 
   // Nov 10 2026: saving an edit keeps what the form doesn't show - 1s/2s/3s/dots, runs per over, wides, no balls,
@@ -664,10 +702,24 @@
     event.preventDefault();
     const msg = form.querySelector("[data-sce-msg]");
     const button = form.querySelector('button[type="submit"]');
-    button.disabled = true;
+    // the form is in parts: a missing required box (team, date) may be on a part that is not showing
+    const missing = form.querySelector(":invalid");
+    if (missing) {
+      const step = missing.closest("[data-sce-step]");
+      if (step) showEditorStep(form.closest("#scEditor") || document, step.dataset.sceStep);
+      missing.reportValidity();
+      return;
+    }
+    const allSave = Array.from(form.querySelectorAll('button[type="submit"]'));
+    allSave.forEach((b) => (b.disabled = true));
     msg.textContent = "Saving…";
+    form.querySelector(".sce-save-bar")?.scrollIntoView({ behavior: "smooth", block: "center" });
     try {
-      const data = await previewAction(`/api/scorecards/${encodeURIComponent(id.replace(/^a-/, ""))}/manual`, { template: buildTemplate(form) });
+      const data = await previewAction(`/api/scorecards/${encodeURIComponent(id.replace(/^a-/, ""))}/manual`, { template: buildTemplate(form) }).catch((error) => {
+        // Nov 14 2026: iPhones say only "Load failed" when the connection drops; say what happened
+        if (error instanceof TypeError) throw new Error("The connection dropped while saving (weak signal or the site was restarting). Your changes are still here - tap Save scorecard again.");
+        throw error;
+      });
       document.getElementById("scEditor")?.remove();
       editorShown = true; // don't pop the editor open again after saving
       await loadPreview();
@@ -675,7 +727,7 @@
       checkEl.scrollIntoView({ behavior: "smooth", block: "start" });
     } catch (error) {
       msg.textContent = error.message;
-      button.disabled = false;
+      allSave.forEach((b) => (b.disabled = false));
     }
   });
   function nameMatchesHtml(matches) {
