@@ -111,8 +111,8 @@ jobs:
             --platform manylinux2014_x86_64 --implementation cp --python-version 3.11 --abi cp311 \
             -r "$BUILD/requirements.txt" -t "$BUILD/.python_packages/lib/site-packages"
           (cd "$BUILD" && zip -qr "$GITHUB_WORKSPACE/app_package.zip" app requirements.txt README.md READMELLM.md startup.sh .python_packages)
-          # never ship data or secrets
-          if unzip -l app_package.zip | grep -E 'app/data/|app/uploads/|\.env$|\.db$'; then echo "::error::Package contains data or secrets"; exit 1; fi
+          # never ship data or secrets (the empty app/data/ and app/uploads/ folders themselves are fine)
+          if unzip -Z1 app_package.zip | grep -E '^app/(data|uploads|duplicates)/.+|(^|/)\.env$|\.db(-wal|-shm)?$|\.db\.gz$'; then echo "::error::Package contains data or secrets"; exit 1; fi
           ls -lh app_package.zip
 
       - name: Deploy to Azure App Service
