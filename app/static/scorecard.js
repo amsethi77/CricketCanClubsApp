@@ -734,8 +734,22 @@
     return matches.map((match) => {
       const label = (m) => `<b>${escapeHtml(m.name)}</b>${(m.clubs || []).length ? ` <span class="sc-name-club">${escapeHtml(m.clubs.join(", "))}</span>` : ""}`;
       if (match.kind === "recognised") {
+        // Nov 16 2026 (Amit: "once it has learnt that Amit is Amit S then it should not question again"): a club admin /
+        // the superadmin confirms who the name is; it is remembered for the club and written on the card.
+        const best = match.members[0];
+        const why = (best.reasons || match.reasons || []).join(" · ");
+        const nameAttrs = `data-card-name="${escapeHtml(match.card_name)}" data-club="${escapeHtml(match.club_id || "")}"`;
+        const choices = match.can_confirm
+          ? `<div class="sc-check-actions">
+              ${match.members.map((m, i) => `<button type="button" class="sc-btn${i === 0 ? " primary" : ""}" data-sc="name-identity" data-member="${escapeHtml(m.id)}" ${nameAttrs}>✓ ${i === 0 ? "Yes, " : "It's "}${escapeHtml(m.name)}${m.full_name && m.full_name !== m.name ? ` (${escapeHtml(m.full_name)})` : ""}</button>`).join("")}
+              <button type="button" class="sc-btn ghost" data-sc="name-identity-no" data-members="${escapeHtml(match.members.map((m) => m.id).join(","))}" ${nameAttrs}>✗ None of these</button>
+            </div>`
+          : `<p class="sc-check-lede"><small>A club admin of this club or the superadmin confirms it once - then it isn't asked again.</small></p>`;
         return `<div class="sc-name-match sc-name-info">
-          <p class="sc-check-lede">🔎 <b>${escapeHtml(match.card_name)}</b> is recognised as ${label(match.members[0])} (${match.match_percent}% match).</p>
+          <p class="sc-check-lede">🔎 <b>${escapeHtml(match.card_name)}</b> on this card is most likely ${label(best)}${best.full_name && best.full_name !== best.name ? ` (${escapeHtml(best.full_name)})` : ""} - ${best.confidence ?? match.match_percent}% sure${match.members.length > 1 ? `, ${match.members.slice(1).map((m) => `${escapeHtml(m.name)} ${m.confidence}%`).join(", ")}` : ""}.</p>
+          ${why ? `<p class="sc-check-lede"><small>${escapeHtml(why)}</small></p>` : ""}
+          ${choices}
+          <p class="sc-name-merge-msg" role="status"></p>
         </div>`;
       }
       const [older, newer] = match.members;
@@ -746,7 +760,7 @@
         : `<p class="sc-check-lede">Ask a club admin to merge these players.</p>`;
       return `<div class="sc-name-match sc-name-dup">
         <p class="sc-check-lede">🔎 <b>${escapeHtml(match.card_name)}</b> may be the same player as ${label(older)} and ${label(newer)} (${match.match_percent}% match).</p>
-        <div class="sc-check-actions">${actions}<button type="button" class="sc-btn ghost" data-sc="name-ignore">Not the same, ignore</button></div>
+        <div class="sc-check-actions">${actions}<button type="button" class="sc-btn ghost" data-sc="name-ignore" ${match.can_merge ? pair : ""}>Not the same, ignore</button></div>
         <p class="sc-name-merge-msg" role="status"></p>
       </div>`;
     }).join("");
@@ -878,7 +892,39 @@
     if (!button || !checkEl || !checkEl.contains(button)) return;
     const msg = checkEl.querySelector(":scope > .sc-check > .sc-check-msg");
     if (button.dataset.sc === "name-ignore") {
+      // Nov 16 2026: remembered (same as Admin Center -> Name Matches -> "Not the same player"), so it isn't asked again
+      if (button.dataset.first && button.dataset.second) {
+        fetch("/api/admin/name-matches/reject", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "X-Auth-Token": token() },
+          body: JSON.stringify({ first_member_id: button.dataset.first, second_member_id: button.dataset.second }),
+        }).catch(() => null);
+      }
       button.closest(".sc-name-match")?.remove();
+      return;
+    }
+    if (button.dataset.sc === "name-identity" || button.dataset.sc === "name-identity-no") {
+      const box = button.closest(".sc-name-match");
+      const msg = box.querySelector(".sc-name-merge-msg");
+      box.querySelectorAll("button").forEach((b) => (b.disabled = true));
+      const yes = button.dataset.sc === "name-identity";
+      try {
+        const data = await previewAction(`/api/scorecards/${encodeURIComponent(id.replace(/^a-/, ""))}/${yes ? "name-identity" : "name-identity-reject"}`, {
+          card_name: button.dataset.cardName,
+          club_id: button.dataset.club,
+          ...(yes ? { member_id: button.dataset.member } : { member_ids: String(button.dataset.members || "").split(",").filter(Boolean) }),
+        });
+        if (yes && data.changed) {
+          await loadPreview();
+          const note = checkEl?.querySelector(":scope > .sc-check > .sc-check-msg");
+          if (note) note.textContent = data.message;
+        } else {
+          box.innerHTML = `<p class="sc-check-lede">✓ ${escapeHtml(data.message || "Saved.")}</p>`;
+        }
+      } catch (error) {
+        msg.textContent = error.message;
+        box.querySelectorAll("button").forEach((b) => (b.disabled = false));
+      }
       return;
     }
     if (button.dataset.sc === "name-merge") {

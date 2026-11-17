@@ -621,3 +621,208 @@
 .acr-remove-actions button {
   flex: 1 1 140px;
 }
+
+/* People & roles in a club (Nov 16 2026) */
+.acp {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 18px;
+}
+
+.acp[hidden] {
+  display: none;
+}
+
+.acp-close {
+  margin-left: auto;
+}
+
+.acp-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.acp-head h3 {
+  margin: 0;
+  font-size: 1.1rem;
+}
+
+.acp-counts {
+  display: flex;
+  gap: 12px;
+  font-size: 0.85rem;
+  color: #5c6f8a;
+}
+
+.acp-counts b {
+  color: #0f1f38;
+}
+
+.acp-sub {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 6px 0 0;
+  font-size: 0.8rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #1f6fe5;
+}
+
+.acp-search {
+  max-width: 220px;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.acp-list {
+  display: grid;
+  gap: 6px;
+}
+
+.acp-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr) minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: #fff;
+  border: 1px solid #e3e9f2;
+}
+
+.acp-row[hidden] {
+  display: none;
+}
+
+.acp-row.is-club_admin {
+  border-left: 4px solid #1f6fe5;
+}
+
+.acp-row.is-captain {
+  border-left: 4px solid #f59e0b;
+}
+
+.acp-who {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.acp-who strong {
+  color: #0f1f38;
+}
+
+.acp-who small {
+  display: block;
+  color: #5c6f8a;
+  font-size: 0.78rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.acp-avatar {
+  flex: 0 0 34px;
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  background: #eef3fa;
+  font-weight: 700;
+  color: #163a7a;
+}
+
+.acp-field {
+  align-self: start;
+  align-content: start;
+  display: grid;
+  gap: 2px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: #5c6f8a;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.acp-field select {
+  width: 100%;
+  min-height: 38px;
+  padding: 6px 8px;
+  border: 1px solid #cfd9e8;
+  border-radius: 10px;
+  background: #fff;
+  font-size: 0.9rem;
+  font-weight: 500;
+  text-transform: none;
+  letter-spacing: 0;
+  color: #0f1f38;
+}
+
+.acp-chip {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  background: #eef3fa;
+  color: #163a7a;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.acp-chip.is-club_admin {
+  background: #dbeafe;
+  color: #1e40af;
+}
+
+.acp-chip.is-captain {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.acp-chip.is-super {
+  background: #ede9fe;
+  color: #5b21b6;
+}
+
+.acp-chip.is-muted {
+  background: #f1f5f9;
+  color: #64748b;
+  font-weight: 600;
+}
+
+.acm-msg.is-success {
+  color: #15803d;
+}
+
+@media (max-width: 720px) {
+  .acp {
+    padding: 12px;
+  }
+
+  .acp-row {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  }
+
+  .acp-counts {
+    width: 100%;
+  }
+
+  .acp-who {
+    grid-column: 1 / -1;
+  }
+}
+
+.acp-list[data-acp-players] {
+  max-height: 60vh;
+  overflow-y: auto;
+  padding-right: 2px;
+}

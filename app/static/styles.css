@@ -7189,6 +7189,22 @@ body[data-can-manage="0"] #performance .three-column-grid { grid-template-column
 .stats-pro-card h3 { margin: 0; }
 .stats-pro-locked { background: linear-gradient(135deg, rgba(225, 29, 72, 0.06), rgba(124, 58, 237, 0.06)); }
 .stats-pro-locked .primary-button { justify-self: start; }
+/* Captains: wins and losses (Nov 16 2026) */
+.stats-captains .cap-sum, .stats-captains .cap-note { margin: 0; color: #5c6f8a; font-size: 0.9rem; }
+.stats-captains .cap-note { font-size: 0.8rem; }
+.stats-captains .cap-w { color: #15803d; }
+.stats-captains .cap-l { color: #b91c1c; }
+.stats-captains td, .stats-captains th { white-space: nowrap; }
+.stats-captains .cap-bar { display: flex; width: 90px; height: 5px; margin-top: 4px; border-radius: 3px; overflow: hidden; background: #e5e7eb; }
+.stats-captains .cap-bar i { display: block; height: 100%; }
+.stats-captains .cap-won { background: #22c55e; }
+.stats-captains .stats-pro-table { width: 100%; }
+@media (max-width: 640px) {
+  .stats-captains .stats-pro-table th, .stats-captains .stats-pro-table td { padding: 8px 5px; font-size: 0.85rem; }
+  .stats-captains .stats-pro-table th[scope="row"] { white-space: normal; }
+  .stats-captains .cap-bar { width: 64px; }
+}
+.stats-captains .cap-lost { background: #ef4444; }
 .stats-pro-scroll { overflow-x: auto; }
 .stats-pro-table { width: 100%; border-collapse: collapse; font-size: 0.92rem; }
 .stats-pro-table th, .stats-pro-table td { padding: 8px 10px; border-bottom: 1px solid rgba(148, 163, 184, 0.25); text-align: left; white-space: nowrap; }

@@ -604,3 +604,33 @@ html body .muse-bell-list { flex: 1 1 auto; min-height: 0; }
 .muse-dots i:nth-child(3) { animation-delay: 0.36s; }
 @keyframes museDot { 0%, 80%, 100% { opacity: 0.25; transform: translateY(0); } 40% { opacity: 1; transform: translateY(-4px); } }
 @media (prefers-reduced-motion: reduce) { .muse-dots i { animation: none; opacity: 0.6; } }
+
+/* Nov 17 2026 (Dhruvika: the AI Assistant button covered scorecard rows and lists on phones): on phones it is a
+   small round ✨ button; the words stay for screen readers. The badge (unread count) stays on its corner. */
+@media (max-width: 640px) {
+  .muse-fab,
+  .muse-fab-public {
+    width: 48px;
+    height: 48px;
+    padding: 0 !important;
+    gap: 0;
+    justify-content: center;
+    right: 12px;
+  }
+
+  .muse-fab strong {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+  }
+
+  .muse-fab-icon {
+    width: 48px;
+    height: 48px;
+    background: transparent;
+    font-size: 1.25rem;
+  }
+}

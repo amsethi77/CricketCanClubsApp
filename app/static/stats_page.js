@@ -94,6 +94,53 @@
   // app.js fills the season list after its own data load: check again when the options appear.
   if (yearSelect) new MutationObserver(() => setTimeout(seasonHint, 100)).observe(yearSelect, { childList: true });
 
+  // Nov 16 2026 (Amit: "under stats, we should show captain wise win/loss stats for the club only"): the club's
+  // matches with a result, by the club's captain in each match (GET /api/stats/captains, the season picked above).
+  const captainsBox = document.getElementById("statsCaptains");
+  let token = "";
+  try {
+    token = localStorage.getItem("cricketClubAppAuthToken") || "";
+  } catch (error) {
+    token = "";
+  }
+  async function renderCaptains() {
+    if (!captainsBox || !token) return;
+    const year = yearSelect && /^\d{4}$/.test(yearSelect.value || "") ? yearSelect.value : "";
+    const response = await fetch(`/api/stats/captains${year ? `?year=${year}` : ""}`, { headers: { "X-Auth-Token": token } }).catch(() => null);
+    const data = response && response.ok ? await response.json().catch(() => null) : null;
+    if (!data || !data.club) {
+      captainsBox.innerHTML = "";
+      return;
+    }
+    const t = data.totals || {};
+    const pct = (value) => (value === null || value === undefined ? "–" : `${value}%`);
+    const rows = (data.captains || [])
+      .map((row) => {
+        const name = row.player_key ? `<a href="/players/${encodeURIComponent(row.player_key)}">${esc(row.captain)}</a>` : esc(row.captain);
+        const bar = row.played ? `<span class="cap-bar" aria-hidden="true"><i class="cap-won" style="width:${(100 * row.won) / row.played}%"></i><i class="cap-lost" style="width:${(100 * row.lost) / row.played}%"></i></span>` : "";
+        return `<tr><th scope="row">🧢 ${name}${bar}</th><td>${row.played}</td><td class="cap-w">${row.won}</td><td class="cap-l">${row.lost}</td><td>${row.tied + row.no_result}</td><td><strong>${pct(row.win_pct)}</strong></td></tr>`;
+      })
+      .join("");
+    captainsBox.innerHTML = `
+      <div class="stats-pro-card stats-captains">
+        <p class="section-kicker">${esc(data.club.name)}${year ? ` · ${esc(year)}` : " · all seasons"}</p>
+        <h3>Captains: wins and losses</h3>
+        ${rows
+          ? `<p class="cap-sum">${t.played} match${t.played === 1 ? "" : "es"} with a result: <b class="cap-w">${t.won} won</b>, <b class="cap-l">${t.lost} lost</b>${t.tied || t.no_result ? `, ${t.tied + t.no_result} tied / no result` : ""}.</p>
+        <div class="stats-pro-scroll">
+          <table class="stats-pro-table">
+            <thead><tr><th scope="col">Captain</th><th scope="col">P</th><th scope="col">W</th><th scope="col">L</th><th scope="col">T/NR</th><th scope="col">Win %</th></tr></thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>
+        ${(data.captains || []).some((row) => row.captain === "Not recorded") ? '<p class="cap-note">"Not recorded": the scorecard has no captain for your club. Open the scorecard and pick the captain (Captains, man of the match) to count it.</p>' : ""}`
+          : `<p class="empty-state">No ${year ? `${esc(year)} ` : ""}matches with a result yet for ${esc(data.club.name)}.</p>`}
+      </div>`;
+  }
+  if (yearSelect) yearSelect.addEventListener("change", renderCaptains);
+  if (yearSelect) new MutationObserver(() => setTimeout(renderCaptains, 150)).observe(yearSelect, { childList: true });
+  renderCaptains();
+
   if (!paid && box) renderLocked();
 
   fetch("/api/dashboard", { credentials: "same-origin" })

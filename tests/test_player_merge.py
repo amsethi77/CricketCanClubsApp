@@ -133,13 +133,15 @@ class PlayerMergeTests(unittest.TestCase):
         card = {"innings": [{"batting": [{"name": "Amit S"}, {"name": "Michael Jones"}], "bowling": [{"name": "Zed Nobody"}]}]}
         matches = _card_name_matches(store, card)
 
-        self.assertEqual([m["kind"] for m in matches], ["recognised", "duplicate"])
-        self.assertEqual(matches[0]["members"][0]["id"], "m1")
-        self.assertEqual([m["id"] for m in matches[1]["members"]], ["b1", "b2"])
-        self.assertFalse(matches[1]["can_merge"])
+        # Nov 16 2026 (Amit: "once it has learnt that Amit is Amit S then it should not question again"): "Amit S" is
+        # already one of Amit Sethi's own names, so it is no longer asked about; two near-identical records still are.
+        self.assertEqual([m["kind"] for m in matches], ["duplicate"])
+        self.assertEqual([m["id"] for m in matches[0]["members"]], ["b1", "b2"])
+        self.assertFalse(matches[0]["can_merge"])
         notice = _name_match_notice(matches)
-        self.assertIn("'Amit S' is recognised as Amit Sethi", notice)
         self.assertIn("'Michael Jones' and 'Michael Jone' look like the same player", notice)
+        recognised = _name_match_notice([{"kind": "recognised", "card_name": "Amit", "members": [{"name": "Amit S"}]}])
+        self.assertIn("'Amit' is most likely Amit S - please confirm", recognised)
         self.assertEqual(_name_match_notice([]), "")
 
     def test_stats_add_up_after_merge_through_alias(self) -> None:

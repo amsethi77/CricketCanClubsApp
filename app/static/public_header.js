@@ -27,7 +27,7 @@
   } catch (e) { /* ignore */ }
   if (!hasToken && !document.querySelector('script[src^="/assets/muse_public.js"]')) {
     const muse = document.createElement("script");
-    muse.src = "/assets/muse_public.js?v=20261030f";
+    muse.src = "/assets/muse_public.js?v=20261117a";
     muse.defer = true;
     document.head.appendChild(muse);
   }
@@ -68,7 +68,7 @@ async function signedInUser() {
 function loadPublicAssistant() {
   if (document.querySelector('script[src^="/assets/muse_public.js"]')) return;
   const muse = document.createElement('script');
-  muse.src = '/assets/muse_public.js?v=20261030f';
+  muse.src = '/assets/muse_public.js?v=20261117a';
   muse.defer = true;
   document.head.appendChild(muse);
 }

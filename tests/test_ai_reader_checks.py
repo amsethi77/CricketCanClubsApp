@@ -52,3 +52,25 @@ def test_empty_bowling_summary_is_fine():
     for row in t["innings"][0]["bowling"]:
         row.update(overs=None, runs_conceded=None, wickets=None)
     assert av.cross_checks(t) == []
+
+
+def test_bowling_reread_fixes_only_what_adds_up():
+    """Nov 16 2026 (Amit: "Bowling readability still needs a lot of improvement"): the right answer needs no
+    re-read; a misread bowler's runs is replaced by the close-up re-read only when that makes the innings add up."""
+    assert av._bowling_mismatches(card()) == 0
+    template = card()
+    innings = next(inn for inn in template["innings"] if inn.get("bowling"))
+    bowler = innings["bowling"][0]
+    right = bowler["runs_conceded"]
+    bowler["runs_conceded"] = right + 40
+    assert av._bowling_mismatches(template) == 1
+    other = innings["bowling"][1]
+    rows = [
+        {"name": bowler["player"]["name"], "runs_conceded": right},
+        {"name": other["player"]["name"], "runs_conceded": other["runs_conceded"] + 9},  # a re-read misread
+    ]
+    filled, corrected = av._merge_bowling(template, rows)
+    assert (filled, corrected) == (0, 1)
+    assert bowler["runs_conceded"] == right
+    assert other["runs_conceded"] == rows[1]["runs_conceded"] - 9
+    assert av._bowling_mismatches(template) == 0

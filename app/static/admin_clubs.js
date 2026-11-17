@@ -40,7 +40,9 @@
       const text = [club.name, club.short_name, club.city, club.country, ...(club.aliases || [])].join(" ").toLowerCase();
       return text.includes(query);
     });
+    const openClub = peopleBoxClub();
     root.innerHTML = `
+      <section class="acm-card acp" id="acmPeople" data-people-box="${esc(openClub)}"${openClub ? "" : " hidden"}></section>
       <div class="acm-grid">
         <section class="acm-card">
           <header class="acm-card-head">
@@ -94,6 +96,7 @@
           <span><b>${club.players}</b> players</span><span><b>${club.matches}</b> match${club.matches === 1 ? "" : "es"}</span><span><b>${club.admins}</b> admin${club.admins === 1 ? "" : "s"}</span>
         </div>
         <div class="acm-club-actions">
+          ${editable ? `<button class="acm-btn is-primary" type="button" data-people="${esc(club.id)}">👥 People &amp; roles</button>` : ""}
           ${editable ? `<button class="acm-btn" type="button" data-edit="${esc(club.id)}">Edit details</button>` : ""}
           ${!editable || data.is_superadmin ? `<button class="acm-btn is-ghost" type="button" data-merge="${esc(club.id)}">Merge…</button>` : ""}
         </div>
@@ -109,7 +112,131 @@
       </article>`;
   }
 
+  // ---------- People & roles (Nov 16 2026, Amit: "under club mgmt show also the club-admins and captains ... club
+  // admins see their club data and super admin can see everyone's and then both should be allowed to change the
+  // player role") ----------
+  const people = {};
+  const ROLE_ICONS = { Batter: "🏏", Bowler: "🎯", "All-rounder": "⚡", "Wicket keeper": "🧤" };
+  const CLUB_ROLE_LABEL = { club_admin: "Club admin", captain: "Captain", player: "Player" };
+
+  let peopleClub = "";
+  function peopleBoxClub() {
+    return peopleClub;
+  }
+  function peopleBox() {
+    return root.querySelector("#acmPeople");
+  }
+
+  async function openPeople(clubId) {
+    const box = peopleBox();
+    if (!box) return;
+    if (peopleClub === clubId && !box.hidden) {
+      box.hidden = true;
+      peopleClub = "";
+      return;
+    }
+    peopleClub = clubId;
+    box.dataset.peopleBox = clubId;
+    box.hidden = false;
+    box.scrollIntoView({ behavior: "smooth", block: "start" });
+    box.innerHTML = '<p class="acm-empty">Loading people...</p>';
+    try {
+      people[clubId] = await api(`/api/admin/clubs/${encodeURIComponent(clubId)}/people`);
+      renderPeople(clubId);
+    } catch (error) {
+      box.innerHTML = `<p class="acm-msg is-error">${esc(error.message)}</p>`;
+    }
+  }
+
+  function personRow(clubId, person, data) {
+    const icon = ROLE_ICONS[person.playing_role || person.playing_role_guess] || "";
+    const clubRole = person.user_id
+      ? person.is_superadmin
+        ? '<span class="acp-chip is-super">Superadmin</span>'
+        : `<select data-club-role="${person.user_id}" aria-label="Club role of ${esc(person.name)}">${data.club_roles.map((r) => `<option value="${r.value}"${r.value === person.club_role ? " selected" : ""}>${esc(r.label)}</option>`).join("")}</select>`
+      : '<span class="acp-chip is-muted" title="Club roles are for players who have signed up">No account</span>';
+    const playing = person.member_id
+      ? `<select data-playing-role="${esc(person.member_id)}" aria-label="Playing role of ${esc(person.name)}">
+          <option value="">${person.playing_role_guess ? `Not set (looks like ${esc(person.playing_role_guess)})` : "Not set"}</option>
+          ${data.playing_roles.map((r) => `<option value="${esc(r)}"${r === person.playing_role ? " selected" : ""}>${ROLE_ICONS[r] || ""} ${esc(r)}</option>`).join("")}
+        </select>`
+      : "";
+    return `<div class="acp-row is-${person.club_role}" data-person="${esc(person.name.toLowerCase())}">
+        <div class="acp-who"><span class="acp-avatar" aria-hidden="true">${icon || esc(person.name.slice(0, 1).toUpperCase())}</span>
+          <div><strong>${esc(person.name)}</strong>${person.club_role !== "player" ? ` <span class="acp-chip is-${person.club_role}">${CLUB_ROLE_LABEL[person.club_role]}</span>` : ""}
+          <small>${person.account_name && person.account_name !== person.name ? `Account: ${esc(person.account_name)} · ` : ""}${person.contact ? esc(person.contact) : person.user_id ? "Signed up" : "Player only"}</small></div></div>
+        <label class="acp-field"><span>Club role</span>${clubRole}</label>
+        <label class="acp-field"><span>Playing role</span>${playing}</label>
+      </div>`;
+  }
+
+  function renderPeople(clubId) {
+    const box = peopleBox();
+    const data = people[clubId];
+    if (!box || !data) return;
+    const leaders = data.people.filter((p) => p.club_role !== "player");
+    const others = data.people.filter((p) => p.club_role === "player");
+    box.innerHTML = `
+      <div class="acp-head">
+        <div><p class="acm-kicker">People &amp; roles</p><h3>${esc(data.club.name)}</h3></div>
+        <button class="acm-btn is-ghost acp-close" type="button" data-people="${esc(clubId)}" aria-label="Close people and roles">✕ Close</button>
+        <div class="acp-counts"><span><b>${data.counts.club_admins}</b> club admin${data.counts.club_admins === 1 ? "" : "s"}</span><span><b>${data.counts.captains}</b> captain${data.counts.captains === 1 ? "" : "s"}</span><span><b>${data.counts.players}</b> people</span></div>
+      </div>
+      <p class="acm-help">Club role: what someone can do for the club (captains score and fix scorecards, club admins also manage the club). Playing role: the icon next to his name on scorecards (🏏 batter, 🎯 bowler, ⚡ all-rounder, 🧤 keeper). Changes save straight away.</p>
+      <h4 class="acp-sub">Club admins and captains</h4>
+      <div class="acp-list">${leaders.map((p) => personRow(clubId, p, data)).join("") || '<p class="acm-empty">No club admin or captain yet - pick one below.</p>'}</div>
+      <h4 class="acp-sub">Players <input class="acm-search acp-search" type="search" placeholder="Find a player..." aria-label="Find a player" /></h4>
+      <div class="acp-list" data-acp-players>${others.map((p) => personRow(clubId, p, data)).join("") || '<p class="acm-empty">No players yet.</p>'}</div>
+      <p class="acm-msg" role="status" data-acp-msg></p>`;
+    box.querySelector(".acp-search").addEventListener("input", (event) => {
+      const text = event.target.value.trim().toLowerCase();
+      box.querySelectorAll("[data-acp-players] .acp-row").forEach((row) => {
+        row.hidden = Boolean(text) && !row.dataset.person.includes(text);
+      });
+    });
+  }
+
+  root.addEventListener("change", async (event) => {
+    const select = event.target.closest("[data-club-role], [data-playing-role]");
+    if (!select) return;
+    const box = select.closest("[data-people-box]");
+    const clubId = box.dataset.peopleBox;
+    select.disabled = true;
+    try {
+      const result = select.dataset.clubRole
+        ? await api(`/api/admin/clubs/${encodeURIComponent(clubId)}/people/${encodeURIComponent(select.dataset.clubRole)}/club-role`, { method: "POST", body: JSON.stringify({ role: select.value }) })
+        : await api(`/api/admin/clubs/${encodeURIComponent(clubId)}/people/members/${encodeURIComponent(select.dataset.playingRole)}/playing-role`, { method: "POST", body: JSON.stringify({ role: select.value }) });
+      people[clubId] = await api(`/api/admin/clubs/${encodeURIComponent(clubId)}/people`);
+      if (select.dataset.clubRole) await load(); // the club's admin count changes
+      showPeopleMessage(clubId, `✅ ${result.message || "Saved."}`, "success");
+    } catch (error) {
+      showPeopleMessage(clubId, error.message, "error");
+    }
+  });
+
+  function showPeopleMessage(clubId, text, tone) {
+    const box = peopleBox();
+    if (!box || !people[clubId]) return;
+    const search = box.querySelector(".acp-search")?.value || "";
+    box.hidden = false;
+    renderPeople(clubId);
+    const input = box.querySelector(".acp-search");
+    if (search && input) {
+      input.value = search;
+      input.dispatchEvent(new Event("input"));
+    }
+    const msg = box.querySelector("[data-acp-msg]");
+    msg.textContent = text;
+    msg.className = `acm-msg is-${tone}`;
+    msg.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  }
+
   root.addEventListener("click", (event) => {
+    const peopleButton = event.target.closest("[data-people]");
+    if (peopleButton) {
+      openPeople(peopleButton.dataset.people);
+      return;
+    }
     const edit = event.target.closest("[data-edit]");
     if (edit) {
       const form = root.querySelector(`[data-form="${CSS.escape(edit.dataset.edit)}"]`);
@@ -240,6 +367,11 @@
     try {
       data = await api("/api/admin/club-management");
       render();
+      // a club admin of one club sees its people straight away
+      if (!data.is_superadmin && data.managed_club_ids.length === 1 && !peopleClub && !people.__opened) {
+        people.__opened = true;
+        openPeople(data.managed_club_ids[0]);
+      }
     } catch (error) {
       root.innerHTML = `<p class="acm-msg is-error">${esc(error.message)}</p>`;
     }

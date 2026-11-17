@@ -39,6 +39,20 @@
       : `<span class="pm-name">${escapeHtml(name)}${suffix}</span>`;
   }
 
+  // Nov 16 2026 (Amit: "make sure we have the icon shown besides the player names - captain, vc, wk, bowler, batter
+  // etc for uploaded scorecards as well"): C / VC / WK tags and the playing role icon (row.tags, row.playing_role -
+  // set by the server for uploaded and live-scored cards alike).
+  const ROLE_ICONS = { Batter: "🏏", Bowler: "🎯", "All-rounder": "⚡", "Wicket keeper": "🧤" };
+  const TAG_NAMES = { C: "Captain", VC: "Vice-captain", WK: "Wicket keeper" };
+  function roleBadges(row = {}, roleName = row.playing_role, fromProfile = row.role_from_profile) {
+    const tags = Array.isArray(row.tags) ? row.tags : [];
+    const tagHtml = tags.map((tag) => ` <em class="pm-tag pm-tag-${escapeHtml(tag.toLowerCase())}" title="${escapeHtml(TAG_NAMES[tag] || tag)}">${escapeHtml(tag)}</em>`).join("");
+    const icon = ROLE_ICONS[roleName] && !(roleName === "Wicket keeper" && tags.includes("WK"))
+      ? ` <span class="pm-role" title="${escapeHtml(roleName)}${fromProfile === false ? " (from his figures)" : ""}" aria-label="${escapeHtml(roleName)}">${ROLE_ICONS[roleName]}</span>`
+      : "";
+    return tagHtml + icon;
+  }
+
   function ballSplit(row, fields) {
     const bits = fields
       .filter(([key]) => row[key] !== null && row[key] !== undefined && row[key] !== "")
@@ -63,7 +77,7 @@
       .map((b) => {
         const how = howOutText(b.dismissal) || (b.not_out ? "not out" : "");
         return `<tr class="${b.not_out ? "pm-notout" : ""}">
-          <th scope="row">${nameHtml(b.name, b.player_key)}${how ? `<small>${escapeHtml(how)}</small>` : ""}</th>
+          <th scope="row">${nameHtml(b.name, b.player_key, roleBadges(b))}${how ? `<small>${escapeHtml(how)}</small>` : ""}</th>
           ${cols.map(([key, , cls]) => `<td${cls ? ` class="${cls}"` : ""}>${num(b[key])}</td>`).join("")}</tr>`;
       })
       .join("");
@@ -89,7 +103,7 @@
     const rows = inn.bowling
       .map(
         (b) => `<tr>
-          <th scope="row">${nameHtml(b.name, b.player_key)}${ballSplit(b, [["dots", "Dots"], ["wides", "Wd"], ["no_balls", "Nb"], ["fours", "4s"], ["sixes", "6s"]])}${Array.isArray(b.over_runs) && b.over_runs.length ? `<small class="pm-split">Runs per over: ${b.over_runs.map((value) => escapeHtml(value)).join(" · ")}</small>` : ""}</th>
+          <th scope="row">${nameHtml(b.name, b.player_key, roleBadges(b))}${ballSplit(b, [["dots", "Dots"], ["wides", "Wd"], ["no_balls", "Nb"], ["fours", "4s"], ["sixes", "6s"]])}${Array.isArray(b.over_runs) && b.over_runs.length ? `<small class="pm-split">Runs per over: ${b.over_runs.map((value) => escapeHtml(value)).join(" · ")}</small>` : ""}</th>
           <td>${num(b.overs)}</td><td>${num(b.maidens)}</td><td>${num(b.runs)}</td><td class="pm-r">${num(b.wickets)}</td><td>${num(b.economy)}</td></tr>`
       )
       .join("");
@@ -121,5 +135,5 @@
     return shown.map((inn) => inningsBlock(inn, Boolean(inn.has_data) || shown.every((i) => !i.has_data))).join("");
   }
 
-  window.CricketClubAppScorecardView = { DASH, escapeHtml, num, rate, nameHtml, battingTable, bowlingTable, inningsBlock, inningsSections };
+  window.CricketClubAppScorecardView = { DASH, escapeHtml, num, rate, nameHtml, roleBadges, ROLE_ICONS, battingTable, bowlingTable, inningsBlock, inningsSections };
 })();

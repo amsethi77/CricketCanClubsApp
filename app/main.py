@@ -1146,7 +1146,7 @@ def _clubs_page_html(request: Request, search: str = "", focus_club_id: str = ""
             </div>
           </main>
         </div>
-        <script src="/assets/multipage.js?v=20261117a"></script>
+        <script src="/assets/multipage.js?v=20261117b"></script>
         <script src="/assets/clubs.js?v=20261117a"></script>
       </body>
     </html>
@@ -6261,6 +6261,7 @@ def _scorecard_from_fixture(fixture: dict[str, Any]) -> dict[str, Any]:
         name = " ".join(str((roles.get(side) or {}).get("captain") or fallback or "").split())
         captains.append({"team": team, "name": name, "side": side, "squad": [str(n) for n in saved.get(side) or [] if str(n or "").strip()]})  # name "" = not picked yet
     card["captains"] = captains if any(item["name"] for item in captains) or card.get("innings") else []
+    card["lineup_roles"] = [{"team": home, "roles": roles.get("club") or {}}, {"team": away, "roles": roles.get("opponent") or {}}]
     chosen = " ".join(str(saved.get("man_of_match") or "").split())
     card["man_of_match"] = chosen
     card["man_of_match_auto"] = "" if chosen else _auto_man_of_match(card)
@@ -6648,6 +6649,136 @@ def _link_card_players(store: dict[str, Any], card: dict[str, Any]) -> dict[str,
     return card
 
 
+# Nov 16 2026 (Amit: "In the scorecards, make sure we have the icon shown besides the player names - captain, vc, wk,
+# bowler, batter etc for uploaded scorecards as well"). Every name on a scorecard (uploaded or scored live) gets:
+#  - C / VC / WK tags: the captains on the card (or picked for it), the line-up roles of a live match, and on an
+#    uploaded card the keeper = the fielder of a stumping;
+#  - the player's playing role icon: the role on his profile (club admins can set it in Admin Center -> Club details
+#    -> People & roles), otherwise worked out from his career figures once he has played 3+ matches.
+PLAYING_ROLES = ["Batter", "Bowler", "All-rounder", "Wicket keeper"]
+
+
+def _playing_role_of(store: dict[str, Any], member: dict[str, Any] | None) -> tuple[str, bool]:
+    """('Batter' | 'Bowler' | 'All-rounder' | 'Wicket keeper' | '', from_profile)."""
+    if not member:
+        return "", False
+    text = str(member.get("role") or "").lower()
+    if "keep" in text:
+        return "Wicket keeper", True
+    if "all" in text and "round" in text:
+        return "All-rounder", True
+    if "bowl" in text:
+        return "Bowler", True
+    if "bat" in text:
+        return "Batter", True
+    stats = _member_summary_index(store).get(str(member.get("id") or ""))
+    if not stats or int(stats.get("matches") or 0) < 3:
+        return "", False
+    matches = max(1, int(stats.get("matches") or 0))
+    innings = max(1, int(stats.get("batting_innings") or 0))
+    wickets_per_match = int(stats.get("wickets") or 0) / matches
+    runs_per_innings = int(stats.get("runs") or 0) / innings
+    if wickets_per_match >= 0.8 and runs_per_innings >= 15:
+        return "All-rounder", False
+    if wickets_per_match >= 0.8:
+        return "Bowler", False
+    return "Batter", False
+
+
+_SUMMARY_INDEX: dict[str, Any] = {"key": None, "index": {}}
+
+
+def _member_summary_index(store: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    rows = store.get("member_summary_stats") or []
+    key = (id(rows), len(rows))
+    if _SUMMARY_INDEX["key"] != key:
+        _SUMMARY_INDEX["index"] = {str(row.get("member_id") or ""): row for row in rows if isinstance(row, dict)}
+        _SUMMARY_INDEX["key"] = key
+    return _SUMMARY_INDEX["index"]
+
+
+def _tag_card_players(store: dict[str, Any], card: dict[str, Any]) -> dict[str, Any]:
+    """Adds row["tags"] (['C', 'VC', 'WK']) and row["playing_role"] / row["role_from_profile"] to every batting and
+    bowling row of a scorecard that is about to be shown."""
+    captains = [item for item in card.get("captains") or [] if isinstance(item, dict) and item.get("name")]
+    lineup_roles = card.get("lineup_roles") if isinstance(card.get("lineup_roles"), list) else []
+    members_by_key = {}
+    for member in store.get("members", []) or []:
+        for value in (member.get("player_id"), member.get("id")):
+            if value:
+                members_by_key[str(value)] = member
+
+    def same(a: Any, b: Any) -> bool:
+        x, y = " ".join(str(a or "").split()).lower(), " ".join(str(b or "").split()).lower()
+        return bool(x) and (x == y or _card_same_player(x, y))
+
+    # an uploaded card keeps the stumping fielder only in the read template ("stumped b X" on the card)
+    template_keepers: set[str] = set()
+    if str(card.get("id") or "").startswith("a-"):
+        upload = next((item for item in store.get("archive_uploads", []) or [] if str(item.get("id") or "") == str(card["id"])[2:]), None)
+        for inn in (_scorecard_pick_template(upload) or {}).get("innings") or [] if upload else []:
+            for row in (inn.get("batting") or []) if isinstance(inn, dict) else []:
+                dismissal = row.get("dismissal") if isinstance(row, dict) and isinstance(row.get("dismissal"), dict) else {}
+                if str(dismissal.get("type") or "").strip().lower().startswith("st") and dismissal.get("fielder"):
+                    template_keepers.add(" ".join(str(dismissal["fielder"]).split()).lower())
+    for innings in card.get("innings") or []:
+        if not isinstance(innings, dict):
+            continue
+        keepers = set(template_keepers) | {
+            " ".join(str(row.get("fielder") or "").split()).lower()
+            for row in innings.get("batting") or []
+            if isinstance(row, dict) and re.match(r"^\s*(st\b|stumped)", str(row.get("dismissal") or ""), re.I) and row.get("fielder")
+        }
+        if not keepers:
+            for row in innings.get("batting") or []:
+                found = re.match(r"^\s*st\.?\s+([^b]+?)\s+b\s", str(row.get("dismissal") or ""), re.I) if isinstance(row, dict) else None
+                if found:
+                    keepers.add(" ".join(found.group(1).split()).lower())
+        for key, team in (("batting", innings.get("team")), ("bowling", innings.get("bowling_team"))):
+            for row in innings.get(key) or []:
+                if not isinstance(row, dict) or not row.get("name"):
+                    continue
+                name = str(row["name"])
+                tags: list[str] = []
+                if any(same(item.get("name"), name) and (not item.get("team") or not team or _same_team_name(item.get("team"), team)) for item in captains):
+                    tags.append("C")
+                for item in lineup_roles:
+                    if isinstance(item, dict) and team and _same_team_name(item.get("team"), team):
+                        roles = item.get("roles") if isinstance(item.get("roles"), dict) else {}
+                        if same(roles.get("captain"), name) and "C" not in tags:
+                            tags.append("C")
+                        if same(roles.get("vice_captain"), name):
+                            tags.append("VC")
+                        if same(roles.get("keeper"), name):
+                            tags.append("WK")
+                if key == "bowling" and "WK" not in tags and any(same(keeper, name) for keeper in keepers):
+                    tags.append("WK")
+                member = members_by_key.get(str(row.get("player_key") or "")) if row.get("player_key") else _member_for_card_name(store, name, team)
+                role, from_profile = _playing_role_of(store, member)
+                row["tags"] = tags
+                row["playing_role"] = role
+                row["role_from_profile"] = from_profile
+    # a keeper found in the bowling side's fielding is also tagged where he batted
+    for innings in card.get("innings") or []:
+        for row in (innings.get("batting") or []) if isinstance(innings, dict) else []:
+            if isinstance(row, dict) and "WK" not in (row.get("tags") or []):
+                for other in card.get("innings") or []:
+                    if other is innings or not isinstance(other, dict) or not _same_team_name(other.get("bowling_team"), innings.get("team")):
+                        continue
+                    if any(isinstance(b, dict) and "WK" in (b.get("tags") or []) and same(b.get("name"), row.get("name")) for b in other.get("bowling") or []):
+                        row.setdefault("tags", []).append("WK")
+    return card
+
+
+def _card_same_player(a: str, b: str) -> bool:
+    """'khan' and 's khan', 'amit' and 'amit s' are one name on a card."""
+    x, y = a.split(), b.split()
+    if not x or not y:
+        return False
+    short, long = (x, y) if len(x) <= len(y) else (y, x)
+    return all(word in long or (len(word) == 1 and any(item.startswith(word) for item in long)) for word in short)
+
+
 def _lineup_player_keys(store: dict[str, Any], match: dict[str, Any], lineups: dict[str, Any]) -> dict[str, str]:
     """Name -> player id for the live scorecard, so its names link to /players/<id> like an uploaded card (Nov 9 2026)."""
     keys: dict[str, str] = {}
@@ -6889,7 +7020,7 @@ def public_scorecard_detail(
                     allowed_club_id = str(current_club_id or user_row["primary_club_id"] or "").strip()
                     if not allowed_club_id or allowed_club_id not in _scorecard_involved_club_ids(store, card):
                         raise HTTPException(status_code=404, detail="Scorecard not found.")
-            return {"scorecard": _link_card_players(store, card), "generated_at": now_iso()}
+            return {"scorecard": _tag_card_players(store, _link_card_players(store, card)), "generated_at": now_iso()}
     raise HTTPException(status_code=404, detail="Scorecard not found.")
 
 
@@ -6983,6 +7114,14 @@ def public_match(
                 member = _member_for_card_name(store, row.get("name"), team)
                 if member and _member_public_key(member):
                     match["player_keys"].setdefault(str(row["name"]), _member_public_key(member))
+    # Nov 16 2026: playing role icon next to each name (C / VC / WK come from match.lineups.roles)
+    match["player_roles"] = {}
+    for side, team in (("club", match.get("club_name")), ("opponent", match.get("opponent"))):
+        for name in match["lineups"].get(side) or []:
+            if isinstance(name, str) and name.strip():
+                role, _from_profile = _playing_role_of(store, _member_for_card_name(store, name, team))
+                if role:
+                    match["player_roles"][name] = role
     return {
         "match": match,
         "generated_at": now_iso(),
@@ -7338,7 +7477,7 @@ def _admin_center_html(request: Request) -> HTMLResponse:
         <link rel="stylesheet" href="/assets/app_polish.css?v=20261006a" />
         <link rel="stylesheet" href="/assets/sports-system.css?v=20260926a" />
         <link rel="stylesheet" href="/assets/scorecards.css?v=20261119d" />
-        <link rel="stylesheet" href="/assets/admin_clubs.css?v=20261119b" />
+        <link rel="stylesheet" href="/assets/admin_clubs.css?v=20261117a" />
         <link rel="stylesheet" href="/assets/admin_center.css?v=20261119c" />
       </head>
       <body class="acx-page">
@@ -7528,12 +7667,12 @@ def _admin_center_html(request: Request) -> HTMLResponse:
             </div>
           </section>
         </div>
-        <script src="/assets/multipage.js?v=20261117a"></script>
+        <script src="/assets/multipage.js?v=20261117b"></script>
         <script src="/assets/scorecard_view.js?v=20261115a"></script>
-        <script src="/assets/scorecard.js?v=20261119d"></script>
+        <script src="/assets/scorecard.js?v=20261120a"></script>
         <script src="/assets/admin_center.js?v=20261119b"></script>
         <script src="/assets/admin_reread.js?v=20261024a"></script>
-        <script src="/assets/admin_clubs.js?v=20261117b"></script>
+        <script src="/assets/admin_clubs.js?v=20261116p"></script>
         <script src="/assets/admin_photos.js?v=20261117a"></script>
       </body>
     </html>
@@ -7559,7 +7698,7 @@ def _club_admin_center_html() -> HTMLResponse:
     <link rel="stylesheet" href="/assets/styles.css?v=20261111tablealign" />
     <link rel="stylesheet" href="/assets/app_polish.css?v=20261006a" />
     <link rel="stylesheet" href="/assets/sports-system.css?v=20260926a" />
-    <link rel="stylesheet" href="/assets/admin_clubs.css?v=20261119b" />
+    <link rel="stylesheet" href="/assets/admin_clubs.css?v=20261117a" />
     <link rel="stylesheet" href="/assets/admin_center.css?v=20261119c" />
   </head>
   <body class="acx-page">
@@ -7578,8 +7717,8 @@ def _club_admin_center_html() -> HTMLResponse:
         </div>
       </section>
     </div>
-    <script src="/assets/multipage.js?v=20261117a"></script>
-    <script src="/assets/admin_clubs.js?v=20261117b"></script>
+    <script src="/assets/multipage.js?v=20261117b"></script>
+    <script src="/assets/admin_clubs.js?v=20261116p"></script>
   </body>
 </html>"""
     return HTMLResponse(body, headers={"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0", "Pragma": "no-cache"})
@@ -12118,6 +12257,253 @@ def club_management(x_auth_token: str | None = Header(default=None)) -> dict[str
     }
 
 
+# Nov 16 2026 (Amit: "in the admin centre, under club mgmt show also the club-admins and captains. This should be
+# available for club admin and super admin and same way club admins see their club data and super admin can see
+# everyone's and then both should be allowed to change the player role"). Admin Center -> Club details & merge ->
+# "People & roles" on a club: its club admins and captains on top, then every player. Accounts get a club role
+# (Player / Captain / Club admin); every player gets a playing role (Batter / Bowler / All-rounder / Wicket keeper),
+# which is also the icon next to his name on scorecards.
+CLUB_ROLES = ["player", "captain", "club_admin"]
+
+
+def _club_people(store: dict[str, Any], club: dict[str, Any]) -> list[dict[str, Any]]:
+    club_id = str(club.get("id") or "")
+    member_ids = _club_member_ids(store, club)
+    members = {str(m.get("id") or ""): m for m in store.get("members", []) or [] if isinstance(m, dict)}
+    people: dict[str, dict[str, Any]] = {}
+    with _auth_connection() as connection:
+        club_roles: dict[int, set[str]] = {}
+        for row in connection.execute("SELECT user_id, role_name FROM app_user_club_roles WHERE club_id = ?", (club_id,)):
+            club_roles.setdefault(int(row["user_id"]), set()).add(str(row["role_name"] or ""))
+        users = connection.execute(
+            "SELECT id, display_name, role, member_id, primary_club_id, mobile, email FROM app_users WHERE primary_club_id = ? OR id IN (SELECT user_id FROM app_user_club_roles WHERE club_id = ?) "
+            "OR (COALESCE(member_id, '') != '' AND member_id IN (%s))" % ",".join("?" for _ in member_ids or [""]),
+            (club_id, club_id, *(member_ids or [""])),
+        ).fetchall()
+    for user in users:
+        base = str(user["role"] or "player").strip() or "player"
+        roles = set(club_roles.get(int(user["id"]), set()))
+        if base in {"captain", "club_admin"} and str(user["primary_club_id"] or "") == club_id:
+            roles.add(base)
+        member = members.get(str(user["member_id"] or ""))
+        club_role = "club_admin" if "club_admin" in roles else "captain" if "captain" in roles else "player"
+        playing, from_profile = _playing_role_of(store, member)
+        contact = str(user["mobile"] or user["email"] or "")
+        key = f"m:{user['member_id']}" if user["member_id"] else f"u:{user['id']}"
+        people[key] = {
+            "user_id": int(user["id"]),
+            "member_id": str(user["member_id"] or ""),
+            "name": str((member or {}).get("name") or user["display_name"] or "Account"),
+            "account_name": str(user["display_name"] or ""),
+            "contact": ("…" + contact[-4:]) if contact and "@" not in contact else (contact[:2] + "…@" + contact.split("@")[-1] if "@" in contact else ""),
+            "club_role": club_role,
+            "is_superadmin": base == "superadmin",
+            "playing_role": playing if from_profile else "",
+            "playing_role_guess": "" if from_profile else playing,
+        }
+    for member_id in member_ids:
+        member = members.get(member_id)
+        if not member or f"m:{member_id}" in people:
+            continue
+        playing, from_profile = _playing_role_of(store, member)
+        people[f"m:{member_id}"] = {
+            "user_id": None,
+            "member_id": member_id,
+            "name": str(member.get("name") or ""),
+            "account_name": "",
+            "contact": "",
+            "club_role": "player",
+            "is_superadmin": False,
+            "playing_role": playing if from_profile else "",
+            "playing_role_guess": "" if from_profile else playing,
+        }
+    order = {"club_admin": 0, "captain": 1, "player": 2}
+    return sorted(people.values(), key=lambda item: (order.get(item["club_role"], 3), item["user_id"] is None, normalize_name(item["name"])))
+
+
+def _club_for_people(user_row: sqlite3.Row, store: dict[str, Any], club_id: str) -> dict[str, Any]:
+    club = next((item for item in store.get("clubs", []) or [] if str(item.get("id") or "") == club_id), None)
+    if not club:
+        raise HTTPException(status_code=404, detail="Club not found.")
+    if not _can_edit_club(user_row, club_id):
+        raise HTTPException(status_code=403, detail="Only this club's admins and the superadmin can see and change its people.")
+    return club
+
+
+@app.get("/api/admin/clubs/{club_id}/people")
+def club_people(club_id: str, x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
+    user_row, _ = _auth_user_from_token(x_auth_token)
+    store = load_store()
+    club = _club_for_people(user_row, store, club_id)
+    people = _club_people(store, club)
+    return {
+        "club": {"id": club_id, "name": club.get("name") or ""},
+        "club_roles": [{"value": "player", "label": "Player"}, {"value": "captain", "label": "Captain"}, {"value": "club_admin", "label": "Club admin"}],
+        "playing_roles": PLAYING_ROLES,
+        "people": people,
+        "counts": {
+            "club_admins": sum(1 for item in people if item["club_role"] == "club_admin"),
+            "captains": sum(1 for item in people if item["club_role"] == "captain"),
+            "players": len(people),
+        },
+    }
+
+
+class ClubRoleRequest(BaseModel):
+    role: str
+
+
+@app.post("/api/admin/clubs/{club_id}/people/{user_id}/club-role")
+def set_club_role(club_id: str, user_id: int, request: ClubRoleRequest, x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
+    user_row, _ = _auth_user_from_token(x_auth_token)
+    store = load_store()
+    club = _club_for_people(user_row, store, club_id)
+    role = str(request.role or "").strip()
+    if role not in CLUB_ROLES:
+        raise HTTPException(status_code=400, detail="Pick Player, Captain or Club admin.")
+    with _auth_connection() as connection:
+        target = connection.execute("SELECT id, display_name, role, primary_club_id FROM app_users WHERE id = ?", (user_id,)).fetchone()
+        if not target:
+            raise HTTPException(status_code=404, detail="Account not found.")
+        if str(target["role"] or "") == "superadmin":
+            raise HTTPException(status_code=400, detail="The superadmin's role can't be changed here.")
+        admins = _club_admin_user_ids(club_id)
+        if role != "club_admin" and user_id in admins and len(admins) <= 1 and str(user_row["role"] or "") != "superadmin":
+            raise HTTPException(status_code=400, detail="This is the club's only club admin. Make someone else club admin first.")
+        connection.execute("DELETE FROM app_user_club_roles WHERE user_id = ? AND club_id = ? AND role_name IN ('captain', 'club_admin')", (user_id, club_id))
+        if str(target["role"] or "") in {"captain", "club_admin"} and str(target["primary_club_id"] or "") == club_id:
+            connection.execute("UPDATE app_users SET role = 'player' WHERE id = ?", (user_id,))
+        if role != "player":
+            connection.execute(
+                "INSERT INTO app_user_club_roles (user_id, club_id, role_name, created_at) VALUES (?, ?, ?, ?) "
+                "ON CONFLICT(user_id, club_id, role_name) DO UPDATE SET created_at = excluded.created_at",
+                (user_id, club_id, role, now_iso()),
+            )
+    _audit_event("club.role", "club", club_id, actor=user_row, club_id=club_id, club_name=str(club.get("name") or ""), details={"user_id": user_id, "role": role}, source="api")
+    label = {"player": "Player", "captain": "Captain", "club_admin": "Club admin"}[role]
+    return {"message": f"{target['display_name'] or 'The account'} is now {label} of {club.get('name') or 'the club'}.", "role": role}
+
+
+class PlayingRoleRequest(BaseModel):
+    role: str = ""
+
+
+@app.post("/api/admin/clubs/{club_id}/people/members/{member_id}/playing-role")
+def set_playing_role(club_id: str, member_id: str, request: PlayingRoleRequest, x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
+    user_row, _ = _auth_user_from_token(x_auth_token)
+    role = str(request.role or "").strip()
+    if role and role not in PLAYING_ROLES:
+        raise HTTPException(status_code=400, detail="Pick Batter, Bowler, All-rounder or Wicket keeper.")
+    with _store_write_lock():
+        store = load_store()
+        club = _club_for_people(user_row, store, club_id)
+        if member_id not in _club_member_ids(store, club):
+            raise HTTPException(status_code=404, detail="That player isn't in this club.")
+        member = next(item for item in store.get("members", []) or [] if str(item.get("id") or "") == member_id)
+        old = str(member.get("role") or "")
+        member["role"] = role or "Player"
+        save_store(store)
+    _audit_event("member.playing_role", "member", member_id, actor=user_row, club_id=club_id, club_name=str(club.get("name") or ""), details={"old": old, "role": member["role"]}, source="api")
+    return {"message": f"{member.get('name') or 'The player'} is now {role or 'shown without a playing role'}.", "role": role}
+
+
+# ---------------------------------------------------------------------------------------------------------------
+# Nov 16 2026 (Amit: "under stats, we should show captain wise win/loss stats for the club only"): for the club the
+# person is looking at (his current club), every published scorecard / scored match of that club with a result,
+# grouped by the club's captain in that match: played, won, lost, tied / no result, win %. Season filter.
+# ---------------------------------------------------------------------------------------------------------------
+_CAPTAIN_STATS_CACHE: dict[str, Any] = {}
+
+
+def _club_side(card: dict[str, Any], club: dict[str, Any]) -> str:
+    keys = _club_identity_keys(club)
+    for team in card.get("teams") or []:
+        if normalize_name(str(team or "")) in keys or _same_team_name(team, club.get("name")) or (club.get("short_name") and _same_team_name(team, club.get("short_name"))):
+            return str(team)
+    return ""
+
+
+def _result_for_side(result: str, side: str, teams: list[str], home_is_side: bool = True) -> str:
+    text = " ".join(str(result or "").split())
+    low = text.lower()
+    if not text:
+        return ""
+    if re.search(r"\b(tie|tied)\b", low):
+        return "tied"
+    if re.search(r"\b(no result|abandon|abandoned|draw|drawn)\b", low):
+        return "no_result"
+    found = re.search(r"^(.*?)\s+(won|win|wins|beat|beats)\b", text, re.I)
+    if not found:
+        return ""
+    winner = found.group(1)
+    if normalize_name(winner) in {"club", "home", "we", "us", "our club"}:
+        return "won" if home_is_side else "lost"  # a scored match saved as "Club won" / "Opponent won"
+    if normalize_name(winner) in {"opponent", "opponents", "opposition", "visitors", "away"}:
+        return "lost" if home_is_side else "won"
+    if _same_team_name(winner, side) or normalize_name(winner) == normalize_name(side):
+        return "won"
+    others = [team for team in teams if team and not _same_team_name(team, side)]
+    if any(_same_team_name(winner, team) or normalize_name(winner) == normalize_name(team) for team in others):
+        return "lost"
+    return ""
+
+
+def _captain_stats(store: dict[str, Any], club: dict[str, Any], year: str = "") -> dict[str, Any]:
+    club_id = str(club.get("id") or "")
+    rows: dict[str, dict[str, Any]] = {}
+    seasons: set[str] = set()
+    for card in _public_scorecards(store):
+        if club_id not in _scorecard_involved_club_ids(store, card):
+            continue
+        side = _club_side(card, club)
+        if not side:
+            continue
+        outcome = _result_for_side(str(card.get("result") or ""), side, [str(t) for t in card.get("teams") or []], str(card.get("club_id") or "") in {"", club_id})
+        if not outcome:
+            continue
+        season = str(card.get("date") or "")[:4]
+        seasons.add(season)
+        if year and season != year:
+            continue
+        captain = next((str(item.get("name") or "") for item in card.get("captains") or [] if isinstance(item, dict) and _same_team_name(item.get("team"), side)), "")
+        member = _member_for_card_name(store, captain, side) if captain else None
+        name = str((member or {}).get("name") or captain or "").strip()
+        key = str((member or {}).get("id") or normalize_name(name) or "-")
+        row = rows.setdefault(key, {"captain": name or "Not recorded", "player_key": _member_public_key(member) if member else "", "played": 0, "won": 0, "lost": 0, "tied": 0, "no_result": 0, "last": ""})
+        row["played"] += 1
+        row[outcome] += 1
+        if str(card.get("date") or "") > row["last"]:
+            row["last"] = str(card.get("date") or "")
+    out = []
+    for row in rows.values():
+        decided = row["won"] + row["lost"]
+        row["win_pct"] = round(100 * row["won"] / decided, 1) if decided else None
+        out.append(row)
+    out.sort(key=lambda r: (r["captain"] == "Not recorded", -r["played"], -(r["win_pct"] or 0)))
+    totals = {key: sum(r[key] for r in out) for key in ("played", "won", "lost", "tied", "no_result")}
+    return {"club": {"id": club_id, "name": club.get("name") or ""}, "year": year, "seasons": sorted(seasons, reverse=True), "captains": out, "totals": totals}
+
+
+@app.get("/api/stats/captains")
+def captain_stats(club_id: str = "", year: str = "", x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
+    user_row, current_club_id = _auth_user_from_token(x_auth_token)
+    store = load_store()
+    wanted = str(club_id or current_club_id or user_row["primary_club_id"] or "").strip()
+    club = next((item for item in store.get("clubs", []) or [] if str(item.get("id") or "") == wanted), None)
+    if not club:
+        return {"club": None, "year": year, "seasons": [], "captains": [], "totals": {}}
+    year = re.sub(r"\D", "", str(year or ""))[:4]
+    key = f"{wanted}|{year}|{store.get('_cache_signature') or ''}|{len(store.get('archive_uploads') or [])}|{len(store.get('fixtures') or [])}"
+    cached = _CAPTAIN_STATS_CACHE.get(key)
+    if cached is not None and time_module.time() - cached[0] < 300:
+        return cached[1]
+    result = _captain_stats(store, club, year)
+    if len(_CAPTAIN_STATS_CACHE) > 50:
+        _CAPTAIN_STATS_CACHE.clear()
+    _CAPTAIN_STATS_CACHE[key] = (time_module.time(), result)
+    return result
+
+
 def _merge_permission(user_row: sqlite3.Row, source_id: str, target_id: str) -> None:
     if str(user_row["role"] or "").strip() == "superadmin":
         return
@@ -12775,6 +13161,8 @@ def add_scorebook_ball(
             alert_events = []  # Live score alerts are a Pro feature
         for kind, title, body in alert_events:
             _notify(str(match.get("club_id") or ""), kind, title, body, f"/live/{match.get('id')}", str(match.get("id") or ""), "Live scoring")
+        if _has_feature(user_row, "", "score_updates") or _club_is_paid(str(match.get("club_id") or "")):
+            _whatsapp_live_alerts(match, innings, summary, alert_events)
     except Exception:
         logger.exception("Live score alert failed for match %s", match_id)
     if x_lite_response:
@@ -13178,6 +13566,7 @@ def _whatsapp_settings() -> dict[str, str] | None:
         "fixture": str(os.getenv("WHATSAPP_TEMPLATE_FIXTURE") or "new_fixture").strip(),
         "scorecard": str(os.getenv("WHATSAPP_TEMPLATE_SCORECARD") or "new_scorecard").strip(),
         "processed": str(os.getenv("WHATSAPP_TEMPLATE_PROCESSED") or "scorecard_processed").strip(),
+        "live": str(os.getenv("WHATSAPP_TEMPLATE_LIVE") or "live_score").strip(),
         "lang": str(os.getenv("WHATSAPP_TEMPLATE_LANG") or "en").strip(),
         "country": re.sub(r"\D", "", str(os.getenv("WHATSAPP_DEFAULT_COUNTRY_CODE") or "1")) or "1",
     }
@@ -13280,6 +13669,45 @@ def _whatsapp_club_alert(club_id: str, kind: str, ref: str, params: list[str], n
     threading.Thread(target=_work, name=f"whatsapp-{kind}", daemon=True).start()
 
 
+# Nov 16 2026 (Amit: "WhatsApp integration for alerts is also pending - ... score updates of the live score for their
+# club"). Live scoring sends WhatsApp to the club's players at the big moments only - match started, innings over
+# (with the target), and the result - not every ball or wicket (each message costs and would flood the phones; the
+# bell icon still gets every wicket and 50). Same Pro rule as the bell live alerts. Template WHATSAPP_TEMPLATE_LIVE
+# (default "live_score", README "WhatsApp alerts"), 3 values: {{1}} club, {{2}} what happened + score, {{3}} link.
+_WHATSAPP_LIVE_KINDS = {"live_start", "live_innings_end"}
+
+
+def _whatsapp_live_alerts(match: dict[str, Any], innings: dict[str, Any], summary: dict[str, Any], events: list[tuple[str, str, str]]) -> None:
+    try:
+        club_id = str(match.get("club_id") or "")
+        match_id = str(match.get("id") or "")
+        if not club_id or not match_id:
+            return
+        club = str(match.get("club_name") or "Your club")
+        fixture = f"{club} vs {match.get('opponent') or 'Opponent'}"
+        link = f"{PUBLIC_SITE_URL}/live/{match_id}"
+        number = int(innings.get("inning_number") or 1)
+        for kind, title, body in events:
+            if kind not in _WHATSAPP_LIVE_KINDS:
+                continue
+            text = f"{title} - {body}" if body and body not in title else title
+            if kind == "live_innings_end":
+                result = str(match.get("result") or "").strip()
+                if number >= 2 and result:
+                    text = f"Result: {fixture} - {result}"
+                    kind = "live_result"
+                elif number == 1:
+                    target = int(summary.get("runs") or 0) + 1
+                    text = f"Innings break: {title.replace('Innings over: ', '')} - target {target}. {fixture}"
+            _whatsapp_club_alert(club_id, "live", f"{kind}:{match_id}:{number}", [club, text[:250], link])
+        # a chase that reaches the target ends the match without "innings over" - the result is sent once anyway
+        result = str(match.get("result") or "").strip()
+        if number >= 2 and result and not any(kind == "live_innings_end" for kind, _title, _body in events):
+            _whatsapp_club_alert(club_id, "live", f"live_result:{match_id}:{number}", [club, f"Result: {fixture} - {result}"[:250], link])
+    except Exception:
+        logger.exception("WhatsApp live alert failed")
+
+
 def _whatsapp_fixture_alert(fixture: dict[str, Any]) -> None:
     club_id = str(fixture.get("club_id") or "")
     venue = _fixture_venue(fixture)
@@ -13338,7 +13766,7 @@ def admin_whatsapp_status(x_auth_token: str | None = Header(default=None)) -> di
         rows = [dict(row) for row in connection.execute("SELECT ref, kind, club_id, status, detail, sent_at, substr(phone, -4) AS phone_end FROM app_whatsapp_log ORDER BY sent_at DESC LIMIT 50")]
     return {
         "configured": bool(settings),
-        "templates": {key: settings[key] for key in ("fixture", "scorecard", "lang")} if settings else {},
+        "templates": {key: settings[key] for key in ("fixture", "scorecard", "processed", "live", "lang")} if settings else {},
         "recent": rows,
     }
 
@@ -16064,6 +16492,8 @@ def _finish_processed_upload(store: dict[str, Any], record: dict[str, Any], user
                 "message": f"This is the other innings of {title} (same date and teams). Both innings are now one scorecard."}
     if record.get("second_photo_file"):
         record["review_flags"] = []
+    # Nov 16 2026: names a club admin / the superadmin already confirmed ("Amit" = Amit S) are written in
+    _apply_identities_to_upload(store, record)
     checks = _scorecard_upload_checks(store, record)
     save_store(store)
     if league_id:
@@ -17434,64 +17864,450 @@ def _card_player_names(card: dict[str, Any]) -> list[str]:
 SCORECARD_NAME_MATCH_MIN_SCORE = PLAYER_MERGE_SUGGEST_MIN_SCORE  # upload name check uses the same 75% rule
 
 
-def _card_name_matches(store: dict[str, Any], card: dict[str, Any], user_row: sqlite3.Row | None = None, current_club_id: str = "") -> list[dict[str, Any]]:
-    """Names on a new scorecard that match players already on file (engine score at or above SCORECARD_NAME_MATCH_MIN_SCORE).
 
-    The card name is scored as a player in the uploader's club. "recognised": one player fits, under an alias or a shorter name.
-    "duplicate": two players fit and the engine says they are likely the same person; the older record is listed first.
-    Only the uploader's own clubs can merge them.
+# ---------------------------------------------------------------------------------------------------------------
+# Who is this name on the scorecard? (Nov 16 2026, Amit: "once it has learnt that Amit is Amit S then it should
+# learn and not question again ... learn from the club, player association with the club, frequent games, whether
+# he is a bowler, batter or all rounder, the clubs he plays with, playing pattern, commitment to the club, batting
+# order, bowling order, role in a club ... It should easily identify the person is Amit Sethi or Amit Gaba").
+#
+# 1. Decisions are kept and followed (app_name_identities / app_name_identity_rejections, plus the Admin Center's
+#    "Not the same player" pairs in app_name_match_rejections): once a club admin or the superadmin confirms that
+#    "Amit" on this club's cards is Amit S, the card is changed to Amit S and the name is never asked about again for
+#    that club - also on the next uploads, which get it written in automatically. "No, not him" is kept too.
+# 2. Each player has a profile from all scorecards: games per club, how often and how recently he plays, where he
+#    usually bats, whether he bowls, which players he plays with, his role. A name on a card is compared with every
+#    player whose name fits (75% or more) using the card itself: the club of the side he played for, the other
+#    names on that side, his batting position and whether he bowled. The scores go through a softmax with a low
+#    temperature, which gives a confidence for each candidate.
+# 3. Only real questions are asked: a name that is already one player's own name / alias in that club, or that the
+#    profile picks with high confidence and nobody else fits, is not shown. README "Who is this name on the card".
+# ---------------------------------------------------------------------------------------------------------------
+IDENTITY_MIN_NAME_SCORE = 0.75  # "production is 75% and above"
+IDENTITY_TEMPERATURE = 0.12  # softmax temperature: lower = the best-fitting player gets more of the confidence
+IDENTITY_SURE = 0.9  # at or above this (and a known name) nothing is asked
+IDENTITY_WEIGHTS = {"name": 0.30, "club": 0.20, "teammates": 0.20, "same_card": 0.10, "role": 0.10, "activity": 0.10}
+_PROFILE_CACHE: dict[str, Any] = {"key": None, "profiles": None}
+_IDENTITY_TABLES = (
+    "CREATE TABLE IF NOT EXISTS app_name_identities (club_id TEXT NOT NULL, card_name TEXT NOT NULL, member_id TEXT NOT NULL, "
+    "decided_by_user_id INTEGER, created_at TEXT NOT NULL DEFAULT '', PRIMARY KEY (club_id, card_name))",
+    "CREATE TABLE IF NOT EXISTS app_name_identity_rejections (club_id TEXT NOT NULL, card_name TEXT NOT NULL, member_id TEXT NOT NULL, "
+    "decided_by_user_id INTEGER, created_at TEXT NOT NULL DEFAULT '', PRIMARY KEY (club_id, card_name, member_id))",
+)
+
+
+def _identity_decisions() -> tuple[dict[tuple[str, str], str], set[tuple[str, str, str]], set[tuple[str, str]]]:
+    """(club, card name) -> member id; (club, card name, member id) rejected; rejected duplicate pairs."""
+    learned: dict[tuple[str, str], str] = {}
+    rejected: set[tuple[str, str, str]] = set()
+    pairs: set[tuple[str, str]] = set()
+    try:
+        with _auth_connection() as connection:
+            for sql in _IDENTITY_TABLES:
+                connection.execute(sql)
+            learned = {(row["club_id"], row["card_name"]): row["member_id"] for row in connection.execute("SELECT club_id, card_name, member_id FROM app_name_identities")}
+            rejected = {(row["club_id"], row["card_name"], row["member_id"]) for row in connection.execute("SELECT club_id, card_name, member_id FROM app_name_identity_rejections")}
+            try:
+                pairs = {(str(row["member_low_id"]), str(row["member_high_id"])) for row in connection.execute("SELECT member_low_id, member_high_id FROM app_name_match_rejections")}
+            except sqlite3.OperationalError:
+                pairs = set()
+    except sqlite3.Error:
+        logger.exception("Couldn't read the name decisions")
+    return learned, rejected, pairs
+
+
+def _player_profiles(store: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """Per player id: games per club, last game, usual batting positions, bowling, team-mates (from every card)."""
+    key = str(store.get("_cache_signature") or "")
+    if key and _PROFILE_CACHE["key"] == key and _PROFILE_CACHE["profiles"] is not None:
+        return _PROFILE_CACHE["profiles"]
+    members = [m for m in store.get("members", []) or [] if isinstance(m, dict) and m.get("id")]
+    # a card name counts for a player only when it is one of HIS names and nobody else's (no guessing here)
+    owners: dict[str, set[str]] = {}
+    for member in members:
+        for name in identity_names(member):
+            owners.setdefault(name, set()).add(str(member["id"]))
+    unique = {name: next(iter(ids)) for name, ids in owners.items() if len(ids) == 1}
+    profiles: dict[str, dict[str, Any]] = {
+        str(m["id"]): {"clubs": {}, "games": 0, "last": "", "positions": [], "bowled": 0, "teammates": set(), "role": str(m.get("role") or "")}
+        for m in members
+    }
+    for row in store.get("member_club_stats", []) or []:
+        profile = profiles.get(str(row.get("member_id") or ""))
+        if profile is not None:
+            profile["clubs"][str(row.get("club_id") or "")] = int(row.get("matches") or 0)
+    for row in store.get("member_summary_stats", []) or []:
+        profile = profiles.get(str(row.get("member_id") or ""))
+        if profile is not None:
+            profile["games"] = int(row.get("matches") or 0)
+            profile["last"] = str(row.get("last_game_date") or "")
+    with _canonical_archive_scope_main():
+        archives = canonical_archive_uploads(store.get("archive_uploads", []) or [])
+    for archive in archives:
+        card = _scorecard_pick_template(archive) or {}
+        innings_list = [item for item in card.get("innings") or [] if isinstance(item, dict)]
+        for index, innings in enumerate(innings_list):
+            side_ids: list[str] = []
+            for position, row in enumerate(innings.get("batting") or [], start=1):
+                name = normalize_name(_row_name(row))
+                member_id = unique.get(name)
+                if member_id:
+                    profiles[member_id]["positions"].append(position)
+                    side_ids.append(member_id)
+            # the bowlers of this innings are the other side
+            other = innings_list[1 - index] if len(innings_list) == 2 else None
+            for row in innings.get("bowling") or []:
+                member_id = unique.get(normalize_name(_row_name(row)))
+                if member_id:
+                    profiles[member_id]["bowled"] += 1
+            for member_id in side_ids:
+                profiles[member_id]["teammates"].update(normalize_name(_row_name(row)) for row in innings.get("batting") or [])
+                if other is not None:
+                    profiles[member_id]["teammates"].update(normalize_name(_row_name(row)) for row in other.get("bowling") or [])
+    if key:
+        _PROFILE_CACHE.update({"key": key, "profiles": profiles})
+    return profiles
+
+
+def _member_club_keys(member: dict[str, Any]) -> tuple[set[str], str]:
+    try:
+        from ai_duplicate_engine import club_keys
+    except ModuleNotFoundError:
+        from app.ai_duplicate_engine import club_keys
+    return club_keys(member)
+
+
+def _canonical_archive_scope_main():
+    try:
+        from cricket_store import _canonical_archive_scope
+    except ModuleNotFoundError:
+        from app.cricket_store import _canonical_archive_scope
+    return _canonical_archive_scope()
+
+
+def _row_name(row: Any) -> str:
+    if not isinstance(row, dict):
+        return ""
+    player = row.get("player")
+    return str((player.get("name") if isinstance(player, dict) else None) or row.get("name") or "").strip()
+
+
+def _card_sides(store: dict[str, Any], card: dict[str, Any], fallback_club_id: str) -> list[dict[str, Any]]:
+    """Every name on a card with the club of the side he played for, his batting position and the other names
+    on his side. A bowler belongs to the side that did NOT bat in that innings."""
+    innings_list = [item for item in card.get("innings") or [] if isinstance(item, dict)]
+    teams = [str(item.get("team") or item.get("batting_team") or "") for item in innings_list]
+
+    def club_of(team: str) -> str:
+        club = _find_club_by_name(store, team) if team else None
+        return str((club or {}).get("id") or "")
+
+    out: list[dict[str, Any]] = []
+    for index, innings in enumerate(innings_list):
+        batting = [_row_name(row) for row in innings.get("batting") or []]
+        bowling = [_row_name(row) for row in innings.get("bowling") or []]
+        bat_club = club_of(teams[index]) or (fallback_club_id if len(innings_list) == 1 else "")
+        other_team = teams[1 - index] if len(teams) == 2 else ""
+        bowl_club = club_of(other_team)
+        other_innings = innings_list[1 - index] if len(innings_list) == 2 else {}
+        bat_side = set(batting) | {_row_name(row) for row in (other_innings or {}).get("bowling") or []}
+        bowl_side = set(bowling) | {_row_name(row) for row in (other_innings or {}).get("batting") or []}
+        for position, name in enumerate(batting, start=1):
+            if name:
+                out.append({"name": name, "club_id": bat_club, "section": "batting", "position": position, "side": bat_side - {name}})
+        for position, name in enumerate(bowling, start=1):
+            if name:
+                out.append({"name": name, "club_id": bowl_club, "section": "bowling", "position": position, "side": bowl_side - {name}})
+    return out
+
+
+def _identify_name(store: dict[str, Any], engine: Any, profiles: dict[str, dict[str, Any]], entry: dict[str, Any], members: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Candidates for one card name, best first: [{member, confidence, score, reasons}]."""
+    card_player = {"name": entry["name"], "aliases": [], "primary_club_id": entry["club_id"], "club_memberships": [{"club_id": entry["club_id"]}] if entry["club_id"] else []}
+    norm = normalize_name(entry["name"])
+    side_norms = {normalize_name(name) for name in entry["side"] if name}
+    found: list[dict[str, Any]] = []
+    for member in members:
+        pair = engine.score(card_player, member, check_matches=False)
+        if pair.name_score < IDENTITY_MIN_NAME_SCORE or pair.score < SCORECARD_NAME_MATCH_MIN_SCORE:
+            continue  # the engine's 75% rule (name + club) as before
+        profile = profiles.get(str(member.get("id") or ""), {})
+        reasons: list[str] = []
+        clubs = profile.get("clubs") or {}
+        member_clubs, primary = _member_club_keys(member)
+        club_part = 1.0 if entry["club_id"] and (entry["club_id"] == primary or clubs.get(entry["club_id"])) else 0.6 if entry["club_id"] in member_clubs else 0.0
+        if club_part >= 1.0:
+            reasons.append(f"plays for this side's club ({clubs.get(entry['club_id'], 0)} games)")
+        mates = profile.get("teammates") or set()
+        overlap = len(side_norms & mates)
+        mates_part = overlap / max(1, len(side_norms))
+        if overlap:
+            reasons.append(f"has played with {overlap} of the players on this side")
+        same_card = 1.0 if (set(identity_names(member)) - {norm}) & side_norms else 0.0
+        if same_card:
+            reasons.append("his other name is on the same side of this card")
+        positions = profile.get("positions") or []
+        if entry["section"] == "batting" and positions:
+            usual = sum(positions) / len(positions)
+            role_part = max(0.0, 1 - abs(entry["position"] - usual) / 6)
+            reasons.append(f"usually bats at {usual:.0f} (here {entry['position']})")
+        elif entry["section"] == "bowling":
+            role_part = 1.0 if profile.get("bowled") else 0.3
+            if profile.get("bowled"):
+                reasons.append(f"bowled in {profile['bowled']} earlier games")
+        else:
+            role_part = 0.5
+        games = int(profile.get("games") or 0)
+        activity = min(1.0, games / 10)
+        if games:
+            reasons.append(f"{games} games{', last ' + profile['last'] if profile.get('last') else ''}")
+        if entry["club_id"] and not club_part and not mates_part and not same_card:
+            continue  # a player of another club with a similar name and nothing else in common
+        parts = {"name": pair.name_score, "club": club_part, "teammates": mates_part, "same_card": same_card, "role": role_part, "activity": activity}
+        score = sum(IDENTITY_WEIGHTS[k] * v for k, v in parts.items())
+        found.append({"member": member, "score": score, "name_score": pair.name_score, "reasons": reasons, "parts": parts})
+    if not found:
+        return []
+    import math
+
+    top = max(item["score"] for item in found)
+    weights = [math.exp((item["score"] - top) / IDENTITY_TEMPERATURE) for item in found]
+    total = sum(weights)
+    for item, weight in zip(found, weights):
+        item["confidence"] = weight / total
+    found.sort(key=lambda item: -item["confidence"])
+    return found
+
+
+def _learned_identity_names(store: dict[str, Any], card: dict[str, Any], fallback_club_id: str) -> dict[str, str]:
+    """card name -> player's name, for the names on this card that a club admin / superadmin already confirmed."""
+    learned, _, _ = _identity_decisions()
+    by_id = {str(m.get("id") or ""): m for m in store.get("members", []) or []}
+    renames: dict[str, str] = {}
+    for entry in _card_sides(store, card, fallback_club_id):
+        member = by_id.get(learned.get((entry["club_id"], normalize_name(entry["name"]))) or "")
+        if member and normalize_name(str(member.get("name") or "")) != normalize_name(entry["name"]):
+            renames[entry["name"]] = str(member.get("name") or "")
+    return renames
+
+
+def _rename_on_template(template: dict[str, Any], renames: dict[str, str]) -> int:
+    """Write the confirmed player names on a card (batters, bowlers, who took the catch / bowled him, captains,
+    man of the match). Returns how many places changed."""
+    keys = {normalize_name(old): new for old, new in renames.items() if old and new}
+    changed = 0
+
+    def fix(value: Any) -> Any:
+        nonlocal changed
+        if isinstance(value, str) and normalize_name(value) in keys:
+            changed += 1
+            return keys[normalize_name(value)]
+        return value
+
+    for innings in template.get("innings") or []:
+        if not isinstance(innings, dict):
+            continue
+        for section in ("batting", "bowling"):
+            for row in innings.get(section) or []:
+                if not isinstance(row, dict):
+                    continue
+                if isinstance(row.get("player"), dict):
+                    row["player"]["name"] = fix(row["player"].get("name"))
+                    if "normalized_name" in row["player"]:
+                        row["player"]["normalized_name"] = normalize_name(row["player"]["name"])
+                elif "name" in row:
+                    row["name"] = fix(row.get("name"))
+                dismissal = row.get("dismissal")
+                if isinstance(dismissal, dict):
+                    for key in ("bowler", "fielder"):
+                        dismissal[key] = fix(dismissal.get(key))
+    match = template.get("match")
+    if isinstance(match, dict):
+        if isinstance(match.get("captains"), dict):
+            for key in list(match["captains"]):
+                match["captains"][key] = fix(match["captains"][key])
+        match["man_of_match"] = fix(match.get("man_of_match"))
+    return changed
+
+
+def _apply_identities_to_upload(store: dict[str, Any], upload: dict[str, Any], renames: dict[str, str] | None = None) -> int:
+    """Write confirmed names on an uploaded card and refresh what is worked out from it. Returns places changed."""
+    template = deepcopy(_scorecard_pick_template(upload) or {})
+    if not template.get("innings"):
+        return 0
+    if renames is None:
+        renames = _learned_identity_names(store, _scorecard_from_archive(upload), str(upload.get("club_id") or ""))
+    if not renames:
+        return 0
+    changed = _rename_on_template(template, renames)
+    if not changed:
+        return 0
+    try:
+        imported = parse_imported_extraction(store, json.dumps(template))
+        for key in ("draft_scorecard", "suggested_performances"):
+            if key in imported:
+                upload[key] = imported[key]
+    except HTTPException:
+        pass
+    upload["extraction_template"] = deepcopy(template)
+    upload["review_template_json"] = json.dumps(template, indent=2)
+    return changed
+
+
+class NameIdentityRequest(BaseModel):
+    card_name: str
+    member_id: str = ""
+    member_ids: list[str] = []  # for "not any of these"
+    club_id: str = ""
+
+
+def _identity_access(store: dict[str, Any], user_row: sqlite3.Row, current_club_id: str, club_id: str, member: dict[str, Any] | None) -> None:
+    """Club admins of that club (or of the player's club) and the superadmin decide who a name is."""
+    if "superadmin" in _user_role_names(user_row, current_club_id):
+        return
+    if club_id and _can_edit_club(user_row, club_id):
+        return
+    if member is not None and _reviewer_can_decide(store, user_row, current_club_id, member) and "club_admin" in _user_role_names(user_row, current_club_id):
+        return
+    raise HTTPException(status_code=403, detail="A club admin of this club or the superadmin confirms who a player is.")
+
+
+@app.post("/api/scorecards/{upload_id}/name-identity")
+def scorecard_name_identity(upload_id: str, request: NameIdentityRequest, x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
+    """'Yes, Amit on this card is Amit S': remember it for the club and write it on the card (and its stats)."""
+    user_row, current_club_id, store, upload, _ = _scorecard_upload_access(x_auth_token, upload_id)
+    member = _member_by_id(store, str(request.member_id or ""))
+    if member is None:
+        raise HTTPException(status_code=404, detail="Player not found.")
+    club_id = str(request.club_id or upload.get("club_id") or "")
+    _identity_access(store, user_row, current_club_id, club_id, member)
+    card_name = normalize_name(request.card_name)
+    if not card_name:
+        raise HTTPException(status_code=400, detail="Which name on the card?")
+    with _auth_connection() as connection:
+        for sql in _IDENTITY_TABLES:
+            connection.execute(sql)
+        connection.execute(
+            "INSERT OR REPLACE INTO app_name_identities (club_id, card_name, member_id, decided_by_user_id, created_at) VALUES (?, ?, ?, ?, ?)",
+            (club_id, card_name, str(member["id"]), int(user_row["id"]), now_iso()),
+        )
+        connection.execute("DELETE FROM app_name_identity_rejections WHERE club_id = ? AND card_name = ? AND member_id = ?", (club_id, card_name, str(member["id"])))
+    changed = _apply_identities_to_upload(store, upload, {request.card_name: str(member.get("name") or "")})
+    if changed:
+        save_store(store)
+    _audit_event("member.name_identity", "member", str(member["id"]), actor=user_row, club_id=club_id, details={"card_name": request.card_name, "upload_id": upload_id, "changed": changed}, source="api")
+    return {
+        "message": f"Learned: '{request.card_name}' on this club's cards is {member.get('name')}. It won't be asked again"
+        + (f", and {changed} place{'s' if changed != 1 else ''} on this card now say {member.get('name')}." if changed else "."),
+        "changed": changed,
+    }
+
+
+@app.post("/api/scorecards/{upload_id}/name-identity-reject")
+def scorecard_name_identity_reject(upload_id: str, request: NameIdentityRequest, x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
+    """'No, Amit on this card is not Amit G' (or none of the players shown): remember it, don't suggest it again."""
+    user_row, current_club_id, store, upload, _ = _scorecard_upload_access(x_auth_token, upload_id)
+    club_id = str(request.club_id or upload.get("club_id") or "")
+    ids = [str(item) for item in ([request.member_id] if request.member_id else []) + list(request.member_ids or []) if item]
+    if not ids:
+        raise HTTPException(status_code=400, detail="Which player is it not?")
+    _identity_access(store, user_row, current_club_id, club_id, _member_by_id(store, ids[0]))
+    card_name = normalize_name(request.card_name)
+    with _auth_connection() as connection:
+        for sql in _IDENTITY_TABLES:
+            connection.execute(sql)
+        for member_id in ids:
+            connection.execute(
+                "INSERT OR IGNORE INTO app_name_identity_rejections (club_id, card_name, member_id, decided_by_user_id, created_at) VALUES (?, ?, ?, ?, ?)",
+                (club_id, card_name, member_id, int(user_row["id"]), now_iso()),
+            )
+    _audit_event("member.name_identity_rejected", "member", ids[0], actor=user_row, club_id=club_id, details={"card_name": request.card_name, "member_ids": ids}, source="api")
+    return {"message": f"Noted: '{request.card_name}' is not {', '.join(str((_member_by_id(store, i) or {}).get('name') or i) for i in ids)}. It won't be suggested again."}
+
+
+
+def _card_name_matches(store: dict[str, Any], card: dict[str, Any], user_row: sqlite3.Row | None = None, current_club_id: str = "") -> list[dict[str, Any]]:
+    """Names on a scorecard that need a person's decision (README "Who is this name on the card").
+
+    Each name is looked at as a player of the club of the side he played for, with his batting position and the other
+    names on his side (_identify_name). Nothing is asked for a name a club admin / superadmin already decided, or that
+    is one player's own name and the profile is sure of him. "recognised": the most likely player(s), to confirm or
+    reject. "duplicate": two records fit equally and could be one person (merge or "not the same").
     """
-    members = store.get("members", []) or []
+    members = [m for m in store.get("members", []) or [] if isinstance(m, dict)]
     engine = _match_engine(store)
+    profiles = _player_profiles(store)
+    learned, rejected, rejected_pairs = _identity_decisions()
     matches: list[dict[str, Any]] = []
-    for name in _card_player_names(card):
-        norm = normalize_name(name)
-        card_player = {
-            "name": name,
-            "aliases": [],
-            "primary_club_id": current_club_id,
-            "club_memberships": [{"club_id": current_club_id}] if current_club_id else [],
-        }
-        scored: list[tuple[float, int, dict[str, Any]]] = []
-        for index, member in enumerate(members):
-            pair = engine.score(card_player, member, check_matches=False)
-            if pair.score >= SCORECARD_NAME_MATCH_MIN_SCORE:
-                scored.append((pair.score, index, member))
-        if not scored:
+    seen: set[tuple[str, str]] = set()
+    for entry in _card_sides(store, card, current_club_id):
+        norm = normalize_name(entry["name"])
+        key = (entry["club_id"], norm)
+        if not norm or key in seen:
             continue
-        scored.sort(key=lambda item: (-item[0], item[1]))
-        duplicate = None
-        if len(scored) >= 2:
-            first_two = sorted(scored[:2], key=lambda item: item[1])  # older record first
-            older, newer = first_two[0][2], first_two[1][2]
-            pair = engine.score(older, newer)
-            if pair.score >= SCORECARD_NAME_MATCH_MIN_SCORE and not pair.vetoed:
-                duplicate = (older, newer, pair)
-        if duplicate:
-            older, newer, pair = duplicate
-            can_merge = user_row is not None and all(_reviewer_can_decide(store, user_row, current_club_id, m) for m in (older, newer))
-            matches.append({
-                "kind": "duplicate",
-                "card_name": name,
-                "match_percent": round(pair.score * 100),
-                "reasons": pair.reasons,
-                "members": [
-                    {"id": str(m.get("id") or ""), "name": str(m.get("name") or ""), "clubs": _member_club_names(store, m), "is_older": position == 0}
-                    for position, m in enumerate((older, newer))
-                ],
-                "can_merge": can_merge,
-            })
+        seen.add(key)
+        if key in learned:
+            continue  # decided before: the card already gets that player's name
+        candidates = [c for c in _identify_name(store, engine, profiles, entry, members) if (entry["club_id"], norm, str(c["member"].get("id") or "")) not in rejected]
+        if not candidates:
             continue
-        top_score, _, top = scored[0]
-        if normalize_name(str(top.get("name") or "")) == norm:
-            continue
+        if len(candidates) > 1:  # confidence again among the ones left
+            total = sum(c["confidence"] for c in candidates) or 1.0
+            for c in candidates:
+                c["confidence"] = c["confidence"] / total
+        top, others = candidates[0], candidates[1:]
+        top_exact = norm in identity_names(top["member"])
+        others_exact = any(norm in identity_names(c["member"]) for c in others)
+        if top_exact and (top["confidence"] >= IDENTITY_SURE or not others or (not others_exact and others[0]["confidence"] < 0.25)):
+            continue  # it is his own name and the profile is clear about it (nobody else fits nearly as well)
+        if others:
+            a, b = top["member"], others[0]["member"]
+            pair_key = tuple(sorted((str(a.get("id") or ""), str(b.get("id") or ""))))
+            close = abs(top["confidence"] - others[0]["confidence"]) < 0.25
+            if close and pair_key not in rejected_pairs:
+                pair = engine.score(a, b)
+                if pair.score >= SCORECARD_NAME_MATCH_MIN_SCORE and not pair.vetoed:
+                    older, newer = sorted((a, b), key=lambda m: next((i for i, x in enumerate(members) if x is m), 0))
+                    can_merge = user_row is not None and all(_reviewer_can_decide(store, user_row, current_club_id, m) for m in (older, newer))
+                    matches.append({
+                        "kind": "duplicate",
+                        "card_name": entry["name"],
+                        "club_id": entry["club_id"],
+                        "match_percent": round(pair.score * 100),
+                        "reasons": pair.reasons,
+                        "members": [
+                            {"id": str(m.get("id") or ""), "name": str(m.get("name") or ""), "clubs": _member_club_names(store, m), "is_older": position == 0}
+                            for position, m in enumerate((older, newer))
+                        ],
+                        "can_merge": can_merge,
+                    })
+                    continue
+        can_confirm = False
+        if user_row is not None:
+            try:
+                _identity_access(store, user_row, current_club_id, entry["club_id"], top["member"])
+                can_confirm = True
+            except HTTPException:
+                can_confirm = False
         matches.append({
             "kind": "recognised",
-            "card_name": name,
-            "match_percent": round(top_score * 100),
-            "reasons": engine.score(card_player, top, check_matches=False).reasons,
-            "members": [{"id": str(top.get("id") or ""), "name": str(top.get("name") or ""), "clubs": _member_club_names(store, top)}],
+            "card_name": entry["name"],
+            "club_id": entry["club_id"],
+            "match_percent": round(top["confidence"] * 100),
+            "reasons": top["reasons"][:4],
+            "members": [
+                {
+                    "id": str(c["member"].get("id") or ""),
+                    "name": str(c["member"].get("name") or ""),
+                    "full_name": str(c["member"].get("full_name") or ""),
+                    "clubs": _member_club_names(store, c["member"]),
+                    "confidence": round(c["confidence"] * 100),
+                    "reasons": c["reasons"][:4],
+                }
+                for c in candidates[:3]
+            ],
             "can_merge": False,
+            "can_confirm": can_confirm,
         })
     return matches
 
@@ -17504,7 +18320,7 @@ def _name_match_notice(matches: list[dict[str, Any]]) -> str:
         if match["kind"] == "duplicate":
             parts.append(f"'{names[0]}' and '{names[1]}' look like the same player")
         else:
-            parts.append(f"'{match['card_name']}' is recognised as {names[0]}")
+            parts.append(f"'{match['card_name']}' is most likely {names[0]} - please confirm")
     return f" Name check: {'; '.join(parts)}." if parts else ""
 
 
@@ -17561,7 +18377,7 @@ def scorecard_upload_preview(upload_id: str, x_auth_token: str | None = Header(d
         )
     same_innings_ids = {str(item["id"]) for item in duplicate_candidates}
     return {
-        "scorecard": _link_card_players(store, _scorecard_from_archive(upload)),
+        "scorecard": _tag_card_players(store, _link_card_players(store, _scorecard_from_archive(upload))),
         "status": status,
         "flags": flags,
         "duplicates": list(upload.get("possible_duplicates") or []),
@@ -17901,6 +18717,8 @@ def scorecard_upload_manual(upload_id: str, request: ScorecardManualRequest, x_a
         raise HTTPException(status_code=400, detail="Add at least one innings.")
     # Learn from the fix: names the AI misread and the person corrected (README "How the AI reader learns").
     learned = _learn_ai_corrections(str(upload.get("club_id") or ""), _scorecard_json(upload.get("review_source_json")) if upload.get("review_source_json") else None, template)
+    # Nov 16 2026: names already confirmed for this club ("Amit" = Amit S) are written in, so they aren't asked again
+    _rename_on_template(template, _learned_identity_names(store, template, str(upload.get("club_id") or "")))
     imported = parse_imported_extraction(store, json.dumps(template))
     upload.update(imported)
     # The typed-in card is THE reviewed copy now (the AI's reading stays in review_source_json for learning).
@@ -18824,6 +19642,86 @@ document.getElementById("backupNow").addEventListener("click", async (event) => 
 }});
 </script></body></html>"""
     return HTMLResponse(page)
+
+
+# ---------------------------------------------------------------------------------------------------------------
+# Mobile API (Nov 16 2026, Amit: "All these features that we build should be an API so that it can be used with
+# mobile apps"). Every feature already works through JSON endpoints (the web pages call them too); this groups them
+# by feature in the API docs (/docs, /openapi.json) so the iOS / Android apps can find them. README: MD/API.md.
+# Sign in with POST /api/auth/signin -> "token", then send header X-Auth-Token: <token> on every call.
+# ---------------------------------------------------------------------------------------------------------------
+API_GROUPS = [
+    ("/api/auth", "Sign in and accounts"),
+    ("/api/account", "Sign in and accounts"),
+    ("/api/viewer-profile", "Sign in and accounts"),
+    ("/api/admin/clubs", "Admin: clubs, people and roles"),
+    ("/api/admin/club-management", "Admin: clubs, people and roles"),
+    ("/api/admin/name-matches", "Admin: duplicate players (AI name check)"),
+    ("/api/admin/member-merges", "Admin: duplicate players (AI name check)"),
+    ("/api/admin/merge-requests", "Admin: duplicate players (AI name check)"),
+    ("/api/admin/name-claims", "Admin: duplicate players (AI name check)"),
+    ("/api/admin/scorecards", "Admin: scorecard review"),
+    ("/api/admin/review-queue", "Admin: scorecard review"),
+    ("/api/admin/archive", "Admin: scorecard review"),
+    ("/api/admin/uploads", "Admin: photos and storage"),
+    ("/api/admin/backups", "Admin: backups and database"),
+    ("/api/admin/db", "Admin: backups and database"),
+    ("/api/admin/whatsapp", "Admin: WhatsApp alerts"),
+    ("/api/admin", "Admin: other"),
+    ("/api/scorecards", "Scorecards: upload, read with AI, edit, publish"),
+    ("/api/archive", "Scorecards: upload, read with AI, edit, publish"),
+    ("/api/public/scorecards", "Scorecards: view"),
+    ("/api/matches", "Matches and live scoring"),
+    ("/api/quick-score", "Matches and live scoring"),
+    ("/api/public/match", "Matches and live scoring"),
+    ("/api/public/live", "Matches and live scoring"),
+    ("/api/guest", "Matches and live scoring"),
+    ("/api/season-setup", "Fixtures and availability"),
+    ("/api/public/fixtures", "Fixtures and availability"),
+    ("/api/player", "Players and profiles"),
+    ("/api/members", "Players and profiles"),
+    ("/api/public/players", "Players and profiles"),
+    ("/api/rankings", "Stats and rankings"),
+    ("/api/stats", "Stats and rankings"),
+    ("/api/public/rankings", "Stats and rankings"),
+    ("/api/dashboard", "Home and dashboard"),
+    ("/api/insights", "Home and dashboard"),
+    ("/api/weather", "Home and dashboard"),
+    ("/api/notifications", "Notifications"),
+    ("/api/clubs", "Clubs"),
+    ("/api/public/clubs", "Clubs"),
+    ("/api/leagues", "Leagues"),
+    ("/api/chat", "AI assistant"),
+    ("/api/muse", "AI assistant"),
+    ("/api/llm", "AI assistant"),
+    ("/api/public/muse", "AI assistant"),
+    ("/api/subscription", "Plans and payments"),
+    ("/api/plans", "Plans and payments"),
+    ("/api/stripe", "Plans and payments"),
+    ("/api/public", "Public (no sign-in)"),
+    ("/api", "Other"),
+]
+
+
+def _group_api_routes() -> None:
+    from fastapi.routing import APIRoute
+
+    for route in app.routes:
+        if not isinstance(route, APIRoute) or route.tags:
+            continue
+        if not route.path.startswith("/api"):
+            route.include_in_schema = False  # web pages, not API
+            continue
+        route.tags = [next(group for prefix, group in API_GROUPS if route.path == prefix or route.path.startswith(prefix + "/") or route.path.startswith(prefix + "-") or prefix == "/api")]
+    app.openapi_schema = None
+    app.description = (
+        "CricketCanClubs API for the web site and the iOS / Android apps. Sign in with POST /api/auth/signin "
+        "(identifier = mobile or email, password) - the answer has \"token\". Send it as the header X-Auth-Token on "
+        "every call. Guide: MD/API.md in the code."
+    )
+
+
+_group_api_routes()
 
 
 if __name__ == "__main__":

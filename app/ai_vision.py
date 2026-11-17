@@ -885,6 +885,12 @@ def _apply_learning(template: dict[str, Any], roster: list[str] | None) -> list[
             name = " ".join(str(row["player"].get("name") or "").split()).lower()
             found = wickets.get(name)
             if found is None:
+                # Nov 16 2026: How out often has only part of the name ("b Khan" for S Khan) - use it when exactly
+                # one bowler fits that name
+                bowler_names = [" ".join(str((item.get("player") or {}).get("name") or "").split()).lower() for item in inn.get("bowling") or [] if isinstance(item, dict)]
+                fits = [who for who in wickets if who not in bowler_names and _same_player(who, name) and sum(1 for other in bowler_names if _same_player(who, other)) == 1]
+                found = sum(wickets[who] for who in fits) if fits else None
+            if found is None:
                 continue
             if row.get("wickets") in (None, ""):
                 row["wickets"] = found
@@ -1129,11 +1135,15 @@ def read_scorecard(
         result = _read_scorecard(path, roster=roster, club_name=club_name, timeout=timeout)
         template = result.get("template")
         if template:
-            if _bowling_gaps(template) >= 2 and provider() == "gemini" and not result.get("fallback"):
-                filled = _merge_bowling(template, _read_bowling_only(Path(path)))
-                if filled:
+            # Nov 16 2026 (Amit: "Bowling readability still needs a lot of improvement"): the close-up re-read now also
+            # runs when the bowling doesn't add up (runs / overs / wickets against the total and How out), not only
+            # when 2+ figures are empty, and its figures replace the first read's when they add up better.
+            if (_bowling_gaps(template) >= 1 or _bowling_mismatches(template)) and provider() == "gemini" and not result.get("fallback"):
+                filled, corrected = _merge_bowling(template, _read_bowling_only(Path(path), _bowling_context(template)))
+                if filled or corrected:
                     result.setdefault("notes", [])
-                    result["notes"] = [*result["notes"], f"Bowling read again from a close-up of the bowling analysis ({filled} figures filled) - check them."]
+                    done = ", ".join(part for part in (f"{filled} figures filled" if filled else "", f"{corrected} bowlers corrected so the figures add up" if corrected else "") if part)
+                    result["notes"] = [*result["notes"], f"Bowling read again from a close-up of the bowling analysis ({done}) - check them."]
             learned = _apply_learning(template, roster)
             learned += _fix_sides_and_wickets(template, roster, club_name)
             learned += _fill_bowling_from_totals(template)
@@ -1176,6 +1186,10 @@ For EVERY bowler row that has a name or marks:
 - "runs_conceded": the RUNS column if written, else the sum of his over_runs, else every run in his boxes (wides and
   no balls count; byes and leg byes don't).
 - Copy the BOWLING SUMMARY columns exactly when they are filled in - they win over anything you count.
+- A figure crossed out and written again: use the new one. A box with a slash or a line through it is still one over.
+- The same bowler on two lines (he came back from the other end, or his overs ran past the last box): give ONE row
+  with all his overs.
+- Read the bowlers top to bottom in the order written. Ignore the batting section, fall of wickets and the totals.
 Use null for anything you can't read. Never invent a bowler.
 
 Reply with JSON only: {"bowling": [{"name": "...", "overs": null, "maidens": null, "runs_conceded": null,
@@ -1193,6 +1207,92 @@ def _bowling_gaps(template: dict[str, Any]) -> int:
     return gaps
 
 
+def _num(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    text = str(value if value is not None else "").strip()
+    return int(text) if text.isdigit() else None
+
+
+def _out_to_bowlers(innings: dict[str, Any]) -> list[str]:
+    """The bowler names in How out for batters out to a bowler (caught, bowled, lbw, stumped, hit wicket)."""
+    return [
+        str((row.get("dismissal") or {}).get("bowler"))
+        for row in innings.get("batting") or []
+        if isinstance(row, dict) and isinstance(row.get("dismissal"), dict) and _credited_to_bowler(row["dismissal"])
+    ]
+
+
+def _bowling_error(innings: dict[str, Any]) -> float:
+    """How far the bowling is from adding up (0 = runs, overs and wickets all agree with the card; an empty figure
+    counts 3). Used to decide whether the close-up re-read is better than the first read."""
+    rows = [row for row in innings.get("bowling") or [] if isinstance(row, dict) and (row.get("player") or {}).get("name")]
+    if not rows:
+        return 0.0
+    error = 0.0
+    summary = innings.get("summary") if isinstance(innings.get("summary"), dict) else {}
+    extras = innings.get("extras") if isinstance(innings.get("extras"), dict) else {}
+    runs = [_num(row.get("runs_conceded")) for row in rows]
+    error += 3 * sum(1 for value in runs if value is None)
+    total = _num(summary.get("runs"))
+    if total is not None and all(value is not None for value in runs):
+        expected = total - sum(_num(extras.get(key)) or 0 for key in ("byes", "leg_byes", "penalties"))
+        error += abs(sum(runs) - expected)  # type: ignore[arg-type]
+    balls = [_overs_balls(row.get("overs")) for row in rows]
+    error += 3 * sum(1 for value in balls if value is None)
+    want = _overs_balls(summary.get("overs"))
+    if want and all(value is not None for value in balls):
+        missing = abs(sum(balls) - want)  # type: ignore[arg-type]
+        error += max(0, missing - 6) / 6 + (0.5 if missing else 0)  # one over left off is common on paper books
+    credited = _out_to_bowlers(innings)
+    if credited:
+        for row in rows:
+            wickets = _num(row.get("wickets"))
+            found = sum(1 for who in credited if _same_player(who, (row.get("player") or {}).get("name")))
+            error += 3 if wickets is None else abs(wickets - found)
+    return error
+
+
+def _bowling_mismatches(template: dict[str, Any]) -> int:
+    """Innings whose bowling doesn't add up (runs vs total, overs vs innings overs, wickets vs How out)."""
+    return sum(1 for innings in template.get("innings") or [] if isinstance(innings, dict) and _bowling_error(innings) >= 1)
+
+
+def _bowling_context(template: dict[str, Any]) -> str:
+    """What the rest of the card says, so the close-up read can check its own figures (never to make them up)."""
+    lines: list[str] = []
+    for innings in template.get("innings") or []:
+        if not isinstance(innings, dict) or not innings.get("batting"):
+            continue
+        summary = innings.get("summary") if isinstance(innings.get("summary"), dict) else {}
+        extras = innings.get("extras") if isinstance(innings.get("extras"), dict) else {}
+        bits: list[str] = []
+        total = _num(summary.get("runs"))
+        if total is not None:
+            byes = sum(_num(extras.get(key)) or 0 for key in ("byes", "leg_byes", "penalties"))
+            bits.append(f"total {total}" + (f" (so the bowlers' runs should add up to {total - byes} after {byes} byes / leg byes)" if byes else " (the bowlers' runs plus any byes and leg byes make this)"))
+        if summary.get("overs") not in (None, ""):
+            bits.append(f"{summary.get('overs')} overs")
+        counts: dict[str, int] = {}
+        for who in _out_to_bowlers(innings):
+            counts[who] = counts.get(who, 0) + 1
+        if counts:
+            bits.append("out to bowlers in How out: " + ", ".join(f"{who} {n}" for who, n in counts.items()))
+        names = [str((row.get("player") or {}).get("name")) for row in innings.get("bowling") or [] if isinstance(row, dict) and (row.get("player") or {}).get("name")]
+        if names:
+            bits.append("bowlers read so far: " + ", ".join(names))
+        if bits:
+            lines.append(f"- {innings.get('batting_team') or 'Innings ' + str(innings.get('inning_number') or '')}: " + "; ".join(bits))
+    if not lines:
+        return ""
+    return ("What the rest of this card says (use it to CHECK your reading - look again at any figure that makes the "
+            "totals not add up, but write only what is on the page):\n" + "\n".join(lines))
+
+
 def _bowling_crop(path: Path) -> tuple[str, str] | None:
     try:
         from PIL import Image, ImageOps
@@ -1208,6 +1308,13 @@ def _bowling_crop(path: Path) -> tuple[str, str] | None:
             width, height = image.size
             part = image.crop((0, int(height * 0.40), width, height))
             part.thumbnail((3072, 3072))
+            # Nov 16 2026: pencil on cream paper - stretch the contrast and sharpen the strokes for the small boxes
+            try:
+                from PIL import ImageFilter
+
+                part = ImageOps.autocontrast(part, cutoff=1).filter(ImageFilter.UnsharpMask(radius=2, percent=120, threshold=3))
+            except Exception:
+                pass
             buffer = io.BytesIO()
             part.save(buffer, format="JPEG", quality=90)
             return ("image/jpeg", base64.b64encode(buffer.getvalue()).decode("ascii"))
@@ -1215,7 +1322,7 @@ def _bowling_crop(path: Path) -> tuple[str, str] | None:
         return None
 
 
-def _read_bowling_only(path: Path) -> list[dict[str, Any]]:
+def _read_bowling_only(path: Path, context: str = "") -> list[dict[str, Any]]:
     """The bowlers read from a crop of the bowling analysis (Gemini). [] when it can't be done."""
     import time
 
@@ -1227,10 +1334,11 @@ def _read_bowling_only(path: Path) -> list[dict[str, Any]]:
     parts: list[dict[str, Any]] = []
     for media, data in [item for item in (whole, crop) if item]:
         parts.append({"inline_data": {"mime_type": media, "data": data}})
+    prompt = BOWLING_PROMPT + ("\n\n" + context if context else "")
     if len(parts) == 2:
-        parts.append({"text": "Image 1 is the whole page, image 2 a sharp copy of its lower part (the bowling analysis).\n\n" + BOWLING_PROMPT})
+        parts.append({"text": "Image 1 is the whole page, image 2 a sharp copy of its lower part (the bowling analysis).\n\n" + prompt})
     else:
-        parts.append({"text": BOWLING_PROMPT})
+        parts.append({"text": prompt})
     body = {"contents": [{"role": "user", "parts": parts}], "generationConfig": {"temperature": 0, "responseMimeType": "application/json"}}
     base = subscriptions.setting("GEMINI_BASE_URL", "https://generativelanguage.googleapis.com").rstrip("/")
     configured = subscriptions.setting("GEMINI_VISION_MODEL")
@@ -1266,11 +1374,15 @@ def _read_bowling_only(path: Path) -> list[dict[str, Any]]:
     return []
 
 
-def _merge_bowling(template: dict[str, Any], rows: list[dict[str, Any]]) -> int:
-    """Fill the empty bowling figures of the innings these bowlers belong to. Returns the number of filled values."""
+def _merge_bowling(template: dict[str, Any], rows: list[dict[str, Any]]) -> tuple[int, int]:
+    """Fill the empty bowling figures from the close-up re-read, and where the first read's bowling doesn't add up,
+    take the re-read's figures for a bowler when that makes the innings add up better (runs vs total, overs vs the
+    innings, wickets vs How out). Returns (figures filled, bowlers corrected)."""
+    import copy
+
     innings_list = [item for item in template.get("innings") or [] if isinstance(item, dict)]
     if not innings_list or not rows:
-        return 0
+        return 0, 0
 
     def key(value: Any) -> str:
         return _norm_name(value).replace(" ", "")
@@ -1287,10 +1399,11 @@ def _merge_bowling(template: dict[str, Any], rows: list[dict[str, Any]]) -> int:
     if overlap(target) == 0:
         empty = [item for item in innings_list if item.get("batting") and not item.get("bowling")]
         if len(innings_list) != 1 and len(empty) != 1:
-            return 0
+            return 0, 0
         target = empty[0] if empty else innings_list[0]
     filled = 0
     existing = [row for row in target.get("bowling") or [] if isinstance(row, dict)]
+    pairs: list[tuple[dict[str, Any], dict[str, Any]]] = []
     for row in rows:
         name = str(row.get("name") or "").strip()
         match = next((item for item in existing if similar(key((item.get("player") or {}).get("name")), key(name))), None)
@@ -1300,6 +1413,8 @@ def _merge_bowling(template: dict[str, Any], rows: list[dict[str, Any]]) -> int:
             match = {"player": {"name": name}, "overs": None, "maidens": None, "runs_conceded": None, "wickets": None}
             existing.append(match)
             filled += 1
+        else:
+            pairs.append((match, row))
         for field in ("overs", "maidens", "runs_conceded", "wickets", "wides", "no_balls"):
             if match.get(field) in (None, "") and row.get(field) not in (None, ""):
                 match[field] = row[field]
@@ -1309,7 +1424,31 @@ def _merge_bowling(template: dict[str, Any], rows: list[dict[str, Any]]) -> int:
                 match[field] = row[field]
                 filled += 1
     target["bowling"] = existing
-    return filled
+
+    # Nov 16 2026: corrections, one bowler at a time, kept only when the innings then adds up better
+    corrected = 0
+    for match, row in pairs:
+        before = _bowling_error(target)
+        if before < 1:
+            break
+        saved = copy.deepcopy(match)
+        changed = False
+        for field in ("overs", "maidens", "runs_conceded", "wickets", "wides", "no_balls"):
+            if row.get(field) not in (None, "") and str(row.get(field)) != str(match.get(field)):
+                match[field] = row[field]
+                changed = True
+        for field in ("over_marks", "over_runs"):
+            if isinstance(row.get(field), list) and row.get(field) and row.get(field) != match.get(field):
+                match[field] = row[field]
+                changed = True
+        if not changed:
+            continue
+        if _bowling_error(target) < before:
+            corrected += 1
+        else:
+            match.clear()
+            match.update(saved)
+    return filled, corrected
 
 
 def _overs_balls(value: Any) -> int | None:
