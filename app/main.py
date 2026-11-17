@@ -1035,7 +1035,7 @@ def _clubs_page_html(request: Request, search: str = "", focus_club_id: str = ""
         <link rel="stylesheet" href="/assets/styles.css?v=20261111tablealign" />
         <link rel="stylesheet" href="/assets/app_polish.css?v=20261006a" />
         <link rel="stylesheet" href="/assets/sports-system.css?v=20260926a" />
-        <link rel="stylesheet" href="/assets/public_match.css?v=20261111tablealign2" />
+        <link rel="stylesheet" href="/assets/public_match.css?v=20261117i" />
       </head>
       <body>
         <div class="page-shell">
@@ -5873,11 +5873,11 @@ def _scorecard_from_archive_base(archive: dict[str, Any]) -> dict[str, Any]:
         extras_total = _scorecard_int(extras.get("total"))
         if extras_total is None and position == 0:
             extras_total = _scorecard_int(parts.get("extras"))
+        # Cricbuzz style (Nov 17 2026): every part, zeros too, when the card has the extras split
         extras_detail = ", ".join(
-            f"{label} {_scorecard_int(extras.get(key))}"
-            for key, label in (("byes", "b"), ("leg_byes", "lb"), ("wides", "w"), ("no_balls", "nb"), ("penalties", "pen"))
-            if _scorecard_int(extras.get(key))
-        )
+            f"{label} {_scorecard_int(extras.get(key)) or 0}"
+            for key, label in (("byes", "b"), ("leg_byes", "lb"), ("wides", "w"), ("no_balls", "nb"), ("penalties", "p"))
+        ) if any(_scorecard_int(extras.get(key)) for key in ("byes", "leg_byes", "wides", "no_balls", "penalties")) else ""
 
         has_data = bool(batting or bowling or runs is not None)
         innings_out.append(
@@ -5990,6 +5990,68 @@ def _scorecard_from_fixture_base(fixture: dict[str, Any]) -> dict[str, Any]:
             if kind == "retired_out":
                 retired.add(normalize_name(player))
 
+        # Nov 17 2026 (Dhruvika: "show similar to cricbuzz"): NB and WD per bowler, and the fall of wickets
+        # "1-23 (Name, 3.4)" from the ball-by-ball
+        bowler_extras: dict[str, dict[str, int]] = {}
+        fall_of_wickets: list[dict[str, Any]] = []
+        running = legal = fallen = 0
+        # the innings summary has the extras total but not its parts - count them here (Nov 17 2026: "Extras 3
+        # (b 0, lb 0, w 0, nb 0)" showed zeros)
+        extra_parts = {"b": 0, "lb": 0, "w": 0, "nb": 0}
+        # Cricbuzz "Partnerships": each wicket's stand - both batters' runs (balls) and the stand's runs (balls)
+        partnerships: list[dict[str, Any]] = []
+        stand: dict[str, Any] | None = None
+
+        def _close_stand() -> None:
+            if stand and (stand["runs"] or stand["balls"]):
+                names = list(stand["batters"])[:2]
+                while len(names) < 2:
+                    names.append("")
+                partnerships.append({
+                    "runs": stand["runs"], "balls": stand["balls"],
+                    "left": names[0], "left_runs": stand["batters"].get(names[0], [0, 0])[0], "left_balls": stand["batters"].get(names[0], [0, 0])[1],
+                    "right": names[1], "right_runs": stand["batters"].get(names[1], [0, 0])[0], "right_balls": stand["batters"].get(names[1], [0, 0])[1],
+                })
+
+        for ball in source.get("balls", []) or []:
+            kind_extra = str(ball.get("extras_type") or "none").lower()
+            bat_runs = int(ball.get("runs_bat") or 0)
+            extra_runs = int(ball.get("extras_runs") or 0)
+            part = {"bye": "b", "byes": "b", "leg_bye": "lb", "leg_byes": "lb", "wide": "w", "no_ball": "nb"}.get(kind_extra)
+            if part:
+                extra_parts[part] += extra_runs
+            running += bat_runs + extra_runs
+            if kind_extra not in {"wide", "no_ball", "retired_out"}:
+                legal += 1
+            striker_name = _scorecard_text(ball.get("striker"))
+            other_name = _scorecard_text(ball.get("non_striker"))
+            if stand is None:
+                stand = {"runs": 0, "balls": 0, "batters": {}}
+            for who in (striker_name, other_name):
+                if who and who not in stand["batters"]:
+                    stand["batters"][who] = [0, 0]
+            if kind_extra != "retired_out":
+                stand["runs"] += bat_runs + extra_runs
+                if kind_extra not in {"wide", "no_ball"}:
+                    stand["balls"] += 1
+                if striker_name:
+                    stand["batters"][striker_name][0] += bat_runs
+                    if kind_extra != "wide":
+                        stand["batters"][striker_name][1] += 1
+            bucket = bowler_extras.setdefault(normalize_name(ball.get("bowler")), {"wides": 0, "no_balls": 0})
+            if kind_extra == "wide":
+                bucket["wides"] += max(1, extra_runs)
+            elif kind_extra == "no_ball":
+                bucket["no_balls"] += 1
+            wicket_kind = str(ball.get("wicket_type") or "").lower()
+            if ball.get("wicket") and wicket_kind not in {"retired_out", "retired", "retired_hurt"}:
+                fallen += 1
+                fall_of_wickets.append({"wicket": fallen, "runs": running, "batter": _scorecard_text(ball.get("wicket_player")), "over": f"{legal // 6}.{legal % 6}"})
+            if ball.get("wicket") or wicket_kind == "retired_out":
+                _close_stand()
+                stand = None
+        _close_stand()
+
         # Nov 11 2026 (Amit: "add 1s, 2s, 3s on the right along with 4s and 6s"): count them per batter from the
         # ball-by-ball of a live-scored match (wides aren't balls faced; byes / leg byes are a dot for the batter)
         scoring_counts: dict[str, dict[str, int]] = {}
@@ -6040,16 +6102,15 @@ def _scorecard_from_fixture_base(fixture: dict[str, Any]) -> dict[str, Any]:
                 "runs": _scorecard_int(bowler.get("runs_conceded")),
                 "wickets": _scorecard_int(bowler.get("wickets")),
                 "economy": f"{float(bowler.get('economy') or 0):.2f}",
+                **(bowler_extras.get(normalize_name(bowler.get("player_name"))) or {}),
             }
             for bowler in summary.get("bowling") or []
             if _scorecard_text(bowler.get("player_name"))
             and (int(bowler.get("legal_balls") or 0) > 0 or int(bowler.get("runs_conceded") or 0) > 0)
         ]
-        extras_detail = ", ".join(
-            f"{label} {int(summary.get(key) or 0)}"
-            for key, label in (("byes", "b"), ("legByes", "lb"), ("wides", "w"), ("noBalls", "nb"))
-            if int(summary.get(key) or 0)
-        )
+        # Cricbuzz style: every part, zeros too - "b 0, lb 2, w 8, nb 1, p 0"
+        extra_parts["p"] = max(0, int(summary.get("extras") or 0) - sum(extra_parts.values()))
+        extras_detail = ", ".join(f"{label} {extra_parts[label]}" for label in ("b", "lb", "w", "nb", "p")) if summary.get("extras") is not None else ""
         score = f"{runs}" if runs is not None else ""
         if runs is not None and wickets is not None:
             score += f"/{wickets}"
@@ -6067,6 +6128,8 @@ def _scorecard_from_fixture_base(fixture: dict[str, Any]) -> dict[str, Any]:
                 "batting": batting,
                 "did_not_bat": did_not_bat,
                 "bowling": bowling,
+                "fall_of_wickets": fall_of_wickets,
+                "partnerships": partnerships,
                 "has_data": bool(batting or bowling or runs is not None),
             }
         )
@@ -6183,6 +6246,9 @@ def _card_people(archive: dict[str, Any], card: dict[str, Any]) -> None:
     match = template.get("match") if isinstance(template.get("match"), dict) else {}
     teams_info = match.get("teams") if isinstance(match.get("teams"), dict) else {}
     captains = match.get("captains") if isinstance(match.get("captains"), dict) else {}
+    # Nov 17 2026 (Dhruvika: "where is the captain and vice caption"): vice-captain and keeper per side, picked on the card
+    vices = match.get("vice_captains") if isinstance(match.get("vice_captains"), dict) else {}
+    keepers = match.get("keepers") if isinstance(match.get("keepers"), dict) else {}
     pairs = []
     card_teams = [str(item or "") for item in card.get("teams") or []]
     for index, key in enumerate(("team_1", "team_2")):
@@ -6200,7 +6266,8 @@ def _card_people(archive: dict[str, Any], card: dict[str, Any]) -> None:
             if str(row.get("name") or "").strip()
         })
         if shown or name:
-            pairs.append({"team": shown, "name": name, "side": key, "squad": squad})
+            clean = lambda value: "" if " ".join(str(value or "").split()).lower() in {"", "null", "none", "-"} else " ".join(str(value).split())
+            pairs.append({"team": shown, "name": name, "side": key, "squad": squad, "vice_captain": clean(vices.get(key)), "keeper": clean(keepers.get(key))})
     card["captains"] = pairs
     mom = " ".join(str(match.get("man_of_match") or "").split())
     card["man_of_match"] = "" if mom.lower() in {"", "null", "none", "-"} else mom
@@ -6259,7 +6326,12 @@ def _scorecard_from_fixture(fixture: dict[str, Any]) -> dict[str, Any]:
     captains = []
     for side, team, fallback in (("club", home, fixture.get("heartlake_captain")), ("opponent", away, "")):
         name = " ".join(str((roles.get(side) or {}).get("captain") or fallback or "").split())
-        captains.append({"team": team, "name": name, "side": side, "squad": [str(n) for n in saved.get(side) or [] if str(n or "").strip()]})  # name "" = not picked yet
+        side_roles = roles.get(side) if isinstance(roles.get(side), dict) else {}
+        captains.append({
+            "team": team, "name": name, "side": side, "squad": [str(n) for n in saved.get(side) or [] if str(n or "").strip()],  # name "" = not picked yet
+            "vice_captain": " ".join(str(side_roles.get("vice_captain") or "").split()),
+            "keeper": " ".join(str(side_roles.get("keeper") or "").split()),
+        })
     card["captains"] = captains if any(item["name"] for item in captains) or card.get("innings") else []
     card["lineup_roles"] = [{"team": home, "roles": roles.get("club") or {}}, {"team": away, "roles": roles.get("opponent") or {}}]
     chosen = " ".join(str(saved.get("man_of_match") or "").split())
@@ -6272,6 +6344,11 @@ class ScorecardPeopleRequest(BaseModel):
     team_1_captain: str | None = None
     team_2_captain: str | None = None
     man_of_match: str = ""
+    # Nov 17 2026: vice-captain and wicket keeper of each side (None = leave as it is, "" = none)
+    team_1_vice_captain: str | None = None
+    team_2_vice_captain: str | None = None
+    team_1_keeper: str | None = None
+    team_2_keeper: str | None = None
 
 
 @app.post("/api/scorecards/{upload_id}/people")
@@ -6291,6 +6368,13 @@ def save_scorecard_people(upload_id: str, request: ScorecardPeopleRequest, x_aut
         if value is not None:
             captains[key] = " ".join(str(value).split())[:80] or None
     match["captains"] = captains
+    for field, prefix in (("vice_captains", "vice_captain"), ("keepers", "keeper")):
+        picked = match.get(field) if isinstance(match.get(field), dict) else {}
+        for key in ("team_1", "team_2"):
+            value = getattr(request, f"{key}_{prefix}")
+            if value is not None:
+                picked[key] = " ".join(str(value).split())[:80] or None
+        match[field] = picked
     match["man_of_match"] = " ".join(str(request.man_of_match or "").split())[:80] or None
     upload["extraction_template"] = deepcopy(template)
     upload["review_template_json"] = json.dumps(template, indent=2)
@@ -6298,7 +6382,7 @@ def save_scorecard_people(upload_id: str, request: ScorecardPeopleRequest, x_aut
     save_store(store)
     _audit_event("archive.people", "archive_upload", str(upload.get("id") or ""), actor=user_row, details={"captains": captains, "man_of_match": match["man_of_match"]}, source="api")
     card = _scorecard_from_archive(upload)
-    return {"message": "Saved captains and man of the match.", "captains": card.get("captains"), "man_of_match": card.get("man_of_match") or ""}
+    return {"message": "Saved captains, vice-captains, keepers and man of the match.", "captains": card.get("captains"), "man_of_match": card.get("man_of_match") or ""}
 
 
 class ManOfMatchRequest(BaseModel):
@@ -6306,6 +6390,11 @@ class ManOfMatchRequest(BaseModel):
     # Nov 11 2026: the captain of each side can be set from the scorecard page too (None = leave as it is)
     club_captain: str | None = None
     opponent_captain: str | None = None
+    # Nov 17 2026: vice-captain and keeper of each side
+    club_vice_captain: str | None = None
+    opponent_vice_captain: str | None = None
+    club_keeper: str | None = None
+    opponent_keeper: str | None = None
 
 
 @app.post("/api/matches/{match_id}/man-of-match")
@@ -6326,10 +6415,14 @@ def set_man_of_match(match_id: str, request: ManOfMatchRequest, x_auth_token: st
         data = json.loads(row["lineups_json"] or "{}") if row else {}
         data["man_of_match"] = name
         roles = data.get("roles") if isinstance(data.get("roles"), dict) else {}
-        for side, value in (("club", request.club_captain), ("opponent", request.opponent_captain)):
+        for side, role, value in (
+            ("club", "captain", request.club_captain), ("opponent", "captain", request.opponent_captain),
+            ("club", "vice_captain", request.club_vice_captain), ("opponent", "vice_captain", request.opponent_vice_captain),
+            ("club", "keeper", request.club_keeper), ("opponent", "keeper", request.opponent_keeper),
+        ):
             if value is not None:
                 side_roles = roles.get(side) if isinstance(roles.get(side), dict) else {}
-                side_roles["captain"] = " ".join(str(value).split())[:80]
+                side_roles[role] = " ".join(str(value).split())[:80]
                 roles[side] = side_roles
         data["roles"] = roles
         connection.execute(
@@ -6338,7 +6431,7 @@ def set_man_of_match(match_id: str, request: ManOfMatchRequest, x_auth_token: st
             (match_id, json.dumps(data), now_iso(), str(user_row["display_name"] or "")),
         )
     _audit_event("match.man_of_match", "fixture", match_id, actor=user_row, details={"name": name}, source="api")
-    return {"message": "Saved captains and man of the match.", "man_of_match": name}
+    return {"message": "Saved captains, vice-captains, keepers and man of the match.", "man_of_match": name}
 
 
 def _public_scorecards(store: dict[str, Any]) -> list[dict[str, Any]]:
@@ -6697,9 +6790,76 @@ def _member_summary_index(store: dict[str, Any]) -> dict[str, dict[str, Any]]:
     return _SUMMARY_INDEX["index"]
 
 
+def _club_leaders(store: dict[str, Any], club_id: str) -> dict[str, set[str]]:
+    """The club's usual captain(s) and vice-captain(s): accounts with the club role Captain (Admin Center -> People &
+    roles) and players whose profile role says Captain / Vice-captain. Names in lower case."""
+    leaders: dict[str, set[str]] = {"captain": set(), "vice_captain": set()}
+    club = next((item for item in store.get("clubs", []) or [] if str(item.get("id") or "") == club_id), None)
+    if not club:
+        return leaders
+    member_ids = _club_member_ids(store, club)
+    members = {str(m.get("id") or ""): m for m in store.get("members", []) or [] if isinstance(m, dict)}
+    for member_id in member_ids:
+        role = str((members.get(member_id) or {}).get("role") or "").lower()
+        name = " ".join(str((members.get(member_id) or {}).get("name") or "").split()).lower()
+        if not name:
+            continue
+        if "vice" in role:
+            leaders["vice_captain"].add(name)
+        elif "captain" in role:
+            leaders["captain"].add(name)
+    try:
+        with _auth_connection() as connection:
+            rows = connection.execute(
+                "SELECT u.member_id, u.display_name FROM app_user_club_roles r JOIN app_users u ON u.id = r.user_id WHERE r.club_id = ? AND r.role_name = 'captain' "
+                "UNION SELECT member_id, display_name FROM app_users WHERE role = 'captain' AND primary_club_id = ?",
+                (club_id, club_id),
+            ).fetchall()
+        for row in rows:
+            member = members.get(str(row["member_id"] or ""))
+            name = " ".join(str((member or {}).get("name") or row["display_name"] or "").split()).lower()
+            if name:
+                leaders["captain"].add(name)
+    except sqlite3.Error:
+        pass
+    return leaders
+
+
+def _auto_side_leaders(store: dict[str, Any], card: dict[str, Any]) -> None:
+    """Nov 17 2026 (Dhruvika: "i do not see the captain and vice captain in any of the cards"): most cards have no
+    captain written on them. When a side has none picked, its club's usual captain / vice-captain (from People & roles
+    or the player's profile role) is used - only when exactly one of them played in this match. Marked "auto" so the
+    picker under the card still shows "Not picked" and the captains' win / loss table doesn't count it."""
+    for item in card.get("captains") or []:
+        if not isinstance(item, dict) or not item.get("team"):
+            continue
+        club = _scorecard_team_club(store, str(item["team"]))
+        if not club:
+            continue
+        played = {
+            " ".join(str(row.get("name") or "").split()).lower(): str(row.get("name") or "")
+            for innings in card.get("innings") or [] if isinstance(innings, dict)
+            for row in ((innings.get("batting") or []) if _same_team_name(innings.get("team"), item["team"]) else (innings.get("bowling") or []))
+            if isinstance(row, dict) and row.get("name")
+        }
+        played.update({" ".join(str(name).split()).lower(): str(name) for name in item.get("squad") or [] if str(name or "").strip()})
+        if not played:
+            continue
+        leaders = _club_leaders(store, str(club.get("id") or ""))
+        for field, role in (("name", "captain"), ("vice_captain", "vice_captain")):
+            if item.get(field):
+                continue
+            found = [played[key] for key in played if key in leaders[role] or any(_card_same_player(key, leader) for leader in leaders[role] if len(key) > 2)]
+            found = list(dict.fromkeys(found))
+            if len(found) == 1:
+                item[field] = found[0]
+                item[f"{'captain' if field == 'name' else field}_auto"] = True
+
+
 def _tag_card_players(store: dict[str, Any], card: dict[str, Any]) -> dict[str, Any]:
     """Adds row["tags"] (['C', 'VC', 'WK']) and row["playing_role"] / row["role_from_profile"] to every batting and
     bowling row of a scorecard that is about to be shown."""
+    _auto_side_leaders(store, card)
     captains = [item for item in card.get("captains") or [] if isinstance(item, dict) and item.get("name")]
     lineup_roles = card.get("lineup_roles") if isinstance(card.get("lineup_roles"), list) else []
     members_by_key = {}
@@ -6742,14 +6902,20 @@ def _tag_card_players(store: dict[str, Any], card: dict[str, Any]) -> dict[str, 
                 tags: list[str] = []
                 if any(same(item.get("name"), name) and (not item.get("team") or not team or _same_team_name(item.get("team"), team)) for item in captains):
                     tags.append("C")
+                for item in card.get("captains") or []:
+                    if isinstance(item, dict) and (not item.get("team") or not team or _same_team_name(item.get("team"), team)):
+                        if same(item.get("vice_captain"), name) and "VC" not in tags:
+                            tags.append("VC")
+                        if same(item.get("keeper"), name) and "WK" not in tags:
+                            tags.append("WK")
                 for item in lineup_roles:
                     if isinstance(item, dict) and team and _same_team_name(item.get("team"), team):
                         roles = item.get("roles") if isinstance(item.get("roles"), dict) else {}
                         if same(roles.get("captain"), name) and "C" not in tags:
                             tags.append("C")
-                        if same(roles.get("vice_captain"), name):
+                        if same(roles.get("vice_captain"), name) and "VC" not in tags:
                             tags.append("VC")
-                        if same(roles.get("keeper"), name):
+                        if same(roles.get("keeper"), name) and "WK" not in tags:
                             tags.append("WK")
                 if key == "bowling" and "WK" not in tags and any(same(keeper, name) for keeper in keepers):
                     tags.append("WK")
@@ -6767,6 +6933,34 @@ def _tag_card_players(store: dict[str, Any], card: dict[str, Any]) -> dict[str, 
                         continue
                     if any(isinstance(b, dict) and "WK" in (b.get("tags") or []) and same(b.get("name"), row.get("name")) for b in other.get("bowling") or []):
                         row.setdefault("tags", []).append("WK")
+    # Cricbuzz style: a captain / vice-captain / keeper who didn't bat is listed under "Did not bat" with his (c) (vc)
+    # (wk), so the captain shows on every card where one is known (Nov 17 2026)
+    for innings in card.get("innings") or []:
+        if not isinstance(innings, dict) or not innings.get("has_data", True):
+            continue
+        side = next((item for item in card.get("captains") or [] if isinstance(item, dict) and item.get("team") and _same_team_name(item.get("team"), innings.get("team"))), None)
+        lineup = next((item.get("roles") or {} for item in lineup_roles if isinstance(item, dict) and innings.get("team") and _same_team_name(item.get("team"), innings.get("team"))), {})
+        wanted: dict[str, list[str]] = {}
+        for tag, name in (("C", (side or {}).get("name") or lineup.get("captain")), ("VC", (side or {}).get("vice_captain") or lineup.get("vice_captain")), ("WK", (side or {}).get("keeper") or lineup.get("keeper"))):
+            clean = " ".join(str(name or "").split())
+            if clean:
+                wanted.setdefault(clean, []).append(tag)
+        if not wanted:
+            continue
+        batted = [str(row.get("name") or "") for row in innings.get("batting") or [] if isinstance(row, dict)]
+        dnb = [str(name) for name in innings.get("did_not_bat") or [] if str(name or "").strip()]
+        tags_for: dict[str, list[str]] = {}
+        for name, tags in wanted.items():
+            if any(same(name, other) for other in batted):
+                continue
+            existing = next((other for other in dnb if same(name, other)), None)
+            if existing is None:
+                dnb.append(name)
+                existing = name
+            tags_for[existing] = tags
+        if tags_for:
+            innings["did_not_bat"] = dnb
+            innings["did_not_bat_tags"] = tags_for
     return card
 
 
@@ -7476,7 +7670,7 @@ def _admin_center_html(request: Request) -> HTMLResponse:
         <link rel="stylesheet" href="/assets/styles.css?v=20261111tablealign" />
         <link rel="stylesheet" href="/assets/app_polish.css?v=20261006a" />
         <link rel="stylesheet" href="/assets/sports-system.css?v=20260926a" />
-        <link rel="stylesheet" href="/assets/scorecards.css?v=20261119d" />
+        <link rel="stylesheet" href="/assets/scorecards.css?v=20261117i" />
         <link rel="stylesheet" href="/assets/admin_clubs.css?v=20261117a" />
         <link rel="stylesheet" href="/assets/admin_center.css?v=20261117w" />
       </head>
@@ -7677,8 +7871,8 @@ def _admin_center_html(request: Request) -> HTMLResponse:
           </section>
         </div>
         <script src="/assets/multipage.js?v=20261117b"></script>
-        <script src="/assets/scorecard_view.js?v=20261115a"></script>
-        <script src="/assets/scorecard.js?v=20261120a"></script>
+        <script src="/assets/scorecard_view.js?v=20261117g"></script>
+        <script src="/assets/scorecard.js?v=20261117g"></script>
         <script src="/assets/admin_center.js?v=20261119b"></script>
         <script src="/assets/admin_whatsapp.js?v=20261117a"></script>
         <script src="/assets/admin_reread.js?v=20261024a"></script>

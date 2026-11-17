@@ -5404,7 +5404,12 @@ def _read_relational_state(connection: sqlite3.Connection) -> dict[str, Any]:
     clubs_rows = connection.execute("SELECT * FROM clubs ORDER BY name").fetchall()
     teams_rows = connection.execute("SELECT * FROM teams ORDER BY display_name, name").fetchall()
     viewer_profile_row = connection.execute("SELECT * FROM app_user_profile WHERE id = 1").fetchone()
-    app_users_rows = connection.execute("SELECT member_id, primary_club_id FROM app_users").fetchall()
+    # Nov 17 2026: a brand-new database (first start, or the deploy pipeline's smoke test) has no accounts table yet -
+    # the app made it a moment later, but this read stopped the start-up ("no such table: app_users")
+    try:
+        app_users_rows = connection.execute("SELECT member_id, primary_club_id FROM app_users").fetchall()
+    except sqlite3.OperationalError:
+        app_users_rows = []
     members_rows = connection.execute("SELECT * FROM members ORDER BY name").fetchall()
     alias_rows = connection.execute("SELECT member_id, alias FROM member_aliases ORDER BY alias").fetchall()
     followed_rows = connection.execute("SELECT member_id FROM app_followed_players WHERE user_id = 1").fetchall()

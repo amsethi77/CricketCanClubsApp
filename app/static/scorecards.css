@@ -1164,6 +1164,10 @@ body.scorecard-detail-page .sc-header h1.sc-title {
 .sc-mom-picker { display: flex; flex-wrap: wrap; align-items: end; gap: 10px; margin: 16px 0 4px; padding: 12px; border: 1px solid #e2e8f0; border-radius: 12px; background: #f8fafc; }
 .sc-mom-picker label { display: grid; gap: 4px; font-weight: 600; font-size: 0.9rem; }
 .sc-mom-picker select { min-width: 220px; padding: 6px 8px; border-radius: 8px; border: 1px solid #cbd5e1; }
+.sc-mom-picker .sc-side-roles { display: flex; flex-wrap: wrap; gap: 10px; align-items: end; flex: 1 1 100%; margin: 0; padding: 10px 12px; border: 1px solid #e2e8f0; border-radius: 10px; background: #fff; }
+.sc-mom-picker .sc-side-roles legend { padding: 0 6px; font-weight: 700; font-size: 0.85rem; color: #1e3a8a; }
+.sc-mom-picker .sc-side-roles select { min-width: 170px; }
+@media (max-width: 640px) { .sc-mom-picker .sc-side-roles label, .sc-mom-picker .sc-side-roles select { width: 100%; min-width: 0; } }
 .sc-mom-msg { font-size: 0.85rem; color: #475569; }
 
 /* Nov 12 2026: each number box in ✏️ Edit carries its own small label (R, B, 4s, 6s, 0s, 1s, 2s, 3s / O, M, R, W),
@@ -1191,3 +1195,42 @@ body.scorecard-detail-page .sc-header h1.sc-title {
 .sce-step[hidden] { display: none; }
 .sce-next { display: flex; justify-content: flex-end; gap: 8px; flex-wrap: wrap; margin: 12px 0 0; }
 .sce-save-bar { margin-top: 16px; }
+
+/* Cricbuzz-style INFO box under the scorecard (Nov 17 2026) */
+.sc-app .pm-info-box {
+  margin-top: 18px;
+  border: 1px solid #ffe4e6;
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.sc-app .pm-info-head {
+  padding: 10px 12px;
+  background: linear-gradient(135deg, #e11d48, #f43f5e);
+  font-weight: 700;
+  font-size: 14px;
+  letter-spacing: 0.04em;
+  color: #fff;
+}
+
+.sc-app .pm-info-rows {
+  margin: 0;
+}
+
+.sc-app .pm-info-rows > div {
+  display: grid;
+  grid-template-columns: minmax(110px, 30%) 1fr;
+  gap: 12px;
+  padding: 10px 12px;
+  border-bottom: 1px solid #f1f5f9;
+}
+
+.sc-app .pm-info-rows dt {
+  font-weight: 700;
+  color: #111;
+}
+
+.sc-app .pm-info-rows dd {
+  margin: 0;
+  color: #333;
+}

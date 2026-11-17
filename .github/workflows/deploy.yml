@@ -1,4 +1,19 @@
-name: Deploy Heartlake Cricket App to Azure App Service
+# Deploy CricketCanClubs to Azure App Service from GitHub (Nov 17 2026, Dhruvika: "can you build the pipeline to
+# deploy the code from GitHub"). README "Deploy pipeline (GitHub Actions)".
+#
+#   push to main (or "Run workflow" on the Actions tab)
+#     1. Check   - Python compiles, the AI reader checks pass, every page script parses, and the app starts on an empty
+#                  database and answers /api/health, /scorecards, /live, /signin, /register, /docs.
+#     2. Deploy  - only if the check passed: the same package as scripts/deploy_azure.sh (app + Linux Python packages,
+#                  never app/data, uploads or .env), zip-deployed to the App Service, then the live site is checked
+#                  until /api/health answers.
+#
+# One-time setup in GitHub (Settings -> Secrets and variables -> Actions): AZUREAPPSERVICE_PUBLISHPROFILE = the
+# publish profile downloaded from the Azure portal (App Service -> Overview -> Download publish profile). Optional:
+# Settings -> Environments -> "production" -> Required reviewers = Amit, so every deploy waits for his OK.
+# Production data (/home/site/cricketcanclubs/cricketclubapp.db) and the Key Vault settings are not touched.
+
+name: Deploy CricketCanClubs to Azure
 
 on:
   push:
@@ -6,14 +21,73 @@ on:
       - main
   workflow_dispatch:
 
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
 env:
   AZURE_WEBAPP_NAME: cricketcanclubs-web
+  SITE_URL: https://cricketcanclubs-web.azurewebsites.net
   PYTHON_VERSION: "3.11"
 
 jobs:
-  build-and-deploy:
+  check:
+    name: 1. Check the code
     runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
 
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pytest
+
+      - name: Python compiles
+        run: python -m compileall -q app
+
+      - name: AI reader checks
+        run: python -m pytest -q tests/test_ai_reader_checks.py
+
+      - name: Page scripts parse
+        run: |
+          for f in app/static/*.js; do
+            node -e "new Function(require('fs').readFileSync(process.argv[1], 'utf8'))" "$f" || { echo "::error file=$f::JavaScript syntax error"; exit 1; }
+          done
+
+      - name: App starts and pages open (empty test database)
+        run: |
+          mkdir -p "$RUNNER_TEMP/ci/data" "$RUNNER_TEMP/ci/uploads" "$RUNNER_TEMP/ci/backups"
+          export CRICKETCLUBAPP_DATA_ROOT="$RUNNER_TEMP/ci/data"
+          export CRICKETCLUBAPP_DATABASE_FILE="$RUNNER_TEMP/ci/data/ci.db"
+          export CRICKETCLUBAPP_UPLOAD_DIR="$RUNNER_TEMP/ci/uploads"
+          export CRICKETCLUBAPP_BACKUP_DIR="$RUNNER_TEMP/ci/backups"
+          cd app
+          python -m uvicorn main:app --port 8099 > "$RUNNER_TEMP/ci/server.log" 2>&1 &
+          for i in $(seq 1 120); do curl -sf http://127.0.0.1:8099/api/health > /dev/null && break; sleep 1; done
+          status=0
+          for page in /api/health /scorecards /live /signin /register /docs /api/public/scorecards; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:8099$page")
+            echo "$page -> $code"
+            [ "$code" = "200" ] || status=1
+          done
+          if [ "$status" != "0" ]; then tail -n 80 "$RUNNER_TEMP/ci/server.log"; exit 1; fi
+
+  deploy:
+    name: 2. Deploy to Azure
+    needs: check
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment:
+      name: production
+      url: https://cricketcanclubs-web.azurewebsites.net
     steps:
       - name: Check out code
         uses: actions/checkout@v4
@@ -23,22 +97,41 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
-      - name: Install dependencies
+      - name: Build the package (same as scripts/deploy_azure.sh)
         run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          BUILD="$RUNNER_TEMP/build"
+          rm -rf "$BUILD" && mkdir -p "$BUILD"
+          rsync -a \
+            --exclude 'app/data/**' --exclude 'app/uploads/**' --exclude 'app/duplicates/**' \
+            --exclude '**/__pycache__/**' --exclude '.DS_Store' --exclude '.env' \
+            app requirements.txt startup.sh "$BUILD"/
+          cp MD/README.md "$BUILD/README.md"
+          cp MD/READMELLM.md "$BUILD/READMELLM.md"
+          python -m pip install --no-cache-dir --only-binary=:all: \
+            --platform manylinux2014_x86_64 --implementation cp --python-version 3.11 --abi cp311 \
+            -r "$BUILD/requirements.txt" -t "$BUILD/.python_packages/lib/site-packages"
+          (cd "$BUILD" && zip -qr "$GITHUB_WORKSPACE/app_package.zip" app requirements.txt README.md READMELLM.md startup.sh .python_packages)
+          # never ship data or secrets
+          if unzip -l app_package.zip | grep -E 'app/data/|app/uploads/|\.env$|\.db$'; then echo "::error::Package contains data or secrets"; exit 1; fi
+          ls -lh app_package.zip
 
-      - name: Lightweight validation
-        run: python -m compileall app
-
-      - name: Package application for deployment
-        run: |
-          rm -f app_package.zip
-          zip -r app_package.zip app requirements.txt -x 'app/data/**' 'app/uploads/**' 'app/duplicates/**' '*.DS_Store'
-
-      - name: Deploy to Azure Web App
+      - name: Deploy to Azure App Service
         uses: azure/webapps-deploy@v3
         with:
           app-name: ${{ env.AZURE_WEBAPP_NAME }}
           publish-profile: ${{ secrets.AZUREAPPSERVICE_PUBLISHPROFILE }}
           package: app_package.zip
+
+      - name: Live site answers
+        run: |
+          for i in $(seq 1 30); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' "$SITE_URL/api/health" || true)
+            echo "try $i: /api/health -> $code"
+            if [ "$code" = "200" ]; then
+              for page in /scorecards /live /signin; do echo "$page -> $(curl -s -o /dev/null -w '%{http_code}' "$SITE_URL$page")"; done
+              exit 0
+            fi
+            sleep 20
+          done
+          echo "::error::The site did not answer /api/health within 10 minutes - check App Service -> Log stream"
+          exit 1

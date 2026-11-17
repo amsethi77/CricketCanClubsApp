@@ -96,7 +96,7 @@
     return sc.man_of_match_auto ? `${sc.man_of_match_auto} (auto pick)` : "";
   }
   function peopleLine(sc) {
-    const caps = (sc.captains || []).map((c) => `${c.name ? escapeHtml(c.name) : "<em>not picked</em>"}${c.team ? ` <small>(${escapeHtml(shortCode(c.team))})</small>` : ""}`).join(" · ");
+    const caps = (sc.captains || []).map((c) => `${c.name ? escapeHtml(c.name) : "<em>not picked</em>"}${c.team ? ` <small>(${escapeHtml(shortCode(c.team))})</small>` : ""}${c.captain_auto ? ' <small title="The club\'s usual captain - pick one below to change it">· usual captain</small>' : ""}`).join(" · ");
     const mom = manOfMatch(sc);
     if (!caps && !mom) return "";
     return `<p class="pm-info sc-people">${caps ? `<span>🧢 Captains: ${caps}</span>` : ""}${caps && mom ? " &nbsp;|&nbsp; " : ""}${mom ? `<span>🏅 Man of the match: <b>${escapeHtml(mom)}</b></span>` : ""}</p>`;
@@ -107,22 +107,30 @@
     document.title = `${sc.title} · ${sc.date_label} · Scorecard`;
   }
 
+  // Nov 17 2026 (Cricbuzz "INFO" box): Match, Series, Date, Toss, Venue, Result, captains, man of the match, then
+  // each side's squad (the players on this card).
   function matchInfo(sc) {
+    const sidePlayers = (team) =>
+      [...new Set((sc.innings || []).flatMap((inn) => (inn.team === team ? [...(inn.batting || []).map((r) => r.name), ...(inn.did_not_bat || [])] : (inn.bowling || []).map((r) => r.name))).filter(Boolean))];
+    const tagged = (c, name) => `${name}${[c.name === name ? "c" : "", c.vice_captain === name ? "vc" : "", c.keeper === name ? "wk" : ""].filter(Boolean).length ? ` (${[c.name === name ? "c" : "", c.vice_captain === name ? "vc" : "", c.keeper === name ? "wk" : ""].filter(Boolean).join(" & ")})` : ""}`;
     const rows = [
-      ["Match", sc.title],
+      ["Match", sc.title + (sc.match_type ? ` · ${sc.match_type}` : "")],
+      ["Series", sc.season],
       ["Date", sc.date_label],
-      ["Venue", sc.venue],
       ["Toss", sc.toss],
+      ["Venue", sc.venue],
       ["Format", sc.overs_limit ? `${sc.overs_limit} overs a side` : ""],
-      ["Club", sc.club_name],
-      ["Season", sc.season],
       ["Result", sc.result],
-      // Nov 7 2026: read from the card's CAPTS. and MAN OF MATCH boxes
       ["Captains", (sc.captains || []).filter((c) => c.name || c.team).map((c) => `${c.name || "not picked"}${c.team ? ` (${c.team})` : ""}`).join(" · ")],
+      ["Vice-captains", (sc.captains || []).filter((c) => c.vice_captain).map((c) => `${c.vice_captain}${c.team ? ` (${c.team})` : ""}`).join(" · ")],
+      ["Wicket keepers", (sc.captains || []).filter((c) => c.keeper).map((c) => `${c.keeper}${c.team ? ` (${c.team})` : ""}`).join(" · ")],
       ["Man of the match", manOfMatch(sc)],
+      ...(sc.captains || [])
+        .filter((c) => c.team && sidePlayers(c.team).length)
+        .map((c) => [`${c.team} squad`, sidePlayers(c.team).map((name) => tagged(c, name)).join(", ")]),
     ].filter(([, value]) => value);
-    return `<div class="pm-subhead"><h2>Match details</h2></div>
-      <dl class="pm-details">${rows.map(([k, v]) => `<div><dt>${escapeHtml(k)}</dt><dd>${escapeHtml(v)}</dd></div>`).join("")}</dl>`;
+    return `<div class="pm-info-box"><div class="pm-info-head">INFO</div>
+      <dl class="pm-details pm-info-rows">${rows.map(([k, v]) => `<div><dt>${escapeHtml(k)}</dt><dd>${escapeHtml(v)}</dd></div>`).join("")}</dl></div>`;
   }
 
   function scorecardMarkup(sc) {
@@ -189,8 +197,18 @@
     const caps = sc.captains || [];
     const box = document.createElement("form");
     box.className = "sc-mom-picker";
+    // Nov 17 2026 (Dhruvika: "where is the captain and vice caption"): captain, vice-captain and wicket keeper of each
+    // side, picked from that side's players in this match; shown as (c) (vc) (wk) after the names.
+    const sidePlayers = (c, extra) => [...new Set([...(c.squad || []), ...teamPlayers(c.team), ...extra.filter(Boolean)])].sort();
     box.innerHTML = `${caps
-      .map((c) => `<label>🧢 ${escapeHtml(c.team)} captain<select data-captain="${escapeHtml(c.side || "")}">${options([...new Set([...(c.squad || []), ...teamPlayers(c.team), ...(c.name ? [c.name] : [])])].sort(), c.name, "Not picked")}</select></label>`)
+      .map((c) => {
+        const list = sidePlayers(c, [c.name, c.vice_captain, c.keeper]);
+        return `<fieldset class="sc-side-roles"><legend>${escapeHtml(c.team)}</legend>
+          <label>🧢 Captain (c)<select data-captain="${escapeHtml(c.side || "")}">${options(list, c.captain_auto ? "" : c.name, c.captain_auto ? `Not picked (usual: ${escapeHtml(c.name)})` : "Not picked")}</select></label>
+          <label>Vice-captain (vc)<select data-vice="${escapeHtml(c.side || "")}">${options(list, c.vice_captain_auto ? "" : c.vice_captain, c.vice_captain_auto ? `Not picked (usual: ${escapeHtml(c.vice_captain)})` : "Not picked")}</select></label>
+          <label>🧤 Wicket keeper (wk)<select data-keeper="${escapeHtml(c.side || "")}">${options(list, c.keeper, "Not picked")}</select></label>
+        </fieldset>`;
+      })
       .join("")}
       <label>🏅 Man of the match
         <select data-mom>${options(names, sc.man_of_match, "Not picked (show the auto pick)")}</select>
@@ -202,6 +220,8 @@
       event.preventDefault();
       const msg = box.querySelector(".sc-mom-msg");
       const pick = (side) => box.querySelector(`[data-captain="${side}"]`)?.value ?? null;
+      const vice = (side) => box.querySelector(`[data-vice="${side}"]`)?.value ?? null;
+      const keeper = (side) => box.querySelector(`[data-keeper="${side}"]`)?.value ?? null;
       const response = await fetch(
         sc.source === "fixture" ? `/api/matches/${encodeURIComponent(matchId)}/man-of-match` : `/api/scorecards/${encodeURIComponent(uploadId)}/people`,
         {
@@ -209,8 +229,18 @@
           headers: { "X-Auth-Token": token(), "Content-Type": "application/json" },
           body: JSON.stringify(
             sc.source === "fixture"
-              ? { name: box.querySelector("[data-mom]").value, club_captain: pick("club"), opponent_captain: pick("opponent") }
-              : { man_of_match: box.querySelector("[data-mom]").value, team_1_captain: pick("team_1"), team_2_captain: pick("team_2") }
+              ? {
+                  name: box.querySelector("[data-mom]").value,
+                  club_captain: pick("club"), opponent_captain: pick("opponent"),
+                  club_vice_captain: vice("club"), opponent_vice_captain: vice("opponent"),
+                  club_keeper: keeper("club"), opponent_keeper: keeper("opponent"),
+                }
+              : {
+                  man_of_match: box.querySelector("[data-mom]").value,
+                  team_1_captain: pick("team_1"), team_2_captain: pick("team_2"),
+                  team_1_vice_captain: vice("team_1"), team_2_vice_captain: vice("team_2"),
+                  team_1_keeper: keeper("team_1"), team_2_keeper: keeper("team_2"),
+                }
           ),
         }
       ).catch(() => null);
@@ -221,6 +251,23 @@
         (sc.captains || []).forEach((c) => {
           const picked = box.querySelector(`[data-captain="${c.side}"]`);
           if (picked) c.name = picked.value;
+          c.vice_captain = box.querySelector(`[data-vice="${c.side}"]`)?.value || "";
+          c.keeper = box.querySelector(`[data-keeper="${c.side}"]`)?.value || "";
+        });
+        // (c) (vc) (wk) next to the names, without reloading the page
+        const sameName = (a, b) => String(a || "").trim().toLowerCase() === String(b || "").trim().toLowerCase();
+        (sc.innings || []).forEach((inn) => {
+          [["batting", inn.team], ["bowling", inn.bowling_team]].forEach(([key, team]) => {
+            (inn[key] || []).forEach((row) => {
+              const side = (sc.captains || []).find((c) => c.team === team);
+              if (!side) return;
+              const keep = (row.tags || []).filter((tag) => !["C", "VC", "WK"].includes(tag));
+              if (sameName(side.name, row.name)) keep.push("C");
+              if (sameName(side.vice_captain, row.name)) keep.push("VC");
+              if (sameName(side.keeper, row.name)) keep.push("WK");
+              row.tags = keep;
+            });
+          });
         });
         if (sc.man_of_match) sc.man_of_match_auto = "";
         renderHeader(sc);

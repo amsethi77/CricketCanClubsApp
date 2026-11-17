@@ -205,12 +205,8 @@
   function tagHtml(match, side, name) {
     const roles = ((match.lineups || {}).roles || {})[side] || {};
     const tags = Object.keys(ROLE_TAGS).filter((role) => roles[role] && roles[role] === name).map((role) => ROLE_TAGS[role]);
-    const tagsHtml = tags.length ? ` <em class="pm-tag" title="${tags.map((t) => ROLE_NAMES[t]).join(", ")}">${tags.join(" ")}</em>` : "";
-    // Nov 16 2026: playing role icon (batter / bowler / all-rounder / keeper) as on uploaded scorecards
-    const role = (match.player_roles || {})[name];
-    const icons = (window.CricketClubAppScorecardView || {}).ROLE_ICONS || {};
-    const icon = role && icons[role] && !(role === "Wicket keeper" && tags.includes("WK")) ? ` <span class="pm-role" title="${esc(role)}" aria-label="${esc(role)}">${icons[role]}</span>` : "";
-    return tagsHtml + icon;
+    // Nov 17 2026: Cricbuzz style "(c)", "(vc)", "(wk)", "(c & wk)" after the name
+    return tags.length ? ` <span class="pm-cap" title="${tags.map((t) => ROLE_NAMES[t]).join(", ")}">(${tags.map((t) => t.toLowerCase()).join(" &amp; ")})</span>` : "";
   }
 
   // Name links to the player's profile when the server matched him to a registered player (match.player_keys).

@@ -778,6 +778,14 @@
   color: #166534;
 }
 
+.pm-cap {
+  margin-left: 4px;
+  font-size: 0.95em;
+  font-weight: 800;
+  color: #0f172a;
+  white-space: nowrap;
+}
+
 .pm-role {
   margin-left: 3px;
   font-size: 12px;
@@ -1476,4 +1484,185 @@
   display: flex;
   flex-wrap: wrap;
   gap: 10px;
+}
+
+/* Cricbuzz-style scorecard (Nov 17 2026, from Dhruvika's NZ v IND Cricbuzz screenshots): green innings bar, grey
+   header rows, centred numbers, (c) / (wk) as part of the name, Extras / Total rows, FoW and partnerships tables. */
+.pm-app .pm-cb-inn .pm-innhead {
+  border-radius: 0 !important;
+  /* Nov 17 2026 (Dhruvika: "do different color like our team"): the app's own red (header logo, active menu) */
+  background: linear-gradient(135deg, #e11d48, #f43f5e) !important;
+  color: #fff !important;
+  padding: 12px 14px !important;
+  font-size: 17px;
+  font-weight: 700;
+}
+
+.pm-app .pm-cb-inn .pm-innhead span,
+.pm-app .pm-cb-inn .pm-innhead b {
+  color: #fff;
+  font-weight: 700;
+}
+
+.pm-app .pm-cb-inn .pm-innhead small {
+  color: #fff;
+  font-weight: 500;
+  font-size: 0.9em;
+}
+
+.pm-app .pm-cb-inn .pm-innhead i {
+  color: #ffe4e6;
+}
+
+.pm-app .pm-table.pm-cb {
+  font-size: 14px;
+}
+
+.pm-app .pm-table.pm-cb th,
+.pm-app .pm-table.pm-cb td {
+  padding: 10px 8px;
+  border-bottom: 1px solid #f1f5f9;
+}
+
+.pm-app .pm-table.pm-cb thead th {
+  background: #fff1f2;
+  color: #9f1239;
+  font-weight: 700;
+  font-size: 14px;
+  padding: 10px 8px;
+  border-bottom: 0;
+}
+
+.pm-app .pm-table.pm-cb thead th:first-child,
+.pm-app .pm-table.pm-cb tbody th:first-child,
+.pm-app .pm-table.pm-cb th[scope="row"] {
+  padding-left: 10px;
+}
+
+.pm-app .pm-table.pm-cb .pm-c {
+  text-align: center;
+}
+
+.pm-app .pm-table.pm-cb .pm-r {
+  font-weight: 700;
+  color: #111;
+}
+
+.pm-app .pm-table.pm-cb .pm-name {
+  display: inline;
+  color: #1866db;
+  font-weight: 400;
+}
+
+.pm-cap {
+  margin-left: 0;
+  font-size: 1em;
+  font-weight: inherit;
+  color: inherit;
+  white-space: nowrap;
+}
+
+.pm-app .pm-bat th:first-child {
+  width: auto;
+  min-width: 170px;
+  padding-right: 12px;
+}
+
+.pm-app .pm-table td.pm-how,
+.pm-app .pm-table th.pm-how {
+  width: 100%;
+  color: #666;
+  font-size: 13.5px;
+  white-space: normal;
+}
+
+.pm-table th small.pm-how-m {
+  display: none;
+}
+
+.pm-app .pm-table .pm-more {
+  color: #9ca3af;
+  font-size: 12px;
+}
+
+.pm-app .pm-table.pm-sum {
+  margin-top: 4px;
+}
+
+.pm-app .pm-table.pm-sum th {
+  width: 40%;
+  font-weight: 700;
+  color: #111;
+}
+
+.pm-app .pm-table.pm-sum td {
+  white-space: normal;
+  color: #333;
+}
+
+.pm-app .pm-table.pm-sum td b {
+  font-weight: 700;
+  color: #111;
+}
+
+.pm-name-in {
+  color: #1866db;
+}
+
+.pm-app .pm-table.pm-bowl,
+.pm-app .pm-table.pm-fowt,
+.pm-app .pm-table.pm-part {
+  margin-top: 14px;
+}
+
+.pm-app .pm-table.pm-part td {
+  font-size: 13px;
+}
+
+.pm-app .pm-table.pm-part .pm-pl {
+  text-align: left;
+  width: 40%;
+  padding-left: 10px;
+}
+
+.pm-app .pm-table.pm-part .pm-pr {
+  text-align: right;
+  width: 40%;
+  padding-right: 10px;
+}
+
+@media (max-width: 640px) {
+  .pm-app .pm-table td.pm-how,
+  .pm-app .pm-table th.pm-how {
+    display: none;
+  }
+
+  .pm-app .pm-bat th:first-child {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .pm-table th small.pm-how-m {
+    display: block;
+    color: #666;
+  }
+
+  /* phone: Cricbuzz's five columns only, so the names and how-out have room (0s-3s stay on a laptop) */
+  .pm-app .pm-table.pm-cb .pm-more {
+    display: none;
+  }
+
+  .pm-app .pm-table.pm-cb th,
+  .pm-app .pm-table.pm-cb td {
+    padding: 8px 5px;
+  }
+
+  .pm-app .pm-table.pm-cb {
+    font-size: 13px;
+  }
+
+  .pm-app .pm-table.pm-part td {
+    font-size: 12px;
+    white-space: normal;
+  }
 }
