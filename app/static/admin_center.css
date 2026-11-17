@@ -154,6 +154,7 @@ body.acx-page .page-shell .admin-section-nav [data-admin-section="archives"]::be
 body.acx-page .page-shell .admin-section-nav [data-admin-section="name-matches"]::before { content: "🔗"; }
 body.acx-page .page-shell .admin-section-nav [data-admin-section="audit"]::before { content: "🕘"; }
 body.acx-page .page-shell .admin-section-nav [data-admin-section="fixtures"]::before { content: "📅"; }
+body.acx-page .page-shell .admin-section-nav [data-admin-section="whatsapp"]::before { content: "💬"; }
 
 body.acx-page .page-shell .admin-section-nav .secondary-button:hover {
   background: var(--acx-soft) !important;
@@ -340,5 +341,143 @@ body.acx-page .page-shell .admin-section .empty-state {
 
   .acx-stat strong {
     font-size: 1.15rem;
+  }
+}
+
+/* ---------- WhatsApp alerts tab (Nov 17 2026) ---------- */
+.awa {
+  display: grid;
+  gap: 14px;
+}
+
+.awa-status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 16px;
+  border-radius: 14px;
+  font-weight: 700;
+}
+
+.awa-status.is-on {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.awa-status.is-off {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.awa-status small {
+  font-weight: 500;
+}
+
+.awa-steps {
+  margin: 0;
+  padding-left: 20px;
+  display: grid;
+  gap: 6px;
+  color: #0f1f38;
+}
+
+.awa-steps .done {
+  color: #15803d;
+}
+
+.awa-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 10px;
+}
+
+.awa-tpl {
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: #f4f7fb;
+  border: 1px solid #e3e9f2;
+  display: grid;
+  gap: 4px;
+}
+
+.awa-tpl code {
+  font-weight: 700;
+  color: #1f6fe5;
+}
+
+.awa-tpl small {
+  color: #5c6f8a;
+}
+
+.awa-tpl q {
+  font-size: 0.86rem;
+  color: #0f1f38;
+}
+
+.awa-test {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: end;
+}
+
+.awa-test label {
+  display: grid;
+  gap: 4px;
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: #5c6f8a;
+}
+
+.awa-test input,
+.awa-test select {
+  min-height: 40px;
+  padding: 6px 10px;
+}
+
+.awa-msg {
+  margin: 0;
+  font-weight: 600;
+}
+
+.awa-msg.is-ok {
+  color: #15803d;
+}
+
+.awa-msg.is-bad {
+  color: #b91c1c;
+}
+
+.awa-log {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+
+.awa-log th,
+.awa-log td {
+  padding: 7px 8px;
+  border-bottom: 1px solid #e3e9f2;
+  text-align: left;
+  vertical-align: top;
+}
+
+.awa-log .is-failed {
+  color: #b91c1c;
+}
+
+.awa-log .is-sent {
+  color: #15803d;
+}
+
+.awa-scroll {
+  overflow-x: auto;
+}
+
+@media (max-width: 640px) {
+  .awa-log td:first-child,
+  .awa-log td:nth-child(3) {
+    white-space: nowrap;
   }
 }

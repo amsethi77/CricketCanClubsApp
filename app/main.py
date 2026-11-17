@@ -7478,7 +7478,7 @@ def _admin_center_html(request: Request) -> HTMLResponse:
         <link rel="stylesheet" href="/assets/sports-system.css?v=20260926a" />
         <link rel="stylesheet" href="/assets/scorecards.css?v=20261119d" />
         <link rel="stylesheet" href="/assets/admin_clubs.css?v=20261117a" />
-        <link rel="stylesheet" href="/assets/admin_center.css?v=20261119c" />
+        <link rel="stylesheet" href="/assets/admin_center.css?v=20261117w" />
       </head>
       <body class="acx-page">
         <div class="page-shell">
@@ -7510,6 +7510,7 @@ def _admin_center_html(request: Request) -> HTMLResponse:
                 <button class="secondary-button" type="button" role="tab" aria-selected="false" aria-controls="adminSectionNameMatches" data-admin-section="name-matches">Name Matches</button>
                 <button class="secondary-button" type="button" role="tab" aria-selected="false" aria-controls="adminSectionAudit" data-admin-section="audit">Audit Log</button>
                 <button class="secondary-button" type="button" role="tab" aria-selected="false" aria-controls="adminSectionFixtures" data-admin-section="fixtures">Fixtures</button>
+                <button class="secondary-button" type="button" role="tab" aria-selected="false" aria-controls="adminSectionWhatsApp" data-admin-section="whatsapp">WhatsApp alerts</button>
               </nav>
               <section class="admin-section" id="adminSectionClubs" data-admin-section-panel="clubs" role="tabpanel" hidden>
                 <div id="clubManager" class="acm" data-superadmin="1"><p class="acm-empty">Loading clubs...</p></div>
@@ -7664,6 +7665,14 @@ def _admin_center_html(request: Request) -> HTMLResponse:
                 <div id="adminFixtureList" class="detail-stack"></div>
               </div>
               </section>
+              <section class="admin-section" id="adminSectionWhatsApp" data-admin-section-panel="whatsapp" role="tabpanel" hidden>
+                <div class="stack-card">
+                  <p class="section-kicker">WhatsApp alerts</p>
+                  <h2>Is WhatsApp working?</h2>
+                  <p class="lede">Fixtures, published scorecards, the uploader's "read / couldn't read" message and live score (start, innings break, result) are sent on WhatsApp through Meta's WhatsApp Cloud API. Check the setup here and send yourself a test.</p>
+                  <div id="adminWhatsApp" class="awa"><p class="empty-state">Checking WhatsApp...</p></div>
+                </div>
+              </section>
             </div>
           </section>
         </div>
@@ -7671,6 +7680,7 @@ def _admin_center_html(request: Request) -> HTMLResponse:
         <script src="/assets/scorecard_view.js?v=20261115a"></script>
         <script src="/assets/scorecard.js?v=20261120a"></script>
         <script src="/assets/admin_center.js?v=20261119b"></script>
+        <script src="/assets/admin_whatsapp.js?v=20261117a"></script>
         <script src="/assets/admin_reread.js?v=20261024a"></script>
         <script src="/assets/admin_clubs.js?v=20261116p"></script>
         <script src="/assets/admin_photos.js?v=20261117a"></script>
@@ -7699,7 +7709,7 @@ def _club_admin_center_html() -> HTMLResponse:
     <link rel="stylesheet" href="/assets/app_polish.css?v=20261006a" />
     <link rel="stylesheet" href="/assets/sports-system.css?v=20260926a" />
     <link rel="stylesheet" href="/assets/admin_clubs.css?v=20261117a" />
-    <link rel="stylesheet" href="/assets/admin_center.css?v=20261119c" />
+    <link rel="stylesheet" href="/assets/admin_center.css?v=20261117w" />
   </head>
   <body class="acx-page">
     <div class="page-shell">
@@ -13619,6 +13629,8 @@ def _whatsapp_send_template(settings: dict[str, str], phone: str, template: str,
             "components": [{"type": "body", "parameters": [{"type": "text", "text": (str(value or "-")[:300] or "-")} for value in params]}],
         },
     }
+    if not params:
+        body["template"].pop("components")  # e.g. Meta's "hello_world" has no values
     try:
         response = httpx.post(
             f"https://graph.facebook.com/{WHATSAPP_API_VERSION}/{settings['phone_id']}/messages",
@@ -13764,11 +13776,77 @@ def admin_whatsapp_status(x_auth_token: str | None = Header(default=None)) -> di
     with _auth_connection() as connection:
         connection.execute(_WHATSAPP_LOG_TABLE)
         rows = [dict(row) for row in connection.execute("SELECT ref, kind, club_id, status, detail, sent_at, substr(phone, -4) AS phone_end FROM app_whatsapp_log ORDER BY sent_at DESC LIMIT 50")]
+    # Nov 17 2026 (Dhruvika: "so whatsapp thing is not done?"): the Admin Center "WhatsApp alerts" tab shows whether
+    # the Azure settings are there, the four templates to create in Meta, a test send and the last messages.
+    with _auth_connection() as connection:
+        week = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
+        counts = {str(row["status"]): int(row["n"]) for row in connection.execute("SELECT status, COUNT(*) AS n FROM app_whatsapp_log WHERE sent_at >= ? GROUP BY status", (week,))}
+    names = {"fixture": "new_fixture", "scorecard": "new_scorecard", "processed": "scorecard_processed", "live": "live_score"}
     return {
         "configured": bool(settings),
+        "token_set": bool(str(os.getenv("WHATSAPP_TOKEN") or "").strip()),
+        "phone_id_set": bool(str(os.getenv("WHATSAPP_PHONE_NUMBER_ID") or "").strip()),
+        "site_url": PUBLIC_SITE_URL,
         "templates": {key: settings[key] for key in ("fixture", "scorecard", "processed", "live", "lang")} if settings else {},
+        "template_list": [
+            {"key": "fixture", "name": (settings or {}).get("fixture") or names["fixture"], "when": "A fixture is added (tell the players ticked) - every player of the club", "text": "New match for {{1}}: {{2}}. Are you available? Tap to reply: {{3}}"},
+            {"key": "scorecard", "name": (settings or {}).get("scorecard") or names["scorecard"], "when": "A scorecard is published - every player of the clubs on it", "text": "New scorecard for {{1}}: {{2}}. See it here: {{3}}"},
+            {"key": "processed", "name": (settings or {}).get("processed") or names["processed"], "when": "An upload was read (or couldn't be) - only the uploader", "text": "Your scorecard {{1}} was {{2}}. Open it: {{3}}"},
+            {"key": "live", "name": (settings or {}).get("live") or names["live"], "when": "Live scoring: match start, innings break, result - every player of the club", "text": "{{1}} live: {{2}}. Follow it here: {{3}}"},
+        ],
+        "last_7_days": {"sent": counts.get("sent", 0), "failed": counts.get("failed", 0)},
         "recent": rows,
     }
+
+
+class WhatsAppTestRequest(BaseModel):
+    phone: str
+    template: str = "hello_world"  # Meta's ready-made template, or fixture / scorecard / processed / live
+
+
+@app.post("/api/admin/whatsapp/test")
+def admin_whatsapp_test(request: WhatsAppTestRequest, x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
+    """Send one WhatsApp now to check the setup: Meta's ready-made "hello_world" (works as soon as the token and number
+    id are right) or one of our four templates with sample words (works once Meta has approved it)."""
+    _require_superadmin(x_auth_token)
+    settings = _whatsapp_settings()
+    if not settings:
+        raise HTTPException(status_code=400, detail="WhatsApp isn't set up yet: add WHATSAPP_TOKEN and WHATSAPP_PHONE_NUMBER_ID in Azure (Configuration), then restart the app.")
+    phone = _whatsapp_number(request.phone, settings["country"])
+    if not phone:
+        raise HTTPException(status_code=400, detail="Type a mobile number, e.g. 416 555 0123 or +91 98765 43210.")
+    samples = {
+        "fixture": ["Test Club", "Sat 21 Nov 10:00 vs Test XI at Test Ground", f"{PUBLIC_SITE_URL}/fixtures"],
+        "scorecard": ["Test Club", "Test Club vs Test XI - Test Club won by 5 runs", f"{PUBLIC_SITE_URL}/scorecards"],
+        "processed": ["M-TEST1234", "read - 2 innings found. Check it and publish it", f"{PUBLIC_SITE_URL}/scorecards"],
+        "live": ["Test Club", "Innings break: Test Club 145/6 - target 146", f"{PUBLIC_SITE_URL}/live"],
+    }
+    key = str(request.template or "hello_world").strip()
+    if key == "hello_world":
+        ok, detail = _whatsapp_send_template({**settings, "lang": "en_US"}, phone, "hello_world", [])
+        name = "hello_world"
+    elif key in samples:
+        name = settings[key]
+        ok, detail = _whatsapp_send_template(settings, phone, name, samples[key])
+    else:
+        raise HTTPException(status_code=400, detail="Unknown template.")
+    with _auth_connection() as connection:
+        connection.execute(_WHATSAPP_LOG_TABLE)
+        connection.execute(
+            "INSERT OR REPLACE INTO app_whatsapp_log (ref, phone, kind, club_id, status, detail, sent_at) VALUES (?, ?, 'test', '', ?, ?, ?)",
+            (f"test:{name}:{now_iso()}", phone, "sent" if ok else "failed", detail, now_iso()),
+        )
+    if ok:
+        return {"ok": True, "message": f"Sent '{name}' to ...{phone[-4:]}. Check that phone's WhatsApp."}
+    hint = ""
+    low = detail.lower()
+    if "template" in low and ("not exist" in low or "132001" in low or "name does not" in low):
+        hint = " The template isn't created or approved yet in Meta WhatsApp Manager (name and language must match)."
+    elif "131030" in low or "not in allowed list" in low or "recipient" in low:
+        hint = " In Meta's test mode a number must first be added as a test recipient (WhatsApp Manager -> API setup -> To)."
+    elif "401" in low or "access token" in low or "oauth" in low:
+        hint = " The token is wrong or expired - make a permanent System user token."
+    return {"ok": False, "message": f"Meta said: {detail}.{hint}"}
 
 
 def _announce_fixture_change(fixture: dict[str, Any], what: str) -> None:
