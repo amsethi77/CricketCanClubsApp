@@ -686,16 +686,19 @@ def count_bowler_marks(overs: Any) -> dict[str, Any] | None:
         stats["runs"] += runs
         stats.setdefault("per_over", []).append(runs)
         stats["legal"] += legal
-        if legal >= 6:
-            full_overs += 1
-            if runs == 0:
-                stats["maidens"] += 1
+        # Nov 17 2026 (Amit: "the overs ... always 1 or 2 overs less than what the bowler has done"): one box is one
+        # over. Scorers often leave dots out, so a box with 4 or 5 marks is still a whole over - only the bowler's
+        # LAST box can be part of an over, and only when the innings overs say so (see _reconcile_bowler_overs).
+        full_overs += 1
+        if runs == 0:
+            stats["maidens"] += 1
         last_legal = legal
-    if not stats["legal"]:
+    if not stats["legal"] and not full_overs:
         return None
     partial = last_legal if 0 < last_legal < 6 else 0
-    overs_text = f"{full_overs}.{partial}" if partial else str(full_overs)
-    return {"overs": overs_text, **{key: value for key, value in stats.items() if key not in {"legal", "per_over"}}, "over_runs": list(stats.get("per_over") or [])}
+    if partial and stats.get("per_over") and stats["per_over"][-1] == 0:
+        stats["maidens"] = max(0, stats["maidens"] - 1)  # a part over isn't a maiden
+    return {"overs": str(full_overs), "last_box_balls": partial, **{key: value for key, value in stats.items() if key not in {"legal", "per_over"}}, "over_runs": list(stats.get("per_over") or [])}
 
 
 def _fill_from_marks(template: dict[str, Any]) -> list[str]:
@@ -757,8 +760,16 @@ def _fill_from_marks(template: dict[str, Any]) -> list[str]:
             if not stats:
                 continue
             name = (row.get("player") or {}).get("name") if isinstance(row.get("player"), dict) else ""
+            row["_last_box_balls"] = stats.get("last_box_balls") or 0
+            boxes = int(stats["overs"])
+            written_balls = _overs_balls(row.get("overs"))
             if row.get("overs") in (None, ""):
-                row["overs"] = stats["overs"]
+                row["overs"] = boxes
+            elif written_balls is not None and written_balls < boxes * 6 - (6 - row["_last_box_balls"] if row["_last_box_balls"] else 0):
+                # Nov 17 2026 (Amit: overs "always 1 or 2 overs less"): more boxes have marks than the overs read -
+                # the boxes win (a reader often misses the last box or a second line of boxes)
+                notes.append(f"{name}'s overs: {row.get('overs')} read, but {boxes} bowling boxes have marks - used {boxes}. Check it.")
+                row["overs"] = boxes
             elif str(row.get("overs")) != stats["overs"]:
                 notes.append(f"Check {name}'s overs: {row.get('overs')} written, {stats['overs']} in the bowling boxes.")
             if row.get("maidens") in (None, ""):
@@ -769,6 +780,31 @@ def _fill_from_marks(template: dict[str, Any]) -> list[str]:
                 notes.append(f"Check {name}'s runs: {row['runs_conceded']} written, {stats['runs']} in the bowling boxes.")
             for key in ("dots", "wides", "no_balls", "fours", "sixes"):
                 row[key] = stats[key]
+        notes += _reconcile_bowler_overs(inn)
+    return notes
+
+
+def _reconcile_bowler_overs(innings: dict[str, Any]) -> list[str]:
+    """Each box counts as a whole over. When the bowlers then have more overs than the innings lasted, the bowlers
+    whose last box had fewer than 6 balls bowled only part of that over: use the balls in it (Nov 17 2026)."""
+    notes: list[str] = []
+    rows = [row for row in innings.get("bowling") or [] if isinstance(row, dict)]
+    want = _overs_balls((innings.get("summary") or {}).get("overs")) if isinstance(innings.get("summary"), dict) else None
+    have = sum(_overs_balls(row.get("overs")) or 0 for row in rows)
+    if want and have > want:
+        for row in sorted(rows, key=lambda item: item.get("_last_box_balls") or 9):
+            part = row.get("_last_box_balls") or 0
+            balls = _overs_balls(row.get("overs"))
+            if have <= want or not part or not balls:
+                continue
+            cut = min(6 - part, have - want)
+            if cut <= 0:
+                continue
+            new_balls = balls - cut
+            row["overs"] = f"{new_balls // 6}.{new_balls % 6}" if new_balls % 6 else new_balls // 6
+            have -= cut
+    for row in rows:
+        row.pop("_last_box_balls", None)
     return notes
 
 
@@ -1475,20 +1511,43 @@ def _fill_bowling_from_totals(template: dict[str, Any]) -> list[str]:
         summary = innings.get("summary") or {}
         extras = innings.get("extras") or {}
         total = summary.get("runs")
+        innings_balls = _overs_balls(summary.get("overs"))
+        no_overs = [row for row in rows if _overs_balls(row.get("overs")) is None]
+        if len(no_overs) > 1 and innings_balls:
+            rest = innings_balls - sum(_overs_balls(row.get("overs")) or 0 for row in rows if row not in no_overs)
+            if rest // 6 >= len(no_overs):
+                each, extra = divmod(rest // 6, len(no_overs))
+                for index, row in enumerate(no_overs):
+                    row["overs"] = each + (1 if index < extra else 0)
+                    row["overs_approximate"] = True
+                notes.append(f"Overs not readable for {', '.join(str(r['player']['name']) for r in no_overs)} - shared out the {rest // 6} overs left (approximate). Check them.")
+            no_overs = []
+        if len(no_overs) == 1 and innings_balls:
+            rest = innings_balls - sum(_overs_balls(row.get("overs")) or 0 for row in rows if row is not no_overs[0])
+            if 0 < rest <= 60:
+                no_overs[0]["overs"] = f"{rest // 6}.{rest % 6}" if rest % 6 else rest // 6
+                notes.append(f"{no_overs[0]['player']['name']}'s overs ({no_overs[0]['overs']}) worked out from the innings overs - check it.")
         missing = [row for row in rows if row.get("runs_conceded") in (None, "")]
+        # Nov 17 2026 (Amit: "at least try to give some approximate number"): several bowlers without runs share
+        # what is left of the total by the balls they bowled; marked approximate for the person checking
+        if len(missing) > 1 and isinstance(total, int) and all(_overs_balls(row.get("overs")) for row in missing):
+            byes = sum(int(extras.get(item) or 0) for item in ("byes", "leg_byes", "penalties") if str(extras.get(item) or "0").isdigit())
+            rest = total - byes - sum(int(row["runs_conceded"]) for row in rows if row not in missing and str(row.get("runs_conceded")).isdigit())
+            balls = [_overs_balls(row.get("overs")) or 0 for row in missing]
+            if rest >= 0 and sum(balls):
+                shares = [rest * b // sum(balls) for b in balls]
+                shares[balls.index(max(balls))] += rest - sum(shares)
+                for row, share in zip(missing, shares):
+                    row["runs_conceded"] = share
+                    row["runs_approximate"] = True
+                notes.append(f"Bowlers' runs not readable for {', '.join(str(r['player']['name']) for r in missing)} - shared out the {rest} runs left of the total by overs bowled (approximate). Check them.")
+            missing = []
         if len(missing) == 1 and isinstance(total, int):
             byes = sum(int(extras.get(item) or 0) for item in ("byes", "leg_byes", "penalties") if str(extras.get(item) or "0").isdigit())
             rest = total - byes - sum(int(row["runs_conceded"]) for row in rows if row is not missing[0] and str(row.get("runs_conceded")).isdigit())
             if 0 <= rest <= 150:
                 missing[0]["runs_conceded"] = rest
                 notes.append(f"{missing[0]['player']['name']}'s runs ({rest}) worked out from the innings total - check it.")
-        innings_balls = _overs_balls(summary.get("overs"))
-        no_overs = [row for row in rows if _overs_balls(row.get("overs")) is None]
-        if len(no_overs) == 1 and innings_balls:
-            rest = innings_balls - sum(_overs_balls(row.get("overs")) or 0 for row in rows if row is not no_overs[0])
-            if 0 < rest <= 60:
-                no_overs[0]["overs"] = f"{rest // 6}.{rest % 6}" if rest % 6 else rest // 6
-                notes.append(f"{no_overs[0]['player']['name']}'s overs ({no_overs[0]['overs']}) worked out from the innings overs - check it.")
     return notes
 
 

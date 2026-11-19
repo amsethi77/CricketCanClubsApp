@@ -690,6 +690,20 @@ def _over_string_from_legal_balls(legal_balls: int) -> str:
 
 
 def summarize_innings_scorebook(innings: dict[str, Any]) -> dict[str, Any]:
+    """Totals of one live-scored innings. Nov 18 2026 (Amit: saving an edit is slow): while a stats rebuild runs
+    (_canonical_archive_scope) each innings is added up once - it was added up again for every player and every
+    club, about 8,700 times per save. Callers only read the result."""
+    cache = getattr(_CANONICAL_SCOPE, "summaries", None)
+    if cache is None:
+        return _summarize_innings_scorebook_uncached(innings)
+    key = (id(innings), len(innings.get("balls") or []), len(innings.get("batters") or []), len(innings.get("bowlers") or []))
+    hit = cache.get(key)
+    if hit is None:
+        hit = cache[key] = (innings, _summarize_innings_scorebook_uncached(innings))  # keeps the innings alive, so its id stays its own
+    return hit[1]
+
+
+def _summarize_innings_scorebook_uncached(innings: dict[str, Any]) -> dict[str, Any]:
     batters = {
         item["player_name"]: {"player_name": item["player_name"], "runs": 0, "balls": 0, "fours": 0, "sixes": 0, "status": "not_batted"}
         for item in innings.get("batters", [])
@@ -2194,6 +2208,9 @@ ARCHIVE_EXTRA_KEYS = (
     "second_uploaded_by",
     "joined_upload_id",
     "joined_upload_ids",
+    # Nov 18 2026 (Amit: AI accuracy 60-70% -> 90%): the AI's own reading, kept when a person fixes the card, so the
+    # Admin Center can show how often the AI was right (README "AI accuracy")
+    "ai_read_json",
 )
 
 
@@ -2218,11 +2235,13 @@ class _canonical_archive_scope:
         self.outer = getattr(_CANONICAL_SCOPE, "cache", None)
         if self.outer is None:
             _CANONICAL_SCOPE.cache = {}
+            _CANONICAL_SCOPE.summaries = {}
         return self
 
     def __exit__(self, *exc: Any) -> None:
         if self.outer is None:
             _CANONICAL_SCOPE.cache = None
+            _CANONICAL_SCOPE.summaries = None
 
 
 def canonical_archive_uploads(archive_uploads: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -3935,6 +3954,10 @@ def _copy_for_review(source_path: Path, target_path: Path) -> None:
     shutil.copy2(source_path, target_path)
 
 
+def _original_photo_url(original_path: Path) -> str:
+    return f"/uploads/{original_path.name}" if (UPLOAD_DIR / original_path.name).is_file() else ""
+
+
 def create_duplicate_record_from_paths(
     *,
     original_path: Path,
@@ -3943,25 +3966,23 @@ def create_duplicate_record_from_paths(
     source: str,
     reason: str = "duplicate file hash",
 ) -> dict[str, Any]:
-    review_dir = _duplicate_bundle_dir()
-    original_review_path = review_dir / f"original_{original_path.name}"
-    duplicate_review_path = review_dir / f"duplicate_{duplicate_path.name}"
-    _copy_for_review(original_path, original_review_path)
-    _copy_for_review(duplicate_path, duplicate_review_path)
+    # Nov 19 2026 (Dhruvika: "i don't want you to store duplicates"): no photo copies are kept any more (it kept a
+    # copy of the duplicate AND another copy of the original for every one caught). The row only says which file
+    # was a duplicate of which; "Open original" shows the scorecard's own photo; the duplicate file is deleted.
     return {
         "id": str(uuid.uuid4())[:8],
         "created_at": now_iso(),
         "reason": reason,
         "source": source,
-        "review_dir": str(review_dir),
+        "review_dir": "",
         "original_file_name": original_path.name,
         "original_file_path": str(original_path),
-        "original_review_path": str(original_review_path),
-        "original_review_url": review_url_for_path(str(original_review_path)),
+        "original_review_path": "",
+        "original_review_url": _original_photo_url(original_path),
         "duplicate_file_name": duplicate_path.name,
-        "duplicate_file_path": str(duplicate_path),
-        "duplicate_review_path": str(duplicate_review_path),
-        "duplicate_review_url": review_url_for_path(str(duplicate_review_path)),
+        "duplicate_file_path": "",
+        "duplicate_review_path": "",
+        "duplicate_review_url": "",
         "file_hash": file_hash,
         "status": "Pending manual review",
     }
@@ -3976,26 +3997,21 @@ def create_duplicate_record_from_bytes(
     source: str,
     reason: str = "duplicate file hash",
 ) -> dict[str, Any]:
-    review_dir = _duplicate_bundle_dir()
-    original_review_path = review_dir / f"original_{original_path.name}"
-    duplicate_review_name = Path(duplicate_file_name or "duplicate-upload").name
-    duplicate_review_path = review_dir / f"duplicate_{duplicate_review_name}"
-    _copy_for_review(original_path, original_review_path)
-    duplicate_review_path.write_bytes(duplicate_content)
+    duplicate_review_name = Path(duplicate_file_name or "duplicate-upload").name  # Nov 19 2026: nothing is stored
     return {
         "id": str(uuid.uuid4())[:8],
         "created_at": now_iso(),
         "reason": reason,
         "source": source,
-        "review_dir": str(review_dir),
+        "review_dir": "",
         "original_file_name": original_path.name,
         "original_file_path": str(original_path),
-        "original_review_path": str(original_review_path),
-        "original_review_url": review_url_for_path(str(original_review_path)),
+        "original_review_path": "",
+        "original_review_url": _original_photo_url(original_path),
         "duplicate_file_name": duplicate_review_name,
         "duplicate_file_path": "",
-        "duplicate_review_path": str(duplicate_review_path),
-        "duplicate_review_url": review_url_for_path(str(duplicate_review_path)),
+        "duplicate_review_path": "",
+        "duplicate_review_url": "",
         "file_hash": file_hash,
         "status": "Pending manual review",
     }
@@ -7434,6 +7450,88 @@ def _parsed_template_json(text: str) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
+def _archive_year_value(archive: dict[str, Any]) -> str:
+    archive_year = str(archive.get("archive_year") or "").strip()
+    archive_date = str(archive.get("archive_date") or "").strip()
+    return archive_year[:4] if re.match(r"20\d{2}", archive_year) else (archive_date[:4] if re.match(r"20\d{2}", archive_date) else "")
+
+
+def _archive_runs_index(archive_uploads: list[dict[str, Any]]) -> dict[str, Any]:
+    """Nov 18 2026 (Amit: saving an edit is slow): every scorecard's batting runs listed once by player name, so a
+    player's highest score and 25s / 50s / 100s look up his own innings instead of re-reading every scorecard for
+    every player on every save. Same numbers as before (tests: README "Faster saving")."""
+    archives = canonical_archive_uploads(archive_uploads)
+    cache = getattr(_CANONICAL_SCOPE, "summaries", None)
+    key = ("archive-runs", id(archives))
+    if cache is not None and key in cache:
+        return cache[key][1]
+    entries: list[tuple[str, set[str], str]] = []
+    index: dict[str, dict[str, list[tuple[int, Any]]]] = {"highest": defaultdict(list), "milestones": defaultdict(list)}
+    fallbacks: list[int] = []
+    for number, archive in enumerate(archives):
+        club_ids = {str(item or "").strip().lower() for item in _coerce_archive_string_list(archive.get("club_ids"))}
+        entries.append((_archive_year_value(archive), club_ids, str(archive.get("club_id") or "").strip().lower()))
+        suggested = [item for item in archive.get("suggested_performances", []) or [] if isinstance(item, dict)]
+        if suggested:
+            for performance in suggested:
+                name = str(performance.get("player_name") or "").strip().lower()
+                index["highest"][name].append((number, performance.get("runs") or 0))
+                index["milestones"][name].append((number, performance.get("runs") or 0))
+            continue
+        fallbacks.append(number)  # 25s / 50s for cards without a list are worked out per player (names are matched to him)
+        try:
+            template = _parsed_template_json(str(archive.get("review_template_json") or "{}"))
+        except Exception:
+            template = {}
+        for inning in template.get("innings", []) or []:
+            for batting in inning.get("batting", []) or []:
+                name = str((batting.get("player") or {}).get("name") or batting.get("player_name") or "").strip().lower()
+                index["highest"][name].append((number, batting.get("runs") or 0))
+    result = {"archives": archives, "entries": entries, "index": index, "fallbacks": fallbacks}
+    if cache is not None:
+        cache[key] = (archives, result)  # keeps the list alive, so its id stays its own
+    return result
+
+
+def _archive_entry_counts(entry: tuple[str, set[str], str], year: str | None, club_id: str | None) -> bool:
+    if year and entry[0] != str(year).strip():
+        return False
+    if club_id:
+        club_match = str(club_id).strip().lower()
+        if club_match not in entry[1] and entry[2] != club_match:
+            return False
+    return True
+
+
+def _archive_runs_for(archive_uploads: list[dict[str, Any]], kind: str, aliases: set[str], year: str | None, club_id: str | None) -> list[Any]:
+    data = _archive_runs_index(archive_uploads)
+    entries, index = data["entries"], data["index"][kind]
+    return [runs for alias in aliases for number, runs in index.get(alias, ()) if _archive_entry_counts(entries[number], year, club_id)]
+
+
+def _archive_runs_fallbacks(archive_uploads: list[dict[str, Any]], year: str | None, club_id: str | None) -> list[dict[str, Any]]:
+    data = _archive_runs_index(archive_uploads)
+    return [data["archives"][number] for number in data["fallbacks"] if _archive_entry_counts(data["entries"][number], year, club_id)]
+
+
+def _scorebook_has_club_side(fixture: dict[str, Any], club: dict[str, Any]) -> bool:
+    """Does one of this match's scored innings belong to the club? Worked out once per match and club during a stats
+    rebuild (Nov 18 2026, faster saving) - it was asked again for every player."""
+    def work() -> bool:
+        return any(
+            _scorebook_is_club_side(fixture, side, club)
+            for inning in (fixture.get("scorebook") or {}).get("innings", [])
+            for side in (inning.get("batting_team", ""), inning.get("bowling_team", ""))
+        )
+    cache = getattr(_CANONICAL_SCOPE, "summaries", None)
+    if cache is None:
+        return work()
+    key = ("club-side", id(fixture), id(club))
+    if key not in cache:
+        cache[key] = ((fixture, club), work())  # keeps both alive, so their ids stay theirs
+    return cache[key][1]
+
+
 def _highest_score_for_member(
     fixtures: list[dict[str, Any]],
     archive_uploads: list[dict[str, Any]],
@@ -7457,45 +7555,15 @@ def _highest_score_for_member(
         if year and fixture_season_year(fixture) != str(year).strip():
             continue
         fixture_owned_by_club = str(fixture.get("club_id") or "").strip() == str(club_id or "").strip()
-        scorebook_has_club_side = bool(club) and any(
-            _scorebook_is_club_side(fixture, side, club)
-            for inning in (fixture.get("scorebook") or {}).get("innings", [])
-            for side in (inning.get("batting_team", ""), inning.get("bowling_team", ""))
-        )
+        scorebook_has_club_side = bool(club) and _scorebook_has_club_side(fixture, club)
         if club_id and not fixture_owned_by_club and not scorebook_has_club_side:
             continue
         performances = _club_performances_for_match(fixture, [member], club) if club else fixture.get("performances", []) or []
         for performance in performances:
             consider(performance.get("player_name") or "", performance.get("runs") or 0)
 
-    for archive in canonical_archive_uploads(archive_uploads):
-        archive_year = str(archive.get("archive_year") or "").strip()
-        archive_date = str(archive.get("archive_date") or "").strip()
-        archive_year_value = archive_year[:4] if re.match(r"20\d{2}", archive_year) else (archive_date[:4] if re.match(r"20\d{2}", archive_date) else "")
-        if year and archive_year_value != str(year).strip():
-            continue
-        if club_id:
-            club_match = str(club_id).strip().lower()
-            archive_club_ids = {str(item or "").strip().lower() for item in _coerce_archive_string_list(archive.get("club_ids"))}
-            archive_club_id = str(archive.get("club_id") or "").strip().lower()
-            if club_match not in archive_club_ids and archive_club_id != club_match:
-                continue
-        performances = [item for item in archive.get("suggested_performances", []) or [] if isinstance(item, dict)]
-        if not performances:
-            try:
-                template = _parsed_template_json(str(archive.get("review_template_json") or "{}"))
-            except Exception:
-                template = {}
-            for inning in template.get("innings", []) or []:
-                for batting in inning.get("batting", []) or []:
-                    performances.append(
-                        {
-                            "player_name": (batting.get("player") or {}).get("name") or batting.get("player_name") or "",
-                            "runs": batting.get("runs") or 0,
-                        }
-                    )
-        for performance in performances:
-            consider(performance.get("player_name") or "", performance.get("runs") or 0)
+    for runs in _archive_runs_for(archive_uploads, "highest", aliases, year, club_id):
+        highest = int(runs or 0) if highest is None else max(highest, int(runs or 0))
     return highest
 
 
@@ -7514,6 +7582,9 @@ def _batting_milestones(
     def consider(performance_name: str, runs_value: Any) -> None:
         if str(performance_name or "").strip().lower() not in aliases:
             return
+        consider_runs(runs_value)
+
+    def consider_runs(runs_value: Any) -> None:
         runs = int(runs_value or 0)
         if 25 < runs < 50:
             milestones["scores_25_plus"] += 1
@@ -7526,29 +7597,16 @@ def _batting_milestones(
         if year and fixture_season_year(fixture) != str(year).strip():
             continue
         fixture_owned_by_club = str(fixture.get("club_id") or "").strip() == str(club_id or "").strip()
-        scorebook_has_club_side = bool(club) and any(
-            _scorebook_is_club_side(fixture, side, club)
-            for inning in (fixture.get("scorebook") or {}).get("innings", [])
-            for side in (inning.get("batting_team", ""), inning.get("bowling_team", ""))
-        )
+        scorebook_has_club_side = bool(club) and _scorebook_has_club_side(fixture, club)
         if club_id and not fixture_owned_by_club and not scorebook_has_club_side:
             continue
         performances = _club_performances_for_match(fixture, [member], club) if club else fixture.get("performances", []) or []
         for performance in performances:
             consider(performance.get("player_name") or "", performance.get("runs") or 0)
 
-    for archive in canonical_archive_uploads(archive_uploads):
-        archive_year = str(archive.get("archive_year") or "").strip()
-        archive_date = str(archive.get("archive_date") or "").strip()
-        archive_year_value = archive_year[:4] if re.match(r"20\d{2}", archive_year) else (archive_date[:4] if re.match(r"20\d{2}", archive_date) else "")
-        if year and archive_year_value != str(year).strip():
-            continue
-        if club_id:
-            club_match = str(club_id).strip().lower()
-            archive_club_ids = {str(item or "").strip().lower() for item in _coerce_archive_string_list(archive.get("club_ids"))}
-            archive_club_id = str(archive.get("club_id") or "").strip().lower()
-            if club_match not in archive_club_ids and archive_club_id != club_match:
-                continue
+    for runs in _archive_runs_for(archive_uploads, "milestones", aliases, year, club_id):
+        consider_runs(runs)
+    for archive in _archive_runs_fallbacks(archive_uploads, year, club_id):
         for performance in _archive_player_performances(archive, [member]):
             consider(performance.get("player_name") or "", performance.get("runs") or 0)
 
@@ -7684,6 +7742,23 @@ def _build_materialized_member_stats_impl(store: dict[str, Any]) -> tuple[list[d
     return overall_rows, year_rows, club_rows
 
 
+_SUMMED_STAT_KEYS = ("runs", "balls", "sr_runs", "wickets", "catches", "fours", "sixes", "matches", "batting_innings", "dismissal_known_innings", "outs")
+
+
+def _sum_match_rows(rows: list[dict[str, Any]], name: str) -> dict[str, Any] | None:
+    """One player's numbers over several matches = the sum of his per-match rows (build_combined_player_stats)."""
+    if not rows:
+        return None
+    total: dict[str, Any] = {"player_name": name, **{key: sum(int(row.get(key, 0) or 0) for row in rows) for key in _SUMMED_STAT_KEYS}}
+    matches = total["matches"]
+    total["batting_average"] = 0.0
+    total["strike_rate"] = 0.0
+    total["wickets_per_match"] = round((total["wickets"] / matches), 2) if matches else 0.0
+    total["catches_per_match"] = round((total["catches"] / matches), 2) if matches else 0.0
+    _finalize_batting_metrics(total)
+    return total
+
+
 def _member_club_rows_one_club_per_match(
     store: dict[str, Any],
     members: list[dict[str, Any]],
@@ -7704,14 +7779,17 @@ def _member_club_rows_one_club_per_match(
 
     # who appears in each match (canonical member names), worked out once
     archive_players: list[tuple[dict[str, Any], set[str]]] = []
+    match_rows: dict[int, dict[str, dict[str, Any]]] = {}  # Nov 18 2026: each match's numbers, added up per club below
     for upload in archives:
         # the same counting as the player's total, one match at a time, so the two can never disagree
-        names = {row["player_name"] for row in build_combined_player_stats([], _CanonicalArchiveList([upload]), members, side_filter=False) if row.get("matches")}
-        archive_players.append((upload, names))
+        per_match = {row["player_name"]: row for row in build_combined_player_stats([], _CanonicalArchiveList([upload]), members, side_filter=False) if row.get("matches")}
+        match_rows[id(upload)] = per_match
+        archive_players.append((upload, set(per_match)))
     fixture_players: list[tuple[dict[str, Any], set[str]]] = []
     for fixture in fixtures:
-        names = {row["player_name"] for row in build_combined_player_stats([fixture], _CanonicalArchiveList([]), members, side_filter=False) if row.get("matches")}
-        fixture_players.append((fixture, names))
+        per_match = {row["player_name"]: row for row in build_combined_player_stats([fixture], _CanonicalArchiveList([]), members, side_filter=False) if row.get("matches")}
+        match_rows[id(fixture)] = per_match
+        fixture_players.append((fixture, set(per_match)))
 
     side_cache: dict[tuple[str, str], set[str] | None] = {}
 
@@ -7765,13 +7843,10 @@ def _member_club_rows_one_club_per_match(
             if not assigned_archives[club_id] and not assigned_fixtures[club_id]:
                 continue
             club = clubs_by_id[club_id]
-            stats = build_combined_player_stats(
-                assigned_fixtures[club_id],
-                _CanonicalArchiveList(assigned_archives[club_id]),
-                members,
-                side_filter=False,
-            )
-            row = next((item for item in stats if item.get("player_name") == name), None)
+            # Nov 18 2026 (Amit: saving an edit is slow): his matches for this club added up from the per-match
+            # numbers worked out above - it used to recount every player of every one of these matches for each
+            # player and club (same numbers, README "Faster saving")
+            row = _sum_match_rows([match_rows[id(item)][name] for item in assigned_fixtures[club_id] + assigned_archives[club_id]], name)
             if not row or not row.get("matches"):
                 continue
             rows.append(

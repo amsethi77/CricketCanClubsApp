@@ -21,6 +21,17 @@ function escapeHtml(value) {
     .replaceAll("'", "&#39;");
 }
 
+// Nov 17 2026: coming from Register - say so and fill in the mobile / email
+(function welcomeFromRegister() {
+  const params = new URLSearchParams(window.location.search);
+  if (params.get("registered") !== "1" || !statusBanner) return;
+  if (identifierInput && params.get("id")) identifierInput.value = params.get("id");
+  statusBanner.hidden = false;
+  statusBanner.className = "status-banner success";
+  statusBanner.textContent = "✅ You're registered. Sign in with your password to continue.";
+  if (passwordInput) passwordInput.focus();
+})();
+
 function setStatus(message, tone = "info") {
   const show = Boolean(message) && (tone === "error" || tone === "warning");
   statusBanner.hidden = !show;

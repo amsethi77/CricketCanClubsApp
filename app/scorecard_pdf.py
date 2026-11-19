@@ -376,3 +376,123 @@ def scorecard_pdf_filename(match: dict[str, Any]) -> str:
     stem = f"{match.get('club_name') or 'match'}-vs-{match.get('opponent') or 'opponent'}"
     safe = re.sub(r"[^A-Za-z0-9-]+", "-", stem).strip("-").lower()
     return f"{safe or 'match'}-scorecard.pdf"
+
+
+# ---------------------------------------------------------------------------------------------------------------
+# Nov 17 2026 (Amit: "once the match is uploaded, then we should have a PDF also to download or to review the
+# scorecard for both uploaded as well as for online games"): a PDF of the digital scorecard exactly as the scorecard
+# page shows it (uploaded cards and live-scored matches alike) - innings bar, batters with how out and (c) (vc) (wk),
+# extras / total / did not bat, bowlers O M R W NB WD ECO, fall of wickets, partnerships and the match info.
+# ---------------------------------------------------------------------------------------------------------------
+BRAND = colors.HexColor("#e11d48")
+ROSE = colors.HexColor("#fff1f2")
+ROSE_INK = colors.HexColor("#9f1239")
+
+
+def _card_tags(row: dict[str, Any], extra: list[str] | None = None) -> str:
+    tags = [tag for tag in (extra if extra is not None else row.get("tags") or []) if tag in {"C", "VC", "WK"}]
+    return f" ({' & '.join(tag.lower() for tag in tags)})" if tags else ""
+
+
+def _card_score(runs: Any, wickets: Any) -> str:
+    if runs is None or runs == "":
+        return "-"
+    return f"{runs}" + (f"-{wickets}" if wickets is not None and wickets != "" else "")
+
+
+def build_card_pdf(card: dict[str, Any]) -> bytes:
+    buffer = io.BytesIO()
+    title = str(card.get("title") or "Scorecard")
+    document = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=14 * mm, leftMargin=14 * mm, topMargin=15 * mm, bottomMargin=15 * mm, title=f"{title} scorecard", author="CricketCanClubs")
+    base = getSampleStyleSheet()
+    h1 = ParagraphStyle("CardTitle", parent=base["Title"], fontName="Helvetica-Bold", fontSize=16, leading=20, textColor=INK, alignment=TA_CENTER, spaceAfter=3)
+    meta = ParagraphStyle("CardMeta", parent=base["Normal"], fontName="Helvetica", fontSize=8.5, leading=12, textColor=MUTED, alignment=TA_CENTER)
+    result = ParagraphStyle("CardResult", parent=base["Normal"], fontName="Helvetica-Bold", fontSize=10.5, leading=14, textColor=BRAND, alignment=TA_CENTER, spaceBefore=3, spaceAfter=8)
+    cell = ParagraphStyle("CardCell", parent=base["Normal"], fontName="Helvetica", fontSize=8.5, leading=11, textColor=INK)
+    small = ParagraphStyle("CardSmall", parent=cell, fontSize=7.5, leading=10, textColor=MUTED)
+    bold = ParagraphStyle("CardBold", parent=cell, fontName="Helvetica-Bold")
+    bar = ParagraphStyle("CardBar", parent=cell, fontName="Helvetica-Bold", fontSize=10.5, leading=13, textColor=colors.white)
+    bar_right = ParagraphStyle("CardBarRight", parent=bar, alignment=TA_RIGHT)
+
+    def table(rows: list[list[Any]], widths: list[float], header: bool = True, zebra: bool = False) -> Table:
+        t = Table(rows, colWidths=widths, repeatRows=1 if header else 0)
+        style = [
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ("FONTNAME", (0, 0), (-1, -1), "Helvetica"),
+            ("FONTSIZE", (0, 0), (-1, -1), 8.5),
+            ("LINEBELOW", (0, 0), (-1, -1), 0.4, RULE),
+            ("TOPPADDING", (0, 0), (-1, -1), 3),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+            ("ALIGN", (1, 0), (-1, -1), "CENTER"),
+        ]
+        if header:
+            style += [("BACKGROUND", (0, 0), (-1, 0), ROSE), ("TEXTCOLOR", (0, 0), (-1, 0), ROSE_INK), ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold")]
+        t.setStyle(TableStyle(style))
+        return t
+
+    story: list[Any] = [_paragraph(title, h1)]
+    bits = [card.get("match_type"), f"{card.get('overs_limit')} overs" if card.get("overs_limit") else "", card.get("venue"), card.get("date_label")]
+    story.append(_paragraph(" · ".join(str(bit) for bit in bits if bit), meta))
+    if card.get("result"):
+        story.append(_paragraph(card.get("result"), result))
+    width = A4[0] - 28 * mm
+    for innings in card.get("innings") or []:
+        if not isinstance(innings, dict) or not (innings.get("has_data") or innings.get("batting") or innings.get("bowling")):
+            continue
+        head = Table([[Paragraph(_pdf_text(innings.get("team") or "Innings"), bar), Paragraph(_pdf_text(f"{_card_score(innings.get('runs'), innings.get('wickets'))}" + (f" ({innings.get('overs')} Ov)" if innings.get("overs") else "")), bar_right)]], colWidths=[width * 0.6, width * 0.4])
+        head.setStyle(TableStyle([("BACKGROUND", (0, 0), (-1, -1), BRAND), ("TOPPADDING", (0, 0), (-1, -1), 5), ("BOTTOMPADDING", (0, 0), (-1, -1), 5)]))
+        story += [Spacer(1, 8), head]
+        rows: list[list[Any]] = [["Batter", "", "R", "B", "4s", "6s", "SR"]]
+        for row in innings.get("batting") or []:
+            how = str(row.get("dismissal") or ("not out" if row.get("not_out") else ""))
+            rows.append([Paragraph(_pdf_text(f"{row.get('name')}{_card_tags(row)}"), cell), Paragraph(_pdf_text(how), small), Paragraph(f"<b>{_pdf_text(row.get('runs') if row.get('runs') is not None else '-')}</b>", cell)] + [_pdf_text(row.get(key) if row.get(key) not in (None, "") else "-") for key in ("balls", "fours", "sixes", "strike_rate")])
+        if len(rows) > 1:
+            story.append(table(rows, [width * 0.30, width * 0.34, width * 0.07, width * 0.07, width * 0.06, width * 0.06, width * 0.10]))
+        overs_text = f"{innings.get('overs')} Overs" if innings.get("overs") else ""
+        summary = [
+            [Paragraph("<b>Extras</b>", cell), Paragraph(_pdf_text(f"{innings.get('extras') if innings.get('extras') is not None else '-'}" + (f" ({innings.get('extras_detail')})" if innings.get("extras_detail") else "")), cell)],
+            [Paragraph("<b>Total</b>", cell), Paragraph(_pdf_text(_card_score(innings.get("runs"), innings.get("wickets")) + (f" ({overs_text})" if overs_text else "")), bold)],
+        ]
+        if innings.get("did_not_bat"):
+            tags = innings.get("did_not_bat_tags") or {}
+            summary.append([Paragraph("<b>Did not Bat</b>", cell), Paragraph(_pdf_text(", ".join(f"{name}{_card_tags({}, tags.get(name) or [])}" for name in innings["did_not_bat"])), cell)])
+        story.append(table(summary, [width * 0.30, width * 0.70], header=False))
+        bowling = [["Bowler", "O", "M", "R", "W", "NB", "WD", "ECO"]]
+        for row in innings.get("bowling") or []:
+            bowling.append([Paragraph(_pdf_text(f"{row.get('name')}{_card_tags(row)}"), cell)] + [("~" if key == "overs" and row.get("overs_approximate") or key == "runs" and row.get("runs_approximate") else "") + _pdf_text(row.get(key) if row.get(key) not in (None, "") else "-") for key in ("overs", "maidens", "runs", "wickets", "no_balls", "wides", "economy")])
+        if len(bowling) > 1:
+            story += [Spacer(1, 5), table(bowling, [width * 0.37] + [width * 0.09] * 7)]
+        fow = innings.get("fall_of_wickets") or []
+        if fow:
+            rows = [["Fall of Wickets", "Score", "Over"]] + [[_pdf_text(item.get("batter") or ""), f"{item.get('runs')}-{item.get('wicket')}", _pdf_text(item.get("over") or "")] for item in fow]
+            story += [Spacer(1, 5), table(rows, [width * 0.6, width * 0.2, width * 0.2])]
+        partners = innings.get("partnerships") or []
+        if partners:
+            rows = [["Partnerships", "", ""]] + [[_pdf_text(f"{p.get('left')} {p.get('left_runs')}({p.get('left_balls')})"), f"{p.get('runs')}({p.get('balls')})", _pdf_text(f"{p.get('right_runs')}({p.get('right_balls')}) {p.get('right')}" if p.get("right") else "")] for p in partners]
+            story += [Spacer(1, 5), table(rows, [width * 0.4, width * 0.2, width * 0.4])]
+    info = [["Info", ""]]
+    captains = [f"{c.get('name')} ({c.get('team')})" for c in card.get("captains") or [] if isinstance(c, dict) and c.get("name")]
+    for label, value in (
+        ("Match", card.get("title")),
+        ("Series", card.get("season")),
+        ("Date", card.get("date_label")),
+        ("Toss", card.get("toss")),
+        ("Venue", card.get("venue")),
+        ("Result", card.get("result")),
+        ("Captains", " · ".join(captains)),
+        ("Man of the match", card.get("man_of_match") or (f"{card.get('man_of_match_auto')} (auto pick)" if card.get("man_of_match_auto") else "")),
+        ("Match ID", card.get("match_code")),
+    ):
+        if value:
+            info.append([Paragraph(f"<b>{_pdf_text(label)}</b>", cell), Paragraph(_pdf_text(value), cell)])
+    if len(info) > 1:
+        story += [Spacer(1, 10), table(info, [width * 0.3, width * 0.7])]
+    story += [Spacer(1, 8), _paragraph("CricketCanClubs digital scorecard. (c) captain, (vc) vice-captain, (wk) wicket keeper, ~ approximate figure.", small)]
+    document.build(story)
+    return buffer.getvalue()
+
+
+def card_pdf_filename(card: dict[str, Any]) -> str:
+    stem = f"{card.get('title') or 'match'}-{card.get('date') or ''}"
+    safe = re.sub(r"[^A-Za-z0-9-]+", "-", stem).strip("-").lower()
+    return f"{safe or 'match'}-scorecard.pdf"

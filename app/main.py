@@ -152,6 +152,8 @@ try:
     import scorecard_checks as scorecard_checks
     import ai_vision as ai_vision
     import ai_chat as ai_chat
+    import usage_meter as usage_meter
+    import ai_accuracy as ai_accuracy
     from llm_service import clear_query_cache, infer as llm_infer, list_llm_documents, list_prompt_manifest, reindex_llm_corpus
     from player_merge import MergeError, choose_survivor, merge_members_in_store
     from ai_duplicate_engine import AIDuplicateEngine, identity_names
@@ -1035,7 +1037,7 @@ def _clubs_page_html(request: Request, search: str = "", focus_club_id: str = ""
         <link rel="stylesheet" href="/assets/styles.css?v=20261111tablealign" />
         <link rel="stylesheet" href="/assets/app_polish.css?v=20261006a" />
         <link rel="stylesheet" href="/assets/sports-system.css?v=20260926a" />
-        <link rel="stylesheet" href="/assets/public_match.css?v=20261117i" />
+        <link rel="stylesheet" href="/assets/public_match.css?v=20261117n" />
       </head>
       <body>
         <div class="page-shell">
@@ -1553,6 +1555,14 @@ class ArchiveReviewRequest(BaseModel):
     text: str
 
 
+def _keep_ai_read(upload: dict[str, Any]) -> None:
+    """Nov 18 2026 (Amit: AI accuracy): before a person's fix replaces the AI's copy of a card, keep the AI's own
+    reading in ai_read_json, so Admin Center -> AI accuracy can compare the two (README "AI accuracy")."""
+    source = _scorecard_json(upload.get("review_source_json")) if upload.get("review_source_json") else {}
+    if source.get("innings") and ai_accuracy.is_ai_reading(source):
+        upload["ai_read_json"] = str(upload.get("review_source_json") or "")
+
+
 def _apply_archive_review_text(
     store: dict[str, Any],
     upload: dict[str, Any],
@@ -1563,6 +1573,7 @@ def _apply_archive_review_text(
     review_text = str(raw_text or "").strip()
     if not review_text:
         raise HTTPException(status_code=400, detail="Paste the reviewed scorecard JSON first.")
+    _keep_ai_read(upload)
 
     try:
         payload = json.loads(review_text)
@@ -1990,6 +2001,10 @@ def _auth_connection() -> sqlite3.Connection:
     connection.execute("PRAGMA synchronous = NORMAL")
     connection.execute("PRAGMA busy_timeout = 60000")
     return connection
+
+
+# Nov 18 2026 (Amit: "track costs"): every Gemini / Claude call is counted in app_ai_usage (README "Costs").
+usage_meter.install(_auth_connection)
 
 
 ROLE_IDS: dict[str, int] = {"superadmin": 1, "club_admin": 2, "captain": 3, "player": 4}
@@ -4184,6 +4199,7 @@ def startup_tasks() -> None:
     except Exception:
         logger.exception("Syncing fixture results from scorecards failed")
     threading.Thread(target=_seed_learned_examples, name="ai-learned-examples", daemon=True).start()
+    _drop_old_reading_copies()
     _start_upload_worker()  # scorecards uploaded before a restart are read now
     threading.Thread(target=_backup_loop, name="database-backups", daemon=True).start()
     threading.Thread(target=_reminder_loop, name="match-reminders", daemon=True).start()
@@ -4843,40 +4859,36 @@ def _build_public_signin_stats(store: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _build_public_batting_chart_figure(player_labels: list[str], total_runs: list[int]):
-    """Build the public batting-leaders chart with Plotly Graph Objects."""
-    import plotly.graph_objects as go
-
+def _build_public_batting_chart_figure(player_labels: list[str], total_runs: list[int]) -> dict[str, Any]:
+    """The public batting-leaders bar chart as the {data, layout} JSON that Plotly.js (loaded by rankings.html) draws.
+    Nov 19 2026 (Dhruvika: "what useless library are there, which are taking space?"): written out by hand - the
+    Python plotly package (about 78 MB with its parts, half of all the app's libraries) was used only to build
+    this one small JSON."""
     safe_labels = [str(label or "Player") for label in player_labels]
     safe_runs = [max(0, int(runs or 0)) for runs in total_runs]
     if len(safe_labels) != len(safe_runs):
         raise ValueError("Player labels and run totals must have matching lengths.")
-
-    return go.Figure(
-        data=[
-            go.Bar(
-                x=safe_labels,
-                y=safe_runs,
-                name="Runs",
-                marker={"color": "#D32F2F", "line": {"color": "#9A1B1B", "width": 1}},
-                hovertemplate="%{x}<br>%{y} runs<extra></extra>",
-            )
+    return {
+        "data": [
+            {
+                "type": "bar",
+                "x": safe_labels,
+                "y": safe_runs,
+                "name": "Runs",
+                "marker": {"color": "#D32F2F", "line": {"color": "#9A1B1B", "width": 1}},
+                "hovertemplate": "%{x}<br>%{y} runs<extra></extra>",
+            }
         ],
-        layout=go.Layout(
-            paper_bgcolor="rgba(0,0,0,0)",
-            plot_bgcolor="rgba(0,0,0,0)",
-            font={"family": "Roboto, Arial, sans-serif", "color": "#1A1A1A"},
-            margin={"t": 12, "r": 12, "b": 72, "l": 48},
-            xaxis={"tickangle": -25, "automargin": True, "showgrid": False, "zeroline": False},
-            yaxis={
-                "title": "Runs",
-                "gridcolor": "#EAEAEA",
-                "zeroline": False,
-                "rangemode": "tozero",
-            },
-            showlegend=False,
-        ),
-    )
+        "layout": {
+            "paper_bgcolor": "rgba(0,0,0,0)",
+            "plot_bgcolor": "rgba(0,0,0,0)",
+            "font": {"family": "Roboto, Arial, sans-serif", "color": "#1A1A1A"},
+            "margin": {"t": 12, "r": 12, "b": 72, "l": 48},
+            "xaxis": {"tickangle": -25, "automargin": True, "showgrid": False, "zeroline": False},
+            "yaxis": {"title": {"text": "Runs"}, "gridcolor": "#EAEAEA", "zeroline": False, "rangemode": "tozero"},
+            "showlegend": False,
+        },
+    }
 
 
 @app.get("/api/public/rankings-chart")
@@ -4887,7 +4899,7 @@ def public_rankings_chart() -> JSONResponse:
         [str(row.get("player_name") or "Player") for row in batting],
         [int(row.get("runs") or 0) for row in batting],
     )
-    return JSONResponse(content=json.loads(figure.to_json()))
+    return JSONResponse(content=figure)
 
 
 def _public_live_matches(store: dict[str, Any]) -> list[dict[str, Any]]:
@@ -5835,6 +5847,8 @@ def _scorecard_from_archive_base(archive: dict[str, Any]) -> dict[str, Any]:
                     **{key: _scorecard_int(item.get(key)) for key in ("dots", "wides", "no_balls", "fours", "sixes") if item.get(key) not in (None, "")},
                     # Nov 7 2026: runs in each of his overs (written under the boxes, or counted from them)
                     **({"over_runs": [int(value) for value in item.get("over_runs") if str(value).strip().lstrip("-").isdigit()]} if isinstance(item.get("over_runs"), list) and item.get("over_runs") else {}),
+                    # Nov 17 2026: figures the reader shared out from the totals (shown as "≈")
+                    **{key: True for key in ("runs_approximate", "overs_approximate") if item.get(key)},
                 }
             )
         known_bowlers = {normalize_name(item["name"]) for item in bowling}
@@ -6376,6 +6390,7 @@ def save_scorecard_people(upload_id: str, request: ScorecardPeopleRequest, x_aut
                 picked[key] = " ".join(str(value).split())[:80] or None
         match[field] = picked
     match["man_of_match"] = " ".join(str(request.man_of_match or "").split())[:80] or None
+    _keep_ai_read(upload)
     upload["extraction_template"] = deepcopy(template)
     upload["review_template_json"] = json.dumps(template, indent=2)
     upload["review_source_json"] = json.dumps(template)[:12000]
@@ -6921,9 +6936,20 @@ def _tag_card_players(store: dict[str, Any], card: dict[str, Any]) -> dict[str, 
                     tags.append("WK")
                 member = members_by_key.get(str(row.get("player_key") or "")) if row.get("player_key") else _member_for_card_name(store, name, team)
                 role, from_profile = _playing_role_of(store, member)
+                role_source = "profile" if from_profile else "career" if role else ""
+                if not role:
+                    # Nov 17 2026 (Dhruvika: "Put icons for batter wkeeper and bowler"): a player with no profile role
+                    # and too few matches gets the role he played in THIS match - bowled = bowler, else batter
+                    bowled_here = any(
+                        same(other.get("name"), name)
+                        for innings_other in card.get("innings") or [] if isinstance(innings_other, dict) and team and _same_team_name(innings_other.get("bowling_team"), team)
+                        for other in innings_other.get("bowling") or [] if isinstance(other, dict)
+                    )
+                    role, role_source = ("Bowler" if bowled_here else "Batter"), "match"
                 row["tags"] = tags
                 row["playing_role"] = role
                 row["role_from_profile"] = from_profile
+                row["role_source"] = role_source
     # a keeper found in the bowling side's fielding is also tagged where he batted
     for innings in card.get("innings") or []:
         for row in (innings.get("batting") or []) if isinstance(innings, dict) else []:
@@ -7310,16 +7336,36 @@ def public_match(
                     match["player_keys"].setdefault(str(row["name"]), _member_public_key(member))
     # Nov 16 2026: playing role icon next to each name (C / VC / WK come from match.lineups.roles)
     match["player_roles"] = {}
+    # same rule as uploaded cards (Nov 17 2026, Amit: "it has to be consistent for the live scoring as well as for the
+    # uploaded scorecards"): profile role, else career figures, else what he did in this match
+    bowled_here = {
+        normalize_name(ball.get("bowler"))
+        for innings in ((match.get("scorebook") or {}).get("innings") or []) if isinstance(innings, dict)
+        for ball in innings.get("balls") or [] if isinstance(ball, dict) and ball.get("bowler")
+    }
     for side, team in (("club", match.get("club_name")), ("opponent", match.get("opponent"))):
         for name in match["lineups"].get(side) or []:
             if isinstance(name, str) and name.strip():
                 role, _from_profile = _playing_role_of(store, _member_for_card_name(store, name, team))
-                if role:
-                    match["player_roles"][name] = role
+                match["player_roles"][name] = role or ("Bowler" if normalize_name(name) in bowled_here else "Batter")
     return {
         "match": match,
         "generated_at": now_iso(),
     }
+
+
+@app.get("/api/public/scorecards/{scorecard_id}/scorecard.pdf")
+def public_scorecard_pdf(scorecard_id: str, x_auth_token: str | None = Header(default=None)) -> Response:
+    """Nov 17 2026 (Amit: "we should have a PDF also to download ... for both uploaded as well as for online games"):
+    the digital scorecard page as a PDF - same card, same access as /api/public/scorecards/{id}."""
+    card = public_scorecard_detail(scorecard_id, x_auth_token)["scorecard"]
+    card["match_code"] = _match_code(card.get("id"))
+    pdf = scorecard_pdf.build_card_pdf(card)
+    return Response(
+        content=pdf,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{scorecard_pdf.card_pdf_filename(card)}"'},
+    )
 
 
 @app.get("/api/public/match/{match_id}/scorecard.pdf")
@@ -7670,9 +7716,9 @@ def _admin_center_html(request: Request) -> HTMLResponse:
         <link rel="stylesheet" href="/assets/styles.css?v=20261111tablealign" />
         <link rel="stylesheet" href="/assets/app_polish.css?v=20261006a" />
         <link rel="stylesheet" href="/assets/sports-system.css?v=20260926a" />
-        <link rel="stylesheet" href="/assets/scorecards.css?v=20261117i" />
-        <link rel="stylesheet" href="/assets/admin_clubs.css?v=20261117a" />
-        <link rel="stylesheet" href="/assets/admin_center.css?v=20261117w" />
+        <link rel="stylesheet" href="/assets/scorecards.css?v=20261117s" />
+        <link rel="stylesheet" href="/assets/admin_clubs.css?v=20261117m" />
+        <link rel="stylesheet" href="/assets/admin_center.css?v=20261118b" />
       </head>
       <body class="acx-page">
         <div class="page-shell">
@@ -7705,6 +7751,8 @@ def _admin_center_html(request: Request) -> HTMLResponse:
                 <button class="secondary-button" type="button" role="tab" aria-selected="false" aria-controls="adminSectionAudit" data-admin-section="audit">Audit Log</button>
                 <button class="secondary-button" type="button" role="tab" aria-selected="false" aria-controls="adminSectionFixtures" data-admin-section="fixtures">Fixtures</button>
                 <button class="secondary-button" type="button" role="tab" aria-selected="false" aria-controls="adminSectionWhatsApp" data-admin-section="whatsapp">WhatsApp alerts</button>
+                <button class="secondary-button" type="button" role="tab" aria-selected="false" aria-controls="adminSectionCosts" data-admin-section="costs">Costs</button>
+                <button class="secondary-button" type="button" role="tab" aria-selected="false" aria-controls="adminSectionAiAccuracy" data-admin-section="ai-accuracy">AI accuracy</button>
               </nav>
               <section class="admin-section" id="adminSectionClubs" data-admin-section-panel="clubs" role="tabpanel" hidden>
                 <div id="clubManager" class="acm" data-superadmin="1"><p class="acm-empty">Loading clubs...</p></div>
@@ -7766,7 +7814,7 @@ def _admin_center_html(request: Request) -> HTMLResponse:
                     <h2>Make scorecard photos smaller</h2>
                   </div>
                 </div>
-                <p class="lede">Phone photos are 4-9 MB each. This keeps every photo at most {PHOTO_MAX_EDGE} px wide (about 0.6-1 MB, handwriting still clear for the AI) - same file, same scorecard. New uploads are made smaller automatically after the AI reads them.</p>
+                <p class="lede">Phone photos are 4-9 MB each. This compresses every photo to under {PHOTO_TARGET_KB} KB (at most {PHOTO_MAX_EDGE} px, handwriting still clear for the AI) - same file, same scorecard. New uploads are made smaller automatically after the AI reads them (at full size).</p>
                 <div class="acx-photo-stats" id="adminPhotoStats"><span>Checking photos...</span></div>
                 <div class="toolbar-actions"><button id="adminPhotoShrink" class="primary-button" type="button" disabled>🗜️ Make photos smaller</button></div>
                 <div id="adminPhotoStatus" class="status-banner info" hidden></div>
@@ -7867,17 +7915,35 @@ def _admin_center_html(request: Request) -> HTMLResponse:
                   <div id="adminWhatsApp" class="awa"><p class="empty-state">Checking WhatsApp...</p></div>
                 </div>
               </section>
+              <section class="admin-section" id="adminSectionCosts" data-admin-section-panel="costs" role="tabpanel" hidden>
+                <div class="stack-card">
+                  <p class="section-kicker">Costs</p>
+                  <h2>What the app costs to run</h2>
+                  <p class="lede">The app counts every AI call (Gemini) and every WhatsApp message it sends. Type in the prices from the Google, Meta and Azure bills and it shows an estimate per month. The bills themselves are the real numbers.</p>
+                  <div id="adminCosts" class="aco"><p class="empty-state">Adding up the costs...</p></div>
+                </div>
+              </section>
+              <section class="admin-section" id="adminSectionAiAccuracy" data-admin-section-panel="ai-accuracy" role="tabpanel" hidden>
+                <div class="stack-card">
+                  <p class="section-kicker">AI accuracy</p>
+                  <h2>How often is the AI reader right?</h2>
+                  <p class="lede">Every scorecard a person fixed after the AI read it is compared, field by field, with what the AI read: names, runs, balls, 4s, 6s, overs, wickets, totals. The AI learns from every fix (names and worked examples), so this % should go up over the months.</p>
+                  <div id="adminAiAccuracy" class="aac"><p class="empty-state">Comparing the AI's readings with the fixed cards...</p></div>
+                </div>
+              </section>
             </div>
           </section>
         </div>
         <script src="/assets/multipage.js?v=20261117b"></script>
-        <script src="/assets/scorecard_view.js?v=20261117g"></script>
-        <script src="/assets/scorecard.js?v=20261117g"></script>
+        <script src="/assets/scorecard_view.js?v=20261117o"></script>
+        <script src="/assets/scorecard.js?v=20261117s"></script>
         <script src="/assets/admin_center.js?v=20261119b"></script>
-        <script src="/assets/admin_whatsapp.js?v=20261117a"></script>
+        <script src="/assets/admin_whatsapp.js?v=20261117b"></script>
+        <script src="/assets/admin_costs.js?v=20261118a"></script>
+        <script src="/assets/admin_ai_accuracy.js?v=20261118a"></script>
         <script src="/assets/admin_reread.js?v=20261024a"></script>
-        <script src="/assets/admin_clubs.js?v=20261116p"></script>
-        <script src="/assets/admin_photos.js?v=20261117a"></script>
+        <script src="/assets/admin_clubs.js?v=20261117m"></script>
+        <script src="/assets/admin_photos.js?v=20261119b"></script>
       </body>
     </html>
     """
@@ -7902,8 +7968,8 @@ def _club_admin_center_html() -> HTMLResponse:
     <link rel="stylesheet" href="/assets/styles.css?v=20261111tablealign" />
     <link rel="stylesheet" href="/assets/app_polish.css?v=20261006a" />
     <link rel="stylesheet" href="/assets/sports-system.css?v=20260926a" />
-    <link rel="stylesheet" href="/assets/admin_clubs.css?v=20261117a" />
-    <link rel="stylesheet" href="/assets/admin_center.css?v=20261117w" />
+    <link rel="stylesheet" href="/assets/admin_clubs.css?v=20261117m" />
+    <link rel="stylesheet" href="/assets/admin_center.css?v=20261118b" />
   </head>
   <body class="acx-page">
     <div class="page-shell">
@@ -7922,7 +7988,7 @@ def _club_admin_center_html() -> HTMLResponse:
       </section>
     </div>
     <script src="/assets/multipage.js?v=20261117b"></script>
-    <script src="/assets/admin_clubs.js?v=20261116p"></script>
+    <script src="/assets/admin_clubs.js?v=20261117m"></script>
   </body>
 </html>"""
     return HTMLResponse(body, headers={"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0", "Pragma": "no-cache"})
@@ -9051,7 +9117,7 @@ def register(request: RegisterRequest, response: Response) -> dict[str, Any]:
             existing_user_for_member = None
             reusable_existing_user = existing if existing and not existing["member_id"] else None
             if existing and existing["member_id"]:
-                raise HTTPException(status_code=409, detail="User already exists.")
+                raise HTTPException(status_code=409, detail="An account with this mobile number or email already exists. Sign in instead (ask your club admin if you forgot the password).")
 
             needs_admin_slot = "club_admin" in requested_roles or created_club
             if needs_admin_slot:
@@ -13841,6 +13907,15 @@ def _whatsapp_send_template(settings: dict[str, str], phone: str, template: str,
         return False, f"{exc.__class__.__name__}: {exc}"
 
 
+def _whatsapp_live() -> bool:
+    return str(os.getenv("WHATSAPP_LIVE") or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _whatsapp_test_numbers(country: str) -> set[str]:
+    raw = str(os.getenv("WHATSAPP_TEST_NUMBERS") or "")
+    return {number for number in (_whatsapp_number(item, country) for item in re.split(r"[,;\n]+", raw)) if number}
+
+
 def _whatsapp_club_alert(club_id: str, kind: str, ref: str, params: list[str], numbers: list[str] | None = None) -> None:
     """kind 'fixture', 'scorecard' or 'processed'; ref = 'fixture:<id>' / 'scorecard:<id>' / 'processed:<id>' (each
     number gets it once). `numbers` given: only those (the uploader); otherwise every player of the club."""
@@ -13852,6 +13927,15 @@ def _whatsapp_club_alert(club_id: str, kind: str, ref: str, params: list[str], n
         try:
             numbers_now = numbers if numbers is not None else _club_whatsapp_numbers(load_store(), club_id, settings["country"])
             numbers_now = [number for number in (_whatsapp_number(item, settings["country"]) for item in numbers_now) if number]
+            # Nov 17 2026 (Amit: "make sure that we do not start sending messages to so many people who have
+            # registered ... only to you and to myself"): until WHATSAPP_LIVE=true is set in Azure, alerts go ONLY
+            # to the numbers in WHATSAPP_TEST_NUMBERS; everyone else is skipped (and logged as skipped).
+            allowed = _whatsapp_test_numbers(settings["country"])
+            if not _whatsapp_live():
+                skipped = [number for number in numbers_now if number not in allowed]
+                numbers_now = [number for number in numbers_now if number in allowed]
+                if skipped:
+                    logger.info("WhatsApp %s alert %s: test mode - %s numbers skipped (not in WHATSAPP_TEST_NUMBERS).", kind, ref, len(skipped))
             sent = failed = 0
             for phone in numbers_now:
                 with _auth_connection() as connection:
@@ -13978,6 +14062,8 @@ def admin_whatsapp_status(x_auth_token: str | None = Header(default=None)) -> di
     names = {"fixture": "new_fixture", "scorecard": "new_scorecard", "processed": "scorecard_processed", "live": "live_score"}
     return {
         "configured": bool(settings),
+        "live": _whatsapp_live(),
+        "test_numbers": sorted("…" + number[-4:] for number in _whatsapp_test_numbers((settings or {}).get("country") or "1")),
         "token_set": bool(str(os.getenv("WHATSAPP_TOKEN") or "").strip()),
         "phone_id_set": bool(str(os.getenv("WHATSAPP_PHONE_NUMBER_ID") or "").strip()),
         "site_url": PUBLIC_SITE_URL,
@@ -14041,6 +14127,222 @@ def admin_whatsapp_test(request: WhatsAppTestRequest, x_auth_token: str | None =
     elif "401" in low or "access token" in low or "oauth" in low:
         hint = " The token is wrong or expired - make a permanent System user token."
     return {"ok": False, "message": f"Meta said: {detail}.{hint}"}
+
+
+
+
+# ---------------------------------------------------------------------------
+# Admin Center -> "AI accuracy" (Nov 18 2026, Amit: "accuracy is 60-70%, it should keep learning and be 90%+").
+# Every card a person fixed after the AI read it is compared field by field with the AI's own reading (ai_accuracy.py)
+# - no AI call, so it costs nothing. README "AI accuracy (Admin Center)".
+# ---------------------------------------------------------------------------
+@app.get("/api/admin/ai-accuracy")
+def admin_ai_accuracy(x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
+    """Superadmin: how often the AI reader was right, overall, by kind of field, by month and per card."""
+    _require_superadmin(x_auth_token)
+    store = load_store()
+    total = ai_accuracy.Score()
+    months: dict[str, ai_accuracy.Score] = {}
+    month_cards: dict[str, int] = {}
+    cards: list[dict[str, Any]] = []
+    as_read = 0
+    for upload in canonical_archive_uploads(store.get("archive_uploads", []) or []):
+        read = ai_accuracy.ai_reading(upload)
+        if not read:
+            continue
+        truth = _scorecard_pick_template(upload) or {}
+        meta = truth.get("meta") if isinstance(truth.get("meta"), dict) else {}
+        if str(meta.get("source") or "") not in {"manual-entry", "manual-import", "checked-example"} or not ai_vision._template_adds_up(truth):
+            if str(upload.get("status") or "").lower() == "approved":
+                as_read += 1  # published as the AI read it (not checked line by line, so not counted)
+            continue
+        score = ai_accuracy.compare(truth, read)
+        if not score.checked:
+            continue
+        total.merge(score)
+        month = str(upload.get("created_at") or upload.get("ocr_processed_at") or "")[:7] or "?"
+        months.setdefault(month, ai_accuracy.Score()).merge(score)
+        month_cards[month] = month_cards.get(month, 0) + 1
+        card = _scorecard_from_archive(upload)
+        read_meta = read.get("meta") if isinstance(read.get("meta"), dict) else {}
+        cards.append(
+            {
+                "id": str(upload.get("id") or ""),
+                "title": str(card.get("title") or upload.get("original_file_name") or upload.get("id") or ""),
+                "date": str(card.get("date") or upload.get("archive_date") or ""),
+                "model": str(read_meta.get("source") or "").removeprefix("ai:") or str(upload.get("ocr_engine") or "").removeprefix("ai:"),
+                "right": score.right,
+                "checked": score.checked,
+                "percent": round(100 * score.right / score.checked, 1),
+                "misses": score.misses[:10],
+                "more_misses": max(0, len(score.misses) - 10),
+            }
+        )
+    cards.sort(key=lambda item: item["date"], reverse=True)
+    with _auth_connection() as connection:
+        _ai_corrections_table(connection)
+        names_learned = int(connection.execute("SELECT COUNT(*) FROM app_ai_corrections").fetchone()[0])
+    try:
+        examples = len(ai_vision._learned_examples())
+    except Exception:
+        examples = 0
+    return {
+        "target": 90,
+        "overall": {"right": total.right, "checked": total.checked, "percent": round(100 * total.right / total.checked, 1) if total.checked else None, "cards": len(cards)},
+        "groups": ai_accuracy.group_scores(total.fields),
+        "fields": ai_accuracy.field_scores(total.fields),
+        "months": [
+            {"month": month, "cards": month_cards[month], "right": score.right, "checked": score.checked, "percent": round(100 * score.right / score.checked, 1)}
+            for month, score in sorted(months.items())
+        ],
+        "cards": cards[:40],
+        "published_as_read": as_read,
+        "learned": {"names": names_learned, "examples": examples},
+    }
+
+
+# ---------------------------------------------------------------------------
+# Admin Center -> "Costs" (Nov 18 2026, Amit: "track costs - Gemini, Azure, WhatsApp"). README "Costs (Admin Center)".
+# The app counts what it uses: AI calls and tokens (app_ai_usage, usage_meter.py) and WhatsApp messages
+# (app_whatsapp_log). Cost = usage x the rates the superadmin types in (kept in app_flags 'cost_rates'), plus the
+# fixed monthly Azure plan. These are estimates: the bills in Google AI Studio, Meta and Azure are the real numbers.
+# ---------------------------------------------------------------------------
+COST_RATE_DEFAULTS: dict[str, Any] = {
+    "currency": "USD",
+    # Gemini paid-tier price per 1 million tokens (Google AI Studio -> Billing / ai.google.dev pricing). 0 = free tier.
+    "gemini_input_per_million": 0.0,
+    "gemini_output_per_million": 0.0,
+    # Meta per-message prices for US / Canada numbers (Utility template; Meta rate card, Sept 2026: $0.0034)
+    "whatsapp_utility": 0.0034,
+    # Azure App Service plan + anything else fixed per month (storage, domain)
+    "azure_monthly": 0.0,
+    "other_monthly": 0.0,
+}
+
+
+def _cost_rates() -> dict[str, Any]:
+    rates = dict(COST_RATE_DEFAULTS)
+    try:
+        with _auth_connection() as connection:
+            connection.execute("CREATE TABLE IF NOT EXISTS app_flags (key TEXT PRIMARY KEY, value TEXT NOT NULL DEFAULT '')")
+            row = connection.execute("SELECT value FROM app_flags WHERE key = 'cost_rates'").fetchone()
+        saved = json.loads(row["value"]) if row else {}
+        for key, default in COST_RATE_DEFAULTS.items():
+            if key in saved:
+                rates[key] = str(saved[key])[:8] if isinstance(default, str) else max(0.0, float(saved[key] or 0))
+    except Exception:
+        logger.exception("Couldn't read the cost rates; using the defaults.")
+    return rates
+
+
+def _month_start(month: str) -> tuple[datetime, datetime]:
+    year, number = (int(part) for part in month.split("-", 1))
+    start = datetime(year, number, 1, tzinfo=timezone.utc)
+    end = datetime(year + (number == 12), 1 if number == 12 else number + 1, 1, tzinfo=timezone.utc)
+    return start, end
+
+
+def _costs_for_month(month: str, rates: dict[str, Any]) -> dict[str, Any]:
+    start, end = _month_start(month)
+    since, until = start.isoformat(), end.isoformat()
+    with _auth_connection() as connection:
+        connection.execute(usage_meter.CREATE_SQL)
+        connection.execute(_WHATSAPP_LOG_TABLE)
+        ai_rows = [
+            dict(row)
+            for row in connection.execute(
+                "SELECT provider, model, purpose, COUNT(*) AS calls, SUM(ok) AS answered, SUM(input_tokens) AS input_tokens, "
+                "SUM(output_tokens) AS output_tokens, SUM(thinking_tokens) AS thinking_tokens FROM app_ai_usage "
+                "WHERE at >= ? AND at < ? GROUP BY provider, model, purpose ORDER BY calls DESC",
+                (since, until),
+            )
+        ]
+        wa_rows = [
+            dict(row)
+            for row in connection.execute(
+                "SELECT kind, COUNT(*) AS messages FROM app_whatsapp_log WHERE status = 'sent' AND sent_at >= ? AND sent_at < ? GROUP BY kind ORDER BY messages DESC",
+                (since, until),
+            )
+        ]
+    for row in ai_rows:
+        for key in ("calls", "answered", "input_tokens", "output_tokens", "thinking_tokens"):
+            row[key] = int(row.get(key) or 0)
+        # thinking tokens are billed as output tokens
+        row["cost"] = round(
+            row["input_tokens"] / 1_000_000 * rates["gemini_input_per_million"]
+            + (row["output_tokens"] + row["thinking_tokens"]) / 1_000_000 * rates["gemini_output_per_million"],
+            4,
+        ) if row["provider"] == "gemini" else 0.0
+    for row in wa_rows:
+        row["messages"] = int(row.get("messages") or 0)
+        row["cost"] = round(row["messages"] * rates["whatsapp_utility"], 4)
+    ai_cost = round(sum(row["cost"] for row in ai_rows), 2)
+    wa_cost = round(sum(row["cost"] for row in wa_rows), 2)
+    fixed = round(float(rates["azure_monthly"]) + float(rates["other_monthly"]), 2)
+    return {
+        "month": month,
+        "ai": ai_rows,
+        "ai_calls": sum(row["calls"] for row in ai_rows),
+        "ai_tokens": sum(row["input_tokens"] + row["output_tokens"] + row["thinking_tokens"] for row in ai_rows),
+        "ai_cost": ai_cost,
+        "whatsapp": wa_rows,
+        "whatsapp_messages": sum(row["messages"] for row in wa_rows),
+        "whatsapp_cost": wa_cost,
+        "azure_cost": round(float(rates["azure_monthly"]), 2),
+        "other_cost": round(float(rates["other_monthly"]), 2),
+        "total": round(ai_cost + wa_cost + fixed, 2),
+    }
+
+
+@app.get("/api/admin/costs")
+def admin_costs(month: str = "", x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
+    """Superadmin: this month's (or ?month=YYYY-MM) AI calls, WhatsApp messages and estimated cost, plus the last 6
+    months' totals and the rates used."""
+    _require_superadmin(x_auth_token)
+    today = datetime.now(timezone.utc)
+    current = f"{today.year:04d}-{today.month:02d}"
+    month = month.strip() or current
+    if not re.fullmatch(r"20\d{2}-(0[1-9]|1[0-2])", month):
+        raise HTTPException(status_code=400, detail="Pick a month like 2026-11.")
+    rates = _cost_rates()
+    months: list[str] = []
+    year, number = today.year, today.month
+    for _ in range(6):
+        months.append(f"{year:04d}-{number:02d}")
+        year, number = (year - 1, 12) if number == 1 else (year, number - 1)
+    history = []
+    for item in months:
+        totals = _costs_for_month(item, rates)
+        history.append({key: totals[key] for key in ("month", "ai_calls", "ai_cost", "whatsapp_messages", "whatsapp_cost", "azure_cost", "other_cost", "total")})
+    return {"rates": rates, "defaults": COST_RATE_DEFAULTS, "current": _costs_for_month(month, rates), "history": history}
+
+
+class CostRatesRequest(BaseModel):
+    gemini_input_per_million: float = 0.0
+    gemini_output_per_million: float = 0.0
+    whatsapp_utility: float = 0.0
+    azure_monthly: float = 0.0
+    other_monthly: float = 0.0
+    currency: str = "USD"
+
+
+@app.post("/api/admin/costs/rates")
+def admin_cost_rates(request: CostRatesRequest, x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
+    """Superadmin: save the prices the cost estimate uses (from the Google, Meta and Azure bills)."""
+    user_row, _ = _require_superadmin(x_auth_token)
+    values = request.model_dump()
+    for key, value in values.items():
+        if key != "currency" and (value is None or value < 0 or value > 100000):
+            raise HTTPException(status_code=400, detail="Prices must be 0 or more.")
+    values["currency"] = re.sub(r"[^A-Za-z]", "", str(values.get("currency") or "USD"))[:3].upper() or "USD"
+    with _auth_connection() as connection:
+        connection.execute("CREATE TABLE IF NOT EXISTS app_flags (key TEXT PRIMARY KEY, value TEXT NOT NULL DEFAULT '')")
+        connection.execute(
+            "INSERT INTO app_flags (key, value) VALUES ('cost_rates', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            (json.dumps(values),),
+        )
+    _audit_event("admin.cost_rates", "settings", "cost_rates", actor=user_row, details=values, source="api")
+    return {"message": "Saved. The costs below use these prices now.", "rates": _cost_rates()}
 
 
 def _announce_fixture_change(fixture: dict[str, Any], what: str) -> None:
@@ -16672,6 +16974,7 @@ def _upload_worker_loop() -> None:
         except Exception as exc:
             logger.exception("Reading scorecard %s failed", job.get("upload_id"))
             if int(job.get("attempts") or 1) >= 3:
+                _drop_reading_copies_of(str(job["upload_id"]))  # Nov 19 2026: the full-size copy isn't kept
                 _finish_upload_job(job["upload_id"], "failed", {"message": str(exc)})
                 _upload_job_gave_up(job["upload_id"], int(job["user_id"]), str(exc))
             else:
@@ -16723,7 +17026,8 @@ def _read_second_photo(store: dict[str, Any], upload: dict[str, Any], user_row: 
     if not (ai_vision.enabled() and _ai_allowed(user_row, club_id, "ai_extraction", f"scorecard:{upload.get('id')}:2")):
         return "2nd innings photo added. Type the 2nd innings in with ✏️ (AI reading isn't available for this account)."
     club = _selected_club(store, str(upload.get("club_id") or club_id or ""))
-    result = _read_photo_with_ai(store, upload, UPLOAD_DIR / file_token, club)
+    result = _read_photo_with_ai(store, upload, _reading_copy(UPLOAD_DIR / file_token), club)
+    _drop_reading_copy(file_token)
     if not result.get("template"):
         return f"2nd innings photo added, but it couldn't be read ({result.get('error') or 'AI reading failed'}). Type the 2nd innings in with ✏️."
     joined = _join_innings_photos(template, result["template"])
@@ -16803,7 +17107,7 @@ def _process_upload_job(job: dict[str, Any]) -> dict[str, Any]:
         ai_note = ""
         if ai_vision.enabled():
             if _ai_allowed(user_row, upload_club_id, "ai_extraction", f"scorecard:{record['id']}"):
-                ai_note = _scorecard_ai_read(store, record, destination, selected_club)
+                ai_note = _scorecard_ai_read(store, record, _reading_copy(destination), selected_club)
             else:
                 ai_note = "AI reading of photos is a Pro feature (your free AI try is used)."
                 record["ai_flags"] = [ai_note + " Type in the scorecard with ✏️, or upgrade to Pro on /pricing."]
@@ -16838,6 +17142,7 @@ def _process_upload_job(job: dict[str, Any]) -> dict[str, Any]:
                 continue  # a 2nd innings photo arrived while the 1st was read: read it too, then save
             result = _finish_processed_upload(store, record, user_row, options, destination, selected_club, second_note)
         break
+    _drop_reading_copy(destination.name, record.get("second_photo_file"))  # the full-size copies are not kept
     if result.get("joined"):
         _tell_uploader(user_row, result["upload"], store, f"Scorecard ready: {result['title']}", result["message"] + " Check it and tap Publish.")
         return {key: value for key, value in result.items() if key in {"message", "preview_url", "joined"}}
@@ -16940,6 +17245,9 @@ async def upload_scorecard(
     file_token = f"{uuid.uuid4().hex[:10]}{suffix}"
     destination = UPLOAD_DIR / file_token
     destination.write_bytes(content)
+    original_hash = file_sha256_from_bytes(content)
+    # Nov 19 2026: stored compressed straight away (the AI reads a temporary full-size copy)
+    _store_photo_compressed(destination)
     record = archive_record_from_file(
         destination,
         season or selected_club.get("season") or store["club"]["season"],
@@ -16951,6 +17259,8 @@ async def upload_scorecard(
         club_names=related_club_names,
     )
     record["original_file_name"] = file.filename or file_token
+    # the scorecard keeps the ORIGINAL photo's hash, so uploading that photo again is still refused as a duplicate
+    record["file_hash"] = original_hash
     record["status"] = "Pending review"
     record["image_fingerprint"] = fingerprint
     record["uploaded_by_user_id"] = int(user_row["id"])
@@ -17834,7 +18144,13 @@ def _apply_ai_template(store: dict[str, Any], record: dict[str, Any], template: 
 # ---------------------------------------------------------------------------
 PHOTO_MAX_EDGE = int(os.getenv("CRICKETCLUBAPP_PHOTO_MAX_EDGE") or 2400)
 PHOTO_QUALITY = int(os.getenv("CRICKETCLUBAPP_PHOTO_QUALITY") or 80)
-PHOTO_SHRINK_ABOVE = 700 * 1024  # photos already smaller than this are left alone
+# Nov 19 2026 (Dhruvika: "i want all photos in kbs so compress them"): every photo is brought under
+# PHOTO_TARGET_KB (default 450 KB) - lower JPEG quality first (not below 60), then 2000 px if still too big - and
+# photos already a small JPEG but too heavy (e.g. 2048 px at 1.5 MB) are now compressed too.
+PHOTO_TARGET_KB = int(os.getenv("CRICKETCLUBAPP_PHOTO_TARGET_KB") or 450)
+PHOTO_MIN_QUALITY = 60
+PHOTO_DONE_MARK = b"CricketCanClubs compressed"  # JPEG comment on a compressed photo, so it isn't compressed twice
+PHOTO_SHRINK_ABOVE = int(PHOTO_TARGET_KB * 1.15) * 1024  # photos already smaller than this are left alone
 _PHOTO_SUFFIXES = {".png", ".jpg", ".jpeg", ".heic", ".heif", ".webp"}
 _SHRINK_JOB: dict[str, Any] = {"running": False}
 
@@ -17853,13 +18169,16 @@ def _needs_shrink(path: Path) -> bool:
         except Exception:
             pass
         with Image.open(path) as image:
-            return not (image.format in {"JPEG", "MPO"} and max(image.size) <= PHOTO_MAX_EDGE)
+            if image.info.get("comment") == PHOTO_DONE_MARK:
+                return False  # compressed already (as far as it can go and stay readable): never again
+        return True  # bigger than the target: compress it, whatever its size in pixels
     except Exception:
         return False
 
 
 def _shrink_photo(path: Path) -> int:
-    """Shrink one photo in place (at most PHOTO_MAX_EDGE px, JPEG). Returns the bytes saved (0 = left as it was)."""
+    """Shrink one photo in place (at most PHOTO_MAX_EDGE px, JPEG, under PHOTO_TARGET_KB when it can be). Returns the
+    bytes saved (0 = left as it was)."""
     try:
         if not _needs_shrink(path):
             return 0
@@ -17875,12 +18194,29 @@ def _shrink_photo(path: Path) -> int:
         with Image.open(path) as source:
             exif = source.getexif()
             image = ImageOps.exif_transpose(source).convert("RGB")
-        image.thumbnail((PHOTO_MAX_EDGE, PHOTO_MAX_EDGE), Image.LANCZOS)
         if 0x0112 in exif:
             exif[0x0112] = 1  # the picture is already turned the right way up
+        exif_bytes = exif.tobytes()
         temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex[:6]}.shrinking")
         try:
-            image.save(temporary, format="JPEG", quality=PHOTO_QUALITY, optimize=True, progressive=True, exif=exif.tobytes())
+            target = PHOTO_TARGET_KB * 1024
+            # Nov 19 2026: try the sharpest picture that is under the target - full 2400 px with lower quality first
+            # (the AI zooms into the halves, so pixels matter more than quality), then 2000 px
+            edges = [PHOTO_MAX_EDGE, min(PHOTO_MAX_EDGE, 2000)]
+            for number, edge in enumerate(edges):
+                sized = image.copy()
+                sized.thumbnail((edge, edge), Image.LANCZOS)
+                save = lambda quality: sized.save(temporary, format="JPEG", quality=quality, optimize=True, progressive=True, exif=exif_bytes, comment=PHOTO_DONE_MARK)
+                if number < len(edges) - 1 and edges[number + 1] < edge:
+                    save(PHOTO_MIN_QUALITY)  # Nov 19 2026 (faster upload): too big even at the lowest quality -> smaller size
+                    if temporary.stat().st_size > target:
+                        continue
+                for quality in range(PHOTO_QUALITY, PHOTO_MIN_QUALITY - 1, -5):
+                    save(quality)
+                    if temporary.stat().st_size <= target:
+                        break
+                if temporary.stat().st_size <= target:
+                    break
             if temporary.stat().st_size >= info.st_size * 0.85:
                 return 0  # hardly smaller: keep the original
             saved = info.st_size - temporary.stat().st_size
@@ -17894,6 +18230,63 @@ def _shrink_photo(path: Path) -> int:
         return 0
 
 
+# Nov 19 2026 (Dhruvika: "for the pictures can you compress the images and then store it"): a photo is compressed
+# the moment it is uploaded, so only the small copy is ever stored. The AI still reads the full-size photo: it is kept
+# for the reading in the computer's temporary folder (on Azure the container's own disk, not the /home storage) and
+# deleted when the reading is done. After a restart before the reading, the AI reads the stored small copy.
+_READING_COPY_DIR_NAME = "cricketcanclubs-reading"
+
+
+def _reading_copy_dir() -> Path:
+    import tempfile
+
+    return Path(tempfile.gettempdir()) / _READING_COPY_DIR_NAME
+
+
+def _store_photo_compressed(path: Path) -> int:
+    """Keep a full-size copy for the AI reading (temporary), then compress the stored photo. Returns its size."""
+    try:
+        folder = _reading_copy_dir()
+        folder.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(path, folder / path.name)
+    except OSError:
+        logger.warning("No full-size reading copy for %s; the AI will read the compressed photo.", path.name)
+    _shrink_photo(path)
+    return path.stat().st_size if path.is_file() else 0
+
+
+def _reading_copy(path: Path) -> Path:
+    """The full-size copy of a just-uploaded photo, if it is still there, else the stored photo."""
+    copy = _reading_copy_dir() / Path(path).name
+    return copy if copy.is_file() else Path(path)
+
+
+def _drop_reading_copy(*names: Any) -> None:
+    for name in names:
+        if name:
+            (_reading_copy_dir() / Path(str(name)).name).unlink(missing_ok=True)
+
+
+def _drop_reading_copies_of(upload_id: str) -> None:
+    try:
+        record = get_archive_or_404(load_store(), upload_id)
+        _drop_reading_copy(record.get("file_name"), record.get("second_photo_file"))
+    except Exception:
+        pass
+
+
+def _drop_old_reading_copies() -> None:
+    """At start-up: full-size copies left by a restart in the middle of a reading (older than a day) are deleted."""
+    folder = _reading_copy_dir()
+    if folder.is_dir():
+        for item in folder.iterdir():
+            try:
+                if item.is_file() and time_module.time() - item.stat().st_mtime > 86400:
+                    item.unlink()
+            except OSError:
+                pass
+
+
 def _photo_files() -> list[Path]:
     if not UPLOAD_DIR.is_dir():
         return []
@@ -17903,7 +18296,9 @@ def _photo_files() -> list[Path]:
 def _photo_storage() -> dict[str, Any]:
     files = _photo_files()
     big = [item.stat().st_size for item in files if _needs_shrink(item)]
-    return {"photos": len(files), "bytes": sum(item.stat().st_size for item in files), "big_photos": len(big), "big_bytes": sum(big), "max_edge": PHOTO_MAX_EDGE}
+    total = sum(item.stat().st_size for item in files)
+    copies, copies_bytes = _duplicate_copies()
+    return {"duplicate_copies": len(copies), "duplicate_bytes": copies_bytes, "photos": len(files), "bytes": total, "average_kb": round(total / 1024 / len(files)) if files else 0, "big_photos": len(big), "big_bytes": sum(big), "max_edge": PHOTO_MAX_EDGE, "target_kb": PHOTO_TARGET_KB}
 
 
 def _shrink_all_photos(actor: str) -> None:
@@ -17949,6 +18344,51 @@ def admin_shrink_photos(x_auth_token: str | None = Header(default=None)) -> dict
     _SHRINK_JOB.update({"running": True, "total": 0, "done": 0, "saved": 0, "message": ""})
     threading.Thread(target=_shrink_all_photos, args=(str(user_row["display_name"] or "admin"),), name="shrink-photos", daemon=True).start()
     return {"message": "Making the photos smaller in the background. You can keep using the app.", "job": dict(_SHRINK_JOB)}
+
+
+def _duplicate_copies() -> tuple[list[Path], int]:
+    """Photo copies kept in the duplicates folder (before Nov 19 2026 every caught duplicate kept 2 copies)."""
+    if not DUPLICATE_DIR.is_dir():
+        return [], 0
+    files = [item for item in DUPLICATE_DIR.rglob("*") if item.is_file()]
+    return files, sum(item.stat().st_size for item in files)
+
+
+@app.post("/api/admin/uploads/remove-duplicate-copies")
+def admin_remove_duplicate_copies(x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
+    """Superadmin (Nov 19 2026, Dhruvika: "i don't want you to store duplicates"): delete the photo copies in the
+    duplicates folder. The scorecards and their own photos in uploads are not touched; the duplicates list keeps
+    its rows (which file was a duplicate of which), with "Open original" pointing at the scorecard's own photo."""
+    user_row, _ = _require_superadmin(x_auth_token)
+    files, total = _duplicate_copies()
+    removed = 0
+    for item in files:
+        try:
+            item.unlink()
+            removed += 1
+        except OSError:
+            logger.warning("Couldn't remove duplicate copy %s", item)
+    for folder in sorted((item for item in DUPLICATE_DIR.rglob("*") if item.is_dir()), key=lambda item: len(item.parts), reverse=True):
+        try:
+            folder.rmdir()
+        except OSError:
+            pass
+    with _store_write_lock():
+        store = load_store()
+        changed = False
+        for item in store.get("duplicate_uploads", []) or []:
+            if item.get("original_review_path") or item.get("duplicate_review_path"):
+                original = Path(str(item.get("original_file_path") or item.get("original_file_name") or "")).name
+                item["original_review_path"] = ""
+                item["duplicate_review_path"] = ""
+                item["review_dir"] = ""
+                item["original_review_url"] = f"/uploads/{original}" if original and (UPLOAD_DIR / original).is_file() else ""
+                item["duplicate_review_url"] = ""
+                changed = True
+        if changed:
+            save_store(store)
+    _audit_event("uploads.remove_duplicate_copies", "uploads", "duplicates", actor=user_row, details={"files": removed, "bytes": total}, source="api")
+    return {"message": f"Removed {removed} duplicate photo copies ({total / 1048576:.1f} MB freed).", "files": removed, "bytes": total}
 
 
 def _upload_file_path(upload: dict[str, Any]) -> Path | None:
@@ -18363,11 +18803,28 @@ def _learned_identity_names(store: dict[str, Any], card: dict[str, Any], fallbac
     return renames
 
 
-def _rename_on_template(template: dict[str, Any], renames: dict[str, str]) -> int:
+def _rename_on_template(template: dict[str, Any], renames: dict[str, str], team: str = "") -> int:
     """Write the confirmed player names on a card (batters, bowlers, who took the catch / bowled him, captains,
-    man of the match). Returns how many places changed."""
+    man of the match). Returns how many places changed.
+
+    Nov 17 2026 (Amit: "if I change Amit S in Heartlake, it should change it in its both batting and fielding innings,
+    but in that particular club only"): with `team`, only that side's places change - its batters (innings it batted)
+    and its bowlers / catchers / the bowler in How out (innings it fielded). "Rafa" in the other team stays."""
     keys = {normalize_name(old): new for old, new in renames.items() if old and new}
     changed = 0
+    teams = (template.get("match") or {}).get("teams") if isinstance(template.get("match"), dict) else {}
+    team_names = [str(value or "") for value in (teams.values() if isinstance(teams, dict) else [])]
+
+    def side_of(innings: dict[str, Any], section: str) -> str:
+        batting = str(innings.get("batting_team") or "")
+        fielding = str(innings.get("bowling_team") or "") or next((name for name in team_names if name and not _same_team_name(name, batting)), "")
+        return batting if section == "batting" else fielding
+
+    def mine(innings: dict[str, Any], section: str) -> bool:
+        if not team:
+            return True
+        side = side_of(innings, section)
+        return bool(side) and _same_team_name(side, team)
 
     def fix(value: Any) -> Any:
         nonlocal changed
@@ -18383,26 +18840,46 @@ def _rename_on_template(template: dict[str, Any], renames: dict[str, str]) -> in
             for row in innings.get(section) or []:
                 if not isinstance(row, dict):
                     continue
-                if isinstance(row.get("player"), dict):
-                    row["player"]["name"] = fix(row["player"].get("name"))
-                    if "normalized_name" in row["player"]:
-                        row["player"]["normalized_name"] = normalize_name(row["player"]["name"])
-                elif "name" in row:
-                    row["name"] = fix(row.get("name"))
+                if mine(innings, section):
+                    if isinstance(row.get("player"), dict):
+                        row["player"]["name"] = fix(row["player"].get("name"))
+                        if "normalized_name" in row["player"]:
+                            row["player"]["normalized_name"] = normalize_name(row["player"]["name"])
+                    elif "name" in row:
+                        row["name"] = fix(row.get("name"))
                 dismissal = row.get("dismissal")
-                if isinstance(dismissal, dict):
+                # the bowler / catcher in a batter's How out are the FIELDING side's players
+                if isinstance(dismissal, dict) and section == "batting" and mine(innings, "bowling"):
                     for key in ("bowler", "fielder"):
                         dismissal[key] = fix(dismissal.get(key))
     match = template.get("match")
     if isinstance(match, dict):
         if isinstance(match.get("captains"), dict):
             for key in list(match["captains"]):
-                match["captains"][key] = fix(match["captains"][key])
-        match["man_of_match"] = fix(match.get("man_of_match"))
+                side_team = str((teams or {}).get(key) or "") if isinstance(teams, dict) else ""
+                if not team or not side_team or _same_team_name(side_team, team):
+                    match["captains"][key] = fix(match["captains"][key])
+        if not team:
+            match["man_of_match"] = fix(match.get("man_of_match"))
     return changed
 
 
-def _apply_identities_to_upload(store: dict[str, Any], upload: dict[str, Any], renames: dict[str, str] | None = None) -> int:
+def _club_team_on_template(store: dict[str, Any], template: dict[str, Any], club_id: str) -> str:
+    """The team name on a card that is this club ('' when it can't be told)."""
+    club = next((item for item in store.get("clubs", []) or [] if str(item.get("id") or "") == str(club_id or "")), None)
+    if not club:
+        return ""
+    names = [str(inn.get("batting_team") or "") for inn in template.get("innings") or [] if isinstance(inn, dict)]
+    teams = (template.get("match") or {}).get("teams") if isinstance(template.get("match"), dict) else {}
+    names += [str(value or "") for value in (teams.values() if isinstance(teams, dict) else [])]
+    keys = _club_identity_keys(club)
+    for name in names:
+        if name and (normalize_name(name) in keys or _same_team_name(name, club.get("name")) or (club.get("short_name") and _same_team_name(name, club.get("short_name")))):
+            return name
+    return ""
+
+
+def _apply_identities_to_upload(store: dict[str, Any], upload: dict[str, Any], renames: dict[str, str] | None = None, club_id: str = "") -> int:
     """Write confirmed names on an uploaded card and refresh what is worked out from it. Returns places changed."""
     template = deepcopy(_scorecard_pick_template(upload) or {})
     if not template.get("innings"):
@@ -18411,7 +18888,7 @@ def _apply_identities_to_upload(store: dict[str, Any], upload: dict[str, Any], r
         renames = _learned_identity_names(store, _scorecard_from_archive(upload), str(upload.get("club_id") or ""))
     if not renames:
         return 0
-    changed = _rename_on_template(template, renames)
+    changed = _rename_on_template(template, renames, _club_team_on_template(store, template, str(club_id or upload.get("club_id") or "")))
     if not changed:
         return 0
     try:
@@ -18464,7 +18941,7 @@ def scorecard_name_identity(upload_id: str, request: NameIdentityRequest, x_auth
             (club_id, card_name, str(member["id"]), int(user_row["id"]), now_iso()),
         )
         connection.execute("DELETE FROM app_name_identity_rejections WHERE club_id = ? AND card_name = ? AND member_id = ?", (club_id, card_name, str(member["id"])))
-    changed = _apply_identities_to_upload(store, upload, {request.card_name: str(member.get("name") or "")})
+    changed = _apply_identities_to_upload(store, upload, {request.card_name: str(member.get("name") or "")}, club_id)
     if changed:
         save_store(store)
     _audit_event("member.name_identity", "member", str(member["id"]), actor=user_row, club_id=club_id, details={"card_name": request.card_name, "upload_id": upload_id, "changed": changed}, source="api")
@@ -18853,6 +19330,7 @@ async def scorecard_upload_second_photo(
     else:
         file_token = f"{uuid.uuid4().hex[:10]}{suffix}"
         (UPLOAD_DIR / file_token).write_bytes(content)
+        _store_photo_compressed(UPLOAD_DIR / file_token)  # Nov 19 2026: stored compressed (hash = the original's)
     archive_id = str(upload.get("id"))
     with _store_write_lock():
         fresh = load_store()
@@ -18982,15 +19460,18 @@ def scorecard_upload_manual(upload_id: str, request: ScorecardManualRequest, x_a
     """"Type in the scorecard": the uploader, their club's scorers or a site admin enter the card by hand
     (the form on /scorecards/{id}?preview=1). Replaces whatever the photo reading found; checks run again."""
     user_row, _, store, upload, _ = _scorecard_upload_access(x_auth_token, upload_id)
+    _keep_ai_read(upload)
     template = dict(request.template or {})
     template.setdefault("meta", {})
     template["meta"].update({"source": "manual-entry", "processed_by": f"Typed in by {user_row['display_name'] or 'a scorer'}", "confidence": "Typed in", "status": "template"})
     if not isinstance(template.get("innings"), list) or not template["innings"]:
         raise HTTPException(status_code=400, detail="Add at least one innings.")
     # Learn from the fix: names the AI misread and the person corrected (README "How the AI reader learns").
-    learned = _learn_ai_corrections(str(upload.get("club_id") or ""), _scorecard_json(upload.get("review_source_json")) if upload.get("review_source_json") else None, template)
+    # Nov 18 2026: compared with the AI's own reading (kept in ai_read_json) - after captains were saved the copy in
+    # review_source_json is the person's, so nothing was learned from the fix
+    learned = _learn_ai_corrections(str(upload.get("club_id") or ""), ai_accuracy.ai_reading(upload) or (_scorecard_json(upload.get("review_source_json")) if upload.get("review_source_json") else None), template)
     # Nov 16 2026: names already confirmed for this club ("Amit" = Amit S) are written in, so they aren't asked again
-    _rename_on_template(template, _learned_identity_names(store, template, str(upload.get("club_id") or "")))
+    _rename_on_template(template, _learned_identity_names(store, template, str(upload.get("club_id") or "")), _club_team_on_template(store, template, str(upload.get("club_id") or "")))
     imported = parse_imported_extraction(store, json.dumps(template))
     upload.update(imported)
     # The typed-in card is THE reviewed copy now (the AI's reading stays in review_source_json for learning).
@@ -18999,10 +19480,11 @@ def scorecard_upload_manual(upload_id: str, request: ScorecardManualRequest, x_a
     upload["ocr_processed_at"] = now_iso()
     upload["status"] = "Pending review"
     upload["review_flags"] = []
+    # Nov 17 2026 (Amit: editing a scorecard "is taking time"): the checks run on the store in memory and it is saved
+    # ONCE - it was saved, read back and saved again, and every save rebuilds everyone's stats (4.7 s -> ~2.4 s)
+    checks = _scorecard_upload_checks(store, upload)
     save_store(store)
     refreshed = load_store()
-    checks = _scorecard_upload_checks(refreshed, get_archive_or_404(refreshed, str(upload.get("id"))))
-    save_store(refreshed)
     # Nov 11 2026 (Amit: "RAG ... less of manual intervention"): a fixed card that adds up becomes an example the AI
     # sees the next time it reads a card of these clubs (README "How the AI reader learns" -> "Learned examples").
     taught = False
@@ -19736,29 +20218,85 @@ def _prune_backups() -> int:
     return freed
 
 
+_BACKUP_STATUS: dict[str, Any] = {}
+
+
+def _record_backup_result(result: dict[str, Any], reason: str) -> dict[str, Any]:
+    """Nov 19 2026 (Dhruvika: "database is not getting backed up anymore"): every try - made, skipped or failed - is
+    remembered (app_flags 'backup_last') and shown on /admin/backups, so a stopped backup is seen straight away."""
+    entry = {"at": now_iso(), "reason": reason, "ok": bool(result.get("ok")), "file": result.get("file") or "", "error": result.get("error") or ""}
+    _BACKUP_STATUS.clear()
+    _BACKUP_STATUS.update(entry)
+    try:
+        with _auth_connection() as connection:
+            connection.execute("CREATE TABLE IF NOT EXISTS app_flags (key TEXT PRIMARY KEY, value TEXT NOT NULL DEFAULT '')")
+            connection.execute(
+                "INSERT INTO app_flags (key, value) VALUES ('backup_last', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                (json.dumps(entry),),
+            )
+    except Exception:
+        logger.exception("Couldn't remember the backup result")
+    return result
+
+
+def _last_backup_try() -> dict[str, Any]:
+    if _BACKUP_STATUS:
+        return dict(_BACKUP_STATUS)
+    try:
+        with _auth_connection() as connection:
+            connection.execute("CREATE TABLE IF NOT EXISTS app_flags (key TEXT PRIMARY KEY, value TEXT NOT NULL DEFAULT '')")
+            row = connection.execute("SELECT value FROM app_flags WHERE key = 'backup_last'").fetchone()
+        return json.loads(row["value"]) if row else {}
+    except Exception:
+        return {}
+
+
+def _backup_work_dir(database_bytes: int) -> Path:
+    """Where the uncompressed copy is made before it is compressed into BACKUP_DIR. Nov 19 2026: the computer's own
+    temporary folder (on Azure the container's local disk, not the 1 GB /home storage), so a nearly full /home only
+    needs room for the small .db.gz. Falls back to BACKUP_DIR when the temporary folder is too small."""
+    import shutil as shutil_module
+    import tempfile
+
+    candidates = [Path(str(os.getenv("CRICKETCLUBAPP_BACKUP_TEMP_DIR") or "").strip())] if str(os.getenv("CRICKETCLUBAPP_BACKUP_TEMP_DIR") or "").strip() else []
+    candidates.append(Path(tempfile.gettempdir()) / "cricketcanclubs-backup")
+    for folder in candidates:
+        try:
+            folder.mkdir(parents=True, exist_ok=True)
+            if shutil_module.disk_usage(folder).free > database_bytes * 2 + 20 * 1024 * 1024:
+                return folder
+        except OSError:
+            continue
+    return BACKUP_DIR
+
+
 def make_database_backup(reason: str = "scheduled") -> dict[str, Any]:
     """A verified copy of the live database. Returns {ok, file, bytes, offsite, error}."""
     reason = re.sub(r"[^a-z0-9-]+", "-", str(reason or "manual").lower()).strip("-")[:30] or "manual"
     if not _BACKUP_LOCK.acquire(timeout=300):
-        return {"ok": False, "error": "another backup is running"}
+        return _record_backup_result({"ok": False, "error": "another backup is running"}, reason)
+    partial: Path | None = None
     try:
         BACKUP_DIR.mkdir(parents=True, exist_ok=True)
         if not DATABASE_FILE.exists():
-            return {"ok": False, "error": "no database file yet"}
+            return _record_backup_result({"ok": False, "error": "no database file yet"}, reason)
         _prune_backups()  # free space first
+        database_bytes = DATABASE_FILE.stat().st_size
+        work_dir = _backup_work_dir(database_bytes)
         try:
             import shutil as shutil_module
 
+            # Nov 19 2026: the copy is made in work_dir; BACKUP_DIR only needs room for the compressed file (~1/10)
+            needed = database_bytes * 2 + 50 * 1024 * 1024 if work_dir == BACKUP_DIR else database_bytes // 3 + 20 * 1024 * 1024
             free = shutil_module.disk_usage(BACKUP_DIR).free
-            if free < DATABASE_FILE.stat().st_size * 2 + 50 * 1024 * 1024:
+            if free < needed:
                 logger.error("Backup skipped: only %.0f MB free on the disk.", free / 1e6)
                 _notify_site_admins("system", "Disk nearly full: backup skipped", f"Only {free // (1024 * 1024)} MB free. Delete old files from the Azure storage.", "/admin/backups")
-                return {"ok": False, "error": f"only {free // (1024 * 1024)} MB free on the disk"}
+                return _record_backup_result({"ok": False, "error": f"only {free // (1024 * 1024)} MB free on the disk (needs {needed // (1024 * 1024)} MB)"}, reason)
         except OSError:
             pass
         name = f"cricketclubapp-{datetime.utcnow().strftime('%Y%m%dT%H%M%SZ')}-{reason}.db"
-        target = BACKUP_DIR / name
-        partial = BACKUP_DIR / (name + ".partial")
+        partial = work_dir / (name + ".partial")
         _sqlite_copy(DATABASE_FILE, partial)
         # A backup is a single self-contained file: switch the copy to the rollback journal so restoring it on
         # Azure Files never brings WAL (and its -wal/-shm side files) back.
@@ -19774,7 +20312,7 @@ def make_database_backup(reason: str = "scheduled") -> dict[str, Any]:
             partial.unlink(missing_ok=True)
             logger.error("Backup NOT kept: the copy failed its check (%s). The live database may be damaged.", detail)
             _notify_site_admins("system", "Database backup failed its check", f"The copy didn't pass the integrity check: {detail}. Check the live database now.", "/admin/backups")
-            return {"ok": False, "error": f"copy failed its check: {detail}"}
+            return _record_backup_result({"ok": False, "error": f"copy failed its check: {detail}"}, reason)
         # compressed: a 51 MB database is a ~3 MB backup
         import gzip
         import shutil as shutil_module
@@ -19788,11 +20326,13 @@ def make_database_backup(reason: str = "scheduled") -> dict[str, Any]:
         offsite = _upload_backup_offsite(target)
         _prune_backups()
         logger.info("Database backup %s (%s bytes). %s", name, target.stat().st_size, offsite or "Off-site copy uploaded.")
-        return {"ok": True, "file": name, "bytes": target.stat().st_size, "offsite": offsite or "uploaded"}
+        return _record_backup_result({"ok": True, "file": name, "bytes": target.stat().st_size, "offsite": offsite or "uploaded"}, reason)
     except Exception as exc:
         logger.exception("Database backup failed")
-        return {"ok": False, "error": str(exc)}
+        return _record_backup_result({"ok": False, "error": str(exc)}, reason)
     finally:
+        if partial is not None:
+            partial.unlink(missing_ok=True)
         _BACKUP_LOCK.release()
 
 
@@ -19814,16 +20354,32 @@ def _backup_loop() -> None:
                 _notify_site_admins("system", "The database failed its start-up check", f"{detail}. Restore the newest good copy from /admin/backups (README 'Database backups').", "/admin/backups")
             else:
                 _prune_backups()
-                # a restart doesn't need a new copy when there is one from the last BACKUP_EVERY_HOURS
-                newest = next(iter(_backup_files()), None)
-                fresh = newest is not None and (time_module.time() - newest.stat().st_mtime) < BACKUP_EVERY_HOURS * 3600
-                if not fresh:
+                if _backup_is_due():
                     make_database_backup("startup")
     except Exception:
         logger.exception("Start-up database check failed")
+    # Nov 19 2026 (Dhruvika: "database is not getting backed up anymore"): it used to sleep 24 hours and then back
+    # up - Azure restarts the app (deploys, settings, idle) more often than that, so the timer started again every
+    # time and the daily backup could be put off again and again. Now it looks every hour and backs up when the
+    # newest copy is BACKUP_EVERY_HOURS old.
     while True:
-        time_module.sleep(BACKUP_EVERY_HOURS * 3600)
-        make_database_backup("scheduled")
+        time_module.sleep(BACKUP_CHECK_SECONDS)
+        try:
+            if _backup_is_due():
+                make_database_backup("scheduled")
+        except Exception:
+            logger.exception("Scheduled database backup failed")
+
+
+BACKUP_CHECK_SECONDS = 3600
+
+
+def _backup_is_due() -> bool:
+    """No backup yet, or the newest one is BACKUP_EVERY_HOURS old (a few minutes early is fine)."""
+    newest = next(iter(_backup_files()), None)
+    if newest is None:
+        return True
+    return (time_module.time() - newest.stat().st_mtime) >= BACKUP_EVERY_HOURS * 3600 - 600
 
 
 @app.get("/api/admin/backups")
@@ -19834,6 +20390,8 @@ def admin_backups(x_auth_token: str | None = Header(default=None)) -> dict[str, 
         "backups": _list_database_backups(),
         "backup_dir": str(BACKUP_DIR),
         "every_hours": BACKUP_EVERY_HOURS,
+        "last_try": _last_backup_try(),
+        "overdue": _backup_is_due(),
         "offsite": bool(str(os.getenv("CRICKETCLUBAPP_BACKUP_BLOB_SAS") or "").strip()),
         "live_database": {"healthy": healthy, "detail": detail, "bytes": DATABASE_FILE.stat().st_size if DATABASE_FILE.exists() else 0},
     }
@@ -19878,6 +20436,24 @@ def admin_backups_page(request: Request) -> Response:
         for item in _list_database_backups()
     ) or '<tr><td colspan="4">No backups yet.</td></tr>'
     offsite = "on (Azure Blob)" if str(os.getenv("CRICKETCLUBAPP_BACKUP_BLOB_SAS") or "").strip() else "not set up yet (CRICKETCLUBAPP_BACKUP_BLOB_SAS)"
+    last = _last_backup_try()
+    if last:
+        last_line = (
+            f'<p>Last try: {html.escape(str(last.get("at") or "")[:16].replace("T", " "))} UTC ({html.escape(str(last.get("reason") or ""))}) - '
+            + (f'<span class="ok">made {html.escape(str(last.get("file") or ""))}</span>' if last.get("ok") else f'<span class="bad">NOT made: {html.escape(str(last.get("error") or "unknown"))}</span>')
+            + "</p>"
+        )
+    else:
+        last_line = "<p>Last try: none recorded yet.</p>"
+    if _backup_is_due():
+        last_line += f'<p class="bad">⚠️ No backup in the last {BACKUP_EVERY_HOURS:g} hours. Tap "Back up now"; if it says the disk is full, free space in the Azure storage (Admin Center -> Scorecard Tools -> compress photos).</p>'
+    try:
+        import shutil as shutil_module
+
+        free_mb = shutil_module.disk_usage(BACKUP_DIR).free // (1024 * 1024)
+        last_line += f"<p>Free space where the backups are kept: {free_mb:,} MB.</p>"
+    except OSError:
+        pass
     page = f"""<!DOCTYPE html>
 <html lang="en"><head><meta charset="UTF-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Database backups</title>
@@ -19896,6 +20472,7 @@ button {{ min-height: 44px; padding: 0 16px; border-radius: 12px; border: 0; bac
 <p>Live database: <span class="{'ok' if healthy else 'bad'}">{'healthy' if healthy else 'DAMAGED: ' + html.escape(detail)}</span></p>
 <p>Automatic backups: once every {BACKUP_EVERY_HOURS:g} hours, each one checked and compressed (.db.gz). Kept: the last {BACKUP_KEEP_DAYS} days. To restore one: unzip the .db.gz (7-Zip on Windows) and put the .db in place of the live file while the app is stopped.</p>
 <p>Off-site copy: {html.escape(offsite)}</p>
+{last_line}
 <button type="button" id="backupNow">Back up now</button> <span id="backupMsg" role="status"></span>
 </section>
 <section class="card"><table><thead><tr><th>File</th><th>Made (UTC)</th><th>Size</th><th></th></tr></thead><tbody>{rows}</tbody></table></section>
@@ -19939,6 +20516,8 @@ API_GROUPS = [
     ("/api/admin/backups", "Admin: backups and database"),
     ("/api/admin/db", "Admin: backups and database"),
     ("/api/admin/whatsapp", "Admin: WhatsApp alerts"),
+    ("/api/admin/costs", "Admin: costs and AI accuracy"),
+    ("/api/admin/ai-accuracy", "Admin: costs and AI accuracy"),
     ("/api/admin", "Admin: other"),
     ("/api/scorecards", "Scorecards: upload, read with AI, edit, publish"),
     ("/api/archive", "Scorecards: upload, read with AI, edit, publish"),

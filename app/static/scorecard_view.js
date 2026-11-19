@@ -44,13 +44,23 @@
   // after the name: "Rohit (c)", "Pant (wk)", "Ravi (c & wk)", "Sam (vc)". row.tags come from the server for uploaded
   // and live-scored cards alike. Batter / bowler icons are not on scorecards (Cricbuzz has none there); they stay on
   // player lists (Admin Center -> People & roles).
-  const ROLE_ICONS = { Batter: "🏏", Bowler: "🎯", "All-rounder": "⚡", "Wicket keeper": "🧤" };
+  // Nov 17 2026 (Dhruvika: "change the icon of bowler, place a ball instead"): a red cricket ball for bowlers
+  const BALL_ICON = '<svg class="pm-ballicon" viewBox="0 0 16 16" width="1em" height="1em" aria-hidden="true"><circle cx="8" cy="8" r="7" fill="#c8102e"/><circle cx="6" cy="5.5" r="2" fill="#fff" opacity=".25"/><path d="M5.2 1.6c1.6 3.9 1.6 8.9 0 12.8M10.8 1.6c-1.6 3.9-1.6 8.9 0 12.8" fill="none" stroke="#fff" stroke-width=".9" stroke-dasharray="1.1 1"/></svg>';
+  const ROLE_ICONS = { Batter: "🏏", Bowler: BALL_ICON, "All-rounder": "⚡", "Wicket keeper": "🧤" };
   const TAG_NAMES = { C: "Captain", VC: "Vice-captain", WK: "Wicket keeper" };
+  // Nov 17 2026 (Dhruvika: "Put icons for batter wkeeper and bowler"): after the (c) / (vc) / (wk) text, one icon -
+  // 🧤 for the keeper of this match (or a keeper by profile), else the player's role: 🏏 batter, red ball = bowler,
+  // ⚡ all-rounder (his profile, else his career figures, else what he did in this match).
+  const ROLE_SOURCE = { profile: "", career: " (from his figures)", match: " (in this match)" };
   function roleBadges(row = {}) {
     const tags = (Array.isArray(row.tags) ? row.tags : []).filter((tag) => TAG_NAMES[tag]);
-    if (!tags.length) return "";
     const text = tags.map((tag) => tag.toLowerCase()).join(" & ");
-    return ` <span class="pm-cap" title="${escapeHtml(tags.map((tag) => TAG_NAMES[tag]).join(", "))}">(${escapeHtml(text)})</span>`;
+    const tagHtml = tags.length ? ` <span class="pm-cap" title="${escapeHtml(tags.map((tag) => TAG_NAMES[tag]).join(", "))}">(${escapeHtml(text)})</span>` : "";
+    const role = tags.includes("WK") ? "Wicket keeper" : row.playing_role;
+    const icon = ROLE_ICONS[role]
+      ? ` <span class="pm-role" title="${escapeHtml(role)}${tags.includes("WK") ? "" : escapeHtml(ROLE_SOURCE[row.role_source] || "")}" aria-label="${escapeHtml(role)}">${ROLE_ICONS[role]}</span>`
+      : "";
+    return tagHtml + icon;
   }
 
   function ballSplit(row, fields) {
@@ -109,7 +119,7 @@
       .map(
         (b) => `<tr>
           <th scope="row">${nameHtml(b.name, b.player_key, roleBadges(b))}${ballSplit(b, [["dots", "Dots"], ["fours", "4s"], ["sixes", "6s"]])}${Array.isArray(b.over_runs) && b.over_runs.length ? `<small class="pm-split">Runs per over: ${b.over_runs.map((value) => escapeHtml(value)).join(" · ")}</small>` : ""}</th>
-          <td class="pm-c">${num(b.overs)}</td><td class="pm-c">${num(b.maidens)}</td><td class="pm-c">${num(b.runs)}</td><td class="pm-c pm-r">${num(b.wickets)}</td><td class="pm-c">${num(b.no_balls)}</td><td class="pm-c">${num(b.wides)}</td><td class="pm-c">${num(b.economy)}</td></tr>`
+          <td class="pm-c"${b.overs_approximate ? ' title="Approximate - shared out from the innings overs"' : ""}>${b.overs_approximate ? "≈" : ""}${num(b.overs)}</td><td class="pm-c">${num(b.maidens)}</td><td class="pm-c"${b.runs_approximate ? ' title="Approximate - shared out from the innings total"' : ""}>${b.runs_approximate ? "≈" : ""}${num(b.runs)}</td><td class="pm-c pm-r">${num(b.wickets)}</td><td class="pm-c">${num(b.no_balls)}</td><td class="pm-c">${num(b.wides)}</td><td class="pm-c">${num(b.economy)}</td></tr>`
       )
       .join("");
     return `

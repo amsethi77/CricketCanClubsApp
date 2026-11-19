@@ -1666,3 +1666,17 @@
     white-space: normal;
   }
 }
+
+/* bowler icon: a red cricket ball (Nov 17 2026) */
+svg.pm-ballicon {
+  display: inline-block;
+  width: 1.3em !important;
+  height: 1.3em !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  border: 0 !important;
+  border-radius: 50% !important;
+  background: none !important;
+  box-shadow: none !important;
+  vertical-align: -0.28em;
+}

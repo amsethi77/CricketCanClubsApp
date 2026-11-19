@@ -1234,3 +1234,4 @@ body.scorecard-detail-page .sc-header h1.sc-title {
   margin: 0;
   color: #333;
 }
+.sc-app .sc-pdf-row { margin: 16px 0 4px; text-align: center; }

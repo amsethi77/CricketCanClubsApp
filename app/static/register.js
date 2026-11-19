@@ -39,6 +39,43 @@ document.addEventListener("DOMContentLoaded", () => {
     statusBanner.hidden = !show;
     statusBanner.textContent = show ? message : "";
     statusBanner.className = `status-banner ${tone}`;
+    // Nov 17 2026 (Amit: "right now it doesn't tell anything"): the message is at the top of the form - bring it
+    // into view so the person sees what went wrong
+    if (show) statusBanner.scrollIntoView({ behavior: "smooth", block: "center" });
+  }
+
+  // Nov 17 2026 (Amit: "when they register, we should show them some message ... for a few seconds. If he presses
+  // okay, okay. If he doesn't, then it should go away ... and route him to the login page"): a short "You're
+  // registered" box, then the Sign in page with the mobile / email filled in. The person is NOT signed in here.
+  function showRegisteredBox(name, identifier) {
+    const goSignIn = () => {
+      window.location.href = `/signin?registered=1${identifier ? `&id=${encodeURIComponent(identifier)}` : ""}`;
+    };
+    const box = document.createElement("div");
+    box.setAttribute("role", "alertdialog");
+    box.setAttribute("aria-modal", "true");
+    box.style.cssText = "position:fixed;inset:0;z-index:5000;display:grid;place-items:center;background:rgba(15,23,42,.45);padding:16px";
+    box.innerHTML = `
+      <div style="max-width:380px;width:100%;background:#fff;border-radius:16px;padding:22px;text-align:center;box-shadow:0 20px 50px rgba(15,23,42,.3);font-family:inherit">
+        <div style="font-size:40px;line-height:1">✅</div>
+        <h2 style="margin:10px 0 6px;font-size:1.25rem;color:#0f172a">You're registered${name ? `, ${String(name).replace(/[<>&"]/g, "")}` : ""}!</h2>
+        <p style="margin:0 0 16px;color:#475569">Sign in with your ${identifier && identifier.includes("@") ? "email" : "mobile number"} and password to continue.</p>
+        <button type="button" class="primary-button" data-ok style="min-width:140px">OK, sign in</button>
+        <p style="margin:12px 0 0;font-size:.8rem;color:#94a3b8">Taking you to Sign in in <span data-left>5</span> s…</p>
+      </div>`;
+    document.body.appendChild(box);
+    box.querySelector("[data-ok]").addEventListener("click", goSignIn);
+    box.querySelector("[data-ok]").focus();
+    let left = 5;
+    const timer = setInterval(() => {
+      left -= 1;
+      const el = box.querySelector("[data-left]");
+      if (el) el.textContent = String(left);
+      if (left <= 0) {
+        clearInterval(timer);
+        goSignIn();
+      }
+    }, 1000);
   }
 
   function syncRoleVisibility() {
@@ -178,27 +215,36 @@ document.addEventListener("DOMContentLoaded", () => {
       return;
     }
 
+    const submitButton = form.querySelector('button[type="submit"], input[type="submit"]');
+    const submitText = submitButton ? submitButton.textContent : "";
     try {
-      setStatus("Registering...", "info");
+      setStatus("", "info");
+      if (submitButton) {
+        submitButton.disabled = true;
+        submitButton.textContent = "Registering…";
+      }
 
       const data = await postJson("/api/auth/register", payload);
 
       console.log("✅ Registration response:", data);
 
-      setStatus("✅ Registration successful! Redirecting...", "success");
-
-      setAuthToken(data.token);
-      setPrimaryClubId(
-        data.user?.current_club_id ||
-        data.user?.primary_club_id ||
-        ""
-      );
-
-      setTimeout(() => {
-        window.location.href = "/clubs";
-      }, 1200);
+      // The server opens a session on register; close it so the person signs in first (and a token from an earlier
+      // person on this phone isn't left behind).
+      try {
+        window.localStorage.removeItem("cricketClubAppAuthToken");
+      } catch (storageError) {
+        /* private mode */
+      }
+      if (data && data.token) {
+        await fetch("/api/auth/signout", { method: "POST", headers: { "X-Auth-Token": data.token }, credentials: "same-origin" }).catch(() => null);
+      }
+      showRegisteredBox(payload.display_name, payload.mobile || payload.email);
 
     } catch (error) {
+      if (submitButton) {
+        submitButton.disabled = false;
+        submitButton.textContent = submitText;
+      }
       console.error("❌ Registration failed:", error);
 
       const msg =

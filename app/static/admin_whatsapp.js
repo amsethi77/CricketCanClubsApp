@@ -32,6 +32,10 @@
 
   function render(data) {
     const tick = (ok) => (ok ? '<span class="done">✅</span>' : "⬜");
+    // Nov 17 2026: test mode - only WHATSAPP_TEST_NUMBERS get alerts until WHATSAPP_LIVE=true
+    const mode = data.live
+      ? '<div class="awa-status is-off">⚠️ LIVE: alerts go to every player of the club (WHATSAPP_LIVE=true)</div>'
+      : `<div class="awa-status is-on">🧪 Test mode: alerts go only to ${data.test_numbers && data.test_numbers.length ? data.test_numbers.map(esc).join(", ") : "nobody yet"} <small>· set WHATSAPP_TEST_NUMBERS in Azure (e.g. 4165550123,6475550199); everyone else is skipped until WHATSAPP_LIVE=true</small></div>`;
     const status = data.configured
       ? `<div class="awa-status is-on">✅ WhatsApp is switched on <small>· last 7 days: ${data.last_7_days.sent} sent, ${data.last_7_days.failed} failed</small></div>`
       : '<div class="awa-status is-off">⏸️ WhatsApp is built but switched off <small>· the app only shows the bell alerts until the steps below are done</small></div>';
@@ -51,6 +55,7 @@
       .join("");
     root.innerHTML = `
       ${status}
+      ${mode}
       <h3>Setup (done once, by the superadmin)</h3>
       ${steps}
       <h3>The 4 message templates</h3>

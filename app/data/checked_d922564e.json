@@ -1,0 +1,389 @@
+{
+ "meta": {
+  "source": "manual-entry",
+  "confidence": "Typed in",
+  "status": "template",
+  "processed_by": "Checked from the photo by Claude, Nov 11 2026 (batting ball by ball; bowling runs only where every over is written)"
+ },
+ "match": {
+  "match_type": "club",
+  "date": "2024-08-25",
+  "venue": null,
+  "teams": {
+   "team_1": "Imrans XI",
+   "team_2": "Heartlake Cricket Club"
+  },
+  "overs_limit": 30,
+  "toss": {
+   "winner": "Heartlake Cricket Club"
+  },
+  "result": "Heartlake Cricket Club won by 27 runs",
+  "captains": {
+   "team_1": null,
+   "team_2": null
+  },
+  "man_of_match": null
+ },
+ "innings": [
+  {
+   "inning_number": 2,
+   "batting_team": "Imrans XI",
+   "bowling_team": "Heartlake Cricket Club",
+   "summary": {
+    "runs": 145,
+    "wickets": 8,
+    "overs": 30,
+    "balls": null
+   },
+   "batting": [
+    {
+     "player": {
+      "name": "RAFAEY",
+      "normalized_name": "rafaey"
+     },
+     "runs": 0,
+     "balls": 7,
+     "fours": 0,
+     "sixes": 0,
+     "dismissal": {
+      "type": "bowled",
+      "fielder": null,
+      "bowler": null,
+      "written_as": "W"
+     },
+     "ball_runs_sum": 0,
+     "ball_count": 7,
+     "unsure": false,
+     "ones": 0,
+     "twos": 0,
+     "threes": 0,
+     "dots": 6,
+     "ball_by_ball": ". . . . . . W"
+    },
+    {
+     "player": {
+      "name": "RAJ",
+      "normalized_name": "raj"
+     },
+     "runs": 30,
+     "balls": 34,
+     "fours": 2,
+     "sixes": 1,
+     "dismissal": {
+      "type": "bowled",
+      "fielder": null,
+      "bowler": null,
+      "written_as": "W"
+     },
+     "ball_runs_sum": 30,
+     "ball_count": 34,
+     "unsure": false,
+     "ones": 9,
+     "twos": 2,
+     "threes": 1,
+     "dots": 18,
+     "ball_by_ball": "4 . . 1 . . . . 1 1 1 . 4 1 . . 1 . . 1 1 6 . 2 . . 3 . 1 . 2 . . W"
+    },
+    {
+     "player": {
+      "name": "HAMZA",
+      "normalized_name": "hamza"
+     },
+     "runs": 19,
+     "balls": 38,
+     "fours": 1,
+     "sixes": 0,
+     "dismissal": {
+      "type": "bowled",
+      "fielder": null,
+      "bowler": null,
+      "written_as": "W"
+     },
+     "ball_runs_sum": 19,
+     "ball_count": 38,
+     "unsure": false,
+     "ones": 5,
+     "twos": 5,
+     "threes": 0,
+     "dots": 26,
+     "ball_by_ball": ". . . . 2 1 . . . . . 2 . 1 . 1 . . . . . 2 2 . 2 . . 4 1 . . . . . . 1 . W"
+    },
+    {
+     "player": {
+      "name": "Rohail",
+      "normalized_name": "rohail"
+     },
+     "runs": 16,
+     "balls": 9,
+     "fours": 3,
+     "sixes": 0,
+     "dismissal": {
+      "type": "retired hurt",
+      "fielder": null,
+      "bowler": null,
+      "written_as": "Retd hurt"
+     },
+     "ball_runs_sum": 16,
+     "ball_count": 9,
+     "unsure": false,
+     "ones": 2,
+     "twos": 1,
+     "threes": 0,
+     "dots": 3,
+     "ball_by_ball": ". . 2 . 4 1 1 4 4"
+    },
+    {
+     "player": {
+      "name": "Umer",
+      "normalized_name": "umer"
+     },
+     "runs": 1,
+     "balls": 5,
+     "fours": 0,
+     "sixes": 0,
+     "dismissal": {
+      "type": "bowled",
+      "fielder": null,
+      "bowler": null,
+      "written_as": "W"
+     },
+     "ball_runs_sum": 1,
+     "ball_count": 5,
+     "unsure": false,
+     "ones": 1,
+     "twos": 0,
+     "threes": 0,
+     "dots": 3,
+     "ball_by_ball": ". . 1 . W"
+    },
+    {
+     "player": {
+      "name": "Ali",
+      "normalized_name": "ali"
+     },
+     "runs": 1,
+     "balls": 5,
+     "fours": 0,
+     "sixes": 0,
+     "dismissal": {
+      "type": "bowled",
+      "fielder": null,
+      "bowler": null,
+      "written_as": "W"
+     },
+     "ball_runs_sum": 1,
+     "ball_count": 5,
+     "unsure": false,
+     "ones": 1,
+     "twos": 0,
+     "threes": 0,
+     "dots": 3,
+     "ball_by_ball": ". . . 1 W"
+    },
+    {
+     "player": {
+      "name": "Farhan",
+      "normalized_name": "farhan"
+     },
+     "runs": 23,
+     "balls": 29,
+     "fours": 3,
+     "sixes": 0,
+     "dismissal": {
+      "type": "not out",
+      "fielder": null,
+      "bowler": null,
+      "written_as": "(no out written)"
+     },
+     "ball_runs_sum": 23,
+     "ball_count": 29,
+     "unsure": false,
+     "ones": 11,
+     "twos": 0,
+     "threes": 0,
+     "dots": 15,
+     "ball_by_ball": ". . . . . . . 1 . . 1 1 . . 4 . 1 . . 1 1 4 4 1 1 . 1 1 1"
+    },
+    {
+     "player": {
+      "name": "Imran",
+      "normalized_name": "imran"
+     },
+     "runs": 3,
+     "balls": 3,
+     "fours": 0,
+     "sixes": 0,
+     "dismissal": {
+      "type": "out",
+      "fielder": null,
+      "bowler": null,
+      "written_as": "out"
+     },
+     "ball_runs_sum": 3,
+     "ball_count": 3,
+     "unsure": false,
+     "ones": 1,
+     "twos": 1,
+     "threes": 0,
+     "dots": 1,
+     "ball_by_ball": "1 . 2"
+    },
+    {
+     "player": {
+      "name": "Parbahjee",
+      "normalized_name": "parbahjee"
+     },
+     "runs": 4,
+     "balls": 10,
+     "fours": 0,
+     "sixes": 0,
+     "dismissal": {
+      "type": "out",
+      "fielder": null,
+      "bowler": null,
+      "written_as": "out"
+     },
+     "ball_runs_sum": 4,
+     "ball_count": 10,
+     "unsure": false,
+     "ones": 4,
+     "twos": 0,
+     "threes": 0,
+     "dots": 6,
+     "ball_by_ball": ". . . . . 1 1 1 . 1"
+    },
+    {
+     "player": {
+      "name": "Haris",
+      "normalized_name": "haris"
+     },
+     "runs": 27,
+     "balls": 14,
+     "fours": 2,
+     "sixes": 2,
+     "dismissal": {
+      "type": "out",
+      "fielder": null,
+      "bowler": null,
+      "written_as": "out"
+     },
+     "ball_runs_sum": 27,
+     "ball_count": 14,
+     "unsure": false,
+     "ones": 7,
+     "twos": 0,
+     "threes": 0,
+     "dots": 3,
+     "ball_by_ball": "1 . 4 1 . 1 1 1 6 . 4 6 1 1"
+    },
+    {
+     "player": {
+      "name": "Anisullah",
+      "normalized_name": "anisullah"
+     },
+     "runs": null,
+     "balls": null,
+     "fours": null,
+     "sixes": null,
+     "dismissal": {
+      "type": "did not bat",
+      "fielder": null,
+      "bowler": null,
+      "written_as": ""
+     },
+     "ball_runs_sum": 0,
+     "ball_count": 0,
+     "unsure": false
+    }
+   ],
+   "bowling": [
+    {
+     "player": {
+      "name": "AMIT",
+      "normalized_name": "amit"
+     },
+     "overs": 4,
+     "maidens": null,
+     "runs_conceded": null,
+     "wickets": 2
+    },
+    {
+     "player": {
+      "name": "SAM",
+      "normalized_name": "sam"
+     },
+     "overs": 5,
+     "maidens": 0,
+     "runs_conceded": 32,
+     "wickets": 0
+    },
+    {
+     "player": {
+      "name": "Chuck",
+      "normalized_name": "chuck"
+     },
+     "overs": 5,
+     "maidens": 0,
+     "runs_conceded": 18,
+     "wickets": 2
+    },
+    {
+     "player": {
+      "name": "ALI",
+      "normalized_name": "ali"
+     },
+     "overs": 5,
+     "maidens": 1,
+     "runs_conceded": null,
+     "wickets": 1
+    },
+    {
+     "player": {
+      "name": "REYAAN",
+      "normalized_name": "reyaan"
+     },
+     "overs": 4,
+     "maidens": null,
+     "runs_conceded": null,
+     "wickets": 2
+    },
+    {
+     "player": {
+      "name": "RAVI",
+      "normalized_name": "ravi"
+     },
+     "overs": 4,
+     "maidens": null,
+     "runs_conceded": null,
+     "wickets": 0
+    },
+    {
+     "player": {
+      "name": "ABC",
+      "normalized_name": "abc"
+     },
+     "overs": 3,
+     "maidens": null,
+     "runs_conceded": null,
+     "wickets": 0
+    }
+   ],
+   "extras": {
+    "wides": 18,
+    "no_balls": 0,
+    "byes": 0,
+    "leg_byes": 3,
+    "penalties": null,
+    "total": 21,
+    "written_as": "LEG BYES 2 and 1, WIDES 18 strokes",
+    "unsure": false
+   }
+  }
+ ],
+ "validation": {
+  "inning_1_total": 145,
+  "inning_2_total": null,
+  "expected_result": "Heartlake Cricket Club won by 27 runs",
+  "notes": "Batters 124 + extras 21 (leg byes 3, wides 18) = 145. Imrans XI 2nd innings (circled 2nd), 30 overs. HOW OUT / BOWLER columns are empty on the card."
+ }
+}

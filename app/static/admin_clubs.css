@@ -826,3 +826,11 @@
   overflow-y: auto;
   padding-right: 2px;
 }
+
+.acp-avatar svg.pm-ballicon {
+  width: 18px !important;
+  height: 18px !important;
+  padding: 0 !important;
+  border: 0 !important;
+  background: none !important;
+}

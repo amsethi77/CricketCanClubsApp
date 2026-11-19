@@ -116,7 +116,9 @@
   // admins see their club data and super admin can see everyone's and then both should be allowed to change the
   // player role") ----------
   const people = {};
-  const ROLE_ICONS = { Batter: "🏏", Bowler: "🎯", "All-rounder": "⚡", "Wicket keeper": "🧤" };
+  // Nov 17 2026 (Dhruvika: "change the icon of bowler, place a ball instead"): a red cricket ball for bowlers
+  const BALL_ICON = '<svg class="pm-ballicon" viewBox="0 0 16 16" width="1em" height="1em" aria-hidden="true"><circle cx="8" cy="8" r="7" fill="#c8102e"/><circle cx="6" cy="5.5" r="2" fill="#fff" opacity=".25"/><path d="M5.2 1.6c1.6 3.9 1.6 8.9 0 12.8M10.8 1.6c-1.6 3.9-1.6 8.9 0 12.8" fill="none" stroke="#fff" stroke-width=".9" stroke-dasharray="1.1 1"/></svg>';
+  const ROLE_ICONS = { Batter: "🏏", Bowler: BALL_ICON, "All-rounder": "⚡", "Wicket keeper": "🧤" };
   const CLUB_ROLE_LABEL = { club_admin: "Club admin", captain: "Captain", player: "Player" };
 
   let peopleClub = "";
@@ -158,7 +160,7 @@
     const playing = person.member_id
       ? `<select data-playing-role="${esc(person.member_id)}" aria-label="Playing role of ${esc(person.name)}">
           <option value="">${person.playing_role_guess ? `Not set (looks like ${esc(person.playing_role_guess)})` : "Not set"}</option>
-          ${data.playing_roles.map((r) => `<option value="${esc(r)}"${r === person.playing_role ? " selected" : ""}>${ROLE_ICONS[r] || ""} ${esc(r)}</option>`).join("")}
+          ${data.playing_roles.map((r) => `<option value="${esc(r)}"${r === person.playing_role ? " selected" : ""}>${r === "Bowler" ? "🔴" : ROLE_ICONS[r] || ""} ${esc(r)}</option>`).join("")}
         </select>`
       : "";
     return `<div class="acp-row is-${person.club_role}" data-person="${esc(person.name.toLowerCase())}">
@@ -182,7 +184,7 @@
         <button class="acm-btn is-ghost acp-close" type="button" data-people="${esc(clubId)}" aria-label="Close people and roles">✕ Close</button>
         <div class="acp-counts"><span><b>${data.counts.club_admins}</b> club admin${data.counts.club_admins === 1 ? "" : "s"}</span><span><b>${data.counts.captains}</b> captain${data.counts.captains === 1 ? "" : "s"}</span><span><b>${data.counts.players}</b> people</span></div>
       </div>
-      <p class="acm-help">Club role: what someone can do for the club (captains score and fix scorecards, club admins also manage the club). Playing role: the icon next to his name on scorecards (🏏 batter, 🎯 bowler, ⚡ all-rounder, 🧤 keeper). Changes save straight away.</p>
+      <p class="acm-help">Club role: what someone can do for the club (captains score and fix scorecards, club admins also manage the club). Playing role: the icon next to his name on scorecards (🏏 batter, red ball = bowler, ⚡ all-rounder, 🧤 keeper). Changes save straight away.</p>
       <h4 class="acp-sub">Club admins and captains</h4>
       <div class="acp-list">${leaders.map((p) => personRow(clubId, p, data)).join("") || '<p class="acm-empty">No club admin or captain yet - pick one below.</p>'}</div>
       <h4 class="acp-sub">Players <input class="acm-search acp-search" type="search" placeholder="Find a player..." aria-label="Find a player" /></h4>

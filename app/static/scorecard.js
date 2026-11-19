@@ -142,6 +142,7 @@
       }
       ${window.CricketClubAppScorecardView.inningsSections(sc)}
       ${matchInfo(sc)}
+      ${preview || !sc.id ? "" : `<p class="sc-pdf-row"><a class="pm-download" href="/api/public/scorecards/${encodeURIComponent(sc.id)}/scorecard.pdf" download>⬇️ Download PDF scorecard</a></p>`}
     `;
   }
 
@@ -566,16 +567,26 @@
       const after = input.value.trim();
       input.dataset.prev = after;
       if (!before || !after || before.toLowerCase() === after.toLowerCase()) return;
+      // Nov 17 2026 (Amit: "it should only change to the same club where I have changed it"): only the places of the
+      // SAME side change - its batters in the innings it batted, its bowlers and the bowler in How out in the innings
+      // it fielded. Rafa of the other team keeps his name. Exact same name only (Rafa never changes Rafael).
+      const sideOf = (field) => {
+        const box = field.closest("[data-innings]");
+        const index = box ? Number(box.dataset.innings) : 0;
+        const inBatting = Boolean(field.closest('[data-rows="bat"]')) && field.matches('[data-f="name"]');
+        return inBatting ? index : 1 - index;
+      };
+      const side = sideOf(input);
       let changed = 0;
       editor.querySelectorAll(nameFields).forEach((other) => {
-        if (other !== input && other.value.trim().toLowerCase() === before.toLowerCase()) {
+        if (other !== input && sideOf(other) === side && other.value.trim().toLowerCase() === before.toLowerCase()) {
           other.value = after;
           other.dataset.prev = after;
           changed += 1;
         }
       });
       const msg = editor.querySelector("[data-sce-msg]");
-      if (msg && changed) msg.textContent = `'${before}' was also changed to '${after}' in ${changed} other place${changed === 1 ? "" : "s"} on this card.`;
+      if (msg && changed) msg.textContent = `'${before}' was also changed to '${after}' in ${changed} other place${changed === 1 ? "" : "s"} of the same team on this card.`;
     });
   }
 

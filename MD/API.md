@@ -117,11 +117,20 @@ Paths starting `/api/public/` need no sign-in. `/api/admin/...` needs a club adm
 | GET | `/api/admin/db/export` | Export Database |
 | POST | `/api/admin/db/import` | Import Database |
 
-### Admin: WhatsApp alerts (1)
+### Admin: WhatsApp alerts (2)
 
 | Method | Path | What it does |
 | --- | --- | --- |
 | GET | `/api/admin/whatsapp` | Admin Whatsapp Status |
+| POST | `/api/admin/whatsapp/test` | Send one WhatsApp now to check the setup: Meta's ready-made "hello_world" (works as soon as the token and number |
+
+### Admin: costs and AI accuracy (3)
+
+| Method | Path | What it does |
+| --- | --- | --- |
+| GET | `/api/admin/ai-accuracy` | Superadmin: how often the AI reader was right, overall, by kind of field, by month and per card. |
+| GET | `/api/admin/costs` | Superadmin: this month's (or ?month=YYYY-MM) AI calls, WhatsApp messages and estimated cost, plus the last 6 |
+| POST | `/api/admin/costs/rates` | Superadmin: save the prices the cost estimate uses (from the Google, Meta and Azure bills). |
 
 ### Admin: other (5)
 
@@ -158,12 +167,13 @@ Paths starting `/api/public/` need no sign-in. `/api/admin/...` needs a club adm
 | POST | `/api/scorecards/{upload_id}/report` | "Something's wrong": send the upload to the site admins with a note, and tell the club's players. |
 | POST | `/api/scorecards/{upload_id}/second-photo` | Amit, Nov 2 2026: a scorecard photographed on two pages. When the upload has only one innings, the uploader, |
 
-### Scorecards: view (2)
+### Scorecards: view (3)
 
 | Method | Path | What it does |
 | --- | --- | --- |
 | GET | `/api/public/scorecards` | Approved scorecards; signed-in users are scoped to their club except superadmins. |
 | GET | `/api/public/scorecards/{scorecard_id}` | Public Scorecard Detail |
+| GET | `/api/public/scorecards/{scorecard_id}/scorecard.pdf` | Nov 17 2026 (Amit: "we should have a PDF also to download ... for both uploaded as well as for online games"): |
 
 ### Matches and live scoring (26)
 
@@ -318,4 +328,4 @@ Paths starting `/api/public/` need no sign-in. `/api/admin/...` needs a club adm
 | GET | `/api/tour` | Tour Status |
 | POST | `/api/tour/seen` | Tour Seen |
 
-173 APIs.
+178 APIs.
