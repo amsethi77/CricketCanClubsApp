@@ -222,6 +222,8 @@ except ModuleNotFoundError:
     from app import ai_scorer
     from app import scorecard_checks
     from app import ai_vision
+    from app import usage_meter  # Nov 20 2026: was missing here - Azure starts the app as app.main and it crashed
+    from app import ai_accuracy
     from app import ai_chat
     from app.llm_service import clear_query_cache, infer as llm_infer, list_llm_documents, list_prompt_manifest, reindex_llm_corpus
     from app.player_merge import MergeError, choose_survivor, merge_members_in_store
@@ -7718,7 +7720,7 @@ def _admin_center_html(request: Request) -> HTMLResponse:
         <link rel="stylesheet" href="/assets/sports-system.css?v=20260926a" />
         <link rel="stylesheet" href="/assets/scorecards.css?v=20261117s" />
         <link rel="stylesheet" href="/assets/admin_clubs.css?v=20261117m" />
-        <link rel="stylesheet" href="/assets/admin_center.css?v=20261118b" />
+        <link rel="stylesheet" href="/assets/admin_center.css?v=20261120a" />
       </head>
       <body class="acx-page">
         <div class="page-shell">
@@ -7751,8 +7753,6 @@ def _admin_center_html(request: Request) -> HTMLResponse:
                 <button class="secondary-button" type="button" role="tab" aria-selected="false" aria-controls="adminSectionAudit" data-admin-section="audit">Audit Log</button>
                 <button class="secondary-button" type="button" role="tab" aria-selected="false" aria-controls="adminSectionFixtures" data-admin-section="fixtures">Fixtures</button>
                 <button class="secondary-button" type="button" role="tab" aria-selected="false" aria-controls="adminSectionWhatsApp" data-admin-section="whatsapp">WhatsApp alerts</button>
-                <button class="secondary-button" type="button" role="tab" aria-selected="false" aria-controls="adminSectionCosts" data-admin-section="costs">Costs</button>
-                <button class="secondary-button" type="button" role="tab" aria-selected="false" aria-controls="adminSectionAiAccuracy" data-admin-section="ai-accuracy">AI accuracy</button>
               </nav>
               <section class="admin-section" id="adminSectionClubs" data-admin-section-panel="clubs" role="tabpanel" hidden>
                 <div id="clubManager" class="acm" data-superadmin="1"><p class="acm-empty">Loading clubs...</p></div>
@@ -7915,22 +7915,6 @@ def _admin_center_html(request: Request) -> HTMLResponse:
                   <div id="adminWhatsApp" class="awa"><p class="empty-state">Checking WhatsApp...</p></div>
                 </div>
               </section>
-              <section class="admin-section" id="adminSectionCosts" data-admin-section-panel="costs" role="tabpanel" hidden>
-                <div class="stack-card">
-                  <p class="section-kicker">Costs</p>
-                  <h2>What the app costs to run</h2>
-                  <p class="lede">The app counts every AI call (Gemini) and every WhatsApp message it sends. Type in the prices from the Google, Meta and Azure bills and it shows an estimate per month. The bills themselves are the real numbers.</p>
-                  <div id="adminCosts" class="aco"><p class="empty-state">Adding up the costs...</p></div>
-                </div>
-              </section>
-              <section class="admin-section" id="adminSectionAiAccuracy" data-admin-section-panel="ai-accuracy" role="tabpanel" hidden>
-                <div class="stack-card">
-                  <p class="section-kicker">AI accuracy</p>
-                  <h2>How often is the AI reader right?</h2>
-                  <p class="lede">Every scorecard a person fixed after the AI read it is compared, field by field, with what the AI read: names, runs, balls, 4s, 6s, overs, wickets, totals. The AI learns from every fix (names and worked examples), so this % should go up over the months.</p>
-                  <div id="adminAiAccuracy" class="aac"><p class="empty-state">Comparing the AI's readings with the fixed cards...</p></div>
-                </div>
-              </section>
             </div>
           </section>
         </div>
@@ -7939,8 +7923,6 @@ def _admin_center_html(request: Request) -> HTMLResponse:
         <script src="/assets/scorecard.js?v=20261117s"></script>
         <script src="/assets/admin_center.js?v=20261119b"></script>
         <script src="/assets/admin_whatsapp.js?v=20261117b"></script>
-        <script src="/assets/admin_costs.js?v=20261118a"></script>
-        <script src="/assets/admin_ai_accuracy.js?v=20261118a"></script>
         <script src="/assets/admin_reread.js?v=20261024a"></script>
         <script src="/assets/admin_clubs.js?v=20261117m"></script>
         <script src="/assets/admin_photos.js?v=20261119b"></script>
@@ -7969,7 +7951,7 @@ def _club_admin_center_html() -> HTMLResponse:
     <link rel="stylesheet" href="/assets/app_polish.css?v=20261006a" />
     <link rel="stylesheet" href="/assets/sports-system.css?v=20260926a" />
     <link rel="stylesheet" href="/assets/admin_clubs.css?v=20261117m" />
-    <link rel="stylesheet" href="/assets/admin_center.css?v=20261118b" />
+    <link rel="stylesheet" href="/assets/admin_center.css?v=20261120a" />
   </head>
   <body class="acx-page">
     <div class="page-shell">
@@ -14132,217 +14114,11 @@ def admin_whatsapp_test(request: WhatsAppTestRequest, x_auth_token: str | None =
 
 
 # ---------------------------------------------------------------------------
-# Admin Center -> "AI accuracy" (Nov 18 2026, Amit: "accuracy is 60-70%, it should keep learning and be 90%+").
-# Every card a person fixed after the AI read it is compared field by field with the AI's own reading (ai_accuracy.py)
-# - no AI call, so it costs nothing. README "AI accuracy (Admin Center)".
+# Nov 20 2026 (Dhruvika: "remove the cost and ai accuracy mode from the site, that is for my info only"): the Admin
+# Center tabs Costs and AI accuracy and their APIs are gone. The app still counts AI calls (usage_meter.py, table
+# app_ai_usage) and keeps the AI's own reading of fixed cards (ai_read_json); the report is made on a computer with
+# python scripts\costs_and_accuracy.py (README "Costs and AI accuracy report").
 # ---------------------------------------------------------------------------
-@app.get("/api/admin/ai-accuracy")
-def admin_ai_accuracy(x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
-    """Superadmin: how often the AI reader was right, overall, by kind of field, by month and per card."""
-    _require_superadmin(x_auth_token)
-    store = load_store()
-    total = ai_accuracy.Score()
-    months: dict[str, ai_accuracy.Score] = {}
-    month_cards: dict[str, int] = {}
-    cards: list[dict[str, Any]] = []
-    as_read = 0
-    for upload in canonical_archive_uploads(store.get("archive_uploads", []) or []):
-        read = ai_accuracy.ai_reading(upload)
-        if not read:
-            continue
-        truth = _scorecard_pick_template(upload) or {}
-        meta = truth.get("meta") if isinstance(truth.get("meta"), dict) else {}
-        if str(meta.get("source") or "") not in {"manual-entry", "manual-import", "checked-example"} or not ai_vision._template_adds_up(truth):
-            if str(upload.get("status") or "").lower() == "approved":
-                as_read += 1  # published as the AI read it (not checked line by line, so not counted)
-            continue
-        score = ai_accuracy.compare(truth, read)
-        if not score.checked:
-            continue
-        total.merge(score)
-        month = str(upload.get("created_at") or upload.get("ocr_processed_at") or "")[:7] or "?"
-        months.setdefault(month, ai_accuracy.Score()).merge(score)
-        month_cards[month] = month_cards.get(month, 0) + 1
-        card = _scorecard_from_archive(upload)
-        read_meta = read.get("meta") if isinstance(read.get("meta"), dict) else {}
-        cards.append(
-            {
-                "id": str(upload.get("id") or ""),
-                "title": str(card.get("title") or upload.get("original_file_name") or upload.get("id") or ""),
-                "date": str(card.get("date") or upload.get("archive_date") or ""),
-                "model": str(read_meta.get("source") or "").removeprefix("ai:") or str(upload.get("ocr_engine") or "").removeprefix("ai:"),
-                "right": score.right,
-                "checked": score.checked,
-                "percent": round(100 * score.right / score.checked, 1),
-                "misses": score.misses[:10],
-                "more_misses": max(0, len(score.misses) - 10),
-            }
-        )
-    cards.sort(key=lambda item: item["date"], reverse=True)
-    with _auth_connection() as connection:
-        _ai_corrections_table(connection)
-        names_learned = int(connection.execute("SELECT COUNT(*) FROM app_ai_corrections").fetchone()[0])
-    try:
-        examples = len(ai_vision._learned_examples())
-    except Exception:
-        examples = 0
-    return {
-        "target": 90,
-        "overall": {"right": total.right, "checked": total.checked, "percent": round(100 * total.right / total.checked, 1) if total.checked else None, "cards": len(cards)},
-        "groups": ai_accuracy.group_scores(total.fields),
-        "fields": ai_accuracy.field_scores(total.fields),
-        "months": [
-            {"month": month, "cards": month_cards[month], "right": score.right, "checked": score.checked, "percent": round(100 * score.right / score.checked, 1)}
-            for month, score in sorted(months.items())
-        ],
-        "cards": cards[:40],
-        "published_as_read": as_read,
-        "learned": {"names": names_learned, "examples": examples},
-    }
-
-
-# ---------------------------------------------------------------------------
-# Admin Center -> "Costs" (Nov 18 2026, Amit: "track costs - Gemini, Azure, WhatsApp"). README "Costs (Admin Center)".
-# The app counts what it uses: AI calls and tokens (app_ai_usage, usage_meter.py) and WhatsApp messages
-# (app_whatsapp_log). Cost = usage x the rates the superadmin types in (kept in app_flags 'cost_rates'), plus the
-# fixed monthly Azure plan. These are estimates: the bills in Google AI Studio, Meta and Azure are the real numbers.
-# ---------------------------------------------------------------------------
-COST_RATE_DEFAULTS: dict[str, Any] = {
-    "currency": "USD",
-    # Gemini paid-tier price per 1 million tokens (Google AI Studio -> Billing / ai.google.dev pricing). 0 = free tier.
-    "gemini_input_per_million": 0.0,
-    "gemini_output_per_million": 0.0,
-    # Meta per-message prices for US / Canada numbers (Utility template; Meta rate card, Sept 2026: $0.0034)
-    "whatsapp_utility": 0.0034,
-    # Azure App Service plan + anything else fixed per month (storage, domain)
-    "azure_monthly": 0.0,
-    "other_monthly": 0.0,
-}
-
-
-def _cost_rates() -> dict[str, Any]:
-    rates = dict(COST_RATE_DEFAULTS)
-    try:
-        with _auth_connection() as connection:
-            connection.execute("CREATE TABLE IF NOT EXISTS app_flags (key TEXT PRIMARY KEY, value TEXT NOT NULL DEFAULT '')")
-            row = connection.execute("SELECT value FROM app_flags WHERE key = 'cost_rates'").fetchone()
-        saved = json.loads(row["value"]) if row else {}
-        for key, default in COST_RATE_DEFAULTS.items():
-            if key in saved:
-                rates[key] = str(saved[key])[:8] if isinstance(default, str) else max(0.0, float(saved[key] or 0))
-    except Exception:
-        logger.exception("Couldn't read the cost rates; using the defaults.")
-    return rates
-
-
-def _month_start(month: str) -> tuple[datetime, datetime]:
-    year, number = (int(part) for part in month.split("-", 1))
-    start = datetime(year, number, 1, tzinfo=timezone.utc)
-    end = datetime(year + (number == 12), 1 if number == 12 else number + 1, 1, tzinfo=timezone.utc)
-    return start, end
-
-
-def _costs_for_month(month: str, rates: dict[str, Any]) -> dict[str, Any]:
-    start, end = _month_start(month)
-    since, until = start.isoformat(), end.isoformat()
-    with _auth_connection() as connection:
-        connection.execute(usage_meter.CREATE_SQL)
-        connection.execute(_WHATSAPP_LOG_TABLE)
-        ai_rows = [
-            dict(row)
-            for row in connection.execute(
-                "SELECT provider, model, purpose, COUNT(*) AS calls, SUM(ok) AS answered, SUM(input_tokens) AS input_tokens, "
-                "SUM(output_tokens) AS output_tokens, SUM(thinking_tokens) AS thinking_tokens FROM app_ai_usage "
-                "WHERE at >= ? AND at < ? GROUP BY provider, model, purpose ORDER BY calls DESC",
-                (since, until),
-            )
-        ]
-        wa_rows = [
-            dict(row)
-            for row in connection.execute(
-                "SELECT kind, COUNT(*) AS messages FROM app_whatsapp_log WHERE status = 'sent' AND sent_at >= ? AND sent_at < ? GROUP BY kind ORDER BY messages DESC",
-                (since, until),
-            )
-        ]
-    for row in ai_rows:
-        for key in ("calls", "answered", "input_tokens", "output_tokens", "thinking_tokens"):
-            row[key] = int(row.get(key) or 0)
-        # thinking tokens are billed as output tokens
-        row["cost"] = round(
-            row["input_tokens"] / 1_000_000 * rates["gemini_input_per_million"]
-            + (row["output_tokens"] + row["thinking_tokens"]) / 1_000_000 * rates["gemini_output_per_million"],
-            4,
-        ) if row["provider"] == "gemini" else 0.0
-    for row in wa_rows:
-        row["messages"] = int(row.get("messages") or 0)
-        row["cost"] = round(row["messages"] * rates["whatsapp_utility"], 4)
-    ai_cost = round(sum(row["cost"] for row in ai_rows), 2)
-    wa_cost = round(sum(row["cost"] for row in wa_rows), 2)
-    fixed = round(float(rates["azure_monthly"]) + float(rates["other_monthly"]), 2)
-    return {
-        "month": month,
-        "ai": ai_rows,
-        "ai_calls": sum(row["calls"] for row in ai_rows),
-        "ai_tokens": sum(row["input_tokens"] + row["output_tokens"] + row["thinking_tokens"] for row in ai_rows),
-        "ai_cost": ai_cost,
-        "whatsapp": wa_rows,
-        "whatsapp_messages": sum(row["messages"] for row in wa_rows),
-        "whatsapp_cost": wa_cost,
-        "azure_cost": round(float(rates["azure_monthly"]), 2),
-        "other_cost": round(float(rates["other_monthly"]), 2),
-        "total": round(ai_cost + wa_cost + fixed, 2),
-    }
-
-
-@app.get("/api/admin/costs")
-def admin_costs(month: str = "", x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
-    """Superadmin: this month's (or ?month=YYYY-MM) AI calls, WhatsApp messages and estimated cost, plus the last 6
-    months' totals and the rates used."""
-    _require_superadmin(x_auth_token)
-    today = datetime.now(timezone.utc)
-    current = f"{today.year:04d}-{today.month:02d}"
-    month = month.strip() or current
-    if not re.fullmatch(r"20\d{2}-(0[1-9]|1[0-2])", month):
-        raise HTTPException(status_code=400, detail="Pick a month like 2026-11.")
-    rates = _cost_rates()
-    months: list[str] = []
-    year, number = today.year, today.month
-    for _ in range(6):
-        months.append(f"{year:04d}-{number:02d}")
-        year, number = (year - 1, 12) if number == 1 else (year, number - 1)
-    history = []
-    for item in months:
-        totals = _costs_for_month(item, rates)
-        history.append({key: totals[key] for key in ("month", "ai_calls", "ai_cost", "whatsapp_messages", "whatsapp_cost", "azure_cost", "other_cost", "total")})
-    return {"rates": rates, "defaults": COST_RATE_DEFAULTS, "current": _costs_for_month(month, rates), "history": history}
-
-
-class CostRatesRequest(BaseModel):
-    gemini_input_per_million: float = 0.0
-    gemini_output_per_million: float = 0.0
-    whatsapp_utility: float = 0.0
-    azure_monthly: float = 0.0
-    other_monthly: float = 0.0
-    currency: str = "USD"
-
-
-@app.post("/api/admin/costs/rates")
-def admin_cost_rates(request: CostRatesRequest, x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
-    """Superadmin: save the prices the cost estimate uses (from the Google, Meta and Azure bills)."""
-    user_row, _ = _require_superadmin(x_auth_token)
-    values = request.model_dump()
-    for key, value in values.items():
-        if key != "currency" and (value is None or value < 0 or value > 100000):
-            raise HTTPException(status_code=400, detail="Prices must be 0 or more.")
-    values["currency"] = re.sub(r"[^A-Za-z]", "", str(values.get("currency") or "USD"))[:3].upper() or "USD"
-    with _auth_connection() as connection:
-        connection.execute("CREATE TABLE IF NOT EXISTS app_flags (key TEXT PRIMARY KEY, value TEXT NOT NULL DEFAULT '')")
-        connection.execute(
-            "INSERT INTO app_flags (key, value) VALUES ('cost_rates', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-            (json.dumps(values),),
-        )
-    _audit_event("admin.cost_rates", "settings", "cost_rates", actor=user_row, details=values, source="api")
-    return {"message": "Saved. The costs below use these prices now.", "rates": _cost_rates()}
 
 
 def _announce_fixture_change(fixture: dict[str, Any], what: str) -> None:
@@ -20516,8 +20292,6 @@ API_GROUPS = [
     ("/api/admin/backups", "Admin: backups and database"),
     ("/api/admin/db", "Admin: backups and database"),
     ("/api/admin/whatsapp", "Admin: WhatsApp alerts"),
-    ("/api/admin/costs", "Admin: costs and AI accuracy"),
-    ("/api/admin/ai-accuracy", "Admin: costs and AI accuracy"),
     ("/api/admin", "Admin: other"),
     ("/api/scorecards", "Scorecards: upload, read with AI, edit, publish"),
     ("/api/archive", "Scorecards: upload, read with AI, edit, publish"),

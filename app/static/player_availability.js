@@ -47,7 +47,9 @@ function renderFixtures() {
     fixturesList.innerHTML = `<p class="empty-state">This account is not linked to a player profile yet.</p>`;
     return;
   }
-  fixturesList.innerHTML = (payload.fixtures || [])
+  // Nov 19 2026 (Dhruvika: "these fixtures should show latest on top"): newest date first (no date: at the end)
+  const newestFirst = [...(payload.fixtures || [])].sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")) || String(b.details?.scheduled_time || "").localeCompare(String(a.details?.scheduled_time || "")));
+  fixturesList.innerHTML = newestFirst
     .map((fixture) => {
       const currentStatus = fixture.availability_statuses?.[payload.member.name] || "no response";
       const selectedStatus = normalizeStatus(currentStatus);

@@ -100,10 +100,11 @@ Paths starting `/api/public/` need no sign-in. `/api/admin/...` needs a club adm
 | POST | `/api/admin/scorecards/reread-all` | Site admin: start the clean-up + AI re-read of every scorecard photo (background). |
 | POST | `/api/admin/scorecards/{upload_id}/decision` | Admin Scorecard Decision |
 
-### Admin: photos and storage (2)
+### Admin: photos and storage (3)
 
 | Method | Path | What it does |
 | --- | --- | --- |
+| POST | `/api/admin/uploads/remove-duplicate-copies` | Superadmin (Nov 19 2026, Dhruvika: "i don't want you to store duplicates"): delete the photo copies in the |
 | POST | `/api/admin/uploads/shrink` | Admin Shrink Photos |
 | GET | `/api/admin/uploads/storage` | Admin Photo Storage |
 
@@ -123,14 +124,6 @@ Paths starting `/api/public/` need no sign-in. `/api/admin/...` needs a club adm
 | --- | --- | --- |
 | GET | `/api/admin/whatsapp` | Admin Whatsapp Status |
 | POST | `/api/admin/whatsapp/test` | Send one WhatsApp now to check the setup: Meta's ready-made "hello_world" (works as soon as the token and number |
-
-### Admin: costs and AI accuracy (3)
-
-| Method | Path | What it does |
-| --- | --- | --- |
-| GET | `/api/admin/ai-accuracy` | Superadmin: how often the AI reader was right, overall, by kind of field, by month and per card. |
-| GET | `/api/admin/costs` | Superadmin: this month's (or ?month=YYYY-MM) AI calls, WhatsApp messages and estimated cost, plus the last 6 |
-| POST | `/api/admin/costs/rates` | Superadmin: save the prices the cost estimate uses (from the Google, Meta and Azure bills). |
 
 ### Admin: other (5)
 
@@ -328,4 +321,4 @@ Paths starting `/api/public/` need no sign-in. `/api/admin/...` needs a club adm
 | GET | `/api/tour` | Tour Status |
 | POST | `/api/tour/seen` | Tour Seen |
 
-178 APIs.
+176 APIs.
