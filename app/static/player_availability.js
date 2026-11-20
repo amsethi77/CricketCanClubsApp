@@ -70,6 +70,7 @@ function renderFixtures() {
               </div>
             </form>
           </div>`}
+          ${fixture.scorecard_url ? `<a class="secondary-button availability-scorecard" href="${fixture.scorecard_url}">📋 View scorecard</a>` : ""}
         </article>
       `;
     })

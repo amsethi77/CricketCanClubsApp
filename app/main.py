@@ -2490,8 +2490,99 @@ def _migrate_auth_sessions(connection: sqlite3.Connection) -> None:
     )
 
 
-def _password_hash(password: str) -> str:
+# Passwords (Nov 20 2026, Dhruvika: "can you please encrypt the password, due to security reasons in database?").
+# Before, app_users.password_hash was a plain SHA-256 of the password: no salt and very fast, so a copy of the
+# database could be cracked with ready-made tables. Now every password is stored as PBKDF2-HMAC-SHA256 with its own
+# random salt and 600,000 rounds (OWASP's figure):  pbkdf2_sha256$600000$<salt>$<hash>.
+# Old SHA-256 values are wrapped at start-up (pbkdf2_sha256_legacy$..., the PBKDF2 of the old value), so no plain
+# SHA-256 stays in the database; at the person's next sign-in it is replaced by the normal format.
+# A password can't be read back from either form - only checked. README "Passwords".
+PASSWORD_ROUNDS = 600_000
+_PASSWORD_PREFIX = "pbkdf2_sha256$"
+_LEGACY_PREFIX = "pbkdf2_sha256_legacy$"
+
+
+def _b64(raw: bytes) -> str:
+    import base64
+
+    return base64.b64encode(raw).decode("ascii").rstrip("=")
+
+
+def _unb64(text: str) -> bytes:
+    import base64
+
+    return base64.b64decode(text + "=" * (-len(text) % 4))
+
+
+def _pbkdf2(secret: str, salt: bytes, rounds: int) -> bytes:
+    return hashlib.pbkdf2_hmac("sha256", secret.encode("utf-8"), salt, rounds)
+
+
+def _sha256_hex(password: str) -> str:
     return hashlib.sha256(password.encode("utf-8")).hexdigest()
+
+
+def _password_hash(password: str) -> str:
+    salt = secrets.token_bytes(16)
+    return f"{_PASSWORD_PREFIX}{PASSWORD_ROUNDS}${_b64(salt)}${_b64(_pbkdf2(password, salt, PASSWORD_ROUNDS))}"
+
+
+def _wrap_legacy_hash(old_hex: str) -> str:
+    salt = secrets.token_bytes(16)
+    return f"{_LEGACY_PREFIX}{PASSWORD_ROUNDS}${_b64(salt)}${_b64(_pbkdf2(old_hex, salt, PASSWORD_ROUNDS))}"
+
+
+def _password_matches(password: str, stored: str) -> bool:
+    """Is `password` the one saved as `stored` (any of the three forms)? Compared in constant time."""
+    stored = str(stored or "")
+    try:
+        for prefix, secret in ((_PASSWORD_PREFIX, password), (_LEGACY_PREFIX, None)):
+            if stored.startswith(prefix):
+                rounds, salt, digest = stored[len(prefix):].split("$", 2)
+                value = secret if secret is not None else _sha256_hex(password)
+                return hmac.compare_digest(_pbkdf2(value, _unb64(salt), int(rounds)), _unb64(digest))
+    except (ValueError, TypeError):
+        return False
+    if re.fullmatch(r"[0-9a-f]{64}", stored):
+        return hmac.compare_digest(_sha256_hex(password), stored)  # not wrapped yet (before the start-up step ran)
+    return False
+
+
+def _password_is_current(stored: str) -> bool:
+    return str(stored or "").startswith(f"{_PASSWORD_PREFIX}{PASSWORD_ROUNDS}$")
+
+
+def _protect_old_password_hashes() -> int:
+    """Start-up (background): wrap every old plain SHA-256 password value. Returns how many were wrapped."""
+    done = 0
+    try:
+        with _auth_connection() as connection:
+            rows = connection.execute("SELECT id, password_hash FROM app_users").fetchall()
+        for row in rows:
+            old = str(row["password_hash"] or "")
+            if not re.fullmatch(r"[0-9a-f]{64}", old):
+                continue
+            with _auth_connection() as connection:
+                connection.execute(
+                    "UPDATE app_users SET password_hash = ? WHERE id = ? AND password_hash = ?",
+                    (_wrap_legacy_hash(old), int(row["id"]), old),
+                )
+            done += 1
+        if done:
+            logger.info("Passwords: %s old SHA-256 values wrapped with PBKDF2.", done)
+    except Exception:
+        logger.exception("Wrapping old password values failed; they still work and are retried at the next start.")
+    return done
+
+
+def _signin_with_password(connection: sqlite3.Connection, candidates: list[sqlite3.Row], password: str) -> sqlite3.Row | None:
+    """The first account among `candidates` whose password matches; an old-format value is upgraded on the way."""
+    for row in candidates:
+        if _password_matches(password, row["password_hash"]):
+            if not _password_is_current(row["password_hash"]):
+                connection.execute("UPDATE app_users SET password_hash = ? WHERE id = ?", (_password_hash(password), int(row["id"])))
+            return row
+    return None
 
 
 def _role_permissions(connection: sqlite3.Connection, role_name: str) -> set[str]:
@@ -4202,6 +4293,7 @@ def startup_tasks() -> None:
         logger.exception("Syncing fixture results from scorecards failed")
     threading.Thread(target=_seed_learned_examples, name="ai-learned-examples", daemon=True).start()
     _drop_old_reading_copies()
+    threading.Thread(target=_protect_old_password_hashes, name="password-hashes", daemon=True).start()
     _start_upload_worker()  # scorecards uploaded before a restart are read now
     threading.Thread(target=_backup_loop, name="database-backups", daemon=True).start()
     threading.Thread(target=_reminder_loop, name="match-reminders", daemon=True).start()
@@ -6391,12 +6483,18 @@ def save_scorecard_people(upload_id: str, request: ScorecardPeopleRequest, x_aut
             if value is not None:
                 picked[key] = " ".join(str(value).split())[:80] or None
         match[field] = picked
+    # Nov 20 2026 (Dhruvika: "c and vc cannot be same person")
+    vice_captains = match.get("vice_captains") if isinstance(match.get("vice_captains"), dict) else {}
+    teams = (match.get("teams") or {}) if isinstance(match.get("teams"), dict) else {}
+    for key in ("team_1", "team_2"):
+        if captains.get(key) and vice_captains.get(key) and normalize_name(captains[key]) == normalize_name(vice_captains[key]):
+            raise HTTPException(status_code=400, detail=f"{teams.get(key) or 'This team'}: the captain and the vice-captain can't be the same player. Pick someone else as vice-captain.")
     match["man_of_match"] = " ".join(str(request.man_of_match or "").split())[:80] or None
     _keep_ai_read(upload)
     upload["extraction_template"] = deepcopy(template)
     upload["review_template_json"] = json.dumps(template, indent=2)
     upload["review_source_json"] = json.dumps(template)[:12000]
-    save_store(store)
+    save_store(store, keep_stats=True)  # Nov 20 2026: captains / man of the match don't change anyone's stats - fast save
     _audit_event("archive.people", "archive_upload", str(upload.get("id") or ""), actor=user_row, details={"captains": captains, "man_of_match": match["man_of_match"]}, source="api")
     card = _scorecard_from_archive(upload)
     return {"message": "Saved captains, vice-captains, keepers and man of the match.", "captains": card.get("captains"), "man_of_match": card.get("man_of_match") or ""}
@@ -6442,6 +6540,11 @@ def set_man_of_match(match_id: str, request: ManOfMatchRequest, x_auth_token: st
                 side_roles[role] = " ".join(str(value).split())[:80]
                 roles[side] = side_roles
         data["roles"] = roles
+        # Nov 20 2026 (Dhruvika: "c and vc cannot be same person")
+        for side, side_roles in roles.items():
+            if isinstance(side_roles, dict) and side_roles.get("captain") and side_roles.get("vice_captain") and normalize_name(side_roles["captain"]) == normalize_name(side_roles["vice_captain"]):
+                team = match.get("club_name") if side == "club" else match.get("opponent")
+                raise HTTPException(status_code=400, detail=f"{team or 'This team'}: the captain and the vice-captain can't be the same player. Pick someone else as vice-captain.")
         connection.execute(
             "INSERT INTO app_match_lineups (match_id, lineups_json, updated_at, updated_by) VALUES (?, ?, ?, ?) "
             "ON CONFLICT(match_id) DO UPDATE SET lineups_json = excluded.lineups_json, updated_at = excluded.updated_at, updated_by = excluded.updated_by",
@@ -6876,6 +6979,16 @@ def _auto_side_leaders(store: dict[str, Any], card: dict[str, Any]) -> None:
 def _tag_card_players(store: dict[str, Any], card: dict[str, Any]) -> dict[str, Any]:
     """Adds row["tags"] (['C', 'VC', 'WK']) and row["playing_role"] / row["role_from_profile"] to every batting and
     bowling row of a scorecard that is about to be shown."""
+    # Nov 20 2026 (Dhruvika: "c and vc cannot be same person"): a card saved before the check with the same player as
+    # captain and vice-captain shows him as captain only (the vice-captain is "Not picked")
+    for item in card.get("captains") or []:
+        if isinstance(item, dict) and item.get("name") and item.get("vice_captain") and normalize_name(item["name"]) == normalize_name(item["vice_captain"]):
+            item["vice_captain"] = ""
+            item.pop("vice_captain_auto", None)
+    for item in card.get("lineup_roles") or []:
+        roles = item.get("roles") if isinstance(item, dict) and isinstance(item.get("roles"), dict) else {}
+        if roles.get("captain") and roles.get("vice_captain") and normalize_name(roles["captain"]) == normalize_name(roles["vice_captain"]):
+            roles["vice_captain"] = ""
     _auto_side_leaders(store, card)
     captains = [item for item in card.get("captains") or [] if isinstance(item, dict) and item.get("name")]
     lineup_roles = card.get("lineup_roles") if isinstance(card.get("lineup_roles"), list) else []
@@ -7919,12 +8032,12 @@ def _admin_center_html(request: Request) -> HTMLResponse:
           </section>
         </div>
         <script src="/assets/multipage.js?v=20261117b"></script>
-        <script src="/assets/scorecard_view.js?v=20261117o"></script>
-        <script src="/assets/scorecard.js?v=20261117s"></script>
+        <script src="/assets/scorecard_view.js?v=20261120a"></script>
+        <script src="/assets/scorecard.js?v=20261120b"></script>
         <script src="/assets/admin_center.js?v=20261119b"></script>
         <script src="/assets/admin_whatsapp.js?v=20261117b"></script>
         <script src="/assets/admin_reread.js?v=20261024a"></script>
-        <script src="/assets/admin_clubs.js?v=20261117m"></script>
+        <script src="/assets/admin_clubs.js?v=20261120a"></script>
         <script src="/assets/admin_photos.js?v=20261119b"></script>
       </body>
     </html>
@@ -7970,7 +8083,7 @@ def _club_admin_center_html() -> HTMLResponse:
       </section>
     </div>
     <script src="/assets/multipage.js?v=20261117b"></script>
-    <script src="/assets/admin_clubs.js?v=20261117m"></script>
+    <script src="/assets/admin_clubs.js?v=20261120a"></script>
   </body>
 </html>"""
     return HTMLResponse(body, headers={"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0", "Pragma": "no-cache"})
@@ -9303,25 +9416,26 @@ def signin(request: SignInRequest, response: Response) -> dict[str, Any]:
         if password:
             logger.debug("Trying password login.")
 
+            # Nov 20 2026: salted PBKDF2 passwords can't be looked up in SQL - the accounts with this mobile / email are
+            # read and the password is checked against each one (_signin_with_password)
             if identifier_phone_candidates:
                 mobile_clause = ", ".join("?" for _ in identifier_phone_candidates)
-                user_row = connection.execute(
+                candidates = connection.execute(
                     f"""
                     SELECT * FROM app_users
                     WHERE (mobile IN ({mobile_clause}) OR lower(email) = lower(?))
-                      AND password_hash = ?
                     """,
-                    (*identifier_phone_candidates, identifier_email or None, _password_hash(password)),
-                ).fetchone()
+                    (*identifier_phone_candidates, identifier_email or None),
+                ).fetchall()
             else:
-                user_row = connection.execute(
+                candidates = connection.execute(
                     """
                     SELECT * FROM app_users
                     WHERE lower(email) = lower(?)
-                      AND password_hash = ?
                     """,
-                    (identifier_email or None, _password_hash(password)),
-                ).fetchone()
+                    (identifier_email or None,),
+                ).fetchall()
+            user_row = _signin_with_password(connection, candidates, password)
 
             if user_row:
                 logger.debug("Login done by %s. method=password user_id=%s", user_row["display_name"] or user_row["mobile"] or "user", user_row["id"])
@@ -10111,8 +10225,13 @@ def player_availability_data(x_auth_token: str | None = Header(default=None)) ->
         ):
             relevant.append(fixture)
             relevant_ids.add(fixture_id)
+    # Nov 20 2026 (Dhruvika: "Attach the scorecard with that complete fixture"): a played match links to its
+    # scorecard - the uploaded card linked to the fixture, else the live-scored card
+    public_ids = {str(card.get("id") or "") for card in _public_scorecards(store)}
     for fixture in relevant:
         url = links.get(str(fixture.get("id") or ""), "")
+        fixture_card = f"f-{fixture.get('id')}"
+        scorecard_url = url or (f"/scorecards/{fixture_card}" if fixture_card in public_ids else "")
         archive = archives.get(url.rsplit("/a-", 1)[-1]) if url else None
         card = _scorecard_from_archive(archive) if archive else None
         participant_ids = _scorecard_participant_ids(store, fixture, card, club) if card else set()
@@ -10129,14 +10248,14 @@ def player_availability_data(x_auth_token: str | None = Header(default=None)) ->
                 statuses[member["name"]] = "Available"
                 changed = True
             fixture_view = _club_dashboard_fixture_view(fixture, club)
-            fixtures.append({**fixture_view, "availability_read_only": True})
+            fixtures.append({**fixture_view, "availability_read_only": True, "scorecard_url": scorecard_url})
             continue
         if (
             (not active_year or fixture_season_year(fixture) == active_year)
             and str(fixture.get("status") or "").lower() != "completed"
             and not is_past
         ):
-            fixtures.append({**_club_dashboard_fixture_view(fixture, club), "availability_read_only": False})
+            fixtures.append({**_club_dashboard_fixture_view(fixture, club), "availability_read_only": False, "scorecard_url": scorecard_url})
     if changed:
         save_store(store)
     fixtures.sort(key=lambda fixture: (str(fixture.get("date") or ""), str(fixture.get("opponent") or "")))
@@ -12701,38 +12820,71 @@ def _result_for_side(result: str, side: str, teams: list[str], home_is_side: boo
 
 
 def _captain_stats(store: dict[str, Any], club: dict[str, Any], year: str = "") -> dict[str, Any]:
+    """Captains' wins and losses for one club (Stats page). Nov 20 2026 (Amit: "There are other captains in this
+    heartlake club like CHECKLEY, Ravi or Steve but none are shown. If they have 1 innings and result not available
+    then you can mention NA"):
+      * every match of the club counts, not only those with a result: a card with one innings / no result (the
+        result is already worked out from the two totals when both innings are there, _result_from_innings) is "NA"
+        (column NA, not in Win %);
+      * the captain is the one picked on the card; if none was picked, the club's usual captain (People & roles /
+        profile role Captain) who played in that match - only when exactly one of them played (marked "usual");
+        otherwise "Not recorded";
+      * a played fixture and its linked uploaded scorecard count once (two matches on one day both count)."""
     club_id = str(club.get("id") or "")
     rows: dict[str, dict[str, Any]] = {}
     seasons: set[str] = set()
-    for card in _public_scorecards(store):
+    by_match: dict[tuple[str, str], tuple[int, dict[str, Any]]] = {}
+    # Nov 20 2026 (Dhruvika's screenshot: 3 matches instead of 6): a club can play twice on one day, so matches are
+    # NOT merged by date. Only a played fixture whose uploaded scorecard is also there counts once (the link between
+    # them is the one My availability uses, _past_fixture_scorecard_urls).
+    fixtures = [item for item in store.get("fixtures", []) or [] if isinstance(item, dict)]
+    linked_cards = {
+        str(fixture.get("id") or ""): url.rsplit("/", 1)[-1]
+        for fixture, url in ((fixture, _past_fixture_scorecard_urls(store, [_public_fixture_card_payload(fixture)]).get(str(fixture.get("id") or ""), "")) for fixture in fixtures)
+        if url
+    }
+    public_cards = _public_scorecards(store)
+    card_ids = {str(card.get("id") or "") for card in public_cards}
+    for card in public_cards:
         if club_id not in _scorecard_involved_club_ids(store, card):
             continue
+        if str(card.get("source") or "") == "fixture" and linked_cards.get(str(card.get("fixture_id") or "")) in card_ids:
+            continue  # its uploaded scorecard is counted instead
         side = _club_side(card, club)
         if not side:
             continue
+        date = str(card.get("date") or "")
         outcome = _result_for_side(str(card.get("result") or ""), side, [str(t) for t in card.get("teams") or []], str(card.get("club_id") or "") in {"", club_id})
-        if not outcome:
-            continue
-        season = str(card.get("date") or "")[:4]
+        picked = next((str(item.get("name") or "") for item in card.get("captains") or [] if isinstance(item, dict) and _same_team_name(item.get("team"), side) and not item.get("captain_auto")), "")
+        usual = ""
+        if not picked:
+            probe = {**card, "captains": [dict(item) for item in card.get("captains") or [] if isinstance(item, dict)]}
+            _auto_side_leaders(store, probe)
+            usual = next((str(item.get("name") or "") for item in probe["captains"] if _same_team_name(item.get("team"), side) and item.get("captain_auto")), "")
+        entry = {"card": card, "side": side, "date": date, "outcome": outcome or "na", "captain": picked or usual, "usual": bool(usual and not picked)}
+        by_match[(str(card.get("id")), club_id)] = (0, entry)
+    for _score, entry in by_match.values():
+        season = entry["date"][:4]
         seasons.add(season)
         if year and season != year:
             continue
-        captain = next((str(item.get("name") or "") for item in card.get("captains") or [] if isinstance(item, dict) and _same_team_name(item.get("team"), side)), "")
-        member = _member_for_card_name(store, captain, side) if captain else None
+        captain = entry["captain"]
+        member = _member_for_card_name(store, captain, entry["side"]) if captain else None
         name = str((member or {}).get("name") or captain or "").strip()
         key = str((member or {}).get("id") or normalize_name(name) or "-")
-        row = rows.setdefault(key, {"captain": name or "Not recorded", "player_key": _member_public_key(member) if member else "", "played": 0, "won": 0, "lost": 0, "tied": 0, "no_result": 0, "last": ""})
+        row = rows.setdefault(key, {"captain": name or "Not recorded", "player_key": _member_public_key(member) if member else "", "played": 0, "won": 0, "lost": 0, "tied": 0, "no_result": 0, "na": 0, "usual": 0, "last": ""})
         row["played"] += 1
-        row[outcome] += 1
-        if str(card.get("date") or "") > row["last"]:
-            row["last"] = str(card.get("date") or "")
+        row[entry["outcome"]] += 1
+        row["usual"] += int(entry["usual"])
+        if entry["date"] > row["last"]:
+            row["last"] = entry["date"]
     out = []
     for row in rows.values():
         decided = row["won"] + row["lost"]
         row["win_pct"] = round(100 * row["won"] / decided, 1) if decided else None
         out.append(row)
     out.sort(key=lambda r: (r["captain"] == "Not recorded", -r["played"], -(r["win_pct"] or 0)))
-    totals = {key: sum(r[key] for r in out) for key in ("played", "won", "lost", "tied", "no_result")}
+    totals = {key: sum(r[key] for r in out) for key in ("played", "won", "lost", "tied", "no_result", "na", "usual")}
     return {"club": {"id": club_id, "name": club.get("name") or ""}, "year": year, "seasons": sorted(seasons, reverse=True), "captains": out, "totals": totals}
 
 
@@ -16889,6 +17041,10 @@ def _process_upload_job(job: dict[str, Any]) -> dict[str, Any]:
                 record["ai_flags"] = [ai_note + " Type in the scorecard with ✏️, or upgrade to Pro on /pricing."]
         if not record.get("ocr_processed_at"):
             # No AI: Amit's local reader (OCR + Ollama vision with focused crops, Oct 16).
+            # Nov 20 2026: it only reads uploads that are waiting for review - a background upload is still marked
+            # "Processing" here, so it stopped with "cannot be re-extracted" and the uploader got "couldn't be read"
+            if str(record.get("status") or "") == UPLOAD_PROCESSING:
+                record["status"] = "Pending review"
             record = extract_archive_by_id(store, record["id"])
             if not _is_scorecard_template_payload(record.get("extraction_template")):
                 record["extraction_template"] = scorecard_template_from_archive(record)

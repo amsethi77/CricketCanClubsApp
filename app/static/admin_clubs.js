@@ -151,7 +151,6 @@
   }
 
   function personRow(clubId, person, data) {
-    const icon = ROLE_ICONS[person.playing_role || person.playing_role_guess] || "";
     const clubRole = person.user_id
       ? person.is_superadmin
         ? '<span class="acp-chip is-super">Superadmin</span>'
@@ -160,11 +159,11 @@
     const playing = person.member_id
       ? `<select data-playing-role="${esc(person.member_id)}" aria-label="Playing role of ${esc(person.name)}">
           <option value="">${person.playing_role_guess ? `Not set (looks like ${esc(person.playing_role_guess)})` : "Not set"}</option>
-          ${data.playing_roles.map((r) => `<option value="${esc(r)}"${r === person.playing_role ? " selected" : ""}>${r === "Bowler" ? "🔴" : ROLE_ICONS[r] || ""} ${esc(r)}</option>`).join("")}
+          ${data.playing_roles.map((r) => `<option value="${esc(r)}"${r === person.playing_role ? " selected" : ""}>${esc(r)}</option>`).join("")}
         </select>`
       : "";
     return `<div class="acp-row is-${person.club_role}" data-person="${esc(person.name.toLowerCase())}">
-        <div class="acp-who"><span class="acp-avatar" aria-hidden="true">${icon || esc(person.name.slice(0, 1).toUpperCase())}</span>
+        <div class="acp-who"><span class="acp-avatar" aria-hidden="true">${esc(person.name.slice(0, 1).toUpperCase())}</span>
           <div><strong>${esc(person.name)}</strong>${person.club_role !== "player" ? ` <span class="acp-chip is-${person.club_role}">${CLUB_ROLE_LABEL[person.club_role]}</span>` : ""}
           <small>${person.account_name && person.account_name !== person.name ? `Account: ${esc(person.account_name)} · ` : ""}${person.contact ? esc(person.contact) : person.user_id ? "Signed up" : "Player only"}</small></div></div>
         <label class="acp-field"><span>Club role</span>${clubRole}</label>

@@ -48,19 +48,15 @@
   const BALL_ICON = '<svg class="pm-ballicon" viewBox="0 0 16 16" width="1em" height="1em" aria-hidden="true"><circle cx="8" cy="8" r="7" fill="#c8102e"/><circle cx="6" cy="5.5" r="2" fill="#fff" opacity=".25"/><path d="M5.2 1.6c1.6 3.9 1.6 8.9 0 12.8M10.8 1.6c-1.6 3.9-1.6 8.9 0 12.8" fill="none" stroke="#fff" stroke-width=".9" stroke-dasharray="1.1 1"/></svg>';
   const ROLE_ICONS = { Batter: "🏏", Bowler: BALL_ICON, "All-rounder": "⚡", "Wicket keeper": "🧤" };
   const TAG_NAMES = { C: "Captain", VC: "Vice-captain", WK: "Wicket keeper" };
-  // Nov 17 2026 (Dhruvika: "Put icons for batter wkeeper and bowler"): after the (c) / (vc) / (wk) text, one icon -
-  // 🧤 for the keeper of this match (or a keeper by profile), else the player's role: 🏏 batter, red ball = bowler,
-  // ⚡ all-rounder (his profile, else his career figures, else what he did in this match).
+  // Nov 17 2026 role icons after the name were removed on Nov 20 2026 (Dhruvika: "remove the batter and bowler icons,
+  // but keep the C, VC, WK"): names show only (c) / (vc) / (wk). ROLE_ICONS stays for other code that may use it.
   const ROLE_SOURCE = { profile: "", career: " (from his figures)", match: " (in this match)" };
   function roleBadges(row = {}) {
     const tags = (Array.isArray(row.tags) ? row.tags : []).filter((tag) => TAG_NAMES[tag]);
     const text = tags.map((tag) => tag.toLowerCase()).join(" & ");
     const tagHtml = tags.length ? ` <span class="pm-cap" title="${escapeHtml(tags.map((tag) => TAG_NAMES[tag]).join(", "))}">(${escapeHtml(text)})</span>` : "";
-    const role = tags.includes("WK") ? "Wicket keeper" : row.playing_role;
-    const icon = ROLE_ICONS[role]
-      ? ` <span class="pm-role" title="${escapeHtml(role)}${tags.includes("WK") ? "" : escapeHtml(ROLE_SOURCE[row.role_source] || "")}" aria-label="${escapeHtml(role)}">${ROLE_ICONS[role]}</span>`
-      : "";
-    return tagHtml + icon;
+    // Nov 20 2026 (Dhruvika: "remove the batter and bowler icons, but keep the C, VC, WK"): only (c) / (vc) / (wk)
+    return tagHtml;
   }
 
   function ballSplit(row, fields) {

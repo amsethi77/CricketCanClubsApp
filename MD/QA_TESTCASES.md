@@ -85,6 +85,13 @@ The automated suite covers the main product surfaces end-to-end on isolated loca
 | F25 | My availability order | Player with several matches | Open `/player-availability` | Newest match date on top. |
 | F26 | Costs / AI accuracy off the site | Superadmin | Open Admin Center; call `/api/admin/costs` | No Costs / AI accuracy tabs; the API answers 404. `python scripts\costs_and_accuracy.py` prints the report. |
 | F27 | Start like Azure | Project folder | `python -m uvicorn app.main:app --port 8000` | App starts; /api/health 200 (the pipeline checks this too). |
+| F28 | Captains' wins and losses | Heartlake, season 2026 | Stats page -> captains table | Every match counted (P = W + L + T/NR + NA); usual captains who played (Steve, Checkley) shown with *; NA for cards without a result, not in Win %; two matches on the same day both counted; a fixture and its uploaded card counted once. |
+| F29 | Scorecard on a played match | Player who played past matches | Open `/player-availability` | Each played match with a published / live-scored card has "📋 View scorecard"; it opens that match's scorecard. |
+| F30 | Passwords stored safely | Fresh registration; an old account with a SHA-256 value | Register; restart; sign in with each | New value starts `pbkdf2_sha256$600000$`; old one is wrapped at start-up and becomes `pbkdf2_sha256$` after sign-in; both sign in with their password; no 64-character plain hashes left. |
+| F31 | Upload without the AI reader | No Gemini key, or a Free user whose AI try is used | Upload a scorecard photo | The upload is read by the local reader (or left for typing in) and ends as "Pending review" / "Needs admin review" - never "couldn't be read: cannot be re-extracted". |
+| F32 | Name tags only | A scorecard with captain / vice-captain / keeper | Open the scorecard, the live match page and Admin Center -> People & roles | Names show (c), (vc), (wk) / (c & wk) only - no bat, ball, lightning or glove icon. |
+| F33 | Quick captains Save | An uploaded scorecard, signed in as captain / admin | Pick a captain and man of the match, tap Save | Button shows "Saving…", done in about a second (was several); (c) appears by the name; the Stats captains table counts it. |
+| F34 | Captain is not vice-captain | Scorecard pickers (uploaded and live) | Pick X as captain, then open vice-captain; try to save X as both | X is greyed out as vice-captain; Save shows "the captain and the vice-captain can't be the same player"; the API answers 400. Captain + keeper the same is allowed. |
 
 ## Non-Functional Testcases
 

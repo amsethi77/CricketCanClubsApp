@@ -74,3 +74,28 @@ def test_bowling_reread_fixes_only_what_adds_up():
     assert bowler["runs_conceded"] == right
     assert other["runs_conceded"] == rows[1]["runs_conceded"] - 9
     assert av._bowling_mismatches(template) == 0
+
+
+def test_bowling_boxes_are_whole_overs():
+    """Nov 17 2026 (Amit: overs "always 1 or 2 overs less"): a box with fewer than 6 marks (dots left out) is still an
+    over; only a bowler's last box is cut back to a part over, and only when the innings overs say so."""
+    assert av.count_bowler_marks(["1 1 2 1 1", "1 . 1 . 2 1 1"])["overs"] == "2"
+    template = {"innings": [{"summary": {"runs": 40, "overs": "5.2"}, "extras": {}, "batting": [], "bowling": [
+        {"player": {"name": "A"}, "over_marks": ["1 1 1 1 1 1", "1 1 1 1 1 1", "1 1"]},
+        {"player": {"name": "B"}, "over_marks": ["1 1 1 1 1 1", "2 2 2 2 2 2", "1 . . . ."]},
+    ]}]}
+    av._fill_from_marks(template)
+    bowling = template["innings"][0]["bowling"]
+    assert [str(row["overs"]) for row in bowling] == ["2.2", "3"]
+    assert [row["runs_conceded"] for row in bowling] == [14, 19]
+
+
+def test_missing_bowler_runs_are_shared_out_approximately():
+    template = {"innings": [{"summary": {"runs": 100, "overs": "20"}, "extras": {"byes": 4}, "bowling": [
+        {"player": {"name": "A"}, "overs": 4, "runs_conceded": 30}, {"player": {"name": "B"}}, {"player": {"name": "C"}},
+        {"player": {"name": "D"}, "overs": 4}]}]}
+    notes = av._fill_bowling_from_totals(template)
+    rows = template["innings"][0]["bowling"]
+    assert sum(_ for _ in (row["runs_conceded"] for row in rows)) == 96
+    assert all(row.get("runs_approximate") for row in rows[1:])
+    assert any("approximate" in note for note in notes)

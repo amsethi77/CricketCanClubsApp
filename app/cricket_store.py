@@ -5340,8 +5340,17 @@ def _write_relational_state(connection: sqlite3.Connection, store: dict[str, Any
                 ),
             )
 
-        summary_rows, year_rows, club_rows = _build_materialized_member_stats(normalized)
-        club_summary_rows, club_year_rows = _build_materialized_club_stats(normalized)
+        if getattr(_SAVE_OPTIONS, "keep_stats", False):
+            # Nov 20 2026 (Dhruvika: the Save under "Captains, man of the match" "takes long time"): a change that can't
+            # move anyone's figures keeps the saved stats as they are - the rows are read back, so nothing is rewritten
+            def saved(table: str) -> list[dict[str, Any]]:
+                return [dict(zip(row.keys(), tuple(row))) for row in connection.execute(f'SELECT * FROM "{table}"').fetchall()]
+
+            summary_rows, year_rows, club_rows = saved("member_summary_stats"), saved("member_year_stats"), saved("member_club_stats")
+            club_summary_rows, club_year_rows = saved("club_summary_stats"), saved("club_year_stats")
+        else:
+            summary_rows, year_rows, club_rows = _build_materialized_member_stats(normalized)
+            club_summary_rows, club_year_rows = _build_materialized_club_stats(normalized)
         connection.executemany(
             """
             INSERT INTO member_summary_stats (
@@ -6896,7 +6905,20 @@ def load_store() -> dict[str, Any]:
     return store
 
 
-def save_store(store: dict[str, Any]) -> None:
+_SAVE_OPTIONS = threading.local()
+
+
+def save_store(store: dict[str, Any], *, keep_stats: bool = False) -> None:
+    """Save the whole store. keep_stats=True (Nov 20 2026) skips rebuilding everyone's batting / bowling stats - only
+    for changes that can't change them (captains, vice-captains, keepers, man of the match on a scorecard)."""
+    _SAVE_OPTIONS.keep_stats = keep_stats
+    try:
+        _save_store(store)
+    finally:
+        _SAVE_OPTIONS.keep_stats = False
+
+
+def _save_store(store: dict[str, Any]) -> None:
     logger.debug(
         "Save store requested → members=%s fixtures=%s archives=%s duplicates=%s",
         len(store.get("members", []) or []),
@@ -6912,7 +6934,11 @@ def save_store(store: dict[str, Any]) -> None:
         _ensure_numeric_player_ids(connection, normalized.get("members", []))
         # Only the rows that changed are written (README "Saving only what changed").
         _write_changes_only(connection, _write_relational_state, normalized, skip_tables=("llm_documents",))
-        llm_documents = _write_changes_only(connection, refresh_llm_document_index, normalized)
+        if getattr(_SAVE_OPTIONS, "keep_stats", False):
+            # Nov 20 2026: the AI assistant's documents are refreshed at the next full save (they hold no captains)
+            llm_documents = [dict(row) for row in connection.execute("SELECT * FROM llm_documents ORDER BY doc_type, title, id").fetchall()]
+        else:
+            llm_documents = _write_changes_only(connection, refresh_llm_document_index, normalized)
         # Tells every other worker / instance that its in-memory copy is now out of date (same transaction).
         _bump_store_version(connection)
     _STORE_CACHE_SIGNATURE = _database_signature()

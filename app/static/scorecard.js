@@ -217,9 +217,43 @@
       <button class="sc-btn primary" type="submit">Save</button>
       <span class="sc-mom-msg" role="status"></span>`;
     cardPanel.appendChild(box);
+    // Nov 20 2026 (Dhruvika: "c and vc cannot be same person"): the player picked as captain can't be picked as
+    // vice-captain of the same side (and the other way round) - greyed out in the other list, and checked on Save
+    const sameName = (a, b) => String(a || "").trim().toLowerCase() === String(b || "").trim().toLowerCase();
+    const syncCaptainVice = (side) => {
+      const cap = box.querySelector(`[data-captain="${side}"]`);
+      const vice = box.querySelector(`[data-vice="${side}"]`);
+      if (!cap || !vice) return;
+      [...vice.options].forEach((o) => { o.disabled = Boolean(o.value) && sameName(o.value, cap.value); });
+      [...cap.options].forEach((o) => { o.disabled = Boolean(o.value) && sameName(o.value, vice.value); });
+    };
+    caps.forEach((c) => {
+      const side = c.side || "";
+      syncCaptainVice(side);
+      box.querySelector(`[data-captain="${side}"]`)?.addEventListener("change", () => syncCaptainVice(side));
+      box.querySelector(`[data-vice="${side}"]`)?.addEventListener("change", () => syncCaptainVice(side));
+    });
     box.addEventListener("submit", async (event) => {
       event.preventDefault();
       const msg = box.querySelector(".sc-mom-msg");
+      const clash = caps.find((c) => {
+        const cap = box.querySelector(`[data-captain="${c.side || ""}"]`)?.value;
+        const vice = box.querySelector(`[data-vice="${c.side || ""}"]`)?.value;
+        return cap && vice && sameName(cap, vice);
+      });
+      if (clash) {
+        msg.textContent = `${clash.team}: the captain and the vice-captain can't be the same player. Pick someone else as vice-captain.`;
+        return;
+      }
+      // Nov 20 2026 (Dhruvika: Save "takes long time"): the button shows it is working and can't be pressed twice
+      const saveButton = box.querySelector('button[type="submit"]');
+      const saveLabel = saveButton ? saveButton.textContent : "";
+      if (saveButton) {
+        if (saveButton.disabled) return;
+        saveButton.disabled = true;
+        saveButton.textContent = "Saving…";
+      }
+      msg.textContent = "";
       const pick = (side) => box.querySelector(`[data-captain="${side}"]`)?.value ?? null;
       const vice = (side) => box.querySelector(`[data-vice="${side}"]`)?.value ?? null;
       const keeper = (side) => box.querySelector(`[data-keeper="${side}"]`)?.value ?? null;
@@ -246,6 +280,10 @@
         }
       ).catch(() => null);
       const data = response ? await response.json().catch(() => ({})) : {};
+      if (saveButton) {
+        saveButton.disabled = false;
+        saveButton.textContent = saveLabel;
+      }
       msg.textContent = response && response.ok ? data.message || "Saved." : data.detail || "Couldn't save.";
       if (response && response.ok) {
         sc.man_of_match = data.man_of_match ?? box.querySelector("[data-mom]").value;

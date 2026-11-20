@@ -7205,7 +7205,11 @@ body[data-can-manage="0"] #performance .three-column-grid { grid-template-column
   .stats-captains .cap-bar { width: 64px; }
 }
 .stats-captains .cap-lost { background: #ef4444; }
+.stats-captains .cap-na { color: #64748b; }
+.stats-captains .cap-usual { color: #e11d48; font-weight: 800; margin-left: 2px; cursor: help; }
 .stats-pro-scroll { overflow-x: auto; }
 .stats-pro-table { width: 100%; border-collapse: collapse; font-size: 0.92rem; }
 .stats-pro-table th, .stats-pro-table td { padding: 8px 10px; border-bottom: 1px solid rgba(148, 163, 184, 0.25); text-align: left; white-space: nowrap; }
 .stats-pro-table thead th { font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.04em; color: #64748b; }
+/* Nov 20 2026: "View scorecard" on a played match (My availability) */
+.availability-card .availability-scorecard { justify-self: start; display: inline-flex; align-items: center; gap: 6px; margin-top: 4px; min-height: 40px; padding: 0 14px; text-decoration: none; }

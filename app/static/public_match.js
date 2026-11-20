@@ -207,11 +207,8 @@
     const tags = Object.keys(ROLE_TAGS).filter((role) => roles[role] && roles[role] === name).map((role) => ROLE_TAGS[role]);
     // Nov 17 2026: Cricbuzz style "(c)", "(vc)", "(wk)", "(c & wk)" after the name
     const tagsHtml = tags.length ? ` <span class="pm-cap" title="${tags.map((t) => ROLE_NAMES[t]).join(", ")}">(${tags.map((t) => t.toLowerCase()).join(" &amp; ")})</span>` : "";
-    // Nov 17 2026: 🧤 keeper / 🏏 batter / 🎯 bowler / ⚡ all-rounder icon, as on the scorecard page
-    const role = tags.includes("WK") ? "Wicket keeper" : (match.player_roles || {})[name];
-    const icons = (window.CricketClubAppScorecardView || {}).ROLE_ICONS || {};
-    const icon = role && icons[role] ? ` <span class="pm-role" title="${esc(role)}" aria-label="${esc(role)}">${icons[role]}</span>` : "";
-    return tagsHtml + icon;
+    // Nov 20 2026 (Dhruvika: "remove the batter and bowler icons, but keep the C, VC, WK"): no role icon any more
+    return tagsHtml;
   }
 
   // Name links to the player's profile when the server matched him to a registered player (match.player_keys).
