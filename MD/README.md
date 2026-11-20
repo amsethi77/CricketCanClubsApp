@@ -11,6 +11,7 @@ Any AI assistant or coding tool working on this repository (Claude, ChatGPT, Cop
 3. **Keep the three surfaces in lockstep.** The iOS and Android apps load these web pages, so web changes must work at phone width (390px) as well as laptop width.
 4. **Never commit local data or secrets.** Files in `app/data/` (`*.db*`, `*_cache.json`, `.stats_version`), `app/uploads/` and the `.env` file (Stripe keys) stay out of git.
 5. **Test before you hand over:** restart with `python app\main.py`, check the pages you touched on laptop and phone widths, and note how to test in the README section you updated.
+6. **Update every MD file the change touches, not only this README** (Dhruvika, Nov 20 2026: "Please update MD files as well always with these changes"): `MD/API.md` (run `python scripts\api_guide.py` after adding, changing or removing an API), `MD/QA_TESTCASES.md` (a test case for the new behaviour), `MD/infra/README.md` (deploy / Azure), `MD/PHONE_APPS.md` / `MD/MOBILE_PARITY.md` (anything the phone apps show), `MD/READMELIVE.md` / `MD/READMEScoring.md` (live scoring), and fix any older sentence in this README that the change makes wrong.
 
 The same rules are in `AGENTS.md` and `CLAUDE.md` so every tool picks them up. If you use GitHub Copilot, copy `AGENTS.md` to `.github/copilot-instructions.md`.
 
@@ -215,6 +216,7 @@ This section captures the user requirements in the order they were given and ref
 - (Amit, Nov 17 call) Editing a scorecard after upload is slow; bowler stats not picked up (count every run and dot, at least an approximate number); overs always 1-2 short.
 - (Amit, Nov 17 call) WhatsApp: testing alerts only to Amit and Dhruvika, never to registered players; check the cost (free tier for development). Also asked: how a duplicate match is recognised (same club names in another city, same names and scores); whether photos are stored in the database; move uploads / duplicates / backups to an Azure storage account with paths from App Service settings; why the App Service storage (1 GB on Basic) is growing (~900 MB, an 89 MB output.tar.gz, a 17 MB tar.gz in Python); a chosen name (Amit S) must stay chosen when the card is edited again; track the monthly costs (Gemini, Azure, WhatsApp) before going live.
 - (Amit, Nov 17 call, 2) After registering show a short "registered successfully" message (or the error) and go to the Sign in page, not into the app; a name changed in the editor must change only for that club's side (Rafa / Rafael on two teams); icons for batter / bowler / keeper / captain the same on live and uploaded cards; a PDF to download for uploaded and live scorecards; the AI duplicate engine and the scorecard reader must keep learning (accuracy 60-70% today, wants 90%+); saving an edit still slow (use player IDs, not names).
+- (Dhruvika, Nov 20) "Please update MD files as well always with these changes".
 - (Dhruvika, Nov 20) "remove the cost and ai accuracy mode from the site, that is for my info only".
 - (Dhruvika, Nov 19) "these fixtures shoe show latest on top" (My availability page).
 - (Dhruvika, Nov 19) "can oyu check the images in upload are taking space"; "i don't want you to store duplicates and for the pictures can you compress the images and then store it".
@@ -631,13 +633,22 @@ Not on the site (Nov 20 2026, Dhruvika: "remove the cost and ai accuracy mode fr
 
 Nov 18 2026 (Amit: "saving an edit is still slow"). Every save rebuilds everyone's saved stats; three repeats were removed (same numbers - checked on four copies of the data, byte for byte, and on 6 card saves): each live-scored innings is added up once per rebuild instead of once per player and club (`summarize_innings_scorebook` cache inside `_canonical_archive_scope`); a player's highest score and 25s / 50s / 100s look up his own innings from one list of every card's runs (`_archive_runs_index`) instead of re-reading every scorecard for every player; club-wise stats add up the per-match numbers already worked out (`_sum_match_rows`) instead of recounting every player of those matches for each player and club. Saving an edited scorecard on Amit's data: about 2.1 s -> 1.5 s (stats rebuild 1.3 s -> 0.6 s). The time is not spent on names vs player IDs.
 
+## Scorecard photos: size and duplicates
+
+Nov 13-19 2026 (Amit: "shrink in the size from Mb to kb"; Dhruvika: "i want all photos in kbs", "i don't want you to store duplicates ... compress the images and then store it").
+
+- **Stored compressed:** every uploaded photo (1st and 2nd innings) is compressed to under 450 KB as soon as it arrives (`CRICKETCLUBAPP_PHOTO_TARGET_KB`, max 2400 px, JPEG quality 80 down to 60, then 2000 px). The AI reads a temporary full-size copy (`<tmp>/cricketcanclubs-reading`, deleted after the reading). The scorecard keeps the original photo's hash, so the same photo can't be uploaded twice. A compressed photo is marked and never compressed again.
+- **Old photos:** Admin Center -> Scorecard Tools -> "🗜️ Compress N photos to under 450 KB" (`GET /api/admin/uploads/storage`, `POST /api/admin/uploads/shrink`). Amit's 20 photos: 110 MB -> 9 MB.
+- **No duplicate copies:** a duplicate photo is deleted, not copied; old copies: "🗑️ Delete N duplicate photo copies" (`POST /api/admin/uploads/remove-duplicate-copies`, tap twice).
+- **Test:** upload a 5-9 MB phone photo -> the file in `app/uploads/` is under 450 KB; upload it again -> refused as a duplicate.
+
 ## Database backups
 
 Request (Amit, Nov 5 2026): "We need a backup plan for the DB, once we go live we cannot afford to lose the data" (after the Nov 4 production file was damaged on Azure Files).
 
 - Local database files, SQLite sidecars and `app/data/backups/` are excluded from Git. Removing already tracked databases from the index keeps local copies but does not erase previously published Git history.
-- **Automatic, checked copies.** At start-up and every 6 hours (`CRICKETCLUBAPP_BACKUP_EVERY_HOURS`) the app copies the live SQLite file with SQLite's backup API (safe while it runs), runs `PRAGMA integrity_check` on the copy and only keeps it if it passes: `BACKUP_DIR/cricketclubapp-<UTC time>-<startup|scheduled|manual>.db`. `BACKUP_DIR` is `backups/` next to the live file (Azure: `/home/site/cricketclubapp/backups`, which survives restarts and deploys), or `CRICKETCLUBAPP_BACKUP_DIR`.
-- **Kept:** the newest 48 copies (12 days at 6 hours) plus one per day for 30 days.
+- **Automatic, checked copies.** At start-up and once a day (`CRICKETCLUBAPP_BACKUP_EVERY_HOURS`, 24 since Nov 12; checked every hour since Nov 19, so restarts don't put it off) the app copies the live SQLite file with SQLite's backup API (safe while it runs), runs `PRAGMA integrity_check` on the copy and only keeps it if it passes: `BACKUP_DIR/cricketclubapp-<UTC time>-<startup|scheduled|manual>.db`. `BACKUP_DIR` is `backups/` next to the live file (Azure: `/home/site/cricketclubapp/backups`, which survives restarts and deploys), or `CRICKETCLUBAPP_BACKUP_DIR`.
+- **Kept:** the last 3 days (`CRICKETCLUBAPP_BACKUP_KEEP_DAYS`; the newest copy is always kept), each compressed (`.db.gz`, ~4 MB). The uncompressed copy is made in the temporary folder, so /home needs only ~36 MB free (Nov 19). /admin/backups shows the last try (made / skipped and why), the free space and a warning when there was no backup in 24 hours.
 - **Off-site copy (recommended for go-live):** create an Azure Storage container and put its SAS URL (write permission) in the App Service setting `CRICKETCLUBAPP_BACKUP_BLOB_SAS`; every copy is then also uploaded there, so the data survives even if the App Service storage is lost.
 - **Start-up health check:** if the live file fails `integrity_check`, the site admins get a notification straight away (and no damaged copy is kept as a backup).
 - **Superadmin page `/admin/backups`** (Admin Center -> 🗄️ Database backups): live database health, every copy, **Back up now**, and **Download** for any copy. APIs: `GET/POST /api/admin/backups`, `GET /api/admin/backups/{file}`.
@@ -745,7 +756,7 @@ The script checks that the port listener is this app before stopping it. Set `CR
 - `app/data/seed.json`: CricketClubApp seed data
 - `app/data/cricketclubapp.db`: local SQLite database used for persistence at runtime
 - `app/uploads/`: accepted scorecard images
-- `app/duplicates/`: duplicate-review bundles containing both the original and duplicate file
+- `app/duplicates/`: old duplicate-review copies (since Nov 19 2026 no copies are kept; Admin Center -> Scorecard Tools -> "Delete N duplicate photo copies" removes the old ones)
 
 ## Notes
 
@@ -762,7 +773,7 @@ The script checks that the port listener is this app before stopping it. Set `CR
 - The chat pipeline also applies a small profanity/content filter so responses stay cricket-focused and respectful.
 - Saving the store refreshes the indexed LLM corpus, including prompt docs, club summaries, member summaries, fixtures, and archive scorecards.
 - Existing images dropped into `app/uploads/` are auto-imported into the archive list.
-- Duplicate files are moved into `app/duplicates/` for manual review, with a copy of the matched original staged beside them.
+- Duplicate files found in `app/uploads/` are deleted and listed for review (which file was a duplicate of which; "Open original" shows the scorecard's own photo). Since Nov 19 2026 no photo copies are kept in `app/duplicates/`.
 - The local LLM also powers grounded predictive analysis for club and player outlooks across current and future seasons, with year-trend fallbacks when the model gets too vague.
 
 ## Azure LLM
@@ -1448,8 +1459,11 @@ Model (soft launch, Oct 2026): keep the core cricket experience free; one paid p
 
 ## Deploy pipeline (GitHub Actions)
 
-Every push to `main` deploys to Azure (`cricketcanclubs-web`) automatically, after the code is checked
-(`.github/workflows/deploy.yml`). Watch it on GitHub -> **Actions** -> "Deploy CricketCanClubs to Azure": a green tick on
+**Only by hand** (Nov 20 2026, Dhruvika: "make sure that pipeline is not getting triggered automatically"): GitHub ->
+**Actions** -> "Deploy CricketCanClubs to Azure" -> **Run workflow** deploys the current `main` to Azure
+(`cricketcanclubs-web`) after the code is checked (`.github/workflows/deploy.yml`, trigger `workflow_dispatch` only - a
+push to `main` does NOT deploy). The check starts the app the way Azure does (`python -m uvicorn app.main:app` from the
+project folder). Watch it on the Actions page: a green tick on
 "1. Check the code" and "2. Deploy to Azure" means the live site has the new code. A red cross in step 1 means nothing was
 deployed (the step shows what failed); in step 2 it shows Azure's error.
 
@@ -1469,6 +1483,7 @@ data (`/home/site/cricketcanclubs/cricketclubapp.db`), Key Vault (Gemini key) an
 
 ## Change log
 
+- 2026-11-20: **MD files brought up to date** (Dhruvika: "Please update MD files as well always with these changes"). README: rule 6 in "Instructions for AI tools" (update every MD file a change touches), "Deploy pipeline" (only by hand), "Database backups" (daily, 3 days, compressed, hourly check), new section "Scorecard photos: size and duplicates", duplicates notes. `MD/infra/README.md` (deploy by hand, Free-plan quota), `MD/QA_TESTCASES.md` (F18-F27 for the Nov 17-20 changes), `AGENTS.md` / `CLAUDE.md` (same rule), `MD/API.md` regenerated.
 - 2026-11-20: **The deploy pipeline runs only by hand** (Dhruvika: "make sure that pipeline is not getting triggered automatically"). `.github/workflows/deploy.yml` has only `workflow_dispatch`: a push to main no longer deploys; to deploy, GitHub -> Actions -> "Deploy CricketCanClubs to Azure" -> Run workflow. It is the only workflow in the repository. Its start-up check now starts the app as Azure does (`app.main:app`).
 - 2026-11-20: **Costs and AI accuracy taken off the site** (Dhruvika: "remove the cost and ai accuracy mode from the site, that is for my info only"). The Admin Center tabs, their scripts (`admin_costs.js`, `admin_ai_accuracy.js` deleted) and styles, and the APIs `GET /api/admin/costs`, `POST /api/admin/costs/rates`, `GET /api/admin/ai-accuracy` are removed. Kept (nothing shows on the site): counting AI calls (`app_ai_usage`) and keeping the AI's reading of fixed cards (`ai_read_json`, which also makes the AI learn from fixes). The same numbers come from `python scripts\costs_and_accuracy.py` (README "Costs and AI accuracy report").
 - 2026-11-20: **Fix: the site didn't start on Azure** ("NameError: name 'usage_meter' is not defined", Amit's log). Azure starts the app as `app.main` (from the project folder), which uses the second set of imports in `main.py` (`from app import ...`); the new `usage_meter` and `ai_accuracy` modules were only in the first set (used when started from inside `app/`). Added to both; checked that both sets now import the same modules, and that `python -m uvicorn app.main:app` starts and answers /api/health, /scorecards, /live, /signin, /rankings. The pipeline's start-up check now starts the app the same way Azure does, so this can't slip through again.

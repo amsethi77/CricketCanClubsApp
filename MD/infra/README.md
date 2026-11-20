@@ -21,6 +21,9 @@ Runtime files are stored in App Service persistent storage under `/home/site/cri
 - `duplicates/`
 
 ## Notes
-- GitHub Actions should deploy on push to `main`.
+- GitHub Actions deploys ONLY by hand (Nov 20 2026): Actions -> "Deploy CricketCanClubs to Azure" -> Run workflow. A push to `main` does not deploy.
+- Azure starts the app as `python -m uvicorn app.main:app` from `/home/site/wwwroot`; the pipeline's check starts it the same way.
+- Free plan (F1): little CPU per 5 minutes / per day and 1 GB storage; when a CPU quota is used up Azure stops the app ("quota exceeded") until it resets (daily at midnight UTC). Deploying and starting the app use the most CPU. Basic (B1) has no CPU quota.
+- Storage on /home: photos are stored under 450 KB, no duplicate copies, backups ~4 MB each (3 days kept).
 - The workflow will use the App Service publish profile secret.
 - If OCR/LLM workloads stay local-only, the App Service stays lightweight for the web app itself.

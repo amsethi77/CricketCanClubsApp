@@ -6,6 +6,7 @@ This file is read by AI assistants (Claude Code, Codex, Copilot, Cursor, Gemini,
 - Add or update the section that describes the feature, page, API or rule you changed.
 - Add a dated line to "Change log" at the end of `MD/README.md`.
 - Add the user's request, in plain words, to "Prompt And Requirement Log".
+- Update every other MD file the change touches too (Dhruvika, Nov 20 2026: "update MD files as well always"): `MD/API.md` (`python scripts\api_guide.py`), `MD/QA_TESTCASES.md`, `MD/infra/README.md`, phone-app docs, and any older README sentence the change makes wrong.
 
 Other rules (full list in `MD/README.md` -> "Instructions for AI tools"):
 - The iOS and Android apps load these web pages: check your change at phone width (390px) and laptop width.

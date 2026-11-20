@@ -75,6 +75,16 @@ The automated suite covers the main product surfaces end-to-end on isolated loca
 | F14 | LLM inference API | Any browser session | Call `/api/llm/infer` with a prompt name and template args | The LLM service returns a structured answer, mode, prompt name, and source label. |
 | F15 | Clear chat | Any browser session | Click `Clear chat` in the Assistant header | The browser conversation state and cached LLM answers are cleared, and the Assistant resets to a fresh prompt. |
 | F16 | Captain recommendation | Any browser session | Ask `Who should be the captain of Coca Cola team in 2026?` through `/api/chat` | Chat returns a grounded provisional captain recommendation for the requested club. |
+| F18 | Register | New mobile number | Register on `/register` | "You're registered" box, then `/signin` with the number filled in; not signed in. Same number again -> "already exists" error. |
+| F19 | Rename on one team | A card with "Rafa" on both teams | In the editor rename Rafa -> Rafael on one team | Only that team's batting / bowling / How out change. |
+| F20 | Scorecard PDF | A published scorecard (uploaded and live) | Tap "⬇️ Download PDF scorecard" | A PDF with innings, (c)/(vc)/(wk), extras, bowlers, fall of wickets, info. |
+| F21 | Photo stored compressed | Signed in, a 5-9 MB phone photo | Upload it | Stored file in `app/uploads/` is under 450 KB; the AI read the full-size copy; uploading the same photo again is refused. |
+| F22 | No duplicate copies | Copy an existing photo into `app/uploads/` under a new name, restart | Open Admin Center duplicates | The copy is deleted and listed as a duplicate; nothing new in `app/duplicates/`. |
+| F23 | Compress old photos | Superadmin, photos over 450 KB | Scorecard Tools -> "Compress N photos" | All photos under ~450 KB; scorecards still show their photos. |
+| F24 | Backups | Superadmin | `/admin/backups` -> Back up now | A new `.db.gz`; "Last try" shows it was made; free space shown. |
+| F25 | My availability order | Player with several matches | Open `/player-availability` | Newest match date on top. |
+| F26 | Costs / AI accuracy off the site | Superadmin | Open Admin Center; call `/api/admin/costs` | No Costs / AI accuracy tabs; the API answers 404. `python scripts\costs_and_accuracy.py` prints the report. |
+| F27 | Start like Azure | Project folder | `python -m uvicorn app.main:app --port 8000` | App starts; /api/health 200 (the pipeline checks this too). |
 
 ## Non-Functional Testcases
 
