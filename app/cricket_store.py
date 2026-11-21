@@ -10,6 +10,7 @@ import re
 import shutil
 import sqlite3
 import subprocess
+import time
 import uuid
 import platform
 from collections import Counter, defaultdict
@@ -149,10 +150,15 @@ def _database_signature() -> tuple[int, ...]:
     The database runs in WAL mode, so a save first goes to the "-wal" file and the main file's time and size
     often don't change. A second worker / instance (Azure) then kept serving its old copy ("Match not found." right
     after a match was created). Every save_store now adds 1 to app_store_version, which is read here.
+
+    Nov 21 2026 (Dhruvika: "Loading is taking age"): the file's time and size are no longer part of it. On Azure
+    the database is not in WAL mode, so every write changed the file - also a visit being counted (every page), a
+    signed-in session's "last seen" (every 30 s) and live-match viewers (every few seconds) - and each one threw
+    away the in-memory data and the Home dashboard: the next page read everything again (20-40 s on Azure B1).
+    Instead, a write to any data table adds 1 to app_store_version through a trigger (_install_version_triggers),
+    except the activity tables in ACTIVITY_TABLES. README "Faster pages".
     """
-    try:
-        stat_result = DATABASE_FILE.stat()
-    except FileNotFoundError:
+    if not DATABASE_FILE.exists():
         return 0, 0, 0
     version = 0
     try:
@@ -166,11 +172,42 @@ def _database_signature() -> tuple[int, ...]:
             connection.close()
     except sqlite3.DatabaseError:
         version = -1
-    return stat_result.st_mtime_ns, stat_result.st_size, version
+    return 0, 0, version
 
 
 def _signature_text(signature: tuple[int, ...]) -> str:
     return ":".join(str(part) for part in signature)
+
+
+# Tables written all the time that are not part of the club data: writing them must not throw the in-memory copy away.
+ACTIVITY_TABLES = frozenset({
+    "app_store_version", "app_analytics_visits", "app_live_match_viewers", "app_auth_sessions", "app_ai_usage",
+    "app_whatsapp_log", "app_audit_log", "app_notification_reads", "app_tour_seen", "app_upload_jobs", "app_flags",
+})
+def _install_version_triggers(connection: sqlite3.Connection) -> None:
+    """Every table except ACTIVITY_TABLES gets triggers that add 1 to app_store_version on insert / update / delete
+    (README "Faster pages"), so a change made anywhere - save_store or a direct SQL write - reaches every worker.
+    Checked against the database itself each time (one small query), so an imported / restored file gets them too."""
+    rows = connection.execute("SELECT type, name FROM sqlite_master WHERE type IN ('table', 'trigger')").fetchall()
+    tables = {str(row[1]) for row in rows if row[0] == "table" and not str(row[1]).startswith("sqlite_")}
+    triggers = {str(row[1]) for row in rows if row[0] == "trigger"}
+    missing = [
+        (table, action)
+        for table in sorted(tables - ACTIVITY_TABLES)
+        if re.fullmatch(r"[A-Za-z0-9_]+", table)
+        for action in ("insert", "update", "delete")
+        if f"trg_store_version_{table}_{action}" not in triggers
+    ]
+    if not missing:
+        return
+    connection.execute("CREATE TABLE IF NOT EXISTS app_store_version (id INTEGER PRIMARY KEY CHECK (id = 1), version INTEGER NOT NULL)")
+    connection.execute("INSERT INTO app_store_version (id, version) VALUES (1, 1) ON CONFLICT(id) DO UPDATE SET version = version + 1")
+    for table, action in missing:
+        connection.execute(
+            f"CREATE TRIGGER IF NOT EXISTS trg_store_version_{table}_{action} AFTER {action.upper()} ON {table} "
+            "BEGIN UPDATE app_store_version SET version = version + 1 WHERE id = 1; END"
+        )
+    connection.commit()
 
 
 def _bump_store_version(connection: sqlite3.Connection) -> None:
@@ -4073,16 +4110,42 @@ def create_duplicate_record_from_bytes(
     }
 
 
+_PASSING_DB_ERRORS = ("disk i/o error", "database is locked", "unable to open database file")
+
+
+def open_database(path: Path | str | None = None) -> sqlite3.Connection:
+    """Open the app's SQLite database (README "Database on Azure").
+
+    Nov 21 2026 (Amit's log after moving to B2: "sqlite3.OperationalError: disk I/O error" on sign-in): the
+    database lives on Azure's network share (/home). While the app restarts (a plan change, a deploy, a settings
+    change) Azure starts the new copy before the old one has stopped, and for a few seconds the share can answer
+    "disk I/O error" or "database is locked" while the two let go of the file. Opening is tried again (up to about
+    7 s) instead of failing the request at once; any other error is raised as before.
+    """
+    target = Path(path) if path is not None else DATABASE_FILE
+    target.parent.mkdir(parents=True, exist_ok=True)
+    waits = (0.25, 0.5, 1.0, 1.5, 2.0, 2.0)
+    for attempt in range(len(waits) + 1):
+        connection = sqlite3.connect(target, timeout=60)
+        try:
+            connection.row_factory = sqlite3.Row
+            connection.execute("PRAGMA busy_timeout = 60000")
+            connection.execute("PRAGMA foreign_keys = ON")
+            # WAL is unsafe on Azure Files (SMB) and corrupted the production DB on 2026-11-04.
+            connection.execute("PRAGMA journal_mode = %s" % ("DELETE" if os.environ.get("WEBSITE_SITE_NAME") else "WAL"))
+            connection.execute("PRAGMA synchronous = NORMAL")
+            return connection
+        except sqlite3.OperationalError as exc:
+            connection.close()
+            if attempt >= len(waits) or not any(text in str(exc).lower() for text in _PASSING_DB_ERRORS):
+                raise
+            logger.warning("Database busy while opening (%s); trying again in %.2f s.", exc, waits[attempt])
+            time.sleep(waits[attempt])
+    raise sqlite3.OperationalError("database could not be opened")  # not reached
+
+
 def _connection() -> sqlite3.Connection:
-    DATABASE_FILE.parent.mkdir(exist_ok=True)
-    connection = sqlite3.connect(DATABASE_FILE, timeout=60)
-    connection.row_factory = sqlite3.Row
-    connection.execute("PRAGMA foreign_keys = ON")
-    # WAL is unsafe on Azure Files (SMB) and corrupted the production DB on 2026-11-04.
-    connection.execute("PRAGMA journal_mode = %s" % ("DELETE" if os.environ.get("WEBSITE_SITE_NAME") else "WAL"))
-    connection.execute("PRAGMA synchronous = NORMAL")
-    connection.execute("PRAGMA busy_timeout = 60000")
-    return connection
+    return open_database()
 
 
 def _slug_token(value: str, fallback: str = "item") -> str:
@@ -6379,6 +6442,7 @@ def ensure_database() -> None:
     with _connection() as connection:
         _repair_indexes_once(connection)
         connection.executescript(_schema_tables())
+        _install_version_triggers(connection)
         existing_fixture_columns = {
             row[1]
             for row in connection.execute("PRAGMA table_info(fixtures)").fetchall()

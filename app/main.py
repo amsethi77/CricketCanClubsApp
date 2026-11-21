@@ -211,6 +211,7 @@ try:
         match_progress,
         shown_match_status,
         shown_status_copy,
+        open_database,
         scorebook_match_finished,
         scorebook_wickets_for_all_out,
         scorebook_result_text,
@@ -285,6 +286,7 @@ except ModuleNotFoundError:
         match_progress,
         shown_match_status,
         shown_status_copy,
+        open_database,
         scorebook_match_finished,
         scorebook_wickets_for_all_out,
         scorebook_result_text,
@@ -2001,15 +2003,7 @@ def _archive_match_club_ids(store: dict[str, Any], club_id: str, match_id: str =
 
 def _auth_connection() -> sqlite3.Connection:
     logger.debug("🗄️ Opening DB connection: %s", DATABASE_FILE)
-    DATABASE_FILE.parent.mkdir(parents=True, exist_ok=True)
-    connection = sqlite3.connect(DATABASE_FILE, timeout=60)
-    connection.row_factory = sqlite3.Row
-    connection.execute("PRAGMA foreign_keys = ON")
-    # WAL is unsafe on Azure Files (SMB) and corrupted the production DB on 2026-11-04.
-    connection.execute("PRAGMA journal_mode = %s" % ("DELETE" if os.environ.get("WEBSITE_SITE_NAME") else "WAL"))
-    connection.execute("PRAGMA synchronous = NORMAL")
-    connection.execute("PRAGMA busy_timeout = 60000")
-    return connection
+    return open_database(DATABASE_FILE)  # tries again while Azure's share is busy (README "Database on Azure")
 
 
 # Nov 18 2026 (Amit: "track costs"): every Gemini / Claude call is counted in app_ai_usage (README "Costs").
@@ -3059,6 +3053,7 @@ def _require_match_scorer(token: str | None, match_id: str, expected_club_id: st
 def _auth_user_from_token(token: str | None, touch: bool = True) -> tuple[sqlite3.Row, str]:
     ensure_auth_schema()
     if not token:
+        logger.warning("Signed out (401): the request had no sign-in token.")
         raise HTTPException(status_code=401, detail="Sign in first.")
     with _auth_connection() as connection:
         row = connection.execute(
@@ -3070,14 +3065,22 @@ def _auth_user_from_token(token: str | None, touch: bool = True) -> tuple[sqlite
             """,
             (token,),
         ).fetchone()
+        # Nov 21 2026: the reason is written to the log (Azure log stream), so an unexpected sign-out can be traced.
         if not row:
+            known = connection.execute("SELECT user_id FROM app_auth_sessions WHERE token = ?", (token,)).fetchone()
+            logger.warning(
+                "Signed out (401): %s.",
+                f"session found but its user {known['user_id']} is missing" if known else "the token is not in app_auth_sessions",
+            )
             raise HTTPException(status_code=401, detail="Session expired. Sign in again.")
         if row["session_ended_at"]:
+            logger.warning("Signed out (401): user %s's session was ended at %s (signed out).", row["id"], row["session_ended_at"])
             raise HTTPException(status_code=401, detail="Session expired. Sign in again.")
         last_seen = _parse_utc_timestamp(row["session_last_seen_at"] or row["session_created_at"])
         if last_seen is not None:
             idle_seconds = int((datetime.utcnow() - last_seen).total_seconds())
             if idle_seconds >= _session_timeout_seconds():
+                logger.warning("Signed out (401): user %s idle for %s s (last seen %s).", row["id"], idle_seconds, row["session_last_seen_at"])
                 _end_auth_session(connection, token)
                 raise HTTPException(status_code=401, detail="Session expired after 30 minutes of inactivity. Sign in again.")
         if touch:
