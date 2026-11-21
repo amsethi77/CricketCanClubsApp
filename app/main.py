@@ -5,6 +5,7 @@ import html
 import os
 import importlib
 import re
+import pickle
 import secrets
 import sqlite3
 import shutil
@@ -20,7 +21,7 @@ from urllib.parse import urlencode
 import uuid
 from datetime import datetime, date, timedelta, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 from zoneinfo import ZoneInfo
 
 # The clubs play in Ontario, but Azure's servers run on GMT/UTC: a match started at 12:08 AM showed "4:08 AM"
@@ -207,6 +208,9 @@ try:
         _club_dashboard_fixture_view,
         _scorebook_is_club_side,
         summarize_innings_scorebook,
+        match_progress,
+        shown_match_status,
+        shown_status_copy,
         scorebook_match_finished,
         scorebook_wickets_for_all_out,
         scorebook_result_text,
@@ -278,6 +282,9 @@ except ModuleNotFoundError:
         _club_dashboard_fixture_view,
         _scorebook_is_club_side,
         summarize_innings_scorebook,
+        match_progress,
+        shown_match_status,
+        shown_status_copy,
         scorebook_match_finished,
         scorebook_wickets_for_all_out,
         scorebook_result_text,
@@ -4517,7 +4524,7 @@ def _fixture_has_recorded_score_data(fixture: dict[str, Any]) -> bool:
 
 def _public_fixture_card(fixture: dict[str, Any]) -> dict[str, Any]:
     scorecard = dict(fixture.get("scorecard") or {})
-    status = str(fixture.get("status") or "Scheduled").strip() or "Scheduled"
+    status = shown_match_status(fixture)  # README "Live, upcoming and finished matches"
     date_text = str(fixture.get("date") or "").strip()
     parsed_date = _parse_public_fixture_date(date_text)
     today = date.today()
@@ -5008,8 +5015,12 @@ def _public_live_matches(store: dict[str, Any]) -> list[dict[str, Any]]:
             continue
         if fixture_date[:10] < today:
             continue  # a game from an earlier day is not live any more
-        if status_key == "completed":
+        if match_progress(fixture) != "live":
+            # Nov 21 2026 (Dhruvika): live only once the 1st innings has started (a ball scored), and not once both
+            # innings are complete - a fixture today with no ball yet is "Coming up", a finished one is a result.
             continue
+        status = "Live"
+        status_key = "live"
         scorecard = dict(fixture.get("scorecard") or {})
         scorebook_innings = []
         for innings in (fixture.get("scorebook", {}) or {}).get("innings", []) or []:
@@ -5175,7 +5186,7 @@ def _public_match_payload(store: dict[str, Any], match_id: str) -> dict[str, Any
     published = None
     if not any(item["balls"] for item in innings_payload):
         published = _published_scorecard_for_fixture(store, match)
-    status_text = str(match.get("status") or "Scheduled")
+    status_text = shown_match_status(match)  # Completed once both innings are done; Live only after the 1st ball
     result_text = str(scorecard.get("result") or match.get("result") or "TBD")
     if published:
         status_text = "Completed"
@@ -5236,11 +5247,39 @@ def public_live_page() -> dict[str, Any]:
     return _public_live_page_payload(store)
 
 
+_PUBLIC_MEMO: dict[str, tuple[tuple[str, str, str], Any]] = {}
+_PUBLIC_MEMO_LOCK = threading.Lock()
+
+
+def _public_memo(name: str, store: dict[str, Any], build: Callable[[dict[str, Any]], Any]) -> Any:
+    """Nov 21 2026 (Dhruvika: "Site is very slow"): the public fixtures list and scorecards list are the same for
+    everyone until the data changes, but were worked out again on every request (each one reads all 265 uploaded
+    cards: ~3 s on Azure B1). Kept per data version (every save_store bumps it) and per day (past / today matter);
+    a copy is handed out so a caller can't change the kept one. README "Faster pages"."""
+    signature = str(store.get("_cache_signature") or "")
+    if not signature:
+        return build(store)
+    try:  # captains / man of the match of live-scored matches are kept in their own table (no store save)
+        with _auth_connection() as connection:
+            _ensure_extra_match_tables(connection)
+            lineups = tuple(connection.execute("SELECT COUNT(*), MAX(updated_at), SUM(LENGTH(lineups_json)) FROM app_match_lineups").fetchone())
+    except Exception:
+        return build(store)
+    key = (signature, _current_local_date().isoformat(), str(lineups))
+    with _PUBLIC_MEMO_LOCK:
+        kept = _PUBLIC_MEMO.get(name)
+    if kept is None or kept[0] != key:
+        kept = (key, build(store))
+        with _PUBLIC_MEMO_LOCK:
+            _PUBLIC_MEMO[name] = kept
+    return pickle.loads(pickle.dumps(kept[1], protocol=pickle.HIGHEST_PROTOCOL))
+
+
 @app.get("/api/public/fixtures-page")
 def public_fixtures_page() -> dict[str, Any]:
     logger.debug("Public fixtures landing page requested.")
     store = load_store()
-    return _public_fixtures_page_payload(store)
+    return _public_memo("fixtures-page", store, _public_fixtures_page_payload)
 
 
 def _public_fixture_card_payload(fixture: dict[str, Any]) -> dict[str, Any]:
@@ -5261,8 +5300,8 @@ def _public_fixture_card_payload(fixture: dict[str, Any]) -> dict[str, Any]:
         "match_type": str(details.get("match_type") or "Friendly"),
         "scheduled_time": str(details.get("scheduled_time") or "Time TBD"),
         "overs": str(details.get("overs") or ""),
-        "status": str(fixture.get("status") or "Scheduled"),
-        "status_key": str(fixture.get("status_key") or str(fixture.get("status") or "").lower().replace(" ", "-")),
+        "status": shown_match_status(fixture),
+        "status_key": shown_match_status(fixture).lower().replace(" ", "-"),
         "result": str(scorecard.get("result") or fixture.get("result") or "TBD"),
         "heartlake_score": _side_score_text(scorecard, "heartlake", fixture.get("heartlake_score")),
         "opponent_score": _side_score_text(scorecard, "opponent", fixture.get("opponent_score")),
@@ -6574,7 +6613,7 @@ def _public_scorecards(store: dict[str, Any]) -> list[dict[str, Any]]:
         if not already_archived:
             cards.append(card)
     cards = [card for card in cards if card["date"]]
-    cards.sort(key=lambda card: (card["date"], card["id"]), reverse=True)
+    cards.sort(key=lambda card: (str(card.get("date") or ""), str(card.get("id") or "")), reverse=True)
     return cards
 
 
@@ -6672,7 +6711,7 @@ def public_scorecards(
 ) -> dict[str, Any]:
     """Approved scorecards; signed-in users are scoped to their club except superadmins."""
     store = load_store()
-    cards = _public_scorecards(store)
+    cards = _public_memo("scorecards", store, _public_scorecards)
     signed_in = bool(x_auth_token)
     can_select_club = False
     selected_club_id = ""
@@ -7403,7 +7442,7 @@ def public_match(
         raise HTTPException(status_code=404, detail=str(exc))
     scorebook = match.get("scorebook") if isinstance(match.get("scorebook"), dict) else {}
     innings = scorebook.get("innings") if isinstance(scorebook.get("innings"), list) else []
-    has_started = str(match.get("status") or "").strip().lower() == "live" or any(
+    has_started = match_progress(fixture or match) == "live" or any(
         isinstance(inning, dict) and bool(inning.get("balls")) for inning in innings
     )
     is_completed = _fixture_is_completed(fixture) if fixture else (
@@ -8034,7 +8073,7 @@ def _admin_center_html(request: Request) -> HTMLResponse:
         <script src="/assets/multipage.js?v=20261117b"></script>
         <script src="/assets/scorecard_view.js?v=20261120a"></script>
         <script src="/assets/scorecard.js?v=20261120b"></script>
-        <script src="/assets/admin_center.js?v=20261119b"></script>
+        <script src="/assets/admin_center.js?v=20261121c"></script>
         <script src="/assets/admin_whatsapp.js?v=20261117b"></script>
         <script src="/assets/admin_reread.js?v=20261024a"></script>
         <script src="/assets/admin_clubs.js?v=20261120a"></script>
@@ -8493,7 +8532,15 @@ def dashboard(
         except Exception:
             user_row = None
             current_club_id = ""
-    resolved_focus_club_id = current_club_id or resolved_focus_club_id
+    # Nov 21 2026 (Dhruvika: Admin Center Overview "Members shows 161 but actual players are different"): a signed-in
+    # person always got their CURRENT club's numbers, even when the Admin Center asked for another club picked in its
+    # club list - so "Selected club: Amit CC" showed Heartlake's fixtures, archives and top batter. A club asked for
+    # with focus_club_id is now used when the person may see it (the superadmin: any club; others: their own clubs).
+    if user_row is not None and focus_club_id and str(focus_club_id) != str(current_club_id or ""):
+        allowed = str(user_row["role"] or "").strip() == "superadmin" or str(focus_club_id) in set(_user_club_ids(store, user_row, current_club_id))
+        resolved_focus_club_id = str(focus_club_id) if allowed else current_club_id
+    else:
+        resolved_focus_club_id = current_club_id or resolved_focus_club_id
     dashboard_data = current_dashboard(store, resolved_focus_club_id, requested_season_year)
     for member_list_key in ("members", "all_members"):
         if isinstance(dashboard_data.get(member_list_key), list):
@@ -9828,7 +9875,7 @@ def season_setup_data(
         season_years = sorted({*season_years, selected_year}, reverse=True)
     fixtures = [
         {
-            **fixture,
+            **shown_status_copy(fixture),  # status as shown everywhere (README "Live, upcoming and finished matches")
             "can_delete_incomplete": bool(
                 not _fixture_is_completed(fixture)
                 and _match_delete_is_authorized(store, user_row, current_club_id, fixture)

@@ -3175,7 +3175,8 @@ function renderFormValues(match) {
   elements.umpiresInput.value = match.details.umpires || "";
   elements.scorerInput.value = match.details.scorer || "";
   elements.whatsappThreadInput.value = match.details.whatsapp_thread || "";
-  elements.matchStatusInput.value = match.status || "Scheduled";
+  // saved_status: what is saved (status on the page follows the 1st ball / both innings - README "Live, upcoming and finished matches")
+  elements.matchStatusInput.value = match.saved_status || match.status || "Scheduled";
   elements.matchNotesInput.value = match.details.notes || "";
   elements.heartlakeRunsInput.value = match.scorecard.heartlake_runs || "";
   elements.heartlakeWicketsInput.value = match.scorecard.heartlake_wickets || "";

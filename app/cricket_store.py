@@ -689,6 +689,62 @@ def _over_string_from_legal_balls(legal_balls: int) -> str:
     return f"{overs}.{balls}"
 
 
+_MATCH_DONE_WORDS = {"complete", "completed", "finished", "final"}
+_MATCH_LIVE_WORDS = {"live", "in progress", "ongoing", "scorecard in progress"}
+_MATCH_OPEN_RESULTS = {"", "tbd", "to be determined", "pending", "not recorded", "in progress", "ongoing"}
+
+
+def match_progress(fixture: dict[str, Any]) -> str:
+    """Where a match is: "completed", "live" or "upcoming" (Nov 21 2026, Dhruvika: "Match should only be in progress
+    when the 1st innings has started and match over when both innings are completed"). README "Live, upcoming and
+    finished matches".
+
+    completed - marked Completed, has a result, or both innings of its scorebook are complete.
+    live      - not completed and the 1st innings has started: a ball is scored, or a score was typed in.
+    upcoming  - everything else, even if its status says "Live" (openers picked but no ball yet, or a fixture
+                someone set to "Live" by hand) - it shows as Scheduled, not "In progress".
+    """
+    fixture = fixture or {}
+    if str(fixture.get("status") or "").strip().lower() in _MATCH_DONE_WORDS:
+        return "completed"
+    scorecard = fixture.get("scorecard") if isinstance(fixture.get("scorecard"), dict) else {}
+    for result in (fixture.get("result"), scorecard.get("result")):
+        if str(result or "").strip().lower() not in _MATCH_OPEN_RESULTS:
+            return "completed"
+    innings = [item for item in ((fixture.get("scorebook") or {}).get("innings") or []) if isinstance(item, dict)]
+    if len(innings) >= 2 and all(str(item.get("status") or "").strip().lower() in _MATCH_DONE_WORDS for item in innings):
+        return "completed"
+    if any(item.get("balls") for item in innings):
+        return "live"
+    typed = (
+        scorecard.get("heartlake_runs"), scorecard.get("heartlake_wickets"),
+        scorecard.get("opponent_runs"), scorecard.get("opponent_wickets"),
+        fixture.get("heartlake_score"), fixture.get("opponent_score"),
+    )
+    if any(value is not None and str(value).strip().lower() not in {"", "-", "--", "tbd", "0", "0/0"} for value in typed):
+        return "live"  # scored without ball-by-ball (runs typed on the scorecard / "quick update")
+    return "upcoming"
+
+
+def shown_status_copy(fixture: dict[str, Any]) -> dict[str, Any]:
+    """A shallow copy for a page: status = shown_match_status, saved_status = what is saved."""
+    copy = dict(fixture)
+    copy["saved_status"] = str(fixture.get("status") or "")
+    copy["status"] = shown_match_status(fixture)
+    return copy
+
+
+def shown_match_status(fixture: dict[str, Any]) -> str:
+    """The status to show for a match, following match_progress (the saved status is left as it is)."""
+    saved = str((fixture or {}).get("status") or "").strip()
+    progress = match_progress(fixture)
+    if progress == "completed":
+        return saved if saved.lower() in _MATCH_DONE_WORDS else "Completed"
+    if progress == "live":
+        return "Live"
+    return "Scheduled" if not saved or saved.lower() in _MATCH_LIVE_WORDS else saved
+
+
 def summarize_innings_scorebook(innings: dict[str, Any]) -> dict[str, Any]:
     """Totals of one live-scored innings. Nov 18 2026 (Amit: saving an edit is slow): while a stats rebuild runs
     (_canonical_archive_scope) each innings is added up once - it was added up again for every player and every
@@ -8537,7 +8593,7 @@ def build_summary(store: dict[str, Any]) -> dict[str, Any]:
     commentary_count = sum(len(match.get("commentary", [])) for match in fixtures)
     pending_player_stats = build_player_pending_stats(canonical_archives, members)
     completed_matches = sum(1 for match in fixtures if match.get("status") == "Completed")
-    live_matches = sum(1 for match in fixtures if match.get("status") == "Live")
+    live_matches = sum(1 for match in fixtures if match_progress(match) == "live")
     no_captain = sum(1 for match in fixtures if not match.get("heartlake_captain"))
     for archive in canonical_archives:
         opponent = _archive_opponent_name(archive)
@@ -9014,7 +9070,9 @@ def _build_dashboard_impl(
         ),
     )
     summary = build_summary(season_store)
-    fixtures = sorted(season_fixtures, key=lambda item: item["date"])
+    # Copies whose status follows match_progress (Live only after the 1st ball, Completed once both innings are done);
+    # the saved status stays in saved_status for the edit form. README "Live, upcoming and finished matches".
+    fixtures = [shown_status_copy(item) for item in sorted(season_fixtures, key=lambda item: item["date"])]
 
     def _fixture_date_value(item: dict[str, Any]) -> datetime.date:
         raw_value = str(item.get("date") or "").strip()
@@ -9184,7 +9242,7 @@ def _build_dashboard_impl(
         "member_club_stats": focused_member_summary_stats,
         "club_summary_stats": list(store.get("club_summary_stats", [])),
         "club_year_stats": list(store.get("club_year_stats", [])),
-        "all_fixtures": global_fixtures,
+        "all_fixtures": [shown_status_copy(item) for item in global_fixtures],
         "all_archive_uploads": global_archives,
         "batting_rankings": build_batting_rankings(focus_stats),
         "bowling_rankings": build_bowling_rankings(focus_stats),
