@@ -90,7 +90,7 @@ function loadPublicAssistant() {
       document.body.dataset.signedIn = 'true';
       document.dispatchEvent(new CustomEvent('cc:signed-in', { detail: user }));
       const script = document.createElement('script');
-      script.src = '/assets/multipage.js?v=20261117a';
+      script.src = '/assets/multipage.js?v=20261123a';
       document.head.appendChild(script);
       return;
     }

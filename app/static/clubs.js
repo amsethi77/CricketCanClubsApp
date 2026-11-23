@@ -523,7 +523,7 @@ function renderClubs() {
     if (!button) return;
     try {
       debug("Club select requested.", { clubId: button.dataset.clubSelect || "" });
-      const data = await postJson("/api/auth/select-club", { club_id: button.dataset.clubSelect }, true);
+      const data = await postJson("/api/auth/select-club?include_dashboard=false", { club_id: button.dataset.clubSelect }, true); // Home loads it
       authData.user = data.user;
       setPrimaryClubId(data.user.current_club_id || data.user.primary_club_id || "");
       renderClubs();

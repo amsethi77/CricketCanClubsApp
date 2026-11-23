@@ -32,6 +32,15 @@ function escapeHtml(value) {
   if (passwordInput) passwordInput.focus();
 })();
 
+// Nov 21 2026 (Amit: "When the session times out then it should take the user to signin page"): say why.
+(function timedOutNotice() {
+  const params = new URLSearchParams(window.location.search);
+  if (params.get("expired") !== "1" || !statusBanner) return;
+  statusBanner.hidden = false;
+  statusBanner.className = "status-banner warning";
+  statusBanner.textContent = "You were signed out after 15 minutes without activity. Sign in again to continue where you were.";
+})();
+
 function setStatus(message, tone = "info") {
   const show = Boolean(message) && (tone === "error" || tone === "warning");
   statusBanner.hidden = !show;

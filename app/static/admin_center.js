@@ -765,16 +765,46 @@ function renderClubSelect(dashboard = payload) {
 }
 
 function renderClubStats(dashboard) {
+  // Nov 21 2026 (Dhruvika: "Members shows 161 but actual players are different"): Members was the server's count of
+  // every player record it had scoped to the club (not the club's roster), and Teams / Top Batter read fields the
+  // server never sends (always 0 / TBD). Now Members and Teams are the same lists as Club Maintenance's roster and
+  // teams, and Top Batter is the season's leading run scorer for this club.
   const summary = dashboard?.summary || {};
   const club = focusedClub(dashboard);
+  const members = Array.isArray(dashboard?.members) ? dashboard.members.length : summary.member_count || 0;
+  const teams = Array.isArray(dashboard?.teams) ? dashboard.teams.length : 0;
+  const season = dashboard?.selected_season_year || dashboard?.default_season_year || "";
+  const seasonNote = season ? `<p>${escapeHtml(season)} season</p>` : "";
+  const topBatter = summary.batting_leader || summary.top_batter || "";
+  const topRuns = summary.batting_leader_runs || summary.top_batter_runs || 0;
+  // Nov 21 2026 (Dhruvika: "Amit CC has only 1 game and just 15 members"): every count says what it counts - the
+  // season numbers and the all-seasons totals - and "Matches played" is the club's real games (each match once, the
+  // same count as Stats -> Captains: wins and losses).
   clubStats.innerHTML = `
     <article class="summary-card"><span>Selected club</span><strong>${escapeHtml(club.name || "TBD")}</strong></article>
-    <article class="summary-card"><span>Members</span><strong>${summary.member_count || 0}</strong></article>
-    <article class="summary-card"><span>Teams</span><strong>${summary.team_count || 0}</strong></article>
-    <article class="summary-card"><span>Fixtures</span><strong>${summary.fixture_count || 0}</strong></article>
-    <article class="summary-card"><span>Archives</span><strong>${summary.archive_count || 0}</strong></article>
-    <article class="summary-card"><span>Top Batter</span><strong>${escapeHtml(summary.top_batter || "TBD")}</strong><p>${summary.top_batter_runs || 0} runs</p></article>
+    <article class="summary-card"><span>Members</span><strong>${members}</strong><p>players on the club roster</p></article>
+    <article class="summary-card"><span>Matches played</span><strong data-club-matches>…</strong><p data-club-matches-note>all seasons</p></article>
+    <article class="summary-card"><span>Teams</span><strong>${teams}</strong></article>
+    <article class="summary-card"><span>Fixtures</span><strong>${summary.fixture_count || 0}</strong>${seasonNote}</article>
+    <article class="summary-card"><span>Uploaded scorecards</span><strong>${summary.archive_count || 0}</strong>${seasonNote}</article>
+    <article class="summary-card"><span>Top Batter</span><strong>${escapeHtml(topBatter || "TBD")}</strong><p>${topBatter ? `${topRuns} runs${season ? ` in ${escapeHtml(season)}` : ""}` : `no runs yet${season ? ` in ${escapeHtml(season)}` : ""}`}</p></article>
   `;
+  const clubIdForMatches = String(club.id || "");
+  if (clubIdForMatches) {
+    getJson(`/api/stats/captains?club_id=${encodeURIComponent(clubIdForMatches)}`, true)
+      .then((data) => {
+        if (String(focusedClub(payload)?.id || "") !== clubIdForMatches) return; // another club was picked meanwhile
+        const totals = (data && data.totals) || {};
+        const box = clubStats.querySelector("[data-club-matches]");
+        const note = clubStats.querySelector("[data-club-matches-note]");
+        if (box) box.textContent = String(totals.played || 0);
+        if (note) note.textContent = `all seasons${totals.played ? ` · ${totals.won || 0} won, ${totals.lost || 0} lost` : ""}`;
+      })
+      .catch(() => {
+        const box = clubStats.querySelector("[data-club-matches]");
+        if (box) box.textContent = "–";
+      });
+  }
 }
 
 function renderClubDetail(dashboard) {

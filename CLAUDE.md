@@ -13,3 +13,4 @@ Other rules (full list in `MD/README.md` -> "Instructions for AI tools"):
 - Never commit `app/data/*.db*`, `app/data/*_cache.json`, `app/data/.stats_version`, `app/uploads/` or `.env` (Stripe keys).
 - Run the app with `python app\main.py` (port 8090) and test the pages you touched before handing over.
 - Keep Windows line endings (CRLF) in existing files.
+- A live match's PDF (`app/scorecard_pdf.py`, `build_scorecard_pdf`) shows exactly what its match page shows (`app/static/public_match.js`): change both together and run `python -m pytest tests/test_scorecard_pdf_matches_page.py` (Dhruvika, Nov 23 2026: "Ensure that they are the same going forward").

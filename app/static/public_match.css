@@ -1680,3 +1680,21 @@ svg.pm-ballicon {
   box-shadow: none !important;
   vertical-align: -0.28em;
 }
+
+/* Nov 23 2026: Share button on every match page (README "Share a match before it starts") */
+.pm-share {
+  margin-left: auto;
+  border: 1px solid #d1d5db;
+  background: #fff;
+  color: #111827;
+  border-radius: 999px;
+  padding: 4px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.pm-share:hover {
+  border-color: #b91c1c;
+  color: #b91c1c;
+}

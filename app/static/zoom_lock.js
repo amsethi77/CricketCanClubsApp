@@ -1,3 +1,32 @@
+// Nov 23 2026 (Dhruvika: "app is still very slow when 2/3 users try to login simultaneously"): every page asked the
+// server "who is signed in?" (/api/auth/me) 4-6 times while loading - the header, the menu, the tour, the page
+// itself. This file is the first script on every page, so here the same question within 3 seconds shares one
+// answer (each caller gets its own copy). README "Faster pages".
+(() => {
+  if (window.CCAuthMeShared || !window.fetch) return;
+  window.CCAuthMeShared = true;
+  const realFetch = window.fetch.bind(window);
+  let last = null;
+  const tokenOf = (headers) => {
+    if (!headers) return "";
+    if (typeof headers.get === "function") return headers.get("X-Auth-Token") || "";
+    return headers["X-Auth-Token"] || headers["x-auth-token"] || "";
+  };
+  window.fetch = (input, init) => {
+    const url = typeof input === "string" ? input : (input && input.url) || "";
+    const method = String((init && init.method) || (input && input.method) || "GET").toUpperCase();
+    const path = url.replace(window.location.origin, "");
+    if (method !== "GET" || !/^\/api\/auth\/me(\?|$)/.test(path)) return realFetch(input, init);
+    const token = tokenOf(init && init.headers);
+    const now = Date.now();
+    if (!last || last.token !== token || now - last.at > 3000) {
+      last = { token, at: now, answer: realFetch(input, init) };
+      last.answer.then((response) => { if (!response.ok) last = null; }).catch(() => { last = null; });
+    }
+    return last.answer.then((response) => response.clone());
+  };
+})();
+
 /*
  * Zoom lock (Oct 2026, README "Screen size and zoom").
  * Keeps the app at its normal size on laptops/desktops:

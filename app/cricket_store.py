@@ -836,6 +836,16 @@ def _summarize_innings_scorebook_uncached(innings: dict[str, Any]) -> dict[str, 
         extras_type = str(ball.get("extras_type", "none") or "none")
         total_runs += runs_bat + extras_runs
         extras += extras_runs
+        # Nov 23 2026: the split of the extras was never filled in (always 0 b, 0 lb, 0 w, 0 nb) - same split as
+        # the match page (public_match.js inningsFacts). README "Scorecard PDF = match page".
+        if extras_type == "wide":
+            wides += extras_runs
+        elif extras_type == "no_ball":
+            noBalls += extras_runs
+        elif extras_type == "bye":
+            byes += extras_runs
+        elif extras_type == "leg_bye":
+            legByes += extras_runs
         if _delivery_is_legal(ball):
             legal_balls += 1
         if striker:
@@ -2409,7 +2419,31 @@ def review_url_for_path(path_string: str) -> str:
     return "/duplicates/" + "/".join(relative.parts)
 
 
+_UPLOAD_PATH_CACHE: dict[tuple[str, str, str], tuple[float, Path | None]] = {}
+_UPLOAD_PATH_TTL_SECONDS = 300.0
+
+
 def resolve_existing_upload_path(path_string: str, file_name: str = "") -> Path | None:
+    """Where an uploaded photo is on disk (None if it isn't there). Nov 23 2026: remembered for 5 minutes - every
+    page that lists scorecards looked up every photo again, and on Azure each look-up (and, for a missing photo, a
+    scan of the whole uploads folder) goes over the network share. README "Faster pages"."""
+    key = (str(path_string or ""), str(file_name or ""), str(UPLOAD_DIR))
+    now = time.monotonic()
+    kept = _UPLOAD_PATH_CACHE.get(key)
+    if kept is not None and now - kept[0] < _UPLOAD_PATH_TTL_SECONDS:
+        return kept[1]
+    found = _resolve_existing_upload_path_now(path_string, file_name)
+    if len(_UPLOAD_PATH_CACHE) > 5000:
+        _UPLOAD_PATH_CACHE.clear()
+    _UPLOAD_PATH_CACHE[key] = (now, found)
+    return found
+
+
+def forget_upload_paths() -> None:
+    _UPLOAD_PATH_CACHE.clear()
+
+
+def _resolve_existing_upload_path_now(path_string: str, file_name: str = "") -> Path | None:
     direct = Path(path_string or "")
     if direct.is_file():
         return direct
@@ -4110,6 +4144,7 @@ def create_duplicate_record_from_bytes(
     }
 
 
+_JOURNAL_MODE_SET: set[str] = set()
 _PASSING_DB_ERRORS = ("disk i/o error", "database is locked", "unable to open database file")
 
 
@@ -4131,8 +4166,11 @@ def open_database(path: Path | str | None = None) -> sqlite3.Connection:
             connection.row_factory = sqlite3.Row
             connection.execute("PRAGMA busy_timeout = 60000")
             connection.execute("PRAGMA foreign_keys = ON")
-            # WAL is unsafe on Azure Files (SMB) and corrupted the production DB on 2026-11-04.
-            connection.execute("PRAGMA journal_mode = %s" % ("DELETE" if os.environ.get("WEBSITE_SITE_NAME") else "WAL"))
+            # WAL is unsafe on Azure Files (SMB) and corrupted the production DB on 2026-11-04. The mode is kept in the
+            # file, so it is set once per server start (Nov 23 2026: setting it on every connection locks the file).
+            if str(target) not in _JOURNAL_MODE_SET:
+                connection.execute("PRAGMA journal_mode = %s" % ("DELETE" if os.environ.get("WEBSITE_SITE_NAME") else "WAL"))
+                _JOURNAL_MODE_SET.add(str(target))
             connection.execute("PRAGMA synchronous = NORMAL")
             return connection
         except sqlite3.OperationalError as exc:
@@ -6438,7 +6476,29 @@ def _ensure_numeric_player_ids(connection: sqlite3.Connection, members: list[dic
                 connection.execute("UPDATE members SET player_id = ? WHERE id = ?", (member.get("player_id"), member.get("id")))
 
 
+_DATABASE_READY: str | None = None
+
+
+def forget_database_checks() -> None:
+    """The database file was replaced (import / restore): check its tables, triggers and journal mode again."""
+    global _DATABASE_READY
+    _DATABASE_READY = None
+    _JOURNAL_MODE_SET.clear()
+
+
 def ensure_database() -> None:
+    """Create / upgrade the tables. Nov 23 2026: once per server start (and again after an import), not on every
+    load_store - on Azure each statement here locks the file on the network share (about 50 statements, hundreds of
+    lock calls per request; README "Faster pages")."""
+    global _DATABASE_READY
+    key = str(DATABASE_FILE)
+    if _DATABASE_READY == key and DATABASE_FILE.exists():
+        return
+    _ensure_database_now()
+    _DATABASE_READY = key
+
+
+def _ensure_database_now() -> None:
     with _connection() as connection:
         _repair_indexes_once(connection)
         connection.executescript(_schema_tables())
@@ -7010,9 +7070,9 @@ def load_store() -> dict[str, Any]:
     store["_cache_signature"] = _signature_text(current_signature)
 
     # ✅ cache only, NO DB writes
-    _write_text_atomic(CACHE_FILE, json.dumps(store, indent=2))
+    _write_text_atomic(CACHE_FILE, json.dumps(store, separators=(",", ":")))
     _STORE_CACHE_SIGNATURE = current_signature
-    _STORE_CACHE_PAYLOAD = deepcopy(store)
+    _STORE_CACHE_PAYLOAD = _fast_clone(store)
     if _DASHBOARD_CACHE:
         _DASHBOARD_CACHE.clear()
     logger.debug(
@@ -7047,6 +7107,7 @@ def _save_store(store: dict[str, Any]) -> None:
         len(store.get("duplicate_uploads", []) or []),
     )
     global _STORE_CACHE_SIGNATURE, _STORE_CACHE_PAYLOAD
+    forget_upload_paths()  # photos may have been added / moved / removed with this change
     normalized = normalize_store(store)
     sync_uploads_in_store(normalized)
     ensure_database()
@@ -7064,8 +7125,8 @@ def _save_store(store: dict[str, Any]) -> None:
     _STORE_CACHE_SIGNATURE = _database_signature()
     normalized["llm_documents"] = llm_documents
     normalized["_cache_signature"] = _signature_text(_STORE_CACHE_SIGNATURE)
-    _write_text_atomic(CACHE_FILE, json.dumps(normalized, indent=2))
-    _STORE_CACHE_PAYLOAD = deepcopy(normalized)
+    _write_text_atomic(CACHE_FILE, json.dumps(normalized, separators=(",", ":")))
+    _STORE_CACHE_PAYLOAD = _fast_clone(normalized)
     if _DASHBOARD_CACHE:
         _DASHBOARD_CACHE.clear()
     logger.debug("Save store complete.")
@@ -9071,10 +9132,15 @@ def _build_dashboard_impl(
     requested_season_year: str = "",
 ) -> dict[str, Any]:
     store_signature = _store_cache_signature(store)
+    # Nov 23 2026: "" and the year it stands for give the same dashboard - one cached copy for both (the Clubs page
+    # asks without a year, Home with it), so picking a club doesn't build it twice. README "Faster pages".
+    requested_key = str(requested_season_year or "").strip()
+    if requested_key.lower() != "auto":
+        requested_key = _resolve_dashboard_season_year(store, requested_key)
     dashboard_cache_key = (
         store_signature,
         str(focus_club_id or "").strip(),
-        str(requested_season_year or "").strip(),
+        requested_key,
         json.dumps(llm_status or {}, sort_keys=True, default=str),
     )
     cached_dashboard = _DASHBOARD_CACHE.get(dashboard_cache_key)
@@ -9355,7 +9421,8 @@ def _build_dashboard_impl(
         {**club, "season": season_label}
         for club in club_directory
     ]
-    _write_text_atomic(DASHBOARD_CACHE_FILE, json.dumps(dashboard, indent=2))
+    # Nov 23 2026: dashboard_cache.json is no longer written - nothing reads it, and writing several MB to Azure's
+    # network share on every rebuild made Home slower (README "Faster pages").
     _DASHBOARD_CACHE[dashboard_cache_key] = _fast_clone(dashboard)
     return dashboard
 

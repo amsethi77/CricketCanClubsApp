@@ -108,6 +108,11 @@ function setAuthToken(token) {
   if (getAuthToken() !== (token || "")) clearPageCache();
   if (token) {
     window.localStorage.setItem(TOKEN_KEY, token);
+    try {
+      window.localStorage.setItem("cricketClubAppLastActivityAt", String(Date.now())); // just signed in = active
+    } catch {
+      /* ignore */
+    }
   } else {
     window.localStorage.removeItem(TOKEN_KEY);
   }
@@ -182,7 +187,9 @@ async function apiJson(url, options = {}) {
   }
   if (!response.ok) {
     const detail = data && typeof data === "object" ? (data.detail || data.message) : "";
-    throw new Error(detail || trimmed || "Request failed.");
+    const error = new Error(detail || trimmed || "Request failed.");
+    error.status = response.status; // Nov 23 2026: only a 401 means "signed out" (see requireAuth)
+    throw error;
   }
   if (data !== null) {
     return data;
@@ -260,13 +267,56 @@ async function authMe() {
   return data;
 }
 
+function isSignedOutError(error) {
+  const message = String(error?.message || "").toLowerCase();
+  return error?.status === 401 || message.includes("session expired") || message.includes("sign in first");
+}
+
+function showServerBusy(text) {
+  let el = document.getElementById("ccServerBusy");
+  if (!text) {
+    if (el) el.remove();
+    return;
+  }
+  if (!el) {
+    el = document.createElement("div");
+    el.id = "ccServerBusy";
+    el.setAttribute("role", "status");
+    el.style.cssText = "position:fixed;left:50%;bottom:84px;transform:translateX(-50%);z-index:9999;background:#111827;color:#fff;padding:10px 16px;border-radius:12px;font:600 14px/1.3 system-ui,sans-serif;box-shadow:0 6px 20px rgba(0,0,0,.25);max-width:90vw;text-align:center";
+    document.body.appendChild(el);
+  }
+  el.textContent = text;
+}
+
+// Nov 23 2026 (Dhruvika: "it logs off in between"; "if we try to select our club then instead going to home page it
+// signs off"): any failed "who is signed in?" check used to sign the person out - also when the server was only
+// slow, restarting or answered an error. Now only "signed out / timed out" (401) signs out; anything else is tried
+// again (about 30 s), with a note on the page, and the person stays signed in. README "Staying signed in".
 async function requireAuth() {
-  try {
-    return await authMe();
-  } catch {
-    setAuthToken("");
-    window.location.href = "/signin";
-    return null;
+  const waits = [1500, 3000, 5000, 8000, 12000];
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      const data = await authMe();
+      showServerBusy("");
+      return data;
+    } catch (error) {
+      if (isSignedOutError(error)) {
+        showServerBusy("");
+        if (String(error?.message || "").toLowerCase().includes("session expired")) {
+          signOutAfterIdle();
+        } else {
+          setAuthToken("");
+          window.location.href = "/signin";
+        }
+        return null;
+      }
+      if (attempt >= waits.length) {
+        showServerBusy("The server isn't answering right now. You're still signed in - reload the page in a moment.");
+        return null;
+      }
+      showServerBusy("The server is busy - trying again…");
+      await new Promise((resolve) => window.setTimeout(resolve, waits[attempt]));
+    }
   }
 }
 
@@ -908,6 +958,10 @@ async function touchSessionIfNeeded(force = false) {
         setAuthToken("");
         return null;
       }
+      if (message.includes("session expired")) {
+        signOutAfterIdle(); // timed out on the server: Sign in says so and brings the person back here
+        return null;
+      }
       signOut();
       return null;
     }
@@ -926,6 +980,59 @@ function scheduleSessionTouch() {
   }, SESSION_ACTIVITY_DEBOUNCE_MS);
 }
 
+// Nov 21 2026 (Amit: "When the session times out then it should take the user to signin page. Session times out
+// is 15 min"): no click / tap / typing for 15 minutes on any open page of the site (all tabs share the last
+// activity time) -> the sign-in is ended and the page goes to Sign in, which says why and comes back here after.
+// Automatic refreshes (notifications, live scores) don't count as activity. README "Sign-in timeout".
+const IDLE_ACTIVITY_KEY = "cricketClubAppLastActivityAt";
+const IDLE_DEFAULT_MINUTES = 15;
+let idleSignOutStarted = false;
+
+function idleTimeoutMs() {
+  try {
+    const stored = JSON.parse(window.sessionStorage.getItem(SESSION_KEY) || "null");
+    const minutes = Number(stored?.timeout_minutes);
+    if (minutes > 0) return minutes * 60000;
+  } catch {
+    /* use the default */
+  }
+  return IDLE_DEFAULT_MINUTES * 60000;
+}
+
+function markUserActivity() {
+  try {
+    window.localStorage.setItem(IDLE_ACTIVITY_KEY, String(Date.now()));
+  } catch {
+    /* ignore */
+  }
+}
+
+function lastUserActivity() {
+  try {
+    return Number(window.localStorage.getItem(IDLE_ACTIVITY_KEY) || 0);
+  } catch {
+    return 0;
+  }
+}
+
+function signOutAfterIdle() {
+  if (idleSignOutStarted) return;
+  idleSignOutStarted = true;
+  const here = window.location.pathname + window.location.search;
+  const next = /^\/(signin|register|signout)/.test(window.location.pathname) ? "" : `&next=${encodeURIComponent(here)}`;
+  Promise.resolve(sharedPostJson("/api/auth/signout", {}, true).catch(() => null)).finally(() => {
+    setAuthToken("");
+    window.sessionStorage.removeItem(SESSION_KEY);
+    window.location.href = `/signin?expired=1${next}`;
+  });
+}
+
+function checkIdleTimeout() {
+  if (!getAuthToken() || idleSignOutStarted) return;
+  const last = lastUserActivity();
+  if (last && Date.now() - last >= idleTimeoutMs()) signOutAfterIdle();
+}
+
 function startSessionMonitor() {
   if (sessionMonitorStarted) {
     return;
@@ -934,6 +1041,15 @@ function startSessionMonitor() {
   const activityEvents = ["click", "pointerdown", "keydown", "input", "change", "submit", "touchstart"];
   activityEvents.forEach((eventName) => {
     document.addEventListener(eventName, scheduleSessionTouch, true);
+    document.addEventListener(eventName, markUserActivity, { capture: true, passive: true });
+  });
+  if (getAuthToken()) {
+    checkIdleTimeout(); // a page opened long after the last activity (e.g. a tab left open overnight)
+    if (!idleSignOutStarted) markUserActivity(); // opening a page counts as activity
+  }
+  window.setInterval(checkIdleTimeout, 15000);
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) checkIdleTimeout();
   });
   window.addEventListener("focus", () => {
     touchSessionIfNeeded().catch(() => {});
@@ -1034,6 +1150,7 @@ syncActiveNavState();
 startSessionMonitor();
 
 window.CricketClubAppPages = {
+  signOutAfterIdle,
   getAuthToken,
   setAuthToken,
   getPrimaryClubId,

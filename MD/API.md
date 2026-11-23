@@ -44,7 +44,7 @@ Paths starting `/api/public/` need no sign-in. `/api/admin/...` needs a club adm
 | GET | `/api/auth/options` | Roles, clubs and players for the Register page. |
 | POST | `/api/auth/register` | Register |
 | GET | `/api/auth/roles` | Auth Roles |
-| POST | `/api/auth/select-club` | Select Club |
+| POST | `/api/auth/select-club` | Pick the club to work in; include_dashboard=false leaves the dashboard out of the answer. |
 | POST | `/api/auth/signin` | Signin |
 | POST | `/api/auth/signout` | Auth Signout |
 | POST | `/api/viewer-profile` | Update Viewer Profile |

@@ -75,7 +75,8 @@
           ? [f.scheduled_time && f.scheduled_time !== "Time TBD" ? f.scheduled_time : "", f.venue && f.venue !== "Venue TBD" ? f.venue : ""].filter(Boolean).join(" · ") || "Time TBD"
           : cleanResult(f.result) || (kind === "live" ? "In progress" : "Result not recorded"),
       meta: [f.match_type, f.overs ? `${f.overs} ov` : ""].filter(Boolean).join(" · "),
-      href: kind === "upcoming" ? "/fixtures" : `/live/${encodeURIComponent(f.id)}`,
+      // Nov 23 2026: an upcoming match opens its own match page too, so its link can be shared before the first ball
+      href: `/live/${encodeURIComponent(f.id)}`,
       balls: Array.isArray(f.recent_balls) ? f.recent_balls : [],
       venue: f.venue && f.venue !== "Venue TBD" ? f.venue : "",
     };
@@ -160,7 +161,12 @@
         <a class="home-btn primary small" href="/fixtures">View fixtures</a>`;
       return;
     }
-    const label = m.kind === "live" ? `<span class="home-badge live"><span class="home-dot"></span>LIVE NOW</span>` : `<span class="home-badge result">LATEST RESULT</span>`;
+    const label =
+      m.kind === "live"
+        ? `<span class="home-badge live"><span class="home-dot"></span>LIVE NOW</span>`
+        : m.kind === "upcoming"
+          ? `<span class="home-badge upcoming">TODAY</span>`
+          : `<span class="home-badge result">LATEST RESULT</span>`;
     featureEl.innerHTML = `
       <div class="home-feature-top">${label}<span class="home-strip-meta">${esc([shortDate(m.date), m.venue].filter(Boolean).join(" · "))}</span></div>
       <div class="home-feature-teams">
@@ -170,9 +176,9 @@
           )
           .join("")}
       </div>
-      <p class="home-feature-note">${esc(m.note)}</p>
+      <p class="home-feature-note">${esc(m.kind === "upcoming" ? `Starts ${m.note}. Scores appear here with the first ball.` : m.note)}</p>
       ${m.kind === "live" ? `<p class="home-feature-sub">Recent balls</p>${ballsHtml(m.balls)}` : ""}
-      <a class="home-btn primary small" href="${m.href}">${m.kind === "live" ? "Open match centre" : "View scorecard"}</a>`;
+      <a class="home-btn primary small" href="${m.href}">${m.kind === "live" ? "Open match centre" : m.kind === "upcoming" ? "Open match page · share it" : "View scorecard"}</a>`;
   }
 
   // ---------- Latest scorecards ----------
@@ -235,8 +241,8 @@
     stripItems = [...liveMatches, ...results.slice(0, 8), ...upcoming.slice(0, 8)];
     renderStrip();
 
-    // Feature: live first, else latest result
-    renderFeature(liveMatches[0] || results[0] || null);
+    // Feature: live first, else today's match (before its first ball - Nov 23 2026), else the latest result
+    renderFeature(liveMatches[0] || upcoming.find((m) => String(m.date).slice(0, 10) === today) || results[0] || null);
 
     // Stats
     const setText = (id, value) => {

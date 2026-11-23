@@ -342,7 +342,7 @@
       .map(esc)
       .join(", ");
     return `<section class="pm-head">
-      <div class="pm-head-top">${pill}${viewerBadge}<span class="pm-updated" id="pmUpdated"></span></div>
+      <div class="pm-head-top">${pill}${viewerBadge}<span class="pm-updated" id="pmUpdated"></span><button type="button" class="pm-share" data-pm-share>🔗 Share</button></div>
       <div class="pm-teams">${rows}</div>
       <p class="pm-status ${status.cls}">${esc(status.text)}${status.cls === "live" || status.cls === "break" ? "." : ""}</p>
       ${rates}
@@ -867,4 +867,26 @@
   } else {
     loadMatch();
   }
+
+  // Nov 23 2026 (Dhruvika: "fixtures and match is not visible in the public live page and we cannot share with others
+  // before the start of the game"): every match page - also before the first ball - has a Share button: the phone's
+  // share sheet (WhatsApp...) where there is one, else the link is copied. README "Share a match before it starts".
+  document.addEventListener("click", async (event) => {
+    const button = event.target.closest("[data-pm-share]");
+    if (!button) return;
+    const url = window.location.origin + window.location.pathname;
+    const title = document.title || "Live cricket";
+    try {
+      if (navigator.share) {
+        await navigator.share({ title, text: title, url });
+        return;
+      }
+      await navigator.clipboard.writeText(url);
+      button.textContent = "✅ Link copied";
+    } catch (e) {
+      if (e && e.name === "AbortError") return;
+      window.prompt("Copy this link:", url);
+    }
+    setTimeout(() => (button.textContent = "🔗 Share"), 2500);
+  });
 })();

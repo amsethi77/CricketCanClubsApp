@@ -33,63 +33,278 @@ def _pdf_text(value: Any) -> str:
     return escape(text).replace("\n", "<br/>")
 
 
-def _dismissal_text(ball: dict[str, Any]) -> str:
-    kind = str(ball.get("wicket_type") or "out").strip().lower()
-    bowler = str(ball.get("bowler") or "").strip()
-    fielder = str(ball.get("fielder") or "").strip()
-    if kind == "retired_out":
-        return "Retired out"
-    if kind == "retired_hurt":
-        return "Retired hurt"
+# ---------------------------------------------------------------------------------------------------------------
+# Nov 23 2026 (Dhruvika, with the Heartlake vs Afghan Eagles PDF: "This should be changed. Ensure that they are the
+# same going forward"): the PDF of a live-scored match showed "Extras: 0 b, 0 lb, 0 w, 0 nb (total 19)", "st Nihal"
+# (keeper missing) and no (c) / (vc) / (wk), while the match page showed "Extras (b 0, lb 0, w 17, nb 2) 19",
+# "st Harsh b Nihal" and the tags. The match page works its figures out from the balls (inningsFacts / howOut /
+# currentPair / tagHtml / renderScorecard in static/public_match.js). The functions below are the same rules,
+# line for line, so the PDF shows exactly what the page shows. CHANGE BOTH TOGETHER (README "Scorecard PDF = match
+# page"; tests/test_scorecard_pdf_matches_page.py checks it).
+# ---------------------------------------------------------------------------------------------------------------
+ROLE_TAGS = (("captain", "C"), ("vice_captain", "VC"), ("keeper", "WK"))
+
+
+def _num(value: Any) -> int:
+    try:
+        return int(float(value or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _is_legal(ball: dict[str, Any]) -> bool:
+    return str(ball.get("extras_type") or "none") not in {"wide", "no_ball", "retired_out"}
+
+
+def overs_text(legal: int) -> str:
+    return f"{legal // 6}.{legal % 6}"
+
+
+def overs_short(legal: int) -> str:
+    return overs_text(legal) if legal % 6 else str(legal // 6)
+
+
+def run_rate(runs: int, legal: int) -> str:
+    return f"{runs / (legal / 6):.2f}" if legal else "0.00"
+
+
+def same_name(a: Any, b: Any) -> bool:
+    return str(a or "").lower() == str(b or "").lower()
+
+
+def how_out(ball: dict[str, Any]) -> str:
+    """public_match.js howOut()"""
+    bowler = str(ball.get("bowler") or "")
+    fielder = str(ball.get("fielder") or "")
+    kind = str(ball.get("wicket_type") or "")
+    if kind == "bowled":
+        return f"b {bowler}"
+    if kind == "caught":
+        return f"c & b {bowler}" if fielder and fielder == bowler else f"c {fielder or '?'} b {bowler}"
+    if kind == "lbw":
+        return f"lbw b {bowler}"
     if kind == "run_out":
         return f"run out ({fielder})" if fielder else "run out"
-    if kind == "caught":
-        if fielder and fielder == bowler:
-            return f"c & b {bowler}"
-        return f"c {fielder} b {bowler}" if fielder and bowler else "caught"
-    labels = {
-        "bowled": "b",
-        "lbw": "lbw b",
-        "stumped": "st",
-        "hit_wicket": "hit wicket b",
-    }
-    prefix = labels.get(kind, kind.replace("_", " "))
-    return f"{prefix} {bowler}".strip() if bowler and kind in labels else prefix
+    if kind == "stumped":
+        return f"st {fielder or '?'} b {bowler}"
+    if kind == "hit_wicket":
+        return f"hit wicket b {bowler}"
+    if kind == "retired_hurt":
+        return "retired hurt"
+    return (kind or "out").replace("_", " ", 1)
 
 
-def _dismissals(innings: dict[str, Any]) -> dict[str, str]:
-    result: dict[str, str] = {}
-    retired: set[str] = set()
-    for ball in innings.get("balls", []) or []:
-        for name in (ball.get("striker"), ball.get("non_striker"), ball.get("new_batter")):
-            key = str(name or "").strip().casefold()
-            if key in retired:
-                result.pop(key, None)
-                retired.discard(key)
-        name = str(ball.get("wicket_player") or "").strip()
-        if not name or not (ball.get("wicket") or str(ball.get("wicket_type") or "").lower() == "retired_out"):
-            continue
-        key = name.casefold()
-        result[key] = _dismissal_text(ball)
-        if str(ball.get("wicket_type") or "").lower() == "retired_out":
-            retired.add(key)
-        else:
-            retired.discard(key)
-    return result
-
-
-def _fall_of_wickets(innings: dict[str, Any]) -> list[str]:
-    runs = 0
-    legal = 0
-    wickets: list[str] = []
-    for ball in innings.get("balls", []) or []:
-        runs += int(ball.get("runs_bat") or 0) + int(ball.get("extras_runs") or 0)
-        extras = str(ball.get("extras_type") or "none").lower()
-        if extras not in {"wide", "no_ball", "retired_out"}:
+def innings_facts(innings: dict[str, Any]) -> dict[str, Any]:
+    """public_match.js inningsFacts(): extras, how out, fall of wickets, worked out from the balls."""
+    balls = [ball for ball in innings.get("balls") or [] if isinstance(ball, dict)]
+    summary = innings.get("summary") or {}
+    extras = {"wd": 0, "nb": 0, "b": 0, "lb": 0}
+    dismissal: dict[str, str] = {}
+    retired_out_players: set[str] = set()
+    fall_of_wickets: list[str] = []
+    runs = wickets = legal = 0
+    for ball in balls:
+        extras_runs = _num(ball.get("extras_runs"))
+        runs += _num(ball.get("runs_bat")) + extras_runs
+        kind = str(ball.get("extras_type") or "none")
+        if kind == "wide":
+            extras["wd"] += extras_runs
+        if kind == "no_ball":
+            extras["nb"] += extras_runs
+        if kind == "bye":
+            extras["b"] += extras_runs
+        if kind == "leg_bye":
+            extras["lb"] += extras_runs
+        if _is_legal(ball):
             legal += 1
-        if ball.get("wicket") and str(ball.get("wicket_type") or "").lower() != "retired_out":
-            wickets.append(f"{runs}-{len(wickets) + 1} ({ball.get('wicket_player') or 'Batter'}, {legal // 6}.{legal % 6})")
-    return wickets
+        retired_out = str(ball.get("wicket_type") or "").lower() == "retired_out"
+        for name in (ball.get("striker"), ball.get("non_striker"), ball.get("new_batter")):
+            if name and name in retired_out_players:
+                dismissal.pop(name, None)
+                retired_out_players.discard(name)
+        if ball.get("wicket") and not retired_out:
+            wickets += 1
+        player = ball.get("wicket_player")
+        if (ball.get("wicket") or retired_out) and player:
+            dismissal[player] = "retired out" if retired_out else how_out(ball)
+            if retired_out:
+                retired_out_players.add(player)
+            else:
+                fall_of_wickets.append(f"{runs}-{len(fall_of_wickets) + 1} ({player}, {overs_text(legal)})")
+    return {
+        "balls": balls,
+        "legal": legal,
+        "runs": _num(summary["runs"]) if summary.get("runs") is not None else runs,
+        "wickets": _num(summary["wickets"]) if summary.get("wickets") is not None else wickets,
+        "extras": extras,
+        "extras_total": sum(extras.values()),
+        "dismissal": dismissal,
+        "fall_of_wickets": fall_of_wickets,
+        "last": balls[-1] if balls else None,
+        "batting": summary.get("batting") if isinstance(summary.get("batting"), list) else [],
+        "bowling": summary.get("bowling") if isinstance(summary.get("bowling"), list) else [],
+        "done": str(innings.get("status") or "").lower() == "completed",
+        "started": bool(balls),
+    }
+
+
+def current_pair(facts: dict[str, Any]) -> tuple[str, str]:
+    """public_match.js currentPair(): the two batters in now (striker first)."""
+    ball = facts.get("last")
+    if not ball:
+        return "", ""
+    striker, non_striker = str(ball.get("striker") or ""), str(ball.get("non_striker") or "")
+    kind = str(ball.get("extras_type") or "none")
+    ran = _num(ball.get("runs_bat")) + (_num(ball.get("extras_runs")) if kind in {"bye", "leg_bye"} else 0)
+    if kind == "wide":
+        ran += max(0, _num(ball.get("extras_runs") or 1) - 1)
+    if ran % 2 == 1:
+        striker, non_striker = non_striker, striker
+    if _is_legal(ball) and facts["legal"] > 0 and facts["legal"] % 6 == 0:
+        striker, non_striker = non_striker, striker
+    if (ball.get("wicket") or str(ball.get("wicket_type") or "").lower() == "retired_out") and ball.get("wicket_player"):
+        if striker == ball.get("wicket_player"):
+            striker = str(ball.get("new_batter") or "")
+        if non_striker == ball.get("wicket_player"):
+            non_striker = str(ball.get("new_batter") or "")
+    return striker, non_striker
+
+
+def side_of_team(match: dict[str, Any], team: Any) -> str:
+    return "club" if same_name(team, match.get("club_name")) else "opponent"
+
+
+def role_tags(match: dict[str, Any], side: str, name: str) -> str:
+    """public_match.js tagHtml(): " (c)", " (vc)", " (wk)", " (c & wk)"."""
+    roles = (((match.get("lineups") or {}).get("roles") or {}).get(side) or {})
+    tags = [tag for role, tag in ROLE_TAGS if roles.get(role) and roles.get(role) == name]
+    return f" ({' & '.join(tag.lower() for tag in tags)})" if tags else ""
+
+
+def match_code(match: dict[str, Any]) -> str:
+    code = match.get("published_match_code") or "M-" + re.sub(r"[^0-9a-zA-Z]", "", str(match.get("id") or ""))[:8].upper()
+    return "" if code == "M-" else code
+
+
+def innings_view(match: dict[str, Any], innings: dict[str, Any]) -> dict[str, Any]:
+    """Everything public_match.js renderScorecard() shows for one innings, as text."""
+    facts = innings_facts(innings)
+    striker, non_striker = current_pair(facts)
+    side = side_of_team(match, innings.get("batting_team"))
+    bowl_side = side_of_team(match, innings.get("bowling_team"))
+    batted = [row for row in facts["batting"] if row.get("status") != "not_batted" or row.get("balls") or row.get("runs")]
+    batting = []
+    for row in batted:
+        name = str(row.get("player_name") or "")
+        out = facts["dismissal"].get(name)
+        in_now = name in {striker, non_striker}
+        how = out or ("not out" if facts["done"] or not in_now else "batting *" if name == striker else "batting")
+        balls_faced = _num(row.get("balls"))
+        batting.append({
+            "name": name + role_tags(match, side, name),
+            "how": how,
+            "runs": _num(row.get("runs")),
+            "balls": balls_faced,
+            "fours": _num(row.get("fours")),
+            "sixes": _num(row.get("sixes")),
+            "sr": f"{_num(row.get('runs')) / balls_faced * 100:.2f}" if balls_faced else "0.00",
+        })
+    lineups = match.get("lineups") or {}
+    lineup = (lineups.get("club") if side == "club" else lineups.get("opponent")) or []
+    batted_names = {str(row.get("player_name") or "") for row in batted}
+    yet_to_bat = [name + role_tags(match, side, name) for name in lineup if name not in batted_names]
+    bowling = []
+    for row in facts["bowling"]:
+        if not (_num(row.get("legal_balls")) or _num(row.get("runs_conceded"))):
+            continue
+        name = str(row.get("player_name") or "")
+        bowling.append({
+            "name": name + role_tags(match, bowl_side, name),
+            "overs": str(row.get("overs") or "0.0"),
+            "maidens": _num(row.get("maidens")),
+            "runs": _num(row.get("runs_conceded")),
+            "wickets": _num(row.get("wickets")),
+            "economy": f"{float(row.get('economy') or 0):.2f}",
+        })
+    extras = facts["extras"]
+    return {
+        "team": str(innings.get("batting_team") or f"Innings {innings.get('inning_number') or ''}"),
+        "score": f"{facts['runs']}/{facts['wickets']}",
+        "overs": overs_short(facts["legal"]),
+        "started": facts["started"],
+        "batting": batting,
+        "extras_label": f"Extras (b {extras['b']}, lb {extras['lb']}, w {extras['wd']}, nb {extras['nb']})",
+        "extras_total": facts["extras_total"],
+        "total_label": f"Total ({facts['wickets']} wkts, {overs_short(facts['legal'])} Ov, RR {run_rate(facts['runs'], facts['legal'])})",
+        "total": facts["runs"],
+        "yet_to_bat": yet_to_bat,
+        "fall_of_wickets": facts["fall_of_wickets"],
+        "bowling": bowling,
+    }
+
+
+def match_state(match: dict[str, Any]) -> dict[str, Any]:
+    """public_match.js matchState()"""
+    innings = sorted(
+        [item for item in (match.get("scorebook") or {}).get("innings", []) or [] if isinstance(item, dict)],
+        key=lambda item: int(item.get("inning_number") or 1),
+    )
+    played = [item for item in innings if item.get("balls")]
+    live = next((item for item in reversed(played) if str(item.get("status") or "").lower() == "live"), None)
+    current = live or (played[-1] if played else None)
+    result = str(match.get("result") or "")
+    done = str(match.get("status") or "").lower() == "completed" or bool(result and result.strip().lower() != "tbd")
+    first = next((item for item in innings if int(item.get("inning_number") or 0) == 1), None)
+    first_facts = innings_facts(first) if first and first.get("balls") else None
+    facts = innings_facts(current) if current else None
+    is_chase = bool(current and int(current.get("inning_number") or 0) == 2 and first_facts)
+    target = first_facts["runs"] + 1 if is_chase else None
+    is_live = not done and bool(live) and not (facts and facts["done"])
+    in_break = not done and bool(current) and not is_live
+    first_bat = (first or {}).get("batting_team") or ""
+    teams = (
+        [first_bat, match.get("opponent") if same_name(first_bat, match.get("club_name")) else match.get("club_name")]
+        if first_bat
+        else [match.get("club_name") or "Team 1", match.get("opponent") or "Team 2"]
+    )
+    return {"played": played, "current": current, "done": done, "facts": facts, "target": target,
+            "is_live": is_live, "in_break": in_break, "teams": teams}
+
+
+def status_line(match: dict[str, Any], state: dict[str, Any] | None = None) -> str:
+    """public_match.js statusLine()"""
+    state = state or match_state(match)
+    current, facts, target = state["current"], state["facts"], state["target"]
+    if state["done"]:
+        return str(match.get("result") or "Match finished")
+    if not current:
+        when = ", ".join(str(item) for item in (match.get("scheduled_time"), match.get("date_label")) if item)
+        return f"Match starts {when}. This page updates by itself." if when else "Scoring hasn't started yet. This page updates by itself."
+    other = next((team for team in state["teams"] if not same_name(team, current.get("batting_team"))), "") or ""
+    if state["in_break"] and int(current.get("inning_number") or 0) == 1:
+        return f"Innings break · {other} need {facts['runs'] + 1} runs to win"
+    if target:
+        need = max(0, target - facts["runs"])
+        left = _num(current.get("overs_limit") or 20) * 6 - facts["legal"]
+        if need <= 0:
+            return f"{current.get('batting_team')} have reached the target"
+        return f"{current.get('batting_team')} need {need} run{'' if need == 1 else 's'} in {left} ball{'' if left == 1 else 's'}"
+    if state["is_live"]:
+        return f"{current.get('batting_team')} batting · {other} yet to bat"
+    return "Waiting for the next innings"
+
+
+def match_info_line(match: dict[str, Any]) -> str:
+    """public_match.js renderHeader() info line."""
+    venue = str(match.get("venue") or "")
+    parts = [
+        f"{match.get('club_name') or 'Team 1'} vs {match.get('opponent') or 'Team 2'}",
+        match.get("match_type"),
+        f"{match.get('overs')} overs" if match.get("overs") else "",
+        venue if venue and venue.lower() != "venue tbd" else "",
+        " ".join(str(item) for item in (match.get("date_label") or match.get("date"), match.get("scheduled_time")) if item),
+    ]
+    return ", ".join(str(part) for part in parts if part)
 
 
 def _paragraph(value: Any, style: ParagraphStyle) -> Paragraph:
@@ -217,26 +432,31 @@ def build_scorecard_pdf(match: dict[str, Any]) -> bytes:
     story: list[Any] = []
     title = f"{match.get('club_name') or 'Team 1'} vs {match.get('opponent') or 'Team 2'}"
     story.append(Paragraph(_pdf_text(title), styles["title"]))
-    details = [
-        match.get("date_label") or match.get("date"),
-        match.get("venue") if not str(match.get("venue") or "").lower().endswith("tbd") else "",
-        match.get("match_type"),
-        f"{match.get('overs')} overs" if match.get("overs") else "",
-    ]
-    story.append(Paragraph(_pdf_text(" | ".join(str(item) for item in details if item)), styles["meta"]))
-    if match.get("result") and str(match.get("result")).strip().lower() not in {"", "tbd"}:
-        story.append(Paragraph(_pdf_text(match["result"]), styles["result"]))
-    else:
-        story.append(Spacer(1, 5))
+    state = match_state(match)
+    played = state["played"]
+    done = state["done"]
+    # the same status line as the match page (result / "X need N runs in M balls" / "Match starts ...")
+    story.append(Paragraph(_pdf_text(status_line(match, state)), styles["result"]))
+    # same info line, Match ID and innings IDs as the match page header (public_match.js renderHeader / matchIds)
+    story.append(Paragraph(_pdf_text(match_info_line(match)), styles["meta"]))
+    code = match_code(match)
+    if code:
+        test = bool(re.search(r"\btest\b|multi-day|two-day|2-day", str(match.get("match_type") or ""), re.I))
+        chips = []
+        teams = state["teams"]
+        for number in range(1, max(4 if test else 2, len(played)) + 1):
+            inn = next((item for item in played if int(item.get("inning_number") or 0) == number), None)
+            team = inn.get("batting_team") if inn else teams[(number - 1) % 2]
+            facts = innings_facts(inn) if inn else None
+            text = f"{facts['runs']}/{facts['wickets']}" if facts else ("missing" if done else "to come")
+            chips.append(f"{code}-I{number} {team or f'Innings {number}'} · {text}")
+        story.append(Paragraph(_pdf_text(f"Match ID {code}   " + "   ".join(chips)), styles["meta"]))
+    story.append(Spacer(1, 4))
 
-    innings_list = sorted(
-        match.get("scorebook", {}).get("innings", []) or [],
-        key=lambda item: int(item.get("inning_number") or 1),
-    )
     available_width = A4[0] - 30 * mm
     batting_widths = [
-        available_width * 0.23,
-        available_width * 0.36,
+        available_width * 0.27,
+        available_width * 0.32,
         available_width * 0.08,
         available_width * 0.08,
         available_width * 0.07,
@@ -253,105 +473,45 @@ def build_scorecard_pdf(match: dict[str, Any]) -> bytes:
     ]
 
     rendered_innings = 0
-    for innings in innings_list:
-        summary = innings.get("summary") or {}
-        batters = summary.get("batting") or []
-        bowlers = summary.get("bowling") or []
-        balls = innings.get("balls") or []
-        if not balls and not any(row.get("status") != "not_batted" for row in batters):
-            continue
+    for innings in played:
+        view = innings_view(match, innings)
         rendered_innings += 1
-        runs = int(summary.get("runs") or 0)
-        wickets = int(summary.get("wickets") or 0)
-        legal = int(summary.get("legal_balls") or 0)
-        team = innings.get("batting_team") or f"Innings {innings.get('inning_number', rendered_innings)}"
-        story.append(
-            Paragraph(
-                _pdf_text(f"{team} innings - {runs}/{wickets} ({summary.get('overs') or f'{legal // 6}.{legal % 6}'} overs)"),
-                styles["section"],
-            )
-        )
-        dismissals = _dismissals(innings)
+        story.append(Paragraph(_pdf_text(f"{view['team']} Innings - {view['score']} ({view['overs']} Ov)"), styles["section"]))
         batting_rows: list[list[Any]] = [
-            [cell("Batter"), cell("Dismissal"), cell("R", True), cell("B", True), cell("4s", True), cell("6s", True), cell("SR", True)]
+            [cell("Batter"), cell(""), cell("R", True), cell("B", True), cell("4s", True), cell("6s", True), cell("SR", True)]
         ]
-        batted_names: set[str] = set()
-        for batter in batters:
-            name = str(batter.get("player_name") or "").strip()
-            if not name:
-                continue
-            status = str(batter.get("status") or "").lower()
-            if status == "not_batted" and not int(batter.get("runs") or 0) and not int(batter.get("balls") or 0):
-                continue
-            key = name.casefold()
-            batted_names.add(key)
-            dismissal = dismissals.get(key, "")
-            if not dismissal:
-                dismissal = "Retired hurt" if status == "retired" else "not out"
-            strike_rate = 100 * int(batter.get("runs") or 0) / int(batter.get("balls") or 0) if int(batter.get("balls") or 0) else 0
+        for row in view["batting"]:
             batting_rows.append(
                 [
-                    cell(name),
-                    cell(dismissal),
-                    cell(int(batter.get("runs") or 0), True),
-                    cell(int(batter.get("balls") or 0), True),
-                    cell(int(batter.get("fours") or 0), True),
-                    cell(int(batter.get("sixes") or 0), True),
-                    cell(f"{strike_rate:.2f}", True),
+                    cell(row["name"]),
+                    cell(row["how"]),
+                    cell(row["runs"], True),
+                    cell(row["balls"], True),
+                    cell(row["fours"], True),
+                    cell(row["sixes"], True),
+                    cell(row["sr"], True),
                 ]
             )
+        batting_rows.append([cell(view["extras_label"]), cell(""), cell(view["extras_total"], True), cell(""), cell(""), cell(""), cell("")])
+        batting_rows.append(
+            [Paragraph(f"<b>{_pdf_text(view['total_label'])}</b>", styles["cell"]), cell(""), Paragraph(f"<b>{view['total']}</b>", styles["cell_right"]), cell(""), cell(""), cell(""), cell("")]
+        )
         story.append(table(batting_rows, batting_widths))
-
-        extras_line = (
-            f"Extras: {int(summary.get('byes') or 0)} b, {int(summary.get('legByes') or 0)} lb, "
-            f"{int(summary.get('wides') or 0)} w, {int(summary.get('noBalls') or 0)} nb "
-            f"(total {int(summary.get('extras') or 0)})"
-        )
-        story.append(Paragraph(_pdf_text(extras_line), styles["note"]))
-        story.append(
-            Paragraph(
-                _pdf_text(
-                    f"Total: {runs}/{wickets} in {summary.get('overs') or f'{legal // 6}.{legal % 6}'} overs "
-                    f"(run rate {float(summary.get('run_rate') or 0):.2f})"
-                ),
-                styles["note"],
-            )
-        )
-
-        yet_to_bat = [
-            str(row.get("player_name") or "").strip()
-            for row in batters
-            if str(row.get("player_name") or "").strip()
-            and str(row.get("player_name") or "").strip().casefold() not in batted_names
-        ]
-        if yet_to_bat:
-            story.append(Paragraph(_pdf_text("Did not bat: " + ", ".join(yet_to_bat)), styles["note"]))
-        fow = _fall_of_wickets(innings)
-        if fow:
-            story.append(Paragraph(_pdf_text("Fall of wickets: " + ", ".join(fow)), styles["note"]))
+        if view["yet_to_bat"]:
+            story.append(Paragraph(_pdf_text("Yet to bat: " + ", ".join(view["yet_to_bat"])), styles["note"]))
+        if view["fall_of_wickets"]:
+            story.append(Paragraph(_pdf_text("Fall of wickets: " + ", ".join(view["fall_of_wickets"])), styles["note"]))
 
         story.append(Paragraph("Bowling", styles["subhead"]))
         bowling_rows: list[list[Any]] = [
             [cell("Bowler"), cell("O", True), cell("M", True), cell("R", True), cell("W", True), cell("ECON", True)]
         ]
-        for bowler in bowlers:
-            name = str(bowler.get("player_name") or "").strip()
-            if not name:
-                continue
-            if not int(bowler.get("legal_balls") or 0) and not int(bowler.get("runs_conceded") or 0):
-                continue
+        for row in view["bowling"]:
             bowling_rows.append(
-                [
-                    cell(name),
-                    cell(bowler.get("overs") or "0.0", True),
-                    cell(int(bowler.get("maidens") or 0), True),
-                    cell(int(bowler.get("runs_conceded") or 0), True),
-                    cell(int(bowler.get("wickets") or 0), True),
-                    cell(f"{float(bowler.get('economy') or 0):.2f}", True),
-                ]
+                [cell(row["name"]), cell(row["overs"], True), cell(row["maidens"], True), cell(row["runs"], True), cell(row["wickets"], True), cell(row["economy"], True)]
             )
         if len(bowling_rows) == 1:
-            bowling_rows.append([cell("No overs bowled"), *[cell("", True) for _ in range(5)]])
+            bowling_rows.append([cell("No overs bowled yet."), *[cell("", True) for _ in range(5)]])
         story.append(table(bowling_rows, bowling_widths))
         story.append(Spacer(1, 8))
 

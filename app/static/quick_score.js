@@ -782,6 +782,16 @@
     const roster = data.roster || [];
     const saved = data.lineups || {};
     const chosen = new Set(saved.club || []);
+    // Nov 23 2026 (Dhruvika: "Afghan Eagles club exists now so then we should allow to select existing players as well
+    // same as heartlake and add new players same how it is today"): when the other team is a club in the app, its
+    // players can be ticked too; anyone else is typed below as before. README "Line-ups and guest matches".
+    const oppRoster = data.opponent_roster || [];
+    const oppIds = data.opponent_roster_player_ids || {};
+    const oppChosen = new Set(saved.opponent || []);
+    const oppRosterKeys = new Set(oppRoster.map((n) => n.toLowerCase()));
+    const oppTyped = (saved.opponent || []).filter((n) => !oppRosterKeys.has(String(n).toLowerCase()));
+    const clubRosterKeys = new Set(roster.map((n) => n.toLowerCase()));
+    const clubTyped = (saved.club || []).filter((n) => !clubRosterKeys.has(String(n).toLowerCase()));
     app.innerHTML = `
       <section class="qs-card">
         <p class="qs-kicker">Before the first ball · ${esc(clubName)} vs ${esc(m.opponent)}</p>
@@ -798,12 +808,20 @@
                 : ""
             }
             ${roster.length ? `<div class="qs-lineup-tools"><button type="button" class="qs-btn ghost" data-lineup="all">Select all</button><button type="button" class="qs-btn ghost" data-lineup="none">Clear</button></div>` : ""}
-            <label>${roster.length ? "Other players (one per line)" : "Players (one per line)"}<textarea id="qsClubExtra" rows="${roster.length ? 2 : 6}" placeholder="Name\nName"></textarea></label>
+            <label>${roster.length ? "Other players (one per line)" : "Players (one per line)"}<textarea id="qsClubExtra" rows="${roster.length ? 2 : 6}" placeholder="Name\nName">${esc((roster.length ? clubTyped : []).join("\n"))}</textarea></label>
             <div class="qs-roles" data-roles="club"></div>
           </fieldset>
           <fieldset class="qs-lineup">
             <legend>${esc(m.opponent)} <span class="qs-count" data-count="opp">0</span></legend>
-            <label>Players (one per line, or paste the WhatsApp list)<textarea id="qsOppList" rows="6" placeholder="Name\nName">${esc((saved.opponent || []).join("\n"))}</textarea></label>
+            ${
+              oppRoster.length
+                ? `<div class="qs-picks">${oppRoster
+                    .map((n) => `<label class="qs-pick"><input type="checkbox" name="opp" value="${esc(n)}"${oppChosen.has(n) ? " checked" : ""} /> <span>${esc(n)}${oppIds[n] ? ` <small class="qs-pid">#${esc(oppIds[n])}</small>` : ""}</span></label>`)
+                    .join("")}</div>
+                  <div class="qs-lineup-tools"><button type="button" class="qs-btn ghost" data-lineup="oppall">Select all</button><button type="button" class="qs-btn ghost" data-lineup="oppnone">Clear</button></div>`
+                : ""
+            }
+            <label>${oppRoster.length ? "Other players (one per line, or paste the WhatsApp list)" : "Players (one per line, or paste the WhatsApp list)"}<textarea id="qsOppList" rows="${oppRoster.length ? 2 : 6}" placeholder="Name\nName">${esc((oppRoster.length ? oppTyped : saved.opponent || []).join("\n"))}</textarea></label>
             <div class="qs-lineup-tools"><span class="qs-muted">Don't know their names?</span><button type="button" class="qs-btn ghost" data-lineup="opp11">Use Player 1–11</button></div>
             <div class="qs-roles" data-roles="opponent"></div>
           </fieldset>
@@ -826,7 +844,8 @@
     };
     const ticked = () => Array.from(form.querySelectorAll('input[name="club"]:checked')).map((i) => i.value);
     const clubNames = () => unique([...ticked(), ...cleanNames(document.getElementById("qsClubExtra").value)]);
-    const oppNames = () => unique(cleanNames(document.getElementById("qsOppList").value));
+    const tickedOpp = () => Array.from(form.querySelectorAll('input[name="opp"]:checked')).map((i) => i.value);
+    const oppNames = () => unique([...tickedOpp(), ...cleanNames(document.getElementById("qsOppList").value)]);
     // Captain / vice-captain / keeper: one tidy line per team; tap one and pick a name (Dhruvika, Oct 29: keep it simple).
     const roleChoice = { club: { ...((saved.roles || {}).club || {}) }, opponent: { ...((saved.roles || {}).opponent || {}) } };
     const SHORT = { captain: "Captain", vice_captain: "VC", keeper: "WK" };
@@ -882,10 +901,11 @@
     form.addEventListener("click", (event) => {
       const tool = event.target.closest("[data-lineup]")?.dataset.lineup;
       if (!tool) return;
-      if (tool === "all" || tool === "none") {
-        const boxes = Array.from(form.querySelectorAll('input[name="club"]'));
-        boxes.forEach((box, i) => (box.checked = tool === "all" && i < 11));
-        if (tool === "all" && boxes.length > 11) toast("Ticked the first 11. Untick anyone not playing, then tick the others.");
+      if (tool === "all" || tool === "none" || tool === "oppall" || tool === "oppnone") {
+        const boxes = Array.from(form.querySelectorAll(`input[name="${tool.startsWith("opp") ? "opp" : "club"}"]`));
+        const all = tool === "all" || tool === "oppall";
+        boxes.forEach((box, i) => (box.checked = all && i < 11));
+        if (all && boxes.length > 11) toast("Ticked the first 11. Untick anyone not playing, then tick the others.");
       } else if (tool === "opp11") {
         document.getElementById("qsOppList").value = Array.from({ length: 11 }, (_, i) => `Player ${i + 1}`).join("\n");
       }
@@ -905,6 +925,10 @@
     form.addEventListener("input", updateCounts);
     form.addEventListener("change", (event) => {
       // 11 players at most per team (Amit, Oct 29)
+      if (event.target.name === "opp" && event.target.checked && oppNames().length > 11) {
+        event.target.checked = false;
+        toast("11 players at most. Untick someone first.", "error");
+      }
       if (event.target.name === "club" && event.target.checked && clubNames().length > 11) {
         event.target.checked = false;
         toast("11 players at most. Untick someone first.", "error");
@@ -922,7 +946,12 @@
         const how = typed && t ? ` (${t} ticked + ${typed} in "Other players")` : typed ? ' (in "Other players")' : "";
         return toast(c > 11 ? `${clubName}: ${c} players${how}. Keep 11 at most: untick or delete ${c - 11}.` : `${clubName} needs at least 2 players (now ${c}).`, "error");
       }
-      if (o < 2 || o > 11) return toast(o > 11 ? `${m.opponent}: ${o} players. Keep 11 at most: delete ${o - 11} from the list.` : `${m.opponent} needs at least 2 players (now ${o}).`, "error");
+      if (o < 2 || o > 11) {
+        const t = tickedOpp().length;
+        const typed = o - t;
+        const how = typed && t ? ` (${t} ticked + ${typed} in "Other players")` : "";
+        return toast(o > 11 ? `${m.opponent}: ${o} players${how}. Keep 11 at most: untick or delete ${o - 11}.` : `${m.opponent} needs at least 2 players (now ${o}).`, "error");
+      }
       try {
         await api("POST", `/api/matches/${enc(matchId)}/lineups`, { club: clubNames(), opponent: oppNames(), roles: roleChoice });
         toast("Line-ups saved ✓");
@@ -1295,11 +1324,60 @@
     render();
   }
 
+  // Nov 23 2026 (Dhruvika: "if we require to undo then it delays as it inserts every ball from queue and then it
+  // does undo due to which the game has to be stopped"): a ball still waiting in the queue is simply taken back here,
+  // at once, without asking the server; only a ball already saved (or being saved) needs the server - Undo then
+  // waits for that one save by itself instead of asking the scorer to wait. README "Fast ball-by-ball saving".
+  function unOptimistic(inn, payload) {
+    const localId = `local-${payload.client_id || ""}`;
+    const at = (inn.balls || []).map((b) => b.id).lastIndexOf(localId);
+    if (at >= 0) inn.balls = inn.balls.filter((_, i) => i !== at);
+    const sum = inn.summary || (inn.summary = {});
+    const extra = payload.extras_type !== "none" ? payload.extras_runs || 0 : 0;
+    sum.runs = Math.max(0, (sum.runs || 0) - (payload.runs_bat || 0) - extra);
+    if (payload.wicket && String(payload.wicket_type || "").toLowerCase() !== "retired_out") {
+      sum.wickets = Math.max(0, (sum.wickets || 0) - 1);
+    }
+    const batter = (sum.batting || []).find((b) => b.player_name === payload.striker);
+    if (batter && !["wide", "retired_out"].includes(payload.extras_type)) {
+      batter.runs = Math.max(0, (batter.runs || 0) - (["bye", "leg_bye"].includes(payload.extras_type) ? 0 : payload.runs_bat || 0));
+      batter.balls = Math.max(0, (batter.balls || 0) - 1);
+    }
+  }
+
+  async function waitForQueue(ms = 90000) {
+    const until = Date.now() + ms;
+    while ((queue.length || draining) && Date.now() < until) {
+      await new Promise((resolve) => setTimeout(resolve, 200));
+    }
+    return !queue.length && !draining;
+  }
+
   async function undo() {
     if (!guest && !data.can_edit_scorebook) return toast("Only a captain, club admin, or superadmin can edit saved balls.");
-    if (queue.length || draining) {
-      toast("Wait for the last balls to save, then undo.");
+    if (queue.length > (draining ? 1 : 0)) {
+      // the last tapped ball hasn't been sent yet: take it back straight away
+      const item = queue.pop();
+      storeQueue();
+      const inn = innings().find((i) => i.inning_number === item.payload.innings_number) || currentInnings();
+      unOptimistic(inn, item.payload);
+      saveLocal(inn.inning_number, {
+        ...loadLocal(inn.inning_number),
+        striker: item.payload.striker,
+        nonStriker: item.payload.non_striker,
+        bowler: item.payload.bowler || loadLocal(inn.inning_number).bowler,
+        setup: true,
+      });
+      showPending();
+      render();
+      toast("Last ball removed.");
       return;
+    }
+    if (queue.length || draining) {
+      if (busy) return;
+      toast("Undoing…");
+      if (!(await waitForQueue())) return toast("Still saving - check the connection, then tap Undo again.", "error");
+      await load().catch(() => {});
     }
     if (editMode) {
       const inn = currentInnings();

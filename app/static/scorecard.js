@@ -321,7 +321,7 @@
     if (!document.querySelector('link[href*="public_match.css"]')) {
       const link = document.createElement("link");
       link.rel = "stylesheet";
-      link.href = "/assets/public_match.css?v=20261114a";
+      link.href = "/assets/public_match.css?v=20261123a";
       document.head.appendChild(link);
     }
     root.innerHTML = `

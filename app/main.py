@@ -17,7 +17,7 @@ from collections import Counter, defaultdict
 from difflib import SequenceMatcher
 from copy import deepcopy
 from urllib import request
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 import uuid
 from datetime import datetime, date, timedelta, timezone
 from pathlib import Path
@@ -212,6 +212,7 @@ try:
         shown_match_status,
         shown_status_copy,
         open_database,
+        forget_database_checks,
         scorebook_match_finished,
         scorebook_wickets_for_all_out,
         scorebook_result_text,
@@ -287,6 +288,7 @@ except ModuleNotFoundError:
         shown_match_status,
         shown_status_copy,
         open_database,
+        forget_database_checks,
         scorebook_match_finished,
         scorebook_wickets_for_all_out,
         scorebook_result_text,
@@ -304,7 +306,7 @@ app = FastAPI(
 )
 
 MIN_SEASON_SETUP_YEAR = 2026
-SESSION_TIMEOUT_MINUTES = 30
+SESSION_TIMEOUT_MINUTES = 15  # Nov 21 2026 (Amit: "Session times out is 15 min"); README "Sign-in timeout"
 
 app.add_middleware(
     CORSMiddleware,
@@ -581,7 +583,16 @@ def _require_page_session(request: Request) -> tuple[sqlite3.Row, str] | Redirec
         return _redirect_to_signin()
     try:
         return _auth_user_from_token(token)
-    except HTTPException:
+    except HTTPException as exc:
+        if exc.status_code == 401 and "expired" in str(exc.detail).lower():
+            # Nov 21 2026 (Amit: "When the session times out then it should take the user to signin page"): Sign in
+            # says why, and brings the person back to this page afterwards (README "Sign-in timeout").
+            here = request.url.path + (f"?{request.url.query}" if request.url.query else "")
+            response = RedirectResponse(url=f"/signin?expired=1&next={quote(here, safe='')}", status_code=303)
+            response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+            response.headers["Pragma"] = "no-cache"
+            _clear_auth_cookies(response)
+            return response
         return _redirect_to_signin()
 
 
@@ -1043,12 +1054,12 @@ def _clubs_page_html(request: Request, search: str = "", focus_club_id: str = ""
       <head>
         <meta charset="UTF-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, viewport-fit=cover" />
-        <script src="/assets/zoom_lock.js?v=20261014a"></script>
+        <script src="/assets/zoom_lock.js?v=20261123a"></script>
         <title>Select Club · CricketClubApp</title>
         <link rel="stylesheet" href="/assets/styles.css?v=20261111tablealign" />
         <link rel="stylesheet" href="/assets/app_polish.css?v=20261006a" />
         <link rel="stylesheet" href="/assets/sports-system.css?v=20260926a" />
-        <link rel="stylesheet" href="/assets/public_match.css?v=20261117n" />
+        <link rel="stylesheet" href="/assets/public_match.css?v=20261123a" />
       </head>
       <body>
         <div class="page-shell">
@@ -1159,8 +1170,8 @@ def _clubs_page_html(request: Request, search: str = "", focus_club_id: str = ""
             </div>
           </main>
         </div>
-        <script src="/assets/multipage.js?v=20261117b"></script>
-        <script src="/assets/clubs.js?v=20261117a"></script>
+        <script src="/assets/multipage.js?v=20261123a"></script>
+        <script src="/assets/clubs.js?v=20261123a"></script>
       </body>
     </html>
     """
@@ -3082,7 +3093,7 @@ def _auth_user_from_token(token: str | None, touch: bool = True) -> tuple[sqlite
             if idle_seconds >= _session_timeout_seconds():
                 logger.warning("Signed out (401): user %s idle for %s s (last seen %s).", row["id"], idle_seconds, row["session_last_seen_at"])
                 _end_auth_session(connection, token)
-                raise HTTPException(status_code=401, detail="Session expired after 30 minutes of inactivity. Sign in again.")
+                raise HTTPException(status_code=401, detail=f"Session expired after {SESSION_TIMEOUT_MINUTES} minutes of inactivity. Sign in again.")
         if touch:
             _touch_auth_session(connection, token)
     current_club_id = str(row["current_club_id"] or row["primary_club_id"] or "").strip()
@@ -7474,11 +7485,7 @@ def public_match(
     match["can_delete_incomplete"] = can_delete_incomplete
     match["can_delete_completed"] = can_delete_completed
     # Player names only, for "Yet to bat" on the public scorecard (README "Public scorecard (Oct 29 2026)").
-    match["lineups"] = {
-        "club": list(lineups.get("club") or []),
-        "opponent": list(lineups.get("opponent") or []),
-        "roles": _clean_lineup_roles(lineups.get("roles"), list(lineups.get("club") or []), list(lineups.get("opponent") or [])),
-    }
+    match["lineups"] = _public_lineups(lineups)
     match["player_keys"] = _lineup_player_keys(store, match, match["lineups"])
     # Names on the linked published card keep their player links even when the match has no lineup.
     for innings in (match.get("published_scorecard") or {}).get("innings") or []:
@@ -7525,6 +7532,12 @@ def public_scorecard_pdf(scorecard_id: str, x_auth_token: str | None = Header(de
     )
 
 
+def _public_lineups(lineups: dict[str, Any]) -> dict[str, Any]:
+    """Line-ups and (c) / (vc) / (wk) as the match page and its PDF show them (Nov 23 2026: the PDF had no tags)."""
+    club, opponent = list(lineups.get("club") or []), list(lineups.get("opponent") or [])
+    return {"club": club, "opponent": opponent, "roles": _clean_lineup_roles(lineups.get("roles"), club, opponent)}
+
+
 @app.get("/api/public/match/{match_id}/scorecard.pdf")
 def public_match_scorecard_pdf(match_id: str) -> Response:
     store = load_store()
@@ -7535,10 +7548,13 @@ def public_match_scorecard_pdf(match_id: str) -> Response:
                 raise ValueError("Match not found.")
             guest.pop("_code", None)
             match = _public_match_payload({"fixtures": [guest]}, match_id)
+            match["lineups"] = _public_lineups(guest.get("lineups") or {})
         else:
             match = _public_match_payload(store, match_id)
+            match["lineups"] = _public_lineups(_match_lineups(match_id))
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
+    # the same figures, how-outs, (c) (vc) (wk) and status line as the match page (README "Scorecard PDF = match page")
     pdf = scorecard_pdf.build_scorecard_pdf(match)
     filename = scorecard_pdf.scorecard_pdf_filename(match)
     return Response(
@@ -7868,7 +7884,7 @@ def _admin_center_html(request: Request) -> HTMLResponse:
       <head>
         <meta charset="UTF-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, viewport-fit=cover" />
-        <script src="/assets/zoom_lock.js?v=20261014a"></script>
+        <script src="/assets/zoom_lock.js?v=20261123a"></script>
         <title>Admin center · CricketClubApp</title>
         <link rel="stylesheet" href="/assets/styles.css?v=20261111tablealign" />
         <link rel="stylesheet" href="/assets/app_polish.css?v=20261006a" />
@@ -8073,9 +8089,9 @@ def _admin_center_html(request: Request) -> HTMLResponse:
             </div>
           </section>
         </div>
-        <script src="/assets/multipage.js?v=20261117b"></script>
+        <script src="/assets/multipage.js?v=20261123a"></script>
         <script src="/assets/scorecard_view.js?v=20261120a"></script>
-        <script src="/assets/scorecard.js?v=20261120b"></script>
+        <script src="/assets/scorecard.js?v=20261123a"></script>
         <script src="/assets/admin_center.js?v=20261121c"></script>
         <script src="/assets/admin_whatsapp.js?v=20261117b"></script>
         <script src="/assets/admin_reread.js?v=20261024a"></script>
@@ -8100,7 +8116,7 @@ def _club_admin_center_html() -> HTMLResponse:
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, viewport-fit=cover" />
-    <script src="/assets/zoom_lock.js?v=20261014a"></script>
+    <script src="/assets/zoom_lock.js?v=20261123a"></script>
     <title>Admin center · CricketClubApp</title>
     <link rel="stylesheet" href="/assets/styles.css?v=20261111tablealign" />
     <link rel="stylesheet" href="/assets/app_polish.css?v=20261006a" />
@@ -8124,7 +8140,7 @@ def _club_admin_center_html() -> HTMLResponse:
         </div>
       </section>
     </div>
-    <script src="/assets/multipage.js?v=20261117b"></script>
+    <script src="/assets/multipage.js?v=20261123a"></script>
     <script src="/assets/admin_clubs.js?v=20261120a"></script>
   </body>
 </html>"""
@@ -8264,6 +8280,8 @@ def clubs_page(request: Request, search: str = "", focus_club_id: str = "") -> R
     logger.debug("Clubs page opened. search=%s focus_club_id=%s", search or "", focus_club_id or "")
     session = _require_page_session(request)
     if isinstance(session, RedirectResponse):
+        if "expired=1" in str(session.headers.get("location") or ""):
+            return session  # Nov 23 2026: a sign-in that ended / timed out goes to Sign in (README "Sign-in timeout")
         # Signed-out visitors get the public, read-only club list instead of the sign-in page.
         return _page_response("public_clubs.html")
     return _clubs_page_html(request, search, focus_club_id)
@@ -9766,7 +9784,15 @@ def auth_signout(request: Request, x_auth_token: str | None = Header(default=Non
 
 
 @app.post("/api/auth/select-club")
-def select_club(request: SelectClubRequest, x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
+def select_club(
+    request: SelectClubRequest,
+    include_dashboard: bool = True,
+    x_auth_token: str | None = Header(default=None),
+) -> dict[str, Any]:
+    """Pick the club to work in; include_dashboard=false leaves the dashboard out of the answer.
+
+    Nov 23 2026: the Clubs page goes to Home right after, which loads the dashboard itself - building it here too
+    (several MB) made picking a club slow. README "Faster pages"."""
     user_row, _ = _auth_user_from_token(x_auth_token)
     store = load_store()
     selected_club = _selected_club(store, request.club_id)
@@ -9798,7 +9824,7 @@ def select_club(request: SelectClubRequest, x_auth_token: str | None = Header(de
         "user": _auth_user_payload(user_row, selected_club.get("id", "")),
         "club": selected_club,
         "clubs": _visible_club_choices_for_user(store, user_row, selected_club.get("id", "")),
-        "dashboard": current_dashboard(store, selected_club.get("id", "")),
+        **({"dashboard": current_dashboard(store, selected_club.get("id", ""))} if include_dashboard else {}),
     }
 
 
@@ -11601,6 +11627,7 @@ async def import_database(
                 except sqlite3.OperationalError:
                     old_version = 0
         _sqlite_copy(incoming_path, DATABASE_FILE)
+        forget_database_checks()  # Nov 23 2026: the new file's tables / triggers / journal mode are checked again
         # New data: every worker must drop its in-memory copy (README "Fresh data on every request").
         live = sqlite3.connect(str(DATABASE_FILE), timeout=60)
         try:
@@ -13520,6 +13547,25 @@ def update_scorebook_setup(
     return current_dashboard(load_store())
 
 
+def _match_finish_state(match: dict[str, Any]) -> tuple[str, ...]:
+    """Which innings are finished, plus the match status and result (Nov 23 2026, README "Fast ball-by-ball saving")."""
+    innings = ((match.get("scorebook") or {}).get("innings") or []) if isinstance(match.get("scorebook"), dict) else []
+    done = tuple(
+        "done" if str(item.get("status") or "").strip().lower() in {"complete", "completed", "finished"} else "open"
+        for item in innings
+        if isinstance(item, dict)
+    )
+    return done + (str(match.get("status") or "").strip().lower(), str(match.get("result") or "").strip().lower())
+
+
+def _save_scored_ball(store: dict[str, Any], match: dict[str, Any], before: tuple[str, ...], full: bool = False) -> None:
+    """Nov 23 2026 (Dhruvika: "every ball saves into DB takes time and long queue happens and if we require to undo
+    then it delays"): a ball (or an undo) in the middle of an innings saves only the match - everyone's batting /
+    bowling stats and the assistant's documents are rebuilt when an innings or the match finishes (or un-finishes),
+    and at any other full save. README "Fast ball-by-ball saving"."""
+    save_store(store, keep_stats=not full and _match_finish_state(match) == before)
+
+
 @app.post("/api/matches/{match_id}/scorebook/ball")
 @_scoring_locked
 def add_scorebook_ball(
@@ -13539,6 +13585,7 @@ def add_scorebook_ball(
         raise HTTPException(status_code=400, detail="Live scoring is locked for this fixture. Use authorized edit mode to correct a past scorebook.")
 
     scorebook = _match_scorebook(match)
+    finish_before = _match_finish_state(match)
     innings_index = max(1, min(2, int(request.innings_number or 1))) - 1
     innings = scorebook["innings"][innings_index]
     saved_ids = {str(item.get("id") or "") for item in innings.get("balls", [])}
@@ -13604,7 +13651,7 @@ def add_scorebook_ball(
     sync_fixture_scorecard_from_scorebook(match)
     _settle_scorebook_result(match, lineups)
     _touch_fixture_audit(match, user_row)
-    save_store(store)
+    _save_scored_ball(store, match, finish_before, full=bool(editing or edit_mode))
     if editing or edit_mode:
         # Historical corrections and appended balls must not send live alerts.
         return {"ok": True, "status": innings.get("status")} if x_lite_response else current_dashboard(load_store())
@@ -13810,6 +13857,7 @@ def delete_scorebook_ball(
     else:
         target_innings, target_ball = sorted(balls_by_innings, key=_ball_sort_key)[-1]
     previous_status = str(target_innings.get("status") or "")
+    finish_before = _match_finish_state(match)
     target_innings["balls"] = [ball for ball in target_innings.get("balls", []) if ball.get("id") != target_ball.get("id")]
     summary = summarize_innings_scorebook(target_innings)
     if not target_innings["balls"]:
@@ -13825,7 +13873,7 @@ def delete_scorebook_ball(
     sync_fixture_scorecard_from_scorebook(match)
     _settle_scorebook_result(match, _match_lineups(match_id))
     _touch_fixture_audit(match, user_row)
-    save_store(store)
+    _save_scored_ball(store, match, finish_before, full=bool(edit_mode))
     return {"ok": True} if x_lite_response else current_dashboard(load_store())
 
 
@@ -15247,6 +15295,24 @@ def quick_score_start(request: QuickStartRequest, x_auth_token: str | None = Hea
     return {"match_id": existing.get("id")}
 
 
+def _opponent_roster_payload(store: dict[str, Any], fixture: dict[str, Any], club: dict[str, Any]) -> dict[str, Any]:
+    """The other team's club (matched by name, short name or alias) and its players, for the line-up step."""
+    opponent = _find_club_by_name(store, str(fixture.get("opponent") or ""))
+    if not opponent or str(opponent.get("id") or "") == str(club.get("id") or ""):
+        return {"opponent_club": None, "opponent_roster": [], "opponent_roster_player_ids": {}}
+    names = _club_member_names(store, opponent)
+    wanted = set(names)
+    return {
+        "opponent_club": {"id": opponent.get("id"), "name": opponent.get("name")},
+        "opponent_roster": names,
+        "opponent_roster_player_ids": {
+            str(member.get("name")): str(member.get("player_id") or "")
+            for member in store.get("members", []) or []
+            if member.get("name") and member.get("player_id") and str(member.get("name")) in wanted
+        },
+    }
+
+
 @app.get("/api/quick-score/{match_id}")
 def quick_score_state(match_id: str, x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
     user_row, current_club_id = _auth_user_from_token(x_auth_token)
@@ -15283,6 +15349,10 @@ def quick_score_state(match_id: str, x_auth_token: str | None = Header(default=N
             for member in store.get("members", []) or []
             if member.get("name") and member.get("player_id") and str(member.get("name")) in set(_club_member_names(store, club))
         },
+        # Nov 23 2026 (Dhruvika: "Afghan Eagles club exists now so then we should allow to select existing players as
+        # well same as heartlake and add new players same how it is today"): when the other team is a club in the
+        # app, its players can be ticked too. README "Line-ups and guest matches".
+        **_opponent_roster_payload(store, fixture, club),
         "lineups": lineups,
         # Matches already being scored before line-ups were required carry on without them.
         "lineups_ready": _lineups_ready(lineups) or started,

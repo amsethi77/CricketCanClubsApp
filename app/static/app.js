@@ -515,7 +515,9 @@ async function refreshSessionState({ force = false } = {}) {
   } catch (error) {
     const message = String(error?.message || "").toLowerCase();
     if (message.includes("session expired") || message.includes("sign in first")) {
-      signOut();
+      // Nov 21 2026: timed out -> Sign in says why and comes back here (multipage.js signOutAfterIdle)
+      if (message.includes("session expired") && window.CricketClubAppPages?.signOutAfterIdle) window.CricketClubAppPages.signOutAfterIdle();
+      else signOut();
       return null;
     }
     throw error;
