@@ -834,3 +834,158 @@
   border: 0 !important;
   background: none !important;
 }
+
+/* Nov 26 2026: ✏️ Edit a player's profile in People & roles */
+.acp-row {
+  grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr) minmax(0, 1fr) auto;
+}
+
+.acp-edit {
+  align-self: center;
+  white-space: nowrap;
+}
+
+.acp-editor {
+  margin: -2px 0 8px;
+  padding: 14px;
+  border: 1px solid #bcd3f5;
+  border-radius: 12px;
+  background: #f5f9ff;
+}
+
+.acp-edit-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 10px;
+  margin: 8px 0;
+}
+
+.acp-edit-grid .acp-field.is-wide {
+  grid-column: 1 / -1;
+}
+
+.acp-edit-grid input,
+.acp-edit-grid textarea {
+  width: 100%;
+  min-height: 38px;
+  padding: 6px 8px;
+  border: 1px solid #cfd9e8;
+  border-radius: 10px;
+  background: #fff;
+  font: inherit;
+  font-size: 0.9rem;
+  font-weight: 500;
+  text-transform: none;
+  color: #142033;
+  box-sizing: border-box;
+}
+
+@media (max-width: 720px) {
+  .acp-row {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  }
+
+  .acp-edit {
+    grid-column: 1 / -1;
+    justify-self: start;
+  }
+}
+
+.acp-list[data-acp-players]:has(.acp-editor) {
+  max-height: none;
+  overflow: visible;
+}
+
+/* Nov 26 2026: ✏️ Edit on the superadmin's club roster (Admin Center -> Club Maintenance) */
+.acr-actions {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: stretch;
+}
+
+.acr-edit-toggle {
+  min-height: 0 !important;
+  padding: 5px 10px !important;
+  border: 1px solid #bcd3f5 !important;
+  border-radius: 8px !important;
+  background: #fff !important;
+  color: #1f5fbf !important;
+  font-size: 0.8rem !important;
+  font-weight: 700;
+  width: auto !important;
+  box-shadow: none !important;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.acr-edit-toggle[aria-expanded="true"] {
+  background: #1f6fe5 !important;
+  color: #fff !important;
+}
+
+.acr-card.is-editing {
+  border-color: #bcd3f5;
+  background: #f7faff;
+}
+
+.admin-roster-panel .acr-edit {
+  margin-top: 10px;
+}
+
+.admin-roster-panel .acr-edit[hidden] {
+  display: none;
+}
+
+.acr-edit-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.acr-edit-field {
+  display: grid;
+  gap: 3px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: #5c6f8a;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.acr-edit-field.is-wide {
+  grid-column: 1 / -1;
+}
+
+.acr-edit-field input,
+.acr-edit-field select,
+.acr-edit-field textarea {
+  width: 100%;
+  min-height: 38px;
+  padding: 6px 8px;
+  border: 1px solid #cfd9e8;
+  border-radius: 10px;
+  background: #fff;
+  font: inherit;
+  font-size: 0.9rem;
+  font-weight: 500;
+  text-transform: none;
+  letter-spacing: 0;
+  color: #142033;
+  box-sizing: border-box;
+}
+
+.acr-edit-msg {
+  margin: 8px 0 0;
+  font-weight: 600;
+}
+
+.acr-edit-msg.is-success {
+  color: #15803d;
+}
+
+.acr-edit-msg.is-error {
+  color: #be123c;
+}

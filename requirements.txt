@@ -5,3 +5,4 @@ python-multipart==0.0.9
 pillow-heif
 reportlab>=4.2,<5
 tzdata>=2024.1
+pypdfium2>=4.30

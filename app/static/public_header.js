@@ -105,7 +105,7 @@ function loadPublicAssistant() {
   }
 
   try {
-    const response = await fetch('/assets/public_header.html?v=20261115a', {
+    const response = await fetch('/assets/public_header.html?v=20261127a', {
       cache: 'no-store',
     });
     if (!response.ok) return;

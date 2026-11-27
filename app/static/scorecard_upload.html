@@ -16,6 +16,7 @@
     <link rel="stylesheet" href="/assets/live.css?v=20261030m" />
     <link rel="stylesheet" href="/assets/scorecards.css?v=20261117s" />
     <link rel="stylesheet" href="/assets/sports-system.css?v=20261030m" />
+    <link rel="stylesheet" href="/assets/report_type.css?v=20261127a" />
   </head>
   <body class="public-fixtures-page scorecards-page scorecard-upload-page">
     <!-- Captains and club admins upload a scorecard photo. README: "Scorecard uploads: checks, review and duplicates". -->
@@ -26,7 +27,7 @@
         <div class="stack-card">
           <p class="section-kicker">Scorecards</p>
           <h1 class="fixtures-title">Upload a scorecard</h1>
-          <p class="lede">Take a clear photo of the paper scorecard. We read it, check it for mistakes and duplicates, and show you the digital scorecard before it goes live.</p>
+          <p class="lede">Take a clear photo of the paper scorecard, or upload it in any format (JPG, PNG, HEIC, PDF, TIFF ...). A PDF with two pages gives both innings. We read it, check it for mistakes and duplicates, and show you the digital scorecard before it goes live.</p>
         </div>
       </section>
       <section class="panel onboarding-panel fixtures-list-panel">
@@ -37,14 +38,14 @@
               <select id="scuClub"></select>
             </label>
             <label class="scu-drop" for="scuFile">
-              <span id="scuDropText">📷 1st innings photo <small>(the team that batted first - tap to take or choose)</small></span>
+              <span id="scuDropText">📷 1st innings photo or PDF <small>(the team that batted first - tap to take or choose)</small></span>
               <img id="scuPreview" alt="" hidden />
-              <input id="scuFile" type="file" accept="image/*,.jpg,.jpeg,.png,.webp,.heic,.heif" />
+              <input id="scuFile" type="file" accept="image/*,application/pdf,.pdf,.jpg,.jpeg,.png,.webp,.heic,.heif,.tif,.tiff,.bmp,.gif" />
             </label>
             <label class="scu-drop scu-drop-second" for="scuFile2">
-              <span id="scuDropText2">📷 2nd innings photo <small>(the team that batted second - add one or both photos)</small></span>
+              <span id="scuDropText2">📷 2nd innings photo or PDF <small>(the team that batted second - add one or both)</small></span>
               <img id="scuPreview2" alt="" hidden />
-              <input id="scuFile2" type="file" accept="image/*,.jpg,.jpeg,.png,.webp,.heic,.heif" />
+              <input id="scuFile2" type="file" accept="image/*,application/pdf,.pdf,.jpg,.jpeg,.png,.webp,.heic,.heif,.tif,.tiff,.bmp,.gif" />
             </label>
             <label>Other team's Match ID <small>(optional - if they already uploaded the other innings)</small>
               <input id="scuLink" type="text" placeholder="e.g. M-8A311D9B" autocomplete="off" />
@@ -61,7 +62,7 @@
         </div>
       </section>
     </main>
-    <script src="/assets/public_header.js?v=20261123a"></script>
+    <script src="/assets/public_header.js?v=20261127a"></script>
     <script src="/assets/scorecard_upload.js?v=20261118c"></script>
   </body>
 </html>

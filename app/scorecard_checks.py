@@ -383,3 +383,156 @@ def ai_candidates(record: dict[str, Any], others: list[dict[str, Any]], card_for
         if len(picked) >= limit:
             break
     return picked
+
+
+# ---------------------------------------------------------------------------------------------------------------
+# Nov 27 2026 (Amit: "Our Scorecard extraction should ensure: Team total must reconcile with batsman runs, extras and
+# applicable penalty runs. Bowling figures must reconcile with innings totals, accounting for byes and leg-byes. Overs
+# and balls must be interpreted correctly (4.3 means four overs and three balls, not 4.3 decimal overs). Dismissals
+# must be compatible with the bowling figures."). Run on every saved card - read by the AI, typed in or fixed with
+# Edit - and each problem puts the card in front of a site admin (README "Scorecard reconciliation checks").
+# A check only runs when the numbers it needs are all on the card (paper books often leave the bowling empty).
+# ---------------------------------------------------------------------------------------------------------------
+def _int(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    text = str(value if value is not None else "").strip()
+    return int(text) if re.fullmatch(r"-?\d+", text) else None
+
+
+def overs_to_balls(value: Any) -> int | None:
+    """Cricket overs notation: 4.3 = 4 overs and 3 balls = 27 balls (never 4.3 decimal overs). None if empty or not
+    valid (the part after the point is the balls of the unfinished over: 0 to 5)."""
+    if value is None or isinstance(value, bool):
+        return None
+    text = f"{value:.1f}" if isinstance(value, float) else str(value).strip()
+    if not text:
+        return None
+    match = re.fullmatch(r"(\d+)(?:\.(\d))?", text)
+    if not match:
+        return None
+    balls = int(match.group(2) or 0)
+    if balls > 5:
+        return None
+    return int(match.group(1)) * 6 + balls
+
+
+def overs_text(balls: int) -> str:
+    return f"{balls // 6}.{balls % 6}" if balls % 6 else str(balls // 6)
+
+
+def _row_name(row: Any) -> str:
+    if not isinstance(row, dict):
+        return ""
+    player = row.get("player")
+    return str((player.get("name") if isinstance(player, dict) else player) or row.get("name") or "").strip()
+
+
+def _same_person(a: Any, b: Any) -> bool:
+    """'Khan' and 'S Khan', 'Dikshit' and 'Dikshit Goel' are the same bowler on one card."""
+    x = [w for w in re.split(r"[^a-z0-9]+", str(a or "").lower()) if w]
+    y = [w for w in re.split(r"[^a-z0-9]+", str(b or "").lower()) if w]
+    if not x or not y:
+        return False
+    if x == y:
+        return True
+    short, long = (x, y) if len(x) <= len(y) else (y, x)
+    return all(w in set(long) or (len(w) == 1 and any(l.startswith(w) for l in long)) for w in short)
+
+
+_NOT_OUT_WORDS = ("not out", "did not", "dnb", "retired hurt", "absent", "retired not out")
+_NOT_TO_BOWLER = ("run", "retired", "obstruct", "handled", "timed", "absent", "hit the ball twice")
+
+
+def _out_to_bowler(dismissal: dict[str, Any]) -> str:
+    """The bowler credited with this wicket ("" for run outs, retired, not out ...)."""
+    kind = str(dismissal.get("type") or "").strip().lower().replace("_", " ")
+    bowler = str(dismissal.get("bowler") or "").strip()
+    if not kind or not bowler or any(word in kind for word in _NOT_OUT_WORDS) or any(word in kind for word in _NOT_TO_BOWLER):
+        return ""
+    return bowler
+
+
+def reconciliation_problems(template: dict[str, Any]) -> list[str]:
+    """Plain-English problems where the card doesn't reconcile with itself ([] = it does)."""
+    problems: list[str] = []
+    limit_balls = overs_to_balls(((template.get("match") or {}) if isinstance(template.get("match"), dict) else {}).get("overs_limit"))
+    for number, inn in enumerate([item for item in template.get("innings") or [] if isinstance(item, dict)], start=1):
+        team = str(inn.get("batting_team") or f"Innings {number}").strip()
+        summary = inn.get("summary") if isinstance(inn.get("summary"), dict) else {}
+        extras = inn.get("extras") if isinstance(inn.get("extras"), dict) else {}
+        batting = [row for row in inn.get("batting") or [] if isinstance(row, dict) and _row_name(row)]
+        bowling = [row for row in inn.get("bowling") or [] if isinstance(row, dict) and _row_name(row)]
+        total = _int(summary.get("runs"))
+        wickets = _int(summary.get("wickets"))
+        parts = {key: _int(extras.get(key)) for key in ("wides", "no_balls", "byes", "leg_byes", "penalties")}
+        extras_total = _int(extras.get("total"))
+
+        # 1. total = batters' runs + extras (wides, no balls, byes, leg byes) + penalty runs
+        known_parts = [value for value in parts.values() if value is not None]
+        if extras_total is not None and known_parts and all(parts[key] is not None for key in ("wides", "no_balls", "byes", "leg_byes")):
+            if sum(known_parts) != extras_total:
+                penalty = f", penalty runs {parts['penalties']}" if parts["penalties"] else ""
+                problems.append(
+                    f"{team}: the extras written separately (wides {parts['wides']}, no balls {parts['no_balls']}, byes {parts['byes']}, "
+                    f"leg byes {parts['leg_byes']}{penalty}) add up to {sum(known_parts)}, but extras says {extras_total}."
+                )
+        bat_runs = [_int(row.get("runs")) for row in batting]
+        if total is not None and batting and extras_total is not None and all(value is not None or not str(row.get("runs") or "").strip() for value, row in zip(bat_runs, batting)):
+            batted = sum(value or 0 for value in bat_runs)
+            if batted + extras_total != total:
+                problems.append(f"{team}: batters' runs ({batted}) + extras incl. penalty runs ({extras_total}) = {batted + extras_total}, but the team total is {total}.")
+
+        # 2. bowling figures: bowlers' runs = total - byes - leg byes - penalty runs (wides and no balls are the bowler's)
+        conceded = [_int(row.get("runs_conceded")) for row in bowling]
+        if total is not None and bowling and all(value is not None for value in conceded) and parts["byes"] is not None and parts["leg_byes"] is not None:
+            expected = total - parts["byes"] - parts["leg_byes"] - (parts["penalties"] or 0)
+            if sum(conceded) != expected:  # type: ignore[arg-type]
+                penalty = f" and penalty runs {parts['penalties']}" if parts["penalties"] else ""
+                problems.append(
+                    f"{team}: the bowlers' runs add up to {sum(conceded)}, but the total {total} minus byes {parts['byes']} and leg byes {parts['leg_byes']}{penalty} is {expected}."
+                )
+
+        # 3. overs notation: 4.3 = 4 overs and 3 balls; the part after the point is 0-5
+        for label, value in [("the innings", summary.get("overs"))] + [(_row_name(row), row.get("overs")) for row in bowling]:
+            if value not in (None, "") and overs_to_balls(value) is None:
+                problems.append(f"{team}: {value} overs for {label} isn't possible - overs are written overs.balls with 0-5 balls (4.3 = 4 overs and 3 balls).")
+        innings_balls = overs_to_balls(summary.get("overs"))
+        bowled = [overs_to_balls(row.get("overs")) for row in bowling]
+        if innings_balls is not None and bowling and all(value is not None for value in bowled):
+            sum_balls = sum(bowled)  # type: ignore[arg-type]
+            if abs(sum_balls - innings_balls) > 6:  # a whole over out is common on paper books (a bowler left off)
+                problems.append(f"{team}: the bowlers' overs add up to {overs_text(sum_balls)}, but the innings lasted {overs_text(innings_balls)} overs.")
+        if innings_balls is not None and limit_balls and innings_balls > limit_balls:
+            problems.append(f"{team}: {overs_text(innings_balls)} overs is more than the {overs_text(limit_balls)}-over limit.")
+
+        # 4. dismissals compatible with the bowling figures
+        credited = [_out_to_bowler(row.get("dismissal")) for row in batting if isinstance(row.get("dismissal"), dict)]
+        credited = [name for name in credited if name]
+        bowl_wickets = [_int(row.get("wickets")) for row in bowling]
+        if bowling and all(value is not None for value in bowl_wickets):
+            for row, count in zip(bowling, bowl_wickets):
+                found = sum(1 for who in credited if _same_person(who, _row_name(row)))
+                if found != count:
+                    problems.append(
+                        f"{team}: {_row_name(row)} has {count} wicket{'s' if count != 1 else ''} in the bowling figures, but {found} "
+                        f"batter{'s were' if found != 1 else ' was'} out to him (caught, bowled, lbw, stumped or hit wicket; run outs don't count)."
+                    )
+            for who in dict.fromkeys(credited):
+                if not any(_same_person(who, _row_name(row)) for row in bowling):
+                    problems.append(f"{team}: a batter was out to {who}, but {who} isn't in the bowling figures.")
+        outs = sum(
+            1 for row in batting
+            if isinstance(row.get("dismissal"), dict)
+            and str(row["dismissal"].get("type") or "").strip()
+            and not any(word in str(row["dismissal"].get("type") or "").lower().replace("_", " ") for word in _NOT_OUT_WORDS)
+        )
+        if wickets is not None and batting and any(isinstance(row.get("dismissal"), dict) and row["dismissal"].get("type") for row in batting) and outs != wickets:
+            problems.append(f"{team}: the score says {wickets} wickets, but {outs} batter{'s are' if outs != 1 else ' is'} out in How out.")
+        if wickets is not None and wickets > 10:
+            problems.append(f"{team}: {wickets} wickets is more than 10.")
+    return problems

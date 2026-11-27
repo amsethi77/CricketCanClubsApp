@@ -2309,6 +2309,15 @@ ARCHIVE_EXTRA_KEYS = (
     "second_photo_name",
     "second_preview_url",
     "second_uploaded_by",
+    # Nov 25 2026 (Dhruvika): which innings the added photo is (1 / 2), and earlier added photos that didn't give
+    # the missing innings (a new one can be added after a swap with Edit)
+    "second_photo_innings",
+    "earlier_second_photos",
+    # Nov 27 2026 (Amit: any format; keep the original scorecard as evidence): the uploaded PDF, and the earlier
+    # versions of a card fixed with Edit
+    "original_document",
+    "original_document_name",
+    "edit_history",
     "joined_upload_id",
     "joined_upload_ids",
     # Nov 18 2026 (Amit: AI accuracy 60-70% -> 90%): the AI's own reading, kept when a person fixes the card, so the
@@ -6680,6 +6689,14 @@ def sync_uploads_in_store(store: dict[str, Any]) -> bool:
             second_photos.add(second_name)
         if item.get("second_photo_hash"):
             second_photos.add(str(item["second_photo_hash"]))
+        # Nov 25 2026: earlier other-innings photos kept on file belong to the scorecard too
+        for earlier in item.get("earlier_second_photos") or []:
+            if isinstance(earlier, dict):
+                earlier_name = Path(str(earlier.get("second_photo_file") or "").replace("\\", "/")).name.lower()
+                if earlier_name:
+                    second_photos.add(earlier_name)
+                if earlier.get("second_photo_hash"):
+                    second_photos.add(str(earlier["second_photo_hash"]))
 
     for path in sorted(UPLOAD_DIR.iterdir()):
         if not path.is_file():
@@ -7445,6 +7462,74 @@ def build_fielding_rankings(player_stats: list[dict[str, Any]]) -> list[dict[str
     return _assign_rank(rows)
 
 
+def _archive_card_template(upload: dict[str, Any]) -> dict[str, Any]:
+    """The scorecard as entered / read (same choice as _archive_for_club_side)."""
+    for key in ("review_template_json", "review_source_json"):
+        try:
+            value = json.loads(str(upload.get(key) or "")) if upload.get(key) else {}
+        except Exception:
+            value = {}
+        if isinstance(value, dict) and value.get("innings"):
+            return value
+    template = upload.get("extraction_template")
+    return template if isinstance(template, dict) else {}
+
+
+def _archive_card_bowling_fielding(upload: dict[str, Any]) -> tuple[list[tuple[str, int]], list[str]] | None:
+    """Nov 25 2026 (Dhruvika: "Bowling stats are not correct for the season for a particular club" - Heartlake
+    2026 showed Dev 3 wickets at the top; Amit S took 10 and Heshad 7 on the scorecards): wickets and catches
+    straight from the card's bowling table and dismissals, like the player page and the scorecard. Before, a
+    bowler was only credited through the batters' rows, and the other team's batters are skipped for a club's
+    stats - so the club's own bowlers got no wickets and bowlers who didn't bat were missing. None when the card
+    has no bowling figures (then the old way is used)."""
+    template = _archive_card_template(upload)
+    innings_list = [item for item in template.get("innings") or [] if isinstance(item, dict)]
+
+    def row_name(row: Any) -> str:
+        if not isinstance(row, dict):
+            return ""
+        player = row.get("player")
+        name = player.get("name") if isinstance(player, dict) else player
+        return str(name or row.get("player_name") or row.get("name") or "").strip()
+
+    has_figures = any(
+        row_name(row) and row.get("wickets") not in (None, "")
+        for innings in innings_list for row in innings.get("bowling") or [] if isinstance(row, dict)
+    )
+    if not has_figures:
+        return None
+    wickets: list[tuple[str, int]] = []
+    catches: list[str] = []
+    for innings in innings_list:
+        in_table: set[str] = set()
+        for row in innings.get("bowling") or []:
+            name = row_name(row)
+            if name:
+                in_table.add(normalize_name(name))
+                try:
+                    wickets.append((name, int(float(row.get("wickets") or 0))))
+                except (TypeError, ValueError):
+                    wickets.append((name, 0))
+        for row in innings.get("batting") or []:
+            dismissal = row.get("dismissal") if isinstance(row, dict) else None
+            if not isinstance(dismissal, dict):
+                continue
+            how = str(dismissal.get("type") or "").strip().lower().replace("_", " ")
+            bowler = str(dismissal.get("bowler") or "").strip()
+            if bowler and normalize_name(bowler) not in in_table and not any(word in how for word in ("run", "retired", "not out", "obstruct", "handled", "absent")):
+                # a bowler the card's bowling table left out (e.g. "c & b Bim" with no Bim in the table): his
+                # wickets come from the dismissals, as before
+                wickets.append((bowler, 1))
+            if not (how.startswith("caught") or how in {"c", "c&b", "c & b", "ct"}):
+                continue
+            fielder = str(dismissal.get("fielder") or "").strip()
+            if not fielder and ("bowled" in how or "&" in how):
+                fielder = str(dismissal.get("bowler") or "").strip()  # caught and bowled
+            if fielder:
+                catches.append(fielder)
+    return wickets, catches
+
+
 def build_player_pending_stats(archive_uploads: list[dict[str, Any]], members: list[dict[str, Any]]) -> list[dict[str, Any]]:
     member_names = {member["name"] for member in members}
     canonical_uploads = canonical_archive_uploads(archive_uploads)
@@ -7466,6 +7551,13 @@ def build_player_pending_stats(archive_uploads: list[dict[str, Any]], members: l
         for member in members
     }
     played_tracker: dict[str, set[str]] = defaultdict(set)
+
+    def _empty_pending_row(name: str) -> dict[str, Any]:
+        return {
+            "player_name": name, "runs": 0, "balls": 0, "wickets": 0, "catches": 0, "matches": 0, "batting_innings": 0,
+            "dismissal_known_innings": 0, "outs": 0, "batting_average": 0.0, "strike_rate": 0.0, "sources": [],
+        }
+
     for upload in canonical_uploads:
         status = str(upload.get("status") or "").strip().lower()
         if status.startswith(("pending", "needs")) or status == "applied to match":
@@ -7473,6 +7565,21 @@ def build_player_pending_stats(archive_uploads: list[dict[str, Any]], members: l
         archive_key = upload.get("id") or upload.get("file_name", "")
         side_players = upload.get("_club_side_players")
         other_players = upload.get("_club_other_players") or set()
+        card_figures = _archive_card_bowling_fielding(upload)
+        if card_figures is not None:
+            card_wickets, card_catches = card_figures
+            for raw_name, count in [*card_wickets, *((name, None) for name in card_catches)]:
+                name = _canonical_member_name(members, raw_name)
+                if not name or name not in member_names:
+                    continue
+                if side_players is not None and (normalize_name(name) in other_players or normalize_name(raw_name) in other_players):
+                    continue  # bowled / fielded for the other team in this match
+                stats.setdefault(name, _empty_pending_row(name))
+                if count is None:
+                    stats[name]["catches"] += 1
+                else:
+                    stats[name]["wickets"] += count
+                played_tracker[name].add(archive_key)
         for performance in _archive_player_performances(upload, members):
             name = _canonical_member_name(members, performance.get("player_name", ""))
             if not name or name not in member_names:
@@ -7501,8 +7608,9 @@ def build_player_pending_stats(archive_uploads: list[dict[str, Any]], members: l
             if int(performance.get("balls", 0) or 0) > 0:
                 # Strike rate only counts runs from innings where balls faced were recorded.
                 stats[name]["sr_runs"] = int(stats[name].get("sr_runs", 0) or 0) + int(performance.get("runs", 0) or 0)
-            stats[name]["wickets"] += int(performance.get("wickets", 0) or 0)
-            stats[name]["catches"] += int(performance.get("catches", 0) or 0)
+            if card_figures is None:
+                stats[name]["wickets"] += int(performance.get("wickets", 0) or 0)
+                stats[name]["catches"] += int(performance.get("catches", 0) or 0)
             _apply_batting_sample(stats[name], performance)
             notes = str(performance.get("notes", "") or "")
             lowered_notes = notes.lower()
@@ -7510,7 +7618,7 @@ def build_player_pending_stats(archive_uploads: list[dict[str, Any]], members: l
                 # the bowler or fielder named on a dismissal belongs to the opposing side in this match
                 return side_players is not None and normalize_name(candidate) in other_players
 
-            fielder_match = re.search(r"fielder:\s*([^|]+)", notes, flags=re.IGNORECASE)
+            fielder_match = re.search(r"fielder:\s*([^|]+)", notes, flags=re.IGNORECASE) if card_figures is None else None
             if fielder_match:
                 fielder_name = _canonical_member_name(members, fielder_match.group(1).strip())
                 if fielder_name not in member_names or played_for_other_side(fielder_name):
@@ -7535,7 +7643,7 @@ def build_player_pending_stats(archive_uploads: list[dict[str, Any]], members: l
                     )
                     stats[fielder_name]["catches"] += 1
                     played_tracker[fielder_name].add(archive_key)
-            bowler_match = re.search(r"bowler:\s*([^|]+)", notes, flags=re.IGNORECASE)
+            bowler_match = re.search(r"bowler:\s*([^|]+)", notes, flags=re.IGNORECASE) if card_figures is None else None
             if bowler_match and not any(tag in lowered_notes for tag in ["run_out", "run out", "not_out", "not out", "retired"]):
                 bowler_name = _canonical_member_name(members, bowler_match.group(1).strip())
                 if bowler_name not in member_names or played_for_other_side(bowler_name):

@@ -149,8 +149,12 @@
   function photoMarkup(sc) {
     // Nov 2 2026: a card photographed on two pages has two photos (1st innings, 2nd innings)
     const urls = (Array.isArray(sc.photo_urls) && sc.photo_urls.length ? sc.photo_urls : [sc.photo_url]).filter(Boolean);
-    if (!urls.length) return `<div class="live-empty">The original scorecard photo isn't available for this match.</div>`;
-    return urls
+    // Nov 27 2026: a scorecard uploaded as a PDF keeps the PDF as the original
+    const pdf = sc.original_document_url
+      ? `<p class="sc-pdf-row"><a class="pm-download" href="${escapeHtml(sc.original_document_url)}" target="_blank" rel="noopener">📄 Open the original PDF${sc.original_document_name ? ` (${escapeHtml(sc.original_document_name)})` : ""}</a></p>`
+      : "";
+    if (!urls.length) return pdf || `<div class="live-empty">The original scorecard photo isn't available for this match.</div>`;
+    return pdf + urls
       .map(
         (url, index) => `
         <figure class="sc-photo">
@@ -465,8 +469,20 @@
     const bowling = (inn.bowling || []).filter((b) => b.name);
     while (batting.length < 11) batting.push({});
     while (bowling.length < 5) bowling.push({});
+    // Nov 25 2026 (Dhruvika: "it never show me upload score card for any innings"): an innings with nothing
+    // typed in yet offers its photo right here; it is read and put into THIS innings
+    const photoAdd = !(inn.batting || []).some((b) => b.name) && lastPreview && lastPreview.can_add_second_photo
+      ? `<div class="sce-photo-add">
+          <p class="sc-check-lede">Nothing on this innings yet. Is it on another page of the scorecard?</p>
+          <label class="sc-btn primary sc-second-btn">📷 Upload the ${index + 1}${index ? "nd" : "st"} innings photo
+            <input type="file" accept="image/*,application/pdf,.pdf,.jpg,.jpeg,.png,.webp,.heic,.heif,.tif,.tiff,.bmp,.gif" data-sc-second data-slot="${index + 1}" hidden />
+          </label>
+          <p class="sc-check-lede" data-sce-photo-msg role="status"></p>
+        </div>`
+      : "";
     return `<fieldset class="sce-innings" data-innings="${index}">
       <legend>${index + 1}${index ? "nd" : "st"} innings: <span data-sce-team-label>${escapeHtml(teams[index] || "")}</span> batting</legend>
+      ${photoAdd}
       <div class="sce-totals">
         <label>Total runs <input data-t="runs" type="number" min="0" inputmode="numeric" value="${isBlank(inn.runs) ? "" : inn.runs}" /></label>
         <label>Wickets <input data-t="wickets" type="number" min="0" max="10" inputmode="numeric" value="${isBlank(inn.wickets) ? "" : inn.wickets}" /></label>
@@ -914,9 +930,10 @@
         ${data.can_add_second_photo && !data.other_half ? `<div class="sc-second-photo">
           <p class="sc-check-lede"><strong>Only ${data.innings_count === 1 ? "one innings" : "part of the match"} is on this photo.</strong> Is the other team's batting on a second page? Add its photo and it is joined to this scorecard.</p>
           <label class="sc-btn primary sc-second-btn">📷 Add the ${missingInningsLabel(data)} innings photo
-            <input type="file" accept="image/*,.jpg,.jpeg,.png,.webp,.heic,.heif" data-sc-second hidden />
+            <input type="file" accept="image/*,application/pdf,.pdf,.jpg,.jpeg,.png,.webp,.heic,.heif,.tif,.tiff,.bmp,.gif" data-sc-second data-slot="${missingInningsLabel(data) === "1st" ? 1 : 2}" hidden />
           </label>
         </div>` : ""}
+        ${aiTrainingHtml(data)}
         <div class="sc-check-actions">
           ${data.can_publish ? `<button type="button" class="sc-btn primary" data-sc="publish">✓ Looks right, publish</button>` : ""}
           ${data.can_edit && data.ai_available ? `<button type="button" class="sc-btn${data.unreadable ? " primary" : ""}" data-sc="ai-read">🤖 ${data.ai_read ? "Read again with AI" : "Read with AI"}</button>` : ""}
@@ -934,6 +951,62 @@
         <p class="sc-check-msg" role="status"></p>
       </div>`;
   }
+
+  // Nov 27 2026 (Dhruvika: "Enable AI training feature after the scorecard has been manually edited ... Whosoever
+  // has the right to edit should also train the AI"): 🎓 Teach the AI with this card / Forget (POST / DELETE
+  // /api/scorecards/{id}/teach-ai). README "Teach the AI with a fixed scorecard".
+  function aiTrainingHtml(data) {
+    const t = data.ai_training;
+    if (!t || !t.can_teach || !data.can_edit) return "";
+    const when = t.saved_at ? new Date(t.saved_at).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" }) : "";
+    const lessons = (t.lessons || []).length
+      ? `<details class="sc-ai-lessons"><summary>What the AI learned from it (${t.lessons.length})</summary><ul>${t.lessons.map((l) => `<li>${escapeHtml(l)}</li>`).join("")}</ul></details>`
+      : "";
+    const status = t.taught
+      ? `<p class="sc-check-lede">✅ <strong>The AI has learned from this card</strong>${when ? ` (${escapeHtml(when)}${t.taught_by ? `, by ${escapeHtml(t.taught_by)}` : ""})` : ""}. It uses it for the next cards of these clubs, and of other clubs whose scorecards look like this one.</p>${lessons}`
+      : `<p class="sc-check-lede"><strong>Teach the AI with this card.</strong> The AI compares the photo with the corrected scorecard, notes what it read wrong, and uses this card when it reads the next cards of these clubs and similar-looking cards of other clubs.</p>`;
+    // a tip in words helps most with a new scorebook format ("runs are in the TOTAL column at the far right")
+    const tipBox = t.ready
+      ? `<label class="sc-ai-tip"><span>Tip for the AI <small>(optional - e.g. where this scorebook writes the runs, extras or bowling)</small></span><textarea rows="2" maxlength="400" data-ai-tip placeholder="e.g. Runs are in the TOTAL column at the far right; extras are written under the batting">${escapeHtml(t.tip || "")}</textarea></label>`
+      : "";
+    const buttons = t.ready
+      ? `<button type="button" class="sc-btn${t.taught ? "" : " primary"}" data-sc="teach-ai">🎓 ${t.taught ? "Teach again (after a fix)" : "Teach the AI with this card"}</button>`
+      : `<p class="sc-check-lede sc-ai-why"><small>${escapeHtml(t.why_not || "")}</small></p>`;
+    const forget = t.taught ? `<button type="button" class="sc-btn ghost" data-sc="forget-ai">Forget this card</button>` : "";
+    return `<div class="sc-second-photo sc-ai-train">${status}${tipBox}<div class="sc-check-actions">${buttons}${forget}</div><p class="sc-check-lede" data-ai-train-msg role="status"></p></div>`;
+  }
+
+  document.addEventListener("click", async (event) => {
+    const button = event.target.closest('[data-sc="teach-ai"], [data-sc="forget-ai"]');
+    if (!button || !checkEl || !checkEl.contains(button)) return;
+    event.stopImmediatePropagation();
+    const box = button.closest(".sc-ai-train");
+    const msg = box.querySelector("[data-ai-train-msg]");
+    const forget = button.dataset.sc === "forget-ai";
+    box.querySelectorAll("button").forEach((b) => (b.disabled = true));
+    msg.textContent = forget ? "Taking this card out of the AI's training…" : "🎓 Teaching the AI…";
+    try {
+      const response = await fetch(`/api/scorecards/${encodeURIComponent(id.replace(/^a-/, ""))}/teach-ai`, {
+        method: forget ? "DELETE" : "POST",
+        headers: { "Content-Type": "application/json", "X-Auth-Token": token() },
+        body: forget ? undefined : JSON.stringify({ tip: box.querySelector("[data-ai-tip]")?.value || "" }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.detail || "Something went wrong.");
+      if (lastPreview) lastPreview.ai_training = data.ai_training;
+      const html = aiTrainingHtml(lastPreview || { ai_training: data.ai_training, can_edit: true });
+      const holder = document.createElement("div");
+      holder.innerHTML = html;
+      const fresh = holder.firstElementChild;
+      if (fresh) {
+        box.replaceWith(fresh);
+        fresh.querySelector("[data-ai-train-msg]").textContent = data.message || "Done.";
+      }
+    } catch (error) {
+      msg.textContent = error.message;
+      box.querySelectorAll("button").forEach((b) => (b.disabled = false));
+    }
+  }, true);
 
   async function previewAction(url, body) {
     const response = await fetch(url, {
@@ -1151,6 +1224,9 @@
 
   // Nov 6 2026: when the uploaded photo is the 2nd innings, the missing one is the 1st.
   function missingInningsLabel(data) {
+    // Nov 25 2026: the server says which innings is missing (it knows about a swap saved with Edit)
+    if (data && Number(data.missing_innings_number) === 1) return "1st";
+    if (data && Number(data.missing_innings_number) === 2) return "2nd";
     const ids = ((data && data.scorecard && data.scorecard.innings_ids) || []).filter((item) => item.status === "missing");
     return ids.length && Number(ids[0].number) === 1 ? "1st" : "2nd";
   }
@@ -1158,8 +1234,10 @@
   // "Add the 2nd innings photo" (POST /api/scorecards/{id}/second-photo)
   document.addEventListener("change", async (event) => {
     const input = event.target.closest("[data-sc-second]");
-    if (!input || !checkEl || !checkEl.contains(input) || !input.files[0]) return;
-    const msg = checkEl.querySelector(".sc-check-msg");
+    const editorEl = document.getElementById("scEditor");
+    if (!input || !checkEl || !(checkEl.contains(input) || (editorEl && editorEl.contains(input))) || !input.files[0]) return;
+    // Nov 25 2026: the button inside Edit shows its own progress next to it
+    const msg = (editorEl && editorEl.contains(input) && input.closest(".sce-photo-add")?.querySelector("[data-sce-photo-msg]")) || checkEl.querySelector(".sc-check-msg");
     const label = input.closest("label");
     label.classList.add("is-busy");
     const started = Date.now();
@@ -1170,6 +1248,8 @@
     const timer = setInterval(tick, 1000);
     const body = new FormData();
     body.append("file", input.files[0]);
+    // Nov 25 2026 (Dhruvika: "it uploaded into 1st innings"): tell the server which innings this photo is
+    if (input.dataset.slot) body.append("innings_number", input.dataset.slot);
     try {
       const response = await fetch(`/api/scorecards/${encodeURIComponent(id.replace(/^a-/, ""))}/second-photo`, { method: "POST", headers: { "X-Auth-Token": token() }, body });
       const data = await response.json().catch(() => ({}));

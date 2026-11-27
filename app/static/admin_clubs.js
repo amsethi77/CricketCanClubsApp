@@ -168,6 +168,7 @@
           <small>${person.account_name && person.account_name !== person.name ? `Account: ${esc(person.account_name)} · ` : ""}${person.contact ? esc(person.contact) : person.user_id ? "Signed up" : "Player only"}</small></div></div>
         <label class="acp-field"><span>Club role</span>${clubRole}</label>
         <label class="acp-field"><span>Playing role</span>${playing}</label>
+        ${person.member_id ? `<button class="acm-btn acp-edit" type="button" data-edit-member="${esc(person.member_id)}" aria-label="Edit ${esc(person.name)}'s profile">✏️ Edit</button>` : ""}
       </div>`;
   }
 
@@ -232,7 +233,97 @@
     msg.scrollIntoView({ behavior: "smooth", block: "nearest" });
   }
 
+  // ---------- ✏️ Edit a player's profile (Nov 26 2026, Dhruvika: "There was edit player profile by club admin or
+  // superadmin but I can't find it anymore") - GET/POST /api/admin/clubs/{club}/people/members/{member}/profile
+  const EDIT_FIELDS = [
+    ["name", "Name on scorecards", "text"],
+    ["full_name", "Full name", "text"],
+    ["aliases", "Other names / aliases (comma separated)", "text"],
+    ["role", "Playing role", "role"],
+    ["batting_style", "Batting style", "text"],
+    ["bowling_style", "Bowling style", "text"],
+    ["jersey_number", "Jersey number", "text"],
+    ["gender", "Gender", "gender"],
+    ["date_of_birth", "Date of birth", "date"],
+    ["city", "City", "text"],
+    ["country", "Country", "text"],
+    ["phone", "Mobile", "tel"],
+    ["email", "Email", "email"],
+    ["notes", "Notes", "textarea"],
+  ];
+  async function openMemberEdit(clubId, memberId) {
+    const box = peopleBox();
+    if (!box) return;
+    box.querySelectorAll(".acp-editor").forEach((el) => el.remove());
+    const row = box.querySelector(`[data-edit-member="${CSS.escape(memberId)}"]`)?.closest(".acp-row");
+    if (!row) return;
+    if (row.hidden) row.hidden = false;
+    const editor = document.createElement("form");
+    editor.className = "acp-editor";
+    editor.dataset.memberEdit = memberId;
+    editor.dataset.club = clubId;
+    editor.innerHTML = '<p class="acm-empty">Loading profile...</p>';
+    row.after(editor);
+    let info;
+    try {
+      info = await api(`/api/admin/clubs/${encodeURIComponent(clubId)}/people/members/${encodeURIComponent(memberId)}/profile`);
+    } catch (error) {
+      editor.innerHTML = `<p class="acm-msg is-error">${esc(error.message)}</p>`;
+      return;
+    }
+    const m = info.member;
+    const field = ([key, label, type]) => {
+      const value = esc(m[key] || "");
+      let input;
+      if (type === "role") input = `<select name="role"><option value="">Not set</option>${info.playing_roles.map((r) => `<option${r === m.role ? " selected" : ""}>${esc(r)}</option>`).join("")}</select>`;
+      else if (type === "gender") input = `<select name="gender"><option value="">Not set</option>${["Male", "Female"].map((g) => `<option${g === m.gender ? " selected" : ""}>${g}</option>`).join("")}</select>`;
+      else if (type === "textarea") input = `<textarea name="${key}" rows="2">${value}</textarea>`;
+      else input = `<input name="${key}" type="${type}" value="${value}"${key === "name" ? " required" : ""} />`;
+      return `<label class="acp-field${type === "textarea" ? " is-wide" : ""}"><span>${esc(label)}</span>${input}</label>`;
+    };
+    editor.innerHTML = `
+      <p class="acm-kicker">Edit player${m.player_id ? ` · Player ID ${esc(m.player_id)}` : ""}</p>
+      <div class="acp-edit-grid">${EDIT_FIELDS.map(field).join("")}</div>
+      <p class="acm-help">Changing the name on scorecards also renames him on fixtures, availability and uploaded scorecards.</p>
+      <div class="acm-edit-actions"><button class="acm-btn is-primary" type="submit">Save</button><button class="acm-btn is-ghost" type="button" data-edit-cancel>Cancel</button>${m.player_key ? ` <a class="acm-btn is-ghost" href="/players/${encodeURIComponent(m.player_key)}">View player page</a>` : ""}</div>
+      <p class="acm-msg" role="status" data-edit-msg></p>`;
+    editor.scrollIntoView({ behavior: "smooth", block: "center" });
+    editor.querySelector('[name="name"]').focus();
+  }
+
+  root.addEventListener("submit", async (event) => {
+    const editor = event.target.closest("[data-member-edit]");
+    if (!editor) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    const msg = editor.querySelector("[data-edit-msg]");
+    const button = editor.querySelector('button[type="submit"]');
+    button.disabled = true;
+    msg.textContent = "Saving...";
+    msg.className = "acm-msg";
+    try {
+      const body = Object.fromEntries(new FormData(editor).entries());
+      const clubId = editor.dataset.club;
+      const result = await api(`/api/admin/clubs/${encodeURIComponent(clubId)}/people/members/${encodeURIComponent(editor.dataset.memberEdit)}/profile`, { method: "POST", body: JSON.stringify(body) });
+      people[clubId] = await api(`/api/admin/clubs/${encodeURIComponent(clubId)}/people`);
+      showPeopleMessage(clubId, `✅ ${result.message || "Saved."}`, "success");
+    } catch (error) {
+      msg.textContent = error.message;
+      msg.className = "acm-msg is-error";
+      button.disabled = false;
+    }
+  }, true);
+
   root.addEventListener("click", (event) => {
+    const editMember = event.target.closest("[data-edit-member]");
+    if (editMember) {
+      openMemberEdit(editMember.closest("[data-people-box]").dataset.peopleBox, editMember.dataset.editMember);
+      return;
+    }
+    if (event.target.closest("[data-edit-cancel]")) {
+      event.target.closest(".acp-editor").remove();
+      return;
+    }
     const peopleButton = event.target.closest("[data-people]");
     if (peopleButton) {
       openPeople(peopleButton.dataset.people);
@@ -368,6 +459,16 @@
     try {
       data = await api("/api/admin/club-management");
       render();
+      // Nov 26 2026: "✏️ Edit player" on a player's page opens /admin-center?people=<club>&edit=<player>
+      const params = new URLSearchParams(window.location.search);
+      const linkClub = params.get("people");
+      const linkMember = params.get("edit");
+      if (linkClub && !people.__opened) {
+        people.__opened = true;
+        await openPeople(linkClub);
+        if (linkMember) openMemberEdit(linkClub, linkMember);
+        return;
+      }
       // a club admin of one club sees its people straight away
       if (!data.is_superadmin && data.managed_club_ids.length === 1 && !peopleClub && !people.__opened) {
         people.__opened = true;

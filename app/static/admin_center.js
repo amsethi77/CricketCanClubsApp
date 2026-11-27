@@ -837,7 +837,7 @@ function renderClubDetail(dashboard) {
           const showFull = fullName && fullName.toLowerCase() !== String(member.name || "").trim().toLowerCase();
           const search = [member.name, fullName, member.role, member.phone, member.team_name, member.player_id].filter(Boolean).join(" ").toLowerCase();
           return `
-            <article class="detail-card admin-member-card acr-card" data-admin-member="${escapeHtml(member.id || "")}" data-search="${escapeHtml(search)}">
+            <article class="detail-card admin-member-card acr-card" data-admin-member="${escapeHtml(member.id || "")}" data-club="${escapeHtml(club.id || "")}" data-search="${escapeHtml(search)}">
               <div class="acr-main">
                 <span class="acr-avatar" aria-hidden="true">${escapeHtml(initials(member.name))}</span>
                 <div class="acr-who">
@@ -850,8 +850,12 @@ function renderClubDetail(dashboard) {
                     ${member.team_name ? `<span class="acr-tag">🏏 ${escapeHtml(member.team_name)}</span>` : ""}
                   </div>
                 </div>
-                <button class="acr-remove-toggle" type="button" data-roster-remove aria-expanded="false">Remove</button>
+                <div class="acr-actions">
+                  <button class="acr-edit-toggle" type="button" data-roster-edit aria-expanded="false">✏️ Edit</button>
+                  <button class="acr-remove-toggle" type="button" data-roster-remove aria-expanded="false">Remove</button>
+                </div>
               </div>
+              <form class="acr-edit" data-roster-edit-form hidden></form>
               <form class="admin-delete-form acr-remove" method="post" action="/api/admin/clubs/${encodeURIComponent(club.id || "")}/members/${encodeURIComponent(member.id || "")}/delete" hidden>
                 <label class="stack-label">
                   Type the exact player name to confirm removal
@@ -926,6 +930,102 @@ function bindRosterControls() {
     };
     toggle?.addEventListener("click", () => setOpen(form.hidden));
     card.querySelector("[data-roster-cancel]")?.addEventListener("click", () => setOpen(false));
+    bindRosterEdit(card);
+  });
+}
+
+// Nov 26 2026 (Dhruvika: "Include edit profile under admin center. Club admin for their club or superadmin for
+// different clubs should edit the players profile if required"): ✏️ Edit on each roster card opens the player's
+// profile form here (GET/POST /api/admin/clubs/{club}/people/members/{member}/profile; club admins have the same
+// form in People & roles).
+const ROSTER_EDIT_FIELDS = [
+  ["name", "Name on scorecards", "text"],
+  ["full_name", "Full name", "text"],
+  ["aliases", "Other names / aliases (comma separated)", "text"],
+  ["role", "Playing role", "role"],
+  ["batting_style", "Batting style", "text"],
+  ["bowling_style", "Bowling style", "text"],
+  ["jersey_number", "Jersey number", "text"],
+  ["gender", "Gender", "gender"],
+  ["date_of_birth", "Date of birth", "date"],
+  ["city", "City", "text"],
+  ["country", "Country", "text"],
+  ["phone", "Mobile", "tel"],
+  ["email", "Email", "email"],
+  ["notes", "Notes", "textarea"],
+];
+
+function bindRosterEdit(card) {
+  const toggle = card.querySelector("[data-roster-edit]");
+  const form = card.querySelector("[data-roster-edit-form]");
+  if (!toggle || !form) return;
+  const profileUrl = () => `/api/admin/clubs/${encodeURIComponent(card.dataset.club)}/people/members/${encodeURIComponent(card.dataset.adminMember)}/profile`;
+  const close = () => {
+    form.hidden = true;
+    form.innerHTML = "";
+    toggle.setAttribute("aria-expanded", "false");
+    card.classList.remove("is-editing");
+  };
+  toggle.addEventListener("click", async () => {
+    if (!form.hidden) {
+      close();
+      return;
+    }
+    form.hidden = false;
+    toggle.setAttribute("aria-expanded", "true");
+    card.classList.add("is-editing");
+    form.innerHTML = '<p class="empty-state">Loading profile...</p>';
+    let info;
+    try {
+      info = await getJson(profileUrl(), true);
+    } catch (error) {
+      form.innerHTML = `<p class="status-banner error">${escapeHtml(error.message || "Couldn't load this player.")}</p>`;
+      return;
+    }
+    const m = info.member || {};
+    const field = ([key, label, type]) => {
+      const value = escapeHtml(m[key] || "");
+      let input;
+      if (type === "role") input = `<select name="role"><option value="">Not set</option>${(info.playing_roles || []).map((r) => `<option${r === m.role ? " selected" : ""}>${escapeHtml(r)}</option>`).join("")}</select>`;
+      else if (type === "gender") input = `<select name="gender"><option value="">Not set</option>${["Male", "Female"].map((g) => `<option${g === m.gender ? " selected" : ""}>${g}</option>`).join("")}</select>`;
+      else if (type === "textarea") input = `<textarea name="${key}" rows="2">${value}</textarea>`;
+      else input = `<input name="${key}" type="${type}" value="${value}"${key === "name" ? " required" : ""} />`;
+      return `<label class="acr-edit-field${type === "textarea" ? " is-wide" : ""}"><span>${escapeHtml(label)}</span>${input}</label>`;
+    };
+    form.innerHTML = `
+      <div class="acr-edit-grid">${ROSTER_EDIT_FIELDS.map(field).join("")}</div>
+      <p class="empty-state">Changing the name on scorecards also renames him on fixtures, availability and uploaded scorecards.</p>
+      <div class="acr-remove-actions">
+        <button class="primary-button" type="submit">Save profile</button>
+        <button class="secondary-button" type="button" data-roster-edit-cancel>Cancel</button>
+      </div>
+      <p class="acr-edit-msg" role="status" data-roster-edit-msg></p>`;
+    form.querySelector("[data-roster-edit-cancel]").addEventListener("click", close);
+    form.querySelector('[name="name"]').focus();
+  });
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const msg = form.querySelector("[data-roster-edit-msg]");
+    const button = form.querySelector('button[type="submit"]');
+    button.disabled = true;
+    msg.className = "acr-edit-msg";
+    msg.textContent = "Saving...";
+    try {
+      const result = await postJson(profileUrl(), Object.fromEntries(new FormData(form).entries()), true);
+      const m = result.member || {};
+      const nameEl = card.querySelector(".acr-who strong");
+      if (nameEl && m.name) nameEl.textContent = m.name;
+      const roleTag = card.querySelector(".acr-role");
+      if (roleTag) roleTag.textContent = m.role || "player";
+      card.dataset.search = [m.name, m.full_name, m.role, m.phone, m.player_id].filter(Boolean).join(" ").toLowerCase();
+      msg.className = "acr-edit-msg is-success";
+      msg.textContent = `✅ ${result.message || "Saved."}`;
+    } catch (error) {
+      msg.className = "acr-edit-msg is-error";
+      msg.textContent = error.message || "Couldn't save.";
+    } finally {
+      button.disabled = false;
+    }
   });
 }
 

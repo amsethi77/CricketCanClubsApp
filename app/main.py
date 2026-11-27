@@ -1,5 +1,6 @@
 import hashlib
 import hmac
+import io
 import json
 import html
 import os
@@ -1060,6 +1061,7 @@ def _clubs_page_html(request: Request, search: str = "", focus_club_id: str = ""
         <link rel="stylesheet" href="/assets/app_polish.css?v=20261006a" />
         <link rel="stylesheet" href="/assets/sports-system.css?v=20260926a" />
         <link rel="stylesheet" href="/assets/public_match.css?v=20261123a" />
+        <link rel="stylesheet" href="/assets/report_type.css?v=20261127a" />
       </head>
       <body>
         <div class="page-shell">
@@ -4345,7 +4347,9 @@ def _register_played_teams_in_background() -> None:
     threading.Thread(target=_work, name="register-played-teams", daemon=True).start()
 
 
-STATS_REFRESH_VERSION = "one-club-per-match-6"  # Nov 12 2026: the "done" mark now lives in the database (see below)
+# Nov 12 2026: the "done" mark now lives in the database (see below). Nov 25 2026: "-7" = wickets and catches from
+# the scorecard's bowling table (Dhruvika: "Bowling stats are not correct for the season for a particular club").
+STATS_REFRESH_VERSION = "one-club-per-match-7"
 
 
 def _stats_refresh_done() -> str:
@@ -5475,6 +5479,211 @@ def public_clubs() -> dict[str, Any]:
     return {"clubs": clubs, "generated_at": now_iso()}
 
 
+# ---------------------------------------------------------------------------------------------------------------
+# Nov 27 2026 (Amit: "Player search: On the live score page (public). We should add Global historical cricket
+# database. Search records by player, club, country, year, tournament and performance etc"). Every published
+# scorecard and every scored match of every club in the app, searchable by anyone: /records (linked from Live).
+# GET /api/public/records - README "Cricket records search".
+# ---------------------------------------------------------------------------------------------------------------
+def _records_index(store: dict[str, Any]) -> dict[str, Any]:
+    """One row per batting innings and per bowling spell of every public scorecard, plus the matches."""
+    clubs_by_id = {str(club.get("id") or ""): club for club in store.get("clubs", []) or [] if isinstance(club, dict)}
+    members_by_key = {_member_public_key(member): member for member in store.get("members", []) or [] if isinstance(member, dict) and _member_public_key(member)}
+    league_of: dict[str, str] = {}
+    try:
+        with _league_db() as connection:
+            for row in connection.execute("SELECT m.match_ref, l.name, l.season FROM league_matches m JOIN leagues l ON l.id = m.league_id"):
+                ref = str(row["match_ref"] or "")
+                league_of[ref.replace(":", "-", 1)] = " ".join(part for part in (str(row["name"] or ""), str(row["season"] or "")) if part).strip()
+    except Exception:
+        logger.exception("Leagues not read for the records search")
+    team_club: dict[str, dict[str, Any] | None] = {}
+
+    def club_for(team: str) -> dict[str, Any] | None:
+        key = normalize_name(team)
+        if key not in team_club:
+            team_club[key] = _scorecard_team_club(store, team) if team else None
+        return team_club[key]
+
+    performances: list[dict[str, Any]] = []
+    matches: list[dict[str, Any]] = []
+    for card in _public_scorecards(store):
+        _link_card_players(store, card)
+        card_id = str(card.get("id") or "")
+        date = str(card.get("date") or "")
+        league = league_of.get(card_id, "")
+        teams = [str(team or "") for team in card.get("teams") or []]
+        match = {
+            "id": card_id, "match_code": _match_code(card_id), "date": date, "year": date[:4], "teams": teams,
+            "result": str(card.get("result") or ""), "league": league, "url": f"/scorecards/{card_id}",
+            "scores": [f"{innings.get('team') or ''} {innings.get('runs') if innings.get('runs') is not None else ''}{'/' + str(innings.get('wickets')) if innings.get('wickets') not in (None, '', 10) else ''}".strip() for innings in card.get("innings") or [] if isinstance(innings, dict)],
+            "clubs": [], "countries": [],
+        }
+        for team in teams:
+            club = club_for(team)
+            if club:
+                match["clubs"].append(str(club.get("name") or team))
+                if club.get("country"):
+                    match["countries"].append(str(club.get("country")))
+        matches.append(match)
+        for innings in card.get("innings") or []:
+            if not isinstance(innings, dict):
+                continue
+            for kind, team, opponent, rows in (
+                ("bat", str(innings.get("team") or ""), str(innings.get("bowling_team") or ""), innings.get("batting") or []),
+                ("bowl", str(innings.get("bowling_team") or ""), str(innings.get("team") or ""), innings.get("bowling") or []),
+            ):
+                club = club_for(team)
+                for row in rows:
+                    if not isinstance(row, dict) or not str(row.get("name") or "").strip():
+                        continue
+                    member = members_by_key.get(str(row.get("player_key") or ""))
+                    country = str((member or {}).get("country") or (club or {}).get("country") or "")
+                    item = {
+                        "kind": kind, "player": str(row.get("name") or "").strip(), "player_key": str(row.get("player_key") or ""),
+                        "full_name": str((member or {}).get("full_name") or ""), "team": team, "opponent": opponent,
+                        "club": str((club or {}).get("name") or team), "country": country, "date": date, "year": date[:4],
+                        "league": league, "match_id": card_id, "match_url": f"/scorecards/{card_id}",
+                    }
+                    if kind == "bat":
+                        if row.get("runs") is None:
+                            continue  # did not bat
+                        item.update({"runs": int(row.get("runs") or 0), "balls": row.get("balls"), "fours": row.get("fours"), "sixes": row.get("sixes"), "not_out": bool(row.get("not_out"))})
+                    else:
+                        item.update({"overs": str(row.get("overs") or ""), "wickets": int(row.get("wickets") or 0), "runs_conceded": row.get("runs"), "maidens": row.get("maidens")})
+                    performances.append(item)
+    countries = sorted({str(club.get("country") or "").strip() for club in clubs_by_id.values() if str(club.get("country") or "").strip()})
+    return {
+        "performances": performances,
+        "matches": matches,
+        "years": sorted({item["year"] for item in matches if item["year"]}, reverse=True),
+        "leagues": sorted({item["league"] for item in matches if item["league"]}),
+        "countries": countries,
+        "clubs": sorted({name for item in matches for name in item["clubs"]}),
+    }
+
+
+@app.get("/api/public/records")
+def public_records(
+    q: str = "",
+    club: str = "",
+    country: str = "",
+    year: str = "",
+    league: str = "",
+    view: str = "players",
+    min_runs: int = 0,
+    min_wickets: int = 0,
+    sort: str = "",
+    limit: int = 50,
+) -> dict[str, Any]:
+    """Search the records: view = players (career totals of the matching innings), batting (single innings),
+    bowling (single spells) or matches. Filters: q (player, club or team name), club, country, year, league
+    (tournament), min_runs / min_wickets (in one innings, or in total for players). Public data only."""
+    store = load_store()
+    try:  # a match put in a tournament (own table, no store save) shows straight away
+        with _league_db() as connection:
+            league_stamp = "|".join(str(value) for value in connection.execute("SELECT COUNT(*), MAX(added_at), (SELECT COUNT(*) FROM leagues), (SELECT MAX(created_at) FROM leagues) FROM league_matches").fetchone())
+    except Exception:
+        league_stamp = ""
+    index = _public_memo(f"records-index:{league_stamp}", store, _records_index)
+    query = normalize_name(q)
+    limit = max(1, min(int(limit or 50), 200))
+    view = view if view in {"players", "batting", "bowling", "matches"} else "players"
+
+    def keep(item: dict[str, Any]) -> bool:
+        if year and item.get("year") != year:
+            return False
+        if league and normalize_name(item.get("league")) != normalize_name(league):
+            return False
+        if club and normalize_name(club) not in {normalize_name(item.get("club")), *(normalize_name(name) for name in item.get("clubs") or [])}:
+            return False
+        if country and normalize_name(country) not in {normalize_name(item.get("country")), *(normalize_name(name) for name in item.get("countries") or [])}:
+            return False
+        return True
+
+    def hit(*values: Any) -> bool:
+        return not query or any(query in normalize_name(str(value or "")) for value in values)
+
+    filters = {"years": index["years"], "leagues": index["leagues"], "countries": index["countries"], "clubs": index["clubs"]}
+    if view == "matches":
+        rows = [item for item in index["matches"] if keep(item) and hit(*item["teams"], *item["clubs"], item["league"], item["match_code"], item["result"])]
+        return {"view": view, "total": len(rows), "results": rows[:limit], "filters": filters}
+    performances = [item for item in index["performances"] if keep(item) and hit(item["player"], item["full_name"], item["team"], item["club"], item["opponent"])]
+    if view == "batting":
+        rows = [item for item in performances if item["kind"] == "bat" and item["runs"] >= min_runs]
+        rows.sort(key=lambda item: (-item["runs"], item.get("balls") or 999, item["date"]))
+        if sort == "date":
+            rows.sort(key=lambda item: item["date"], reverse=True)
+        return {"view": view, "total": len(rows), "results": rows[:limit], "filters": filters}
+    if view == "bowling":
+        rows = [item for item in performances if item["kind"] == "bowl" and item["wickets"] >= min_wickets]
+        rows.sort(key=lambda item: (-item["wickets"], item.get("runs_conceded") if isinstance(item.get("runs_conceded"), int) else 999, item["date"]))
+        if sort == "date":
+            rows.sort(key=lambda item: item["date"], reverse=True)
+        return {"view": view, "total": len(rows), "results": rows[:limit], "filters": filters}
+    players: dict[str, dict[str, Any]] = {}
+    for item in performances:
+        key = item["player_key"] or f"{normalize_name(item['player'])}|{normalize_name(item['team'])}"
+        player = players.setdefault(key, {
+            "player": item["player"], "player_key": item["player_key"], "full_name": item["full_name"], "clubs": [], "countries": [],
+            "matches": set(), "innings": 0, "runs": 0, "balls": 0, "not_outs": 0, "highest": None, "fifties": 0, "hundreds": 0,
+            "wickets": 0, "runs_conceded": 0, "best": None, "five_wickets": 0, "years": set(),
+        })
+        player["matches"].add(item["match_id"])
+        player["years"].add(item["year"])
+        if item["club"] and item["club"] not in player["clubs"]:
+            player["clubs"].append(item["club"])
+        if item["country"] and item["country"] not in player["countries"]:
+            player["countries"].append(item["country"])
+        if item["kind"] == "bat":
+            player["innings"] += 1
+            player["runs"] += item["runs"]
+            player["balls"] += int(item.get("balls") or 0)
+            player["not_outs"] += 1 if item["not_out"] else 0
+            score = (item["runs"], item["not_out"])
+            if player["highest"] is None or score > player["highest"]:
+                player["highest"] = score
+            player["fifties"] += 1 if 50 <= item["runs"] < 100 else 0
+            player["hundreds"] += 1 if item["runs"] >= 100 else 0
+        else:
+            player["wickets"] += item["wickets"]
+            conceded = item.get("runs_conceded") if isinstance(item.get("runs_conceded"), int) else None
+            player["runs_conceded"] += conceded or 0
+            figure = (item["wickets"], -(conceded if conceded is not None else 999))
+            if item["wickets"] and (player["best"] is None or figure > player["best"]):
+                player["best"] = figure
+            player["five_wickets"] += 1 if item["wickets"] >= 5 else 0
+    rows = []
+    for player in players.values():
+        if player["runs"] < min_runs or player["wickets"] < min_wickets:
+            continue
+        outs = player["innings"] - player["not_outs"]
+        highest = player["highest"]
+        best = player["best"]
+        rows.append({
+            **{key: value for key, value in player.items() if key not in {"matches", "years", "highest", "best"}},
+            "matches": len(player["matches"]),
+            "seasons": sorted(player["years"], reverse=True),
+            "highest": f"{highest[0]}{'*' if highest[1] else ''}" if highest else "",
+            "average": round(player["runs"] / outs, 2) if outs else None,
+            "strike_rate": round(100 * player["runs"] / player["balls"], 1) if player["balls"] else None,
+            "best": f"{best[0]}/{-best[1] if best[1] != -999 else '-'}" if best else "",
+            "url": f"/players/{quote(player['player_key'])}" if player["player_key"] else "",
+        })
+    order = {
+        "wickets": lambda row: (-row["wickets"], -row["runs"]),
+        "matches": lambda row: (-row["matches"], -row["runs"]),
+        "average": lambda row: (-(row["average"] or 0), -row["runs"]),
+    }.get(sort, lambda row: (-row["runs"], -row["wickets"]))
+    rows.sort(key=order)
+    return {"view": view, "total": len(rows), "results": rows[:limit], "filters": filters}
+
+
+@app.get("/records")
+def records_page() -> FileResponse:
+    return _page_response("records.html")
+
+
 @app.get("/api/public/search")
 def public_search(q: str = "") -> dict[str, Any]:
     """Navbar search: players, clubs and matches. Public data only (no phone, email or age)."""
@@ -5811,6 +6020,15 @@ def _scorecard_from_archive_base(archive: dict[str, Any]) -> dict[str, Any]:
     if not tagged and len(raw_innings) >= 2 and filled_innings >= 2:
         performances = []
 
+    template_names = [
+        {
+            normalize_name(_scorecard_text((item.get("player") or {}).get("name")))
+            for item in (inn.get("batting", []) or [])
+            if isinstance(item, dict) and _scorecard_text((item.get("player") or {}).get("name"))
+        }
+        for inn in raw_innings[:2]
+    ]
+
     def perf_team(row: dict[str, Any]) -> str:
         found = _SCORECARD_TEAM_NOTE.search(_scorecard_text(row.get("notes")))
         return found.group(1).strip() if found else ""
@@ -5836,6 +6054,12 @@ def _scorecard_from_archive_base(archive: dict[str, Any]) -> dict[str, Any]:
         if tagged:
             team = perf_team(row)
             side = 1 if team and normalize_name(team) == normalize_name(second_team) else 0
+        elif normalize_name(_scorecard_text(row.get("player_name"))) in template_names[1]:
+            # Nov 25 2026 (Dhruvika, after "Swap 1st and 2nd innings"): a batter the card lists in the 2nd innings
+            # belongs there - they were also shown in the empty 1st innings
+            side = 1
+        elif normalize_name(_scorecard_text(row.get("player_name"))) in template_names[0]:
+            side = 0
         else:
             side = 0 if (len(performances) <= 11 or index < 11) else 1
         dismissal_match = _SCORECARD_DISMISSAL_NOTE.search(notes)
@@ -6102,6 +6326,9 @@ def _scorecard_from_archive_base(archive: dict[str, Any]) -> dict[str, Any]:
         "photo_url": _scorecard_photo_url(archive),
         # Nov 2 2026: a card photographed on two pages (1st innings / 2nd innings)
         "photo_urls": [url for url in (_scorecard_photo_url(archive), _scorecard_photo_url({"preview_url": archive.get("second_preview_url")})) if url],
+        # Nov 27 2026: the uploaded PDF, kept as the original evidence
+        "original_document_url": f"/uploads/{quote(str(archive.get('original_document')))}" if archive.get("original_document") else "",
+        "original_document_name": str(archive.get("original_document_name") or ""),
     }
 
 
@@ -7779,6 +8006,7 @@ def _admin_center_html(request: Request) -> HTMLResponse:
                   <p>{html.escape(member.get("full_name") or "")}</p>
                   <small>{html.escape(member.get("role") or "player")} · {html.escape(member.get("phone") or "No mobile")}</small>
                   <small>{html.escape(member.get("team_name") or "")}</small>
+                  <a class="secondary-button" href="/admin-center?people={quote(str(club.get('id') or ''))}&amp;edit={quote(str(member.get('id') or ''))}#clubs">✏️ Edit player</a>
                   <form class="admin-delete-form" method="post" action="/api/admin/clubs/{html.escape(str(club.get('id') or ''))}/members/{html.escape(str(member.get('id') or ''))}/delete">
                     <label class="stack-label">
                       Type the exact player name to confirm unlinking from this club
@@ -7890,8 +8118,9 @@ def _admin_center_html(request: Request) -> HTMLResponse:
         <link rel="stylesheet" href="/assets/app_polish.css?v=20261006a" />
         <link rel="stylesheet" href="/assets/sports-system.css?v=20260926a" />
         <link rel="stylesheet" href="/assets/scorecards.css?v=20261117s" />
-        <link rel="stylesheet" href="/assets/admin_clubs.css?v=20261117m" />
+        <link rel="stylesheet" href="/assets/admin_clubs.css?v=20261126b" />
         <link rel="stylesheet" href="/assets/admin_center.css?v=20261120a" />
+        <link rel="stylesheet" href="/assets/report_type.css?v=20261127a" />
       </head>
       <body class="acx-page">
         <div class="page-shell">
@@ -8092,10 +8321,10 @@ def _admin_center_html(request: Request) -> HTMLResponse:
         <script src="/assets/multipage.js?v=20261123a"></script>
         <script src="/assets/scorecard_view.js?v=20261120a"></script>
         <script src="/assets/scorecard.js?v=20261123a"></script>
-        <script src="/assets/admin_center.js?v=20261121c"></script>
+        <script src="/assets/admin_center.js?v=20261126a"></script>
         <script src="/assets/admin_whatsapp.js?v=20261117b"></script>
         <script src="/assets/admin_reread.js?v=20261024a"></script>
-        <script src="/assets/admin_clubs.js?v=20261120a"></script>
+        <script src="/assets/admin_clubs.js?v=20261126a"></script>
         <script src="/assets/admin_photos.js?v=20261119b"></script>
       </body>
     </html>
@@ -8121,8 +8350,9 @@ def _club_admin_center_html() -> HTMLResponse:
     <link rel="stylesheet" href="/assets/styles.css?v=20261111tablealign" />
     <link rel="stylesheet" href="/assets/app_polish.css?v=20261006a" />
     <link rel="stylesheet" href="/assets/sports-system.css?v=20260926a" />
-    <link rel="stylesheet" href="/assets/admin_clubs.css?v=20261117m" />
+    <link rel="stylesheet" href="/assets/admin_clubs.css?v=20261126b" />
     <link rel="stylesheet" href="/assets/admin_center.css?v=20261120a" />
+    <link rel="stylesheet" href="/assets/report_type.css?v=20261127a" />
   </head>
   <body class="acx-page">
     <div class="page-shell">
@@ -8141,7 +8371,7 @@ def _club_admin_center_html() -> HTMLResponse:
       </section>
     </div>
     <script src="/assets/multipage.js?v=20261123a"></script>
-    <script src="/assets/admin_clubs.js?v=20261120a"></script>
+    <script src="/assets/admin_clubs.js?v=20261126a"></script>
   </body>
 </html>"""
     return HTMLResponse(body, headers={"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0", "Pragma": "no-cache"})
@@ -8185,6 +8415,7 @@ def signin_quick_page() -> HTMLResponse:
             <meta charset="UTF-8" />
             <meta http-equiv="refresh" content="0; url=/signin" />
             <title>Sign In</title>
+            <link rel="stylesheet" href="/assets/report_type.css?v=20261127a" />
           </head>
           <body>
             <script>window.location.href = "/signin";</script>
@@ -8210,6 +8441,7 @@ def _signin_redirect_page(token: str, club_id: str) -> HTMLResponse:
             <meta charset="UTF-8" />
             <meta http-equiv="refresh" content="0; url=/clubs" />
             <title>Signing In</title>
+            <link rel="stylesheet" href="/assets/report_type.css?v=20261127a" />
           </head>
           <body>
             <script>
@@ -8234,6 +8466,7 @@ def _signin_error_page(message: str) -> HTMLResponse:
           <head>
             <meta charset="UTF-8" />
             <title>Sign In Failed</title>
+            <link rel="stylesheet" href="/assets/report_type.css?v=20261127a" />
           </head>
           <body>
             <script>
@@ -8300,6 +8533,7 @@ def clubs_select(request: Request, club_id: str = Form(...), search: str = Form(
                 <meta charset="UTF-8" />
                 <meta http-equiv="refresh" content="0; url=/signin" />
                 <title>Sign In Required</title>
+                <link rel="stylesheet" href="/assets/report_type.css?v=20261127a" />
               </head>
               <body><p>Sign in first.</p></body>
             </html>
@@ -8345,6 +8579,7 @@ def signout_page(request: Request) -> HTMLResponse:
             <meta charset="UTF-8" />
             <meta http-equiv="refresh" content="0; url=/signin" />
             <title>Signing Out</title>
+            <link rel="stylesheet" href="/assets/report_type.css?v=20261127a" />
           </head>
           <body>
             <script>
@@ -12832,6 +13067,161 @@ def set_club_role(club_id: str, user_id: int, request: ClubRoleRequest, x_auth_t
     return {"message": f"{target['display_name'] or 'The account'} is now {label} of {club.get('name') or 'the club'}.", "role": role}
 
 
+# ---------------------------------------------------------------------------------------------------------------
+# Nov 26 2026 (Dhruvika: "There was edit player profile by club admin or superadmin but I can't find it anymore"):
+# the old player edit form lived on the dashboard's Player Profile widget, which /dashboard/widgets/player-profile
+# no longer shows (it opens "Your player profile", the signed-in player's own page). A club's admins and the
+# superadmin edit any player of the club again: Admin Center -> People & roles -> ✏️ Edit, and "✏️ Edit player"
+# on the player's page (/players/<id>). README "Editing a player's profile (club admin / superadmin)".
+# ---------------------------------------------------------------------------------------------------------------
+MEMBER_EDIT_FIELDS = (
+    "name", "full_name", "aliases", "gender", "date_of_birth", "city", "country", "role", "batting_style",
+    "bowling_style", "jersey_number", "phone", "email", "notes",
+)
+
+
+class MemberEditRequest(BaseModel):
+    name: str | None = None
+    full_name: str | None = None
+    aliases: list[str] | str | None = None
+    gender: str | None = None
+    date_of_birth: str | None = None
+    city: str | None = None
+    country: str | None = None
+    role: str | None = None
+    batting_style: str | None = None
+    bowling_style: str | None = None
+    jersey_number: str | None = None
+    phone: str | None = None
+    email: str | None = None
+    notes: str | None = None
+
+
+def _member_edit_view(member: dict[str, Any]) -> dict[str, Any]:
+    view = {key: member.get(key) or "" for key in MEMBER_EDIT_FIELDS}
+    view["aliases"] = ", ".join(str(item) for item in member.get("aliases") or [] if str(item).strip())
+    view["id"] = str(member.get("id") or "")
+    view["player_id"] = str(member.get("player_id") or "")
+    view["player_key"] = _member_public_key(member)
+    return view
+
+
+def _rename_member_everywhere(store: dict[str, Any], previous_name: str, new_name: str) -> None:
+    """A player's short name changed: availability, live performances and scorecard rows follow (as the old edit did)."""
+    if not previous_name or previous_name == new_name:
+        return
+    for fixture in store.get("fixtures", []) or []:
+        for key in ("availability_statuses", "availability_notes"):
+            values = fixture.get(key) or {}
+            if isinstance(values, dict) and previous_name in values:
+                values[new_name] = values.pop(previous_name)
+        for performance in fixture.get("performances", []) or []:
+            if performance.get("player_name") == previous_name:
+                performance["player_name"] = new_name
+    for upload in store.get("archive_uploads", []) or []:
+        for performance in upload.get("suggested_performances", []) or []:
+            if performance.get("player_name") == previous_name:
+                performance["player_name"] = new_name
+
+
+def _member_edit_clubs(user_row: sqlite3.Row, store: dict[str, Any], member: dict[str, Any]) -> list[dict[str, Any]]:
+    """The member's clubs this user may edit players of (all of them for the superadmin)."""
+    clubs = []
+    for club in store.get("clubs", []) or []:
+        club_id = str(club.get("id") or "")
+        if club_id and member_in_club(member, club_id, str(club.get("name") or "")) and _can_edit_club(user_row, club_id):
+            clubs.append({"id": club_id, "name": str(club.get("name") or "")})
+    return clubs
+
+
+def _member_for_edit(user_row: sqlite3.Row, store: dict[str, Any], club_id: str, member_id: str) -> tuple[dict[str, Any], dict[str, Any]]:
+    club = _club_for_people(user_row, store, club_id)
+    member = next((item for item in store.get("members", []) or [] if str(item.get("id") or "") == member_id), None)
+    if member is None or member_id not in _club_member_ids(store, club):
+        raise HTTPException(status_code=404, detail="That player isn't in this club.")
+    return club, member
+
+
+@app.get("/api/admin/clubs/{club_id}/people/members/{member_id}/profile")
+def get_member_profile_for_edit(club_id: str, member_id: str, x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
+    user_row, _ = _auth_user_from_token(x_auth_token)
+    store = load_store()
+    club, member = _member_for_edit(user_row, store, club_id, member_id)
+    return {"club": {"id": club_id, "name": club.get("name") or ""}, "member": _member_edit_view(member), "playing_roles": PLAYING_ROLES}
+
+
+@app.post("/api/admin/clubs/{club_id}/people/members/{member_id}/profile")
+def save_member_profile_for_edit(club_id: str, member_id: str, request: MemberEditRequest, x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
+    user_row, _ = _auth_user_from_token(x_auth_token)
+    updates = {key: value for key, value in request.model_dump().items() if value is not None}
+    with _store_write_lock():
+        store = load_store()
+        club, member = _member_for_edit(user_row, store, club_id, member_id)
+        clean: dict[str, Any] = {}
+        for key, value in updates.items():
+            if key == "aliases":
+                items = value.split(",") if isinstance(value, str) else list(value or [])
+                clean[key] = [str(item).strip() for item in items if str(item).strip()][:20]
+            else:
+                clean[key] = str(value or "").strip()[:500 if key == "notes" else 120]
+        if "name" in clean:
+            if not clean["name"]:
+                raise HTTPException(status_code=400, detail="The player needs a name.")
+            if clean["name"] != member.get("name") and any(
+                str(other.get("name") or "").strip().lower() == clean["name"].lower() and other is not member
+                for other in store.get("members", []) or []
+            ):
+                raise HTTPException(status_code=409, detail=f"Another player is already called {clean['name']}. Use a different name, or merge the two players.")
+        if "role" in clean and clean["role"] and clean["role"] not in PLAYING_ROLES:
+            raise HTTPException(status_code=400, detail="Pick Batter, Bowler, All-rounder or Wicket keeper.")
+        if "gender" in clean:
+            clean["gender"] = _normalize_gender(clean["gender"])
+        if "date_of_birth" in clean:
+            clean["date_of_birth"] = _validated_date_of_birth(clean["date_of_birth"])
+        if "phone" in clean:
+            clean["phone"] = canonical_phone(clean["phone"])
+            if clean["phone"] and any(
+                canonical_phone(other.get("phone", "")) == clean["phone"] and other is not member
+                for other in store.get("members", []) or []
+            ):
+                raise HTTPException(status_code=409, detail="Another player already has this mobile number.")
+        if "email" in clean and clean["email"] and "@" not in clean["email"]:
+            raise HTTPException(status_code=400, detail="That email address doesn't look right.")
+        previous_name = str(member.get("name") or "")
+        changed = sorted(key for key, value in clean.items() if member.get(key, "" if key != "aliases" else []) != value)
+        for key in changed:
+            member[key] = clean[key]
+        if "name" in changed:
+            _rename_member_everywhere(store, previous_name, member["name"])
+        if changed:
+            save_store(store)
+    if changed:
+        _audit_event(
+            "player.update", "member", member_id, actor=user_row, club_id=club_id, club_name=str(club.get("name") or ""),
+            details={"fields": changed, "before_name": previous_name, "after_name": member.get("name") or "", "source": "admin.people"}, source="api",
+        )
+    return {
+        "message": f"Saved {member.get('name') or 'the player'}'s profile." if changed else "Nothing changed.",
+        "changed": changed,
+        "member": _member_edit_view(member),
+    }
+
+
+@app.get("/api/players/{player_key}/edit-access")
+def player_edit_access(player_key: str, x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
+    """For the player's page: may this signed-in user edit him, and through which club."""
+    try:
+        user_row, _ = _auth_user_from_token(x_auth_token)
+    except HTTPException:
+        return {"can_edit": False, "clubs": []}
+    store = load_store()
+    member = _find_member_by_key(store, player_key)
+    if not member:
+        return {"can_edit": False, "clubs": []}
+    clubs = _member_edit_clubs(user_row, store, member)
+    return {"can_edit": bool(clubs), "clubs": clubs, "member_id": str(member.get("id") or "") if clubs else ""}
+
+
 class PlayingRoleRequest(BaseModel):
     role: str = ""
 
@@ -15527,7 +15917,7 @@ def public_muse(request: PublicMuseRequest, x_auth_token: str | None = Header(de
         clubs = [str(club.get("name") or "") for club in store.get("clubs", []) or [] if club.get("name")]
         return reply(
             f"{len(clubs)} clubs are on Cricket Canada Clubs: " + ", ".join(sorted(clubs, key=str.lower)) + ".",
-            [{"label": "Browse clubs", "href": "/clubs"}, {"label": "Register your club", "href": "/register"}],
+            [{"label": "Browse clubs", "href": "/clubs"}, {"label": "Register your club", "href": "/register?club=new"}],
             "clubs",
         )
 
@@ -16755,8 +17145,10 @@ def extract_archive(upload_id: str, focus_club_id: str | None = None, x_auth_tok
     refreshed = load_store()
     extracted = get_archive_or_404(refreshed, upload_id)
     if ai_done:
-        checks = _scorecard_upload_checks(refreshed, extracted)
+        checks = _scorecard_upload_checks(refreshed, extracted, ai_now=False)
         save_store(refreshed)
+        if checks.get("ai_later"):
+            _ai_duplicate_check_later(upload_id)
         refreshed = load_store()
         extracted = get_archive_or_404(refreshed, upload_id)
         reader_note = f" Read by AI ({ai_vision.provider()}). Check it against the photo, then Approve." + (
@@ -16808,8 +17200,10 @@ def import_archive_extraction(upload_id: str, request: ArchiveImportRequest, foc
     # Typed-in / pasted scorecards get the same checks as photo uploads (old OCR flags are replaced).
     # Run them on the saved copy, so the digital scorecard is built exactly as it will be shown.
     refreshed = load_store()
-    _scorecard_upload_checks(refreshed, get_archive_or_404(refreshed, upload_id))
+    import_checks = _scorecard_upload_checks(refreshed, get_archive_or_404(refreshed, upload_id), ai_now=False)
     save_store(refreshed)
+    if import_checks.get("ai_later"):
+        _ai_duplicate_check_later(upload_id)
     refreshed = load_store()
     updated = get_archive_or_404(refreshed, upload_id)
     _audit_event(
@@ -17071,18 +17465,27 @@ def _read_second_photo(store: dict[str, Any], upload: dict[str, Any], user_row: 
     file_token = str(upload.get("second_photo_file") or "")
     template = _scorecard_pick_template(upload) or {}
     upload["second_photo_read"] = True
+    try:
+        named = int(upload.get("second_photo_innings") or 0)
+    except (TypeError, ValueError):
+        named = 0
+    label = "1st innings photo" if named == 1 else "2nd innings photo"
     if not (ai_vision.enabled() and _ai_allowed(user_row, club_id, "ai_extraction", f"scorecard:{upload.get('id')}:2")):
-        return "2nd innings photo added. Type the 2nd innings in with ✏️ (AI reading isn't available for this account)."
+        return f"{label.capitalize()} added. Type that innings in with ✏️ (AI reading isn't available for this account)."
     club = _selected_club(store, str(upload.get("club_id") or club_id or ""))
     result = _read_photo_with_ai(store, upload, _reading_copy(UPLOAD_DIR / file_token), club)
     _drop_reading_copy(file_token)
     if not result.get("template"):
-        return f"2nd innings photo added, but it couldn't be read ({result.get('error') or 'AI reading failed'}). Type the 2nd innings in with ✏️."
-    joined = _join_innings_photos(template, result["template"])
+        return f"{label.capitalize()} added, but it couldn't be read ({result.get('error') or 'AI reading failed'}). Type that innings in with ✏️."
+    try:
+        slot = int(upload.get("second_photo_innings") or 0) or _missing_innings_number(template) or None
+    except (TypeError, ValueError):
+        slot = _missing_innings_number(template) or None
+    joined = _join_innings_photos(template, result["template"], slot=slot)
     if _template_innings_count(joined) > _template_innings_count(template):
         _apply_ai_template(store, upload, joined, result)
-        return "2nd innings photo read and added to the scorecard. Check it against the photos."
-    return "2nd innings photo added, but no new innings was found on it. Check it's the other team's batting page, or type the 2nd innings in with ✏️."
+        return f"{label.capitalize()} read and added to the scorecard. Check it against the photos."
+    return f"{label.capitalize()} added, but no new innings was found on it. Check it's the other team's batting page, or type that innings in with ✏️."
 
 
 def _finish_processed_upload(store: dict[str, Any], record: dict[str, Any], user_row: sqlite3.Row, options: dict[str, Any], destination: Path, selected_club: dict[str, Any], second_note: str) -> dict[str, Any]:
@@ -17226,6 +17629,87 @@ def scorecard_processing(upload_id: str, x_auth_token: str | None = Header(defau
     }
 
 
+# ---------------------------------------------------------------------------------------------------------------
+# Nov 27 2026 (Amit: "We should allow any format to be uploaded - PDF/JPG/PNG or any"): a scorecard can be a photo in
+# any common format (JPG, PNG, HEIC, WebP, TIFF, BMP, GIF ...) or a PDF. Photos the reader takes as they are stay as
+# they are; other image formats become a JPG; a PDF's pages become JPGs (page 1 = the scorecard, page 2 = the other
+# innings) and the PDF itself is kept as the original evidence. README "Upload any file format".
+# ---------------------------------------------------------------------------------------------------------------
+READER_PHOTO_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp", ".heic", ".heif"}
+UPLOAD_MAX_BYTES = 40 * 1024 * 1024
+
+
+def _is_pdf(content: bytes, filename: str) -> bool:
+    return content[:5] == b"%PDF-" or str(filename or "").lower().endswith(".pdf")
+
+
+def _upload_pages(content: bytes, filename: str, max_pages: int = 2) -> tuple[list[tuple[bytes, str]], bool]:
+    """([(image bytes, suffix), ...], is_pdf) for an uploaded scorecard file. Raises a 400 the person understands."""
+    if not content:
+        raise HTTPException(status_code=400, detail="Choose a file first.")
+    if len(content) > UPLOAD_MAX_BYTES:
+        raise HTTPException(status_code=413, detail="That file is bigger than 40 MB. Take a photo of the scorecard, or save the PDF smaller.")
+    from PIL import Image, ImageOps
+
+    def as_jpeg(image: Any) -> bytes:
+        image = ImageOps.exif_transpose(image)
+        if image.mode not in ("RGB", "L"):
+            background = Image.new("RGB", image.size, "white")
+            background.paste(image.convert("RGBA"), mask=image.convert("RGBA").split()[-1])
+            image = background
+        buffer = io.BytesIO()
+        image.convert("RGB").save(buffer, "JPEG", quality=92)
+        return buffer.getvalue()
+
+    if _is_pdf(content, filename):
+        try:
+            import pypdfium2 as pdfium
+        except ImportError:
+            raise HTTPException(status_code=415, detail="PDF scorecards can't be read on this server yet (pypdfium2 is missing). Upload a photo instead.")
+        try:
+            document = pdfium.PdfDocument(content)
+            pages: list[tuple[bytes, str]] = []
+            for index in range(min(len(document), max_pages)):
+                page = document[index]
+                width, height = page.get_size()
+                scale = max(1.0, min(4.0, 2400 / max(width, height, 1)))  # about 2400 px on the long side
+                pages.append((as_jpeg(page.render(scale=scale).to_pil()), ".jpg"))
+            document.close()
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=f"That PDF couldn't be opened ({str(exc)[:80]}). Save it again, or upload a photo of the scorecard.")
+        if not pages:
+            raise HTTPException(status_code=400, detail="That PDF has no pages.")
+        return pages, True
+    suffix = Path(filename or "scorecard.jpg").suffix.lower() or ".jpg"
+    try:
+        try:
+            from pillow_heif import register_heif_opener
+
+            register_heif_opener()
+        except Exception:
+            pass
+        image = Image.open(io.BytesIO(content))
+        image.load()
+    except Exception:
+        raise HTTPException(status_code=400, detail="That file isn't a photo or a PDF of a scorecard. Upload a JPG, PNG, HEIC, PDF or another picture.")
+    detected = {"JPEG": ".jpg", "PNG": ".png", "WEBP": ".webp", "HEIF": ".heic", "HEIC": ".heic"}.get(str(image.format or "").upper())
+    if detected and suffix in READER_PHOTO_SUFFIXES:
+        return [(content, suffix)], False
+    if detected:
+        return [(content, detected)], False
+    return [(as_jpeg(image), ".jpg")], False  # TIFF, BMP, GIF, ... -> JPG
+
+
+def _keep_original_document(content: bytes, record: dict[str, Any], filename: str) -> None:
+    """The uploaded PDF is kept next to its pages as the original evidence."""
+    token = f"{uuid.uuid4().hex[:10]}.pdf"
+    (UPLOAD_DIR / token).write_bytes(content)
+    record["original_document"] = token
+    record["original_document_name"] = filename or token
+
+
 @app.post("/api/scorecards/upload")
 async def upload_scorecard(
     request: Request,
@@ -17260,9 +17744,35 @@ async def upload_scorecard(
     related_clubs = [_club_by_identifier(store.get("clubs", []), club_id) for club_id in related_club_ids]
     related_clubs = [club for club in related_clubs if club]
     related_club_names = [str(club.get("name") or club.get("short_name") or "").strip() for club in related_clubs]
-    suffix = Path(file.filename or "scorecard.jpg").suffix or ".jpg"
-    content = await file.read()
-    incoming_hash = file_sha256_from_bytes(content)
+    uploaded = await file.read()
+    # Nov 27 2026: any format - a PDF becomes its page photos (kept as evidence), other formats a JPG
+    pages, from_pdf = _upload_pages(uploaded, file.filename or "")
+    content, suffix = pages[0]
+    incoming_hash = file_sha256_from_bytes(uploaded)
+    fingerprint = scorecard_checks.image_fingerprint(content)
+    # Nov 25 2026 (Dhruvika): a "scorecard" the uploads-folder scan made from a loose photo nobody read (e.g. the other
+    # innings photo of a deleted scorecard) doesn't block uploading that photo: the loose copy is removed.
+    loose = [
+        existing for existing in store["archive_uploads"]
+        if _is_unread_folder_copy(existing) and (
+            existing.get("file_hash") == incoming_hash
+            or (fingerprint and scorecard_checks.is_current_fingerprint(existing.get("image_fingerprint"))
+                and scorecard_checks.fingerprint_distance(fingerprint, str(existing["image_fingerprint"])) <= scorecard_checks.FINGERPRINT_SAME)
+            or (fingerprint and not scorecard_checks.is_current_fingerprint(existing.get("image_fingerprint")) and _upload_file_path(existing) is not None
+                and scorecard_checks.fingerprint_distance(fingerprint, scorecard_checks.image_fingerprint(_upload_file_path(existing).read_bytes()) or "") <= scorecard_checks.FINGERPRINT_SAME)
+        )
+    ]
+    if loose:
+        loose_ids = {str(item.get("id") or "") for item in loose}
+        with _store_write_lock():
+            fresh = load_store()
+            for item in [entry for entry in fresh.get("archive_uploads", []) or [] if str(entry.get("id") or "") in loose_ids]:
+                _delete_upload_photos(fresh, item)
+            fresh["archive_uploads"] = [entry for entry in fresh.get("archive_uploads", []) or [] if str(entry.get("id") or "") not in loose_ids]
+            save_store(fresh)
+        logger.info("Upload replaced %d unread loose photo card(s): %s", len(loose), ", ".join(sorted(loose_ids)))
+        store = load_store()
+        selected_club = _selected_club(store, focus_club_id)
     for existing in store["archive_uploads"]:
         if existing.get("file_hash") == incoming_hash:
             logger.debug("Duplicate scorecard upload rejected. filename=%s hash=%s", file.filename or "", incoming_hash)
@@ -17274,7 +17784,6 @@ async def upload_scorecard(
                 ),
             )
 
-    fingerprint = scorecard_checks.image_fingerprint(content)
     if fingerprint:
         for existing in store["archive_uploads"]:
             if str(existing.get("status") or "").lower() in {"rejected", "duplicate"}:
@@ -17312,7 +17821,19 @@ async def upload_scorecard(
     )
     record["original_file_name"] = file.filename or file_token
     # the scorecard keeps the ORIGINAL photo's hash, so uploading that photo again is still refused as a duplicate
-    record["file_hash"] = original_hash
+    record["file_hash"] = original_hash if not from_pdf else incoming_hash
+    if from_pdf:
+        _keep_original_document(uploaded, record, file.filename or "")
+        if len(pages) > 1 and int(innings_number or 0) != 2:
+            # page 2 of the PDF = the other innings: read and joined like an added 2nd innings photo
+            second_token = f"{uuid.uuid4().hex[:10]}.jpg"
+            (UPLOAD_DIR / second_token).write_bytes(pages[1][0])
+            _store_photo_compressed(UPLOAD_DIR / second_token)
+            record.update({
+                "second_photo_file": second_token, "second_photo_hash": file_sha256_from_bytes(pages[1][0]),
+                "second_photo_name": f"{file.filename or 'scorecard.pdf'} (page 2)", "second_preview_url": f"/uploads/{second_token}",
+                "second_photo_read": False, "second_photo_innings": 2,
+            })
     record["status"] = "Pending review"
     record["image_fingerprint"] = fingerprint
     record["uploaded_by_user_id"] = int(user_row["id"])
@@ -17632,8 +18153,25 @@ def _template_innings_count(template: dict[str, Any] | None) -> int:
     return len(_usable_innings(template))
 
 
-def _join_innings_photos(first: dict[str, Any], second: dict[str, Any]) -> dict[str, Any]:
-    """Join a card read from two photos: the 1st photo's innings + the other team's innings from the 2nd photo."""
+def _missing_innings_number(template: dict[str, Any] | None) -> int:
+    """Which innings (1 or 2) a one-innings card is missing: the 1st when its innings is written / marked as the 2nd
+    (e.g. after "Swap 1st and 2nd innings" in Edit), else the 2nd. 0 when the card has both innings."""
+    usable = _usable_innings(template)
+    if len(usable) >= 2:
+        return 0
+    if not usable:
+        return 1
+    try:
+        number = int(usable[0].get("inning_number") or 1)
+    except (TypeError, ValueError):
+        number = 1
+    return 1 if number == 2 else 2
+
+
+def _join_innings_photos(first: dict[str, Any], second: dict[str, Any], slot: int | None = None) -> dict[str, Any]:
+    """Join a card read from two photos: the 1st photo's innings + the other team's innings from the 2nd photo.
+    Nov 25 2026 (Dhruvika: "Uploaded the second innings scorecard but it uploaded into 1st innings"): `slot` is the
+    innings the scorer added the photo for (the "Add the 1st / 2nd innings photo" button); the photo goes there."""
     joined = deepcopy(first)
     kept = [deepcopy(item) for item in _usable_innings(joined)]
     taken = {_team_key_text(item.get("batting_team")) for item in kept}
@@ -17670,10 +18208,19 @@ def _join_innings_photos(first: dict[str, Any], second: dict[str, Any]) -> dict[
         first_bowl = str(kept[0].get("bowling_team") or "")
         pick["batting_team"] = pick.get("batting_team") or first_bowl or next((n for n in names if n and n != first_bat), "")
         pick["bowling_team"] = pick.get("bowling_team") or first_bat
+    elif not pick.get("batting_team"):
+        pick["batting_team"] = names[1] if slot == 2 else names[0]
+        pick["bowling_team"] = names[0] if slot == 2 else names[1]
     # the page written as the 2nd innings ("HEARTLAKE (2nd)") stays 2nd: the other photo's innings goes first
     kept_no = int((kept[0].get("inning_number") if kept else 1) or 1)
     pick_no = int(pick.get("inning_number") or 0)
-    if len(kept) == 1 and kept_no == 2 and pick_no != 2:
+    if slot in (1, 2) and len(kept) <= 1:
+        # the scorer said which innings this photo is: it goes there, the other innings takes the other number
+        pick["inning_number"] = slot
+        for item in kept:
+            item["inning_number"] = 2 if slot == 1 else 1
+        joined["innings"] = [pick] + kept if slot == 1 else kept + [pick]
+    elif len(kept) == 1 and kept_no == 2 and pick_no != 2:
         pick["inning_number"] = 1
         joined["innings"] = [pick] + kept
     else:
@@ -18096,9 +18643,13 @@ def _map_card_names_to_rosters(store: dict[str, Any], template: dict[str, Any]) 
         scored.sort(key=lambda item: -item[0])
         if scored and scored[0][0] >= 0.85 and (len(scored) == 1 or scored[0][0] - scored[1][0] >= 0.1):
             chosen = str(scored[0][1].get("name") or text)
+            # Nov 27 2026 (Amit: "Player names must be matched against existing club records without automatically
+            # merging uncertain identities"): a near spelling is NOT changed any more - the name stays as written and
+            # the scorecard page asks "is this <player>?" (a club admin confirms once, then it is applied everywhere)
             if normalize_name(chosen) != low:
-                notes.append(f"'{text}' was matched to the club's player '{chosen}'. Check it against the photo.")
-            return chosen
+                note = f"'{text}' looks like the club's player '{chosen}' - confirm it on the scorecard page (it stays as written until someone confirms)."
+                if note not in notes:
+                    notes.append(note)
         return text
 
     for innings in template.get("innings") or []:
@@ -18458,35 +19009,104 @@ def _upload_file_path(upload: dict[str, Any]) -> Path | None:
 NEEDS_REVIEW = "Needs admin review"
 
 
-def _scorecard_upload_checks(store: dict[str, Any], record: dict[str, Any]) -> dict[str, Any]:
-    """Run the smart checks on a fresh upload and set its status. Mutates `record` in the store."""
+AI_DUPLICATE_BUDGET_SECONDS = 45.0
+
+
+def _ai_duplicates(store: dict[str, Any], record: dict[str, Any], card: dict[str, Any]) -> list[dict[str, Any]]:
+    """Smart duplicate check (sticky note "fix the duplicate SC, use smart detection through AI or Ollama"): ask the
+    AI (Gemini, else Claude, else Ollama) about uploads from the same day, or with a shared team and a total within
+    10 runs. README: "AI duplicate check". Nov 25 2026: at most AI_DUPLICATE_BUDGET_SECONDS in all."""
+    found: list[dict[str, Any]] = []
+    started = time_module.monotonic()
+    mine = scorecard_checks.card_summary(card)
+    for other in scorecard_checks.ai_candidates(record, store.get("archive_uploads", []) or [], _scorecard_from_archive):
+        if time_module.monotonic() - started > AI_DUPLICATE_BUDGET_SECONDS:
+            logger.warning("AI duplicate check for %s stopped after %.0f s.", record.get("id"), AI_DUPLICATE_BUDGET_SECONDS)
+            break
+        try:
+            verdict = ai_vision.same_match(mine, scorecard_checks.card_summary(_scorecard_from_archive(other)))
+        except Exception:
+            logger.exception("AI duplicate check failed for %s vs %s", record.get("id"), other.get("id"))
+            verdict = None
+        if verdict and verdict["same"]:
+            found.append({
+                "id": other.get("id"),
+                "file_name": other.get("original_file_name") or other.get("file_name"),
+                "status": other.get("status"),
+                "reason": f"AI thinks it's the same match ({verdict['reason'] or verdict['model']})",
+            })
+    return found
+
+
+def _ai_duplicate_check_later(upload_id: str) -> None:
+    """Nov 25 2026 (Dhruvika: "Still the same error while editing the scorecard" - "The connection dropped while
+    saving"): saving an edited card waited for the AI to compare it with up to 4 other uploads (up to 40 s a question,
+    trying 4 Gemini models in turn). On Azure that could pass the time a request may take, and the phone lost the
+    connection. Now the card is saved and the answer sent at once; the AI comparison runs here afterwards and, if it
+    finds the same match, marks the card "Needs review" like before. README "Saving an edited scorecard"."""
+
+    def work() -> None:
+        try:
+            store = load_store()
+            record = get_archive_or_404(store, upload_id)
+            card = _scorecard_from_archive(record)
+            found = _ai_duplicates(store, record, card) if card else []
+            if not found:
+                return
+            store = load_store()  # fresh copy: the card may have been changed meanwhile
+            record = get_archive_or_404(store, upload_id)
+            known = {str(item.get("id")) for item in record.get("possible_duplicates") or []}
+            new = [item for item in found if str(item.get("id")) not in known]
+            if not new:
+                return
+            for item in new:
+                item["match_code"] = _match_code(item.get("id"))
+            record["possible_duplicates"] = list(record.get("possible_duplicates") or []) + new
+            record["review_flags"] = list(record.get("review_flags") or []) + [
+                f"Possible duplicate of '{item['file_name']}' (Match ID {item['match_code']}): {item['reason']}." for item in new
+            ]
+            record["status"] = NEEDS_REVIEW
+            save_store(store, keep_stats=True)
+            logger.info("AI duplicate check: %s may be the same match as %s.", upload_id, [item.get("id") for item in new])
+        except Exception:
+            logger.exception("AI duplicate check after saving %s failed.", upload_id)
+
+    threading.Thread(target=work, name=f"ai-duplicates-{upload_id}", daemon=True).start()
+
+
+_CHECK_KINDS = (("batters' runs",), ("bowlers' runs",), ("bowlers' overs",), ("out to him", "in the bowling", "isn't in the bowling", "no bowler with that name"), ("batters are out", "batter is out", "wickets, but"), ("more than 10",), ("over limit",))
+
+
+def _same_check(note: str, reconcile: list[str]) -> bool:
+    """An older message about the same team and the same rule as one of the reconciliation checks (shown once)."""
+    team = note.split(":", 1)[0].strip().lower() if ":" in note else ""
+    for kind in _CHECK_KINDS:
+        if any(word in note for word in kind):
+            return any(item.split(":", 1)[0].strip().lower() == team and any(word in item for word in kind) for item in reconcile if item != note)
+    return False
+
+
+def _scorecard_upload_checks(store: dict[str, Any], record: dict[str, Any], *, ai_now: bool = True) -> dict[str, Any]:
+    """Run the smart checks on a fresh upload and set its status. Mutates `record` in the store.
+    ai_now=False: the AI duplicate check runs after the answer is sent (_ai_duplicate_check_later)."""
     try:
         card = _scorecard_from_archive(record)
     except Exception:
         logger.exception("Digital scorecard build failed for upload %s", record.get("id"))
         card = {}
+    ai_later = False
     problems = scorecard_checks.quality_problems(card, record) if card else ["The digital scorecard couldn't be built."]
+    # Nov 27 2026 (Amit: totals, bowling figures, overs.balls and dismissals must reconcile): on every saved card
+    reconcile = scorecard_checks.reconciliation_problems(_scorecard_pick_template(record) or {})
+    problems = [problem for problem in problems if not _same_check(problem, reconcile)] + [item for item in reconcile if item not in problems]
     if str(record.get("ocr_engine") or "").startswith(("ai:", "claude:")):
-        problems += [note for note in record.get("ai_flags") or [] if note not in problems]
+        problems += [note for note in record.get("ai_flags") or [] if note not in problems and not _same_check(note, reconcile)]
     duplicates = scorecard_checks.find_duplicates(store.get("archive_uploads", []) or [], record, _scorecard_from_archive)
     if not duplicates and card and ai_vision.enabled():
-        # Smart duplicate check (sticky note "fix the duplicate SC, use smart detection through AI or Ollama"):
-        # ask the AI (Gemini, else Claude, else Ollama) about uploads from the same day, or with a shared team
-        # and a total within 10 runs. README: "AI duplicate check".
-        mine = scorecard_checks.card_summary(card)
-        for other in scorecard_checks.ai_candidates(record, store.get("archive_uploads", []) or [], _scorecard_from_archive):
-            try:
-                verdict = ai_vision.same_match(mine, scorecard_checks.card_summary(_scorecard_from_archive(other)))
-            except Exception:
-                logger.exception("AI duplicate check failed for %s vs %s", record.get("id"), other.get("id"))
-                verdict = None
-            if verdict and verdict["same"]:
-                duplicates.append({
-                    "id": other.get("id"),
-                    "file_name": other.get("original_file_name") or other.get("file_name"),
-                    "status": other.get("status"),
-                    "reason": f"AI thinks it's the same match ({verdict['reason'] or verdict['model']})",
-                })
+        if ai_now:
+            duplicates += _ai_duplicates(store, record, card)
+        else:
+            ai_later = True  # the caller starts _ai_duplicate_check_later once the card is saved
     for item in duplicates:
         item["match_code"] = _match_code(item.get("id"))
     flags = list(problems) + [f"Possible duplicate of '{item['file_name']}' (Match ID {item['match_code']}): {item['reason']}." for item in duplicates]
@@ -18494,7 +19114,7 @@ def _scorecard_upload_checks(store: dict[str, Any], record: dict[str, Any]) -> d
     record["review_problems"] = problems
     record["possible_duplicates"] = duplicates
     record["status"] = NEEDS_REVIEW if flags else "Pending review"
-    return {"needs_review": bool(flags), "problems": problems, "duplicates": duplicates, "flags": flags, "scorecard": card}
+    return {"needs_review": bool(flags), "problems": problems, "duplicates": duplicates, "flags": flags, "scorecard": card, "ai_later": ai_later}
 
 
 def _scorecard_safe_date(archive: dict[str, Any]) -> str:
@@ -19216,11 +19836,16 @@ def scorecard_upload_preview(upload_id: str, x_auth_token: str | None = Header(d
         "other_half": (lambda half: {"id": half.get("id"), "file_name": half.get("original_file_name") or half.get("file_name") or "", "uploaded_by": half.get("uploaded_by") or ""} if half else None)(_find_other_half(store, upload)),
         # Nov 2 2026: only one innings on the photo -> offer "Add the 2nd innings photo"
         "innings_count": _template_innings_count(_scorecard_pick_template(upload) or {}),
+        # Nov 25 2026 (Dhruvika): offered again when an earlier other-innings photo didn't give the missing innings
+        # (it went into the wrong innings and was swapped back with Edit)
         "can_add_second_photo": bool(
             status.lower() not in {"rejected", "duplicate"}
-            and not upload.get("second_photo_file")
+            and str(upload.get("status") or "") != UPLOAD_PROCESSING
             and _template_innings_count(_scorecard_pick_template(upload) or {}) < 2
         ),
+        "missing_innings_number": _missing_innings_number(_scorecard_pick_template(upload) or {}),
+        # Nov 27 2026: 🎓 Teach the AI with this card
+        "ai_training": _ai_training_view(upload, _scorecard_pick_template(upload) or {}, status.lower() not in {"rejected", "duplicate"}),
     }
 
 
@@ -19318,8 +19943,10 @@ def scorecard_upload_ai_read(upload_id: str, x_auth_token: str | None = Header(d
     save_store(store)
     refreshed = load_store()
     archive_id = str(upload.get("id"))
-    checks = _scorecard_upload_checks(refreshed, get_archive_or_404(refreshed, archive_id))
+    checks = _scorecard_upload_checks(refreshed, get_archive_or_404(refreshed, archive_id), ai_now=False)
     save_store(refreshed)
+    if checks.get("ai_later"):
+        _ai_duplicate_check_later(archive_id)
     _audit_event("archive.ai_read", "archive_upload", archive_id, actor=user_row, club_id=str(upload.get("club_id") or ""), details={"flags": len(checks["flags"])}, source="api")
     if checks["needs_review"]:
         _scorecard_check_alerts(get_archive_or_404(refreshed, archive_id), checks, user_row)
@@ -19347,6 +19974,7 @@ async def scorecard_upload_second_photo(
     request: Request,
     x_auth_token: str | None = Header(default=None),
     file: UploadFile = File(...),
+    innings_number: int = Form(default=0),
 ) -> dict[str, Any]:
     """Amit, Nov 2 2026: a scorecard photographed on two pages. When the upload has only one innings, the uploader,
     their club's scorers or a site admin add the 2nd innings photo; it is read and joined to the same scorecard."""
@@ -19355,15 +19983,18 @@ async def scorecard_upload_second_photo(
     status = str(upload.get("status") or "").lower()
     if status in {"rejected", "duplicate"}:
         raise HTTPException(status_code=409, detail="This scorecard was rejected. Upload it again instead.")
-    if upload.get("second_photo_file"):
-        raise HTTPException(status_code=409, detail="This scorecard already has a 2nd innings photo.")
+    if str(upload.get("status") or "") == UPLOAD_PROCESSING:
+        raise HTTPException(status_code=409, detail="The other innings photo is still being read. Wait for the notification, then check the scorecard.")
     template = _scorecard_pick_template(upload) or {}
     if _template_innings_count(template) >= 2:
         raise HTTPException(status_code=409, detail="This scorecard already has both innings.")
-    content = await file.read()
-    if not content:
-        raise HTTPException(status_code=400, detail="Choose a photo first.")
-    incoming_hash = file_sha256_from_bytes(content)
+    # Nov 25 2026 (Dhruvika): which innings this photo is (1st / 2nd); the button says it, else the missing one
+    slot = innings_number if innings_number in (1, 2) else _missing_innings_number(template)
+    uploaded = await file.read()
+    # Nov 27 2026: any format (a PDF's first page, TIFF, BMP ... become a JPG)
+    pages, _ = _upload_pages(uploaded, file.filename or "", max_pages=1)
+    content = pages[0][0]
+    incoming_hash = file_sha256_from_bytes(uploaded)
     if incoming_hash == upload.get("file_hash"):
         raise HTTPException(status_code=409, detail="That is the same photo as the 1st innings. Take a photo of the 2nd innings page.")
     stray_file = ""
@@ -19374,9 +20005,9 @@ async def scorecard_upload_second_photo(
             stray_file = Path(str(existing.get("file_path") or existing.get("file_name") or "").replace("\\", "/")).name
             store["archive_uploads"] = [item for item in store.get("archive_uploads", []) or [] if item is not existing]
             continue
-        if existing.get("file_hash") == incoming_hash or existing.get("second_photo_hash") == incoming_hash:
+        if existing is not upload and (existing.get("file_hash") == incoming_hash or existing.get("second_photo_hash") == incoming_hash):
             raise HTTPException(status_code=409, detail=f"This photo was already uploaded as '{existing.get('original_file_name') or existing.get('file_name') or 'another scorecard'}'.")
-    suffix = Path(file.filename or "scorecard.jpg").suffix or ".jpg"
+    suffix = pages[0][1]
     if stray_file and (UPLOAD_DIR / stray_file).is_file():
         file_token = stray_file
     else:
@@ -19389,6 +20020,12 @@ async def scorecard_upload_second_photo(
         if stray_file:
             fresh["archive_uploads"] = [item for item in fresh.get("archive_uploads", []) or [] if Path(str(item.get("file_path") or item.get("file_name") or "").replace("\\", "/")).name != stray_file]
         upload = get_archive_or_404(fresh, archive_id)
+        if upload.get("second_photo_file"):
+            # Nov 25 2026: an earlier other-innings photo that didn't give the missing innings stays on file
+            earlier = list(upload.get("earlier_second_photos") or [])
+            earlier.append({key: upload.get(key) for key in ("second_photo_file", "second_photo_hash", "second_photo_name", "second_preview_url")})
+            upload["earlier_second_photos"] = earlier[-5:]
+        upload["second_photo_innings"] = slot
         upload["second_photo_file"] = file_token
         upload["second_photo_hash"] = incoming_hash
         upload["second_photo_name"] = file.filename or file_token
@@ -19401,7 +20038,7 @@ async def scorecard_upload_second_photo(
     _queue_upload_job(archive_id, int(user_row["id"]), str(current_club_id or ""), {} if was_processing else {"second_only": True})
     _audit_event("archive.second_photo", "archive_upload", archive_id, actor=user_row, club_id=str(upload.get("club_id") or ""), details={"file": file_token, "queued": True}, source="api")
     return {
-        "message": "2nd innings photo added. It's being read with the scorecard - you'll get a notification when it's ready.",
+        "message": f"{'1st' if slot == 1 else '2nd'} innings photo added. It's being read with the scorecard - you'll get a notification when it's ready.",
         "processing": True,
         "preview_url": f"/scorecards/{archive_id}?preview=1",
     }
@@ -19490,14 +20127,7 @@ def scorecard_upload_remove_duplicate(upload_id: str, other_id: str, request: Sc
         for item in store.get("duplicate_uploads", []) or []
         if str(item.get("original_upload_id") or "") != other_key and str(item.get("duplicate_upload_id") or "") != other_key
     ]
-    still_used = any(str(item.get("file_path") or "").strip() == file_path for item in store["archive_uploads"]) if file_path else True
-    if file_path and not still_used:
-        try:
-            resolved = Path(file_path).resolve()
-            if resolved.exists() and UPLOAD_DIR.resolve() in resolved.parents:
-                resolved.unlink()
-        except Exception as exc:
-            logger.warning("Could not delete duplicate upload file from disk: %s", exc)
+    _delete_upload_photos(store, other)  # Nov 25 2026: all its photos (its 2nd photo was left behind)
     upload["possible_duplicates"] = [item for item in upload.get("possible_duplicates") or [] if str((item or {}).get("id")) != other_key]
     upload["review_flags"] = [flag for flag in upload.get("review_flags") or [] if f"(Match ID {other_code})" not in str(flag)]
     if str(upload.get("status") or "") == NEEDS_REVIEW and not upload["review_flags"]:
@@ -19505,6 +20135,111 @@ def scorecard_upload_remove_duplicate(upload_id: str, other_id: str, request: Sc
     save_store(store)
     _audit_event("archive.duplicate.delete", "archive_upload", other_key, actor=user_row, club_id=str(other.get("club_id") or ""), details={"kept": str(upload.get("id") or ""), "file_name": other.get("file_name") or ""}, source="api")
     return {"message": f"Deleted the duplicate {other_code}. This scorecard is kept.", "status": upload.get("status")}
+
+
+# ---------------------------------------------------------------------------------------------------------------
+# Nov 27 2026 (Dhruvika: "Enable AI training feature after the scorecard has been manually edited ... Whosoever has
+# the right to edit should also train the AI ... comparing the scorecard image data and edited scorecard ... and
+# apply in next or other scorecards. So if there is a new format of scorecard then AI should be trained ... instead
+# of ... code change"). README "Teach the AI with a fixed scorecard".
+# - Saving an edit teaches the AI automatically when the card adds up (as since Nov 11), now also for two-photo cards
+#   (each page with its own innings) and with the list of what the AI got wrong ("lessons").
+# - "🎓 Teach the AI with this card" on the scorecard (anyone who can edit it) does it on purpose and says why not
+#   when it can't (e.g. runs don't add up); "Forget" takes a wrong card out of the training.
+# - The next reads get these cards as worked examples: the same club's, and the closest card in the same scorebook
+#   FORMAT from any club (ai_vision.layout_signature) - a new format is learned from data, no code change.
+# ---------------------------------------------------------------------------------------------------------------
+def _card_was_checked_by_a_person(upload: dict[str, Any], template: dict[str, Any]) -> bool:
+    source = str(((template.get("meta") or {}) if isinstance(template.get("meta"), dict) else {}).get("source") or "")
+    return source in {"manual-entry", "manual-import", "checked-example"} or _archive_scorecard_is_published(upload)
+
+
+def _teach_ai_from_card(upload: dict[str, Any], template: dict[str, Any], user_row: sqlite3.Row | None, tip: str | None = None) -> tuple[bool, str, list[str]]:
+    """(taught, why not, lessons): keep this person-checked card (photo + right answer + what the AI got wrong) as an
+    example for the next reads. A card with two photos is kept as two pages, each with its own innings."""
+    upload_id = str(upload.get("id") or "")
+    photo = _upload_file_path(upload)
+    if photo is None:
+        return False, "The scorecard photo isn't on the server any more.", []
+    problem = ai_vision.learn_problem(template)
+    if problem:
+        return False, problem, []
+    teams = [str(value or "") for value in ((template.get("match") or {}).get("teams") or {}).values()]
+    clubs = [str(upload.get("club_name") or ""), *teams]
+    lessons = ai_vision.correction_lessons(ai_accuracy.ai_reading(upload) or None, template)
+    taught_by = str((user_row["display_name"] if user_row is not None else "") or "")
+    if tip is None:
+        tip = str(ai_vision.learned_example_info(upload_id).get("tip") or "")  # a re-save keeps the tip given before
+    second_name = Path(str(upload.get("second_photo_file") or "").replace("\\", "/")).name
+    second = UPLOAD_DIR / second_name if second_name else None
+    innings = [item for item in template.get("innings") or [] if isinstance(item, dict)]
+    if second is not None and second.is_file() and len(innings) >= 2:
+        # the page added as the other innings photo holds that innings; the card's own photo the other one
+        try:
+            second_no = int(upload.get("second_photo_innings") or 2)
+        except (TypeError, ValueError):
+            second_no = 2
+        on_second = [item for item in innings if int(item.get("inning_number") or 0) == second_no] or innings[1:2]
+        on_first = [item for item in innings if item not in on_second]
+        first_page, second_page = deepcopy(template), deepcopy(template)
+        first_page["innings"], second_page["innings"] = deepcopy(on_first), deepcopy(on_second)
+        ok_first = ai_vision.save_learned_example(upload_id, photo, first_page, clubs, lessons=lessons, taught_by=taught_by, tip=tip)
+        ok_second = ai_vision.save_learned_example(f"{upload_id}-2", second, second_page, clubs, lessons=lessons, taught_by=taught_by, tip=tip)
+        taught = ok_first or ok_second
+    else:
+        taught = ai_vision.save_learned_example(upload_id, photo, template, clubs, lessons=lessons, taught_by=taught_by, tip=tip)
+    return taught, "" if taught else "The AI couldn't keep this card (the photo couldn't be opened).", lessons
+
+
+class TeachAiRequest(BaseModel):
+    tip: str = ""
+
+
+@app.post("/api/scorecards/{upload_id}/teach-ai")
+def scorecard_teach_ai(upload_id: str, request: TeachAiRequest | None = None, x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
+    """🎓 Teach the AI with this card (anyone who can edit it)."""
+    user_row, _, store, upload, _ = _scorecard_upload_access(x_auth_token, upload_id)
+    if str(upload.get("status") or "").lower() in {"rejected", "duplicate"}:
+        raise HTTPException(status_code=409, detail="This scorecard was rejected, so it can't teach the AI.")
+    template = _scorecard_pick_template(upload) or {}
+    if not _card_was_checked_by_a_person(upload, template):
+        raise HTTPException(status_code=409, detail="Check the scorecard against the photo first: fix it with ✏️ Edit (or publish it if it is right), then teach the AI.")
+    taught, problem, lessons = _teach_ai_from_card(upload, template, user_row, tip=(request.tip if request else "") or None)
+    if not taught:
+        raise HTTPException(status_code=409, detail=problem)
+    _audit_event("archive.teach_ai", "archive_upload", str(upload.get("id") or ""), actor=user_row, club_id=str(upload.get("club_id") or ""), club_name=str(upload.get("club_name") or ""), details={"lessons": len(lessons)}, source="api")
+    return {
+        "message": "🎓 The AI learned from this card. It will use it when it reads the next cards of these clubs, and of other clubs whose scorecards look like this one."
+        + (f" It now knows {len(lessons)} thing{'s' if len(lessons) != 1 else ''} it read wrong here." if lessons else ""),
+        "ai_training": _ai_training_view(upload, template, True),
+    }
+
+
+@app.delete("/api/scorecards/{upload_id}/teach-ai")
+def scorecard_forget_ai(upload_id: str, x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
+    """Take this card out of the AI's training (e.g. it was taught with a mistake)."""
+    user_row, _, store, upload, _ = _scorecard_upload_access(x_auth_token, upload_id)
+    removed = ai_vision.forget_learned_example(str(upload.get("id") or ""))
+    if removed:
+        _audit_event("archive.forget_ai", "archive_upload", str(upload.get("id") or ""), actor=user_row, club_id=str(upload.get("club_id") or ""), club_name=str(upload.get("club_name") or ""), details={}, source="api")
+    template = _scorecard_pick_template(upload) or {}
+    return {"message": "The AI no longer uses this card." if removed else "This card wasn't in the AI's training.", "ai_training": _ai_training_view(upload, template, True)}
+
+
+def _ai_training_view(upload: dict[str, Any], template: dict[str, Any], can_edit: bool) -> dict[str, Any]:
+    info = ai_vision.learned_example_info(str(upload.get("id") or ""))
+    checked = _card_was_checked_by_a_person(upload, template)
+    problem = "" if not checked else ai_vision.learn_problem(template)
+    if not checked:
+        problem = "Fix the card with ✏️ Edit (or publish it once it matches the photo), then teach the AI."
+    elif _upload_file_path(upload) is None:
+        problem = "The scorecard photo isn't on the server any more."
+    return {
+        **info,
+        "can_teach": bool(can_edit and str(upload.get("status") or "").lower() not in {"rejected", "duplicate"}),
+        "ready": not problem,
+        "why_not": problem,
+    }
 
 
 @app.post("/api/scorecards/{upload_id}/manual")
@@ -19524,6 +20259,14 @@ def scorecard_upload_manual(upload_id: str, request: ScorecardManualRequest, x_a
     learned = _learn_ai_corrections(str(upload.get("club_id") or ""), ai_accuracy.ai_reading(upload) or (_scorecard_json(upload.get("review_source_json")) if upload.get("review_source_json") else None), template)
     # Nov 16 2026: names already confirmed for this club ("Amit" = Amit S) are written in, so they aren't asked again
     _rename_on_template(template, _learned_identity_names(store, template, str(upload.get("club_id") or "")), _club_team_on_template(store, template, str(upload.get("club_id") or "")))
+    # Nov 27 2026 (Amit: "Historical records must preserve the original scorecard as evidence"): the photo(s) and the
+    # uploaded PDF are never changed by an edit, the AI's own reading stays in ai_read_json, and the version this edit
+    # replaces is kept here (newest 5: when, who, the card as it was)
+    previous = _scorecard_pick_template(upload)
+    if isinstance(previous, dict) and previous.get("innings"):
+        history = [item for item in upload.get("edit_history") or [] if isinstance(item, dict)]
+        history.append({"replaced_at": now_iso(), "replaced_by": str(user_row["display_name"] or ""), "template": previous})
+        upload["edit_history"] = history[-5:]
     imported = parse_imported_extraction(store, json.dumps(template))
     upload.update(imported)
     # The typed-in card is THE reviewed copy now (the AI's reading stays in review_source_json for learning).
@@ -19534,16 +20277,14 @@ def scorecard_upload_manual(upload_id: str, request: ScorecardManualRequest, x_a
     upload["review_flags"] = []
     # Nov 17 2026 (Amit: editing a scorecard "is taking time"): the checks run on the store in memory and it is saved
     # ONCE - it was saved, read back and saved again, and every save rebuilds everyone's stats (4.7 s -> ~2.4 s)
-    checks = _scorecard_upload_checks(store, upload)
+    checks = _scorecard_upload_checks(store, upload, ai_now=False)  # Nov 25 2026: AI check after the answer
     save_store(store)
+    if checks.get("ai_later"):
+        _ai_duplicate_check_later(str(upload.get("id") or ""))
     refreshed = load_store()
     # Nov 11 2026 (Amit: "RAG ... less of manual intervention"): a fixed card that adds up becomes an example the AI
     # sees the next time it reads a card of these clubs (README "How the AI reader learns" -> "Learned examples").
-    taught = False
-    photo_path = _upload_file_path(upload)
-    if photo_path is not None and not upload.get("second_photo_file"):
-        teams = [str(value or "") for value in ((template.get("match") or {}).get("teams") or {}).values()]
-        taught = ai_vision.save_learned_example(str(upload.get("id") or ""), photo_path, template, [str(upload.get("club_name") or ""), *teams])
+    taught, _, _ = _teach_ai_from_card(upload, template, user_row)
     _audit_event("archive.manual", "archive_upload", upload_id, actor=user_row, club_id=str(upload.get("club_id") or ""), club_name=str(upload.get("club_name") or ""), details={"flags": len(checks["flags"]), "learned_example": taught}, source="api")
     if checks["needs_review"]:
         _scorecard_check_alerts(get_archive_or_404(refreshed, str(upload.get("id"))), checks, user_row)
@@ -20074,6 +20815,36 @@ def approve_archive_form(
         return _redirect_to_admin_center("", str(exc.detail), "error")
 
 
+def _photo_names(upload: dict[str, Any]) -> set[str]:
+    """File names of every photo of a scorecard: the card, the other innings photo and earlier added photos."""
+    raws = [upload.get("file_path"), upload.get("file_name"), upload.get("second_photo_file"), upload.get("original_document")]
+    raws += [item.get("second_photo_file") for item in upload.get("earlier_second_photos") or [] if isinstance(item, dict)]
+    return {Path(str(raw).replace("\\", "/")).name for raw in raws if raw and Path(str(raw).replace("\\", "/")).name}
+
+
+def _delete_upload_photos(store: dict[str, Any], upload: dict[str, Any]) -> list[str]:
+    """Nov 25 2026 (Dhruvika: deleted the 28 Jun 2026 scorecard, uploading it again said "This looks like the same
+    photo as '5d4be7f92d.jpeg'"): deleting a scorecard deleted only its first photo. Its other innings photo stayed
+    in the uploads folder, the folder scan made it a scorecard of its own, and that blocked the upload. Now every
+    photo of the card is deleted (a photo another scorecard still uses is kept)."""
+    still_used: set[str] = set()
+    for item in store.get("archive_uploads", []) or []:
+        if item is not upload and str(item.get("id") or "") != str(upload.get("id") or ""):
+            still_used |= _photo_names(item)
+    removed: list[str] = []
+    for name in sorted(_photo_names(upload) - still_used):
+        path = UPLOAD_DIR / name
+        try:
+            if path.is_file():
+                path.unlink()
+                removed.append(name)
+        except Exception as exc:
+            logger.warning("Could not delete scorecard photo %s: %s", name, exc)
+    if removed:
+        logger.info("Deleted scorecard %s photos: %s", upload.get("id"), ", ".join(removed))
+    return removed
+
+
 @app.delete("/api/admin/archive/{upload_id}")
 def delete_archive(upload_id: str, published: bool = False, x_auth_token: str | None = Header(default=None)) -> dict[str, Any]:
     user_row, current_club_id = _auth_user_from_token(x_auth_token)
@@ -20103,16 +20874,7 @@ def delete_archive(upload_id: str, published: bool = False, x_auth_token: str | 
             raise HTTPException(status_code=403, detail="This incomplete scorecard belongs to a different club.")
     if not is_site_admin and not archive_belongs_to_club(upload, upload_club, store.get("clubs", []), store.get("members", []), store.get("fixtures", [])):
         raise HTTPException(status_code=403, detail="This archive belongs to a different club.")
-    file_path = str(upload.get("file_path") or "").strip()
-    if file_path:
-        try:
-            resolved_path = Path(file_path).resolve()
-            upload_dir = UPLOAD_DIR.resolve()
-            if resolved_path.exists() and (resolved_path == upload_dir or upload_dir in resolved_path.parents):
-                resolved_path.unlink()
-                logger.debug("Deleted archive upload file from disk.", extra={"file_path": str(resolved_path)})
-        except Exception as exc:
-            logger.warning("Could not delete archive upload file from disk: %s", exc)
+    _delete_upload_photos(store, upload)
 
     store["archive_uploads"] = [
         item for item in store.get("archive_uploads", []) if str(item.get("id") or "").strip() != upload_id

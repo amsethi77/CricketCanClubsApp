@@ -16,6 +16,7 @@
     <link rel="stylesheet" href="/assets/live.css?v=20261030m" />
     <link rel="stylesheet" href="/assets/signin.css?v=20261030m" />
     <link rel="stylesheet" href="/assets/sports-system.css?v=20261030m" />
+    <link rel="stylesheet" href="/assets/report_type.css?v=20261127a" />
   </head>
   <body class="public-auth-page signin-v2">
     <div data-public-header></div>
@@ -62,6 +63,8 @@
               </form>
               <div class="si-divider"><span>New to CricketCanClubs?</span></div>
               <a class="primary-link auth-cta-link secondary wide si-register" href="/register">Create an account</a>
+              <!-- Nov 25 2026: club registration has its own link (it opened the player form) -->
+              <p class="rg-switch" style="text-align:center;margin:12px 0 0"><a href="/register?club=new" style="color:#d61f45;font-weight:600;text-decoration:none">New club? Register your club →</a></p>
             </div>
           </div>
         </section>
@@ -85,7 +88,7 @@
         setTimeout(function () { if (player && player.value) document.getElementById("signinQuick").hidden = false; }, 300);
       })();
     </script>
-    <script src="/assets/public_header.js?v=20261123a"></script>
+    <script src="/assets/public_header.js?v=20261127a"></script>
     <script src="/assets/multipage.js?v=20261123a"></script>
     <script src="/assets/signin.js?v=20261123a"></script>
   </body>

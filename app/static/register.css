@@ -114,3 +114,23 @@ html body.register-v2 .register-form-panel .si-quick {
     padding: 14px;
   }
 }
+
+/* Nov 25 2026: "Register your club" (/register?club=new) */
+.register-v2 [hidden] {
+  display: none !important;
+}
+
+.rg-switch {
+  margin: 4px 0 12px;
+  font-weight: 600;
+}
+
+.rg-switch a {
+  color: #d61f45;
+  text-decoration: none;
+}
+
+.rg-club-mode {
+  border: 0;
+  padding: 0;
+}

@@ -82,6 +82,28 @@
     return `<div class="pm-subhead"><h2>Recent matches</h2></div><div class="pm-table-wrap"><table class="pm-table pm-combined"><thead>${band}${head}</thead><tbody>${lines}</tbody></table></div>`;
   }
 
+  // Nov 26 2026 (Dhruvika: "There was edit player profile by club admin or superadmin but I can't find it
+  // anymore"): a club admin of one of his clubs (or the superadmin) gets "✏️ Edit player" -> Admin Center -> People &
+  // roles with this player's form open.
+  function showEditButton(player) {
+    let token = "";
+    try {
+      token = localStorage.getItem("cricketClubAppAuthToken") || "";
+    } catch (error) {
+      token = "";
+    }
+    if (!token) return;
+    fetch(`/api/players/${encodeURIComponent(key)}/edit-access`, { headers: { "X-Auth-Token": token, Accept: "application/json" } })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((access) => {
+        const slot = head.querySelector("[data-pp-edit]");
+        if (!access || !access.can_edit || !slot) return;
+        const club = access.clubs[0];
+        slot.innerHTML = `<a class="pm-share pp-edit-btn" href="/admin-center?people=${encodeURIComponent(club.id)}&edit=${encodeURIComponent(access.member_id)}#clubs">✏️ Edit player</a>${access.clubs.length > 1 ? ` <small>(${esc(club.name)})</small>` : ""}`;
+      })
+      .catch(() => null);
+  }
+
   fetch(`/api/public/players/${encodeURIComponent(key)}`, { headers: { Accept: "application/json" } })
     .then((r) => (r.ok ? r.json() : Promise.reject(new Error(r.status === 404 ? "Player not found." : "Couldn't load this player."))))
     .then((data) => {
@@ -96,7 +118,8 @@
         ${facts ? `<p class="pm-info">${facts}</p>` : ""}
         ${(p.clubs || []).length ? `<p class="pm-info">Clubs: ${p.clubs.map(esc).join(" · ")}</p>` : ""}
         ${(p.aliases || []).length ? `<p class="pm-info">Also written as: ${p.aliases.map(esc).join(", ")}</p>` : ""}
-        <p class="pm-info"><small>Read only</small></p>`;
+        <p class="pm-info" data-pp-edit><small>Read only</small></p>`;
+      showEditButton(p);
       const bowl = data.bowling || {};
       const bowlSummary = bowl.summary || {};
       const fielding = data.fielding || {};

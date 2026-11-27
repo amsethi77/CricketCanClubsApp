@@ -28,6 +28,51 @@ document.addEventListener("DOMContentLoaded", () => {
 
   console.log("Register form found");
 
+  // Nov 25 2026 (Dhruvika: "Register club open player registration page and not club registration"): "Register your
+  // club" opens /register?club=new - the same form set up for a new club: club admin, the new club's name / city /
+  // country, no "find your club" or player profile pickers.
+  const params = new URLSearchParams(window.location.search);
+  const clubMode = params.get("club") === "new" || params.get("mode") === "club";
+  let knownClubs = [];
+  function setUpClubMode() {
+    const show = (id, visible) => {
+      const el = document.getElementById(id);
+      if (el) el.hidden = !visible;
+    };
+    if (!clubMode) return;
+    document.title = "Register your club · CricketClubApp";
+    const text = (id, value) => {
+      const el = document.getElementById(id);
+      if (el) el.textContent = value;
+    };
+    text("registerKicker", "Register a club");
+    text("registerTitle", "Register your club");
+    text("registerLede", "Add your club and become its club admin. Your players can then register and pick your club.");
+    const switchEl = document.getElementById("registerSwitch");
+    if (switchEl) switchEl.innerHTML = '<a href="/register">Joining a club as a player? Register as a player →</a>';
+    show("registerClubSearchRow", false);
+    show("registerClubRow", false);
+    show("registerClubAdminNote", true);
+    if (memberRow) memberRow.hidden = true;
+    const details = document.getElementById("registerNewClub");
+    if (details) {
+      details.open = true;
+      details.classList.add("rg-club-mode");
+      const summary = details.querySelector("summary");
+      if (summary) summary.hidden = true;
+    }
+    [newClubNameInput, newClubCityInput, newClubCountryInput].forEach((input) => {
+      if (input) input.required = true;
+    });
+    if (newClubCountryInput && !newClubCountryInput.value) newClubCountryInput.value = "Canada";
+    if (roleSelect) {
+      roleSelect.value = "club_admin";
+      roleSelect.disabled = true;
+    }
+    const submit = form.querySelector('button[type="submit"]');
+    if (submit) submit.textContent = "Register club";
+  }
+
   if (!form) {
     console.error("❌ registerForm NOT FOUND");
     return;
@@ -80,7 +125,8 @@ document.addEventListener("DOMContentLoaded", () => {
 
   function syncRoleVisibility() {
     if (!memberRow) return;
-    memberRow.hidden = false;
+    memberRow.hidden = clubMode;
+    if (clubMode && roleSelect) roleSelect.value = "club_admin";
   }
 
   function normalizeMobile(value) {
@@ -116,6 +162,7 @@ document.addEventListener("DOMContentLoaded", () => {
       console.log("🔄 Loading registration options...");
       const data = await getJson("/api/auth/options");
       const clubs = Array.isArray(data.clubs) ? data.clubs : [];
+      knownClubs = clubs;
 
       if (clubSearchInput) {
         clubSearchInput.value = "";
@@ -173,10 +220,10 @@ document.addEventListener("DOMContentLoaded", () => {
     mobile: document.getElementById("registerMobile")?.value.trim() || "",
     email: document.getElementById("registerEmail")?.value.trim() || "",
     password: document.getElementById("registerPassword")?.value || "",
-    role: roleSelect?.value || "player",
-    primary_club_id: clubSelect?.value || "",
+    role: clubMode ? "club_admin" : roleSelect?.value || "player",
+    primary_club_id: clubMode ? "" : clubSelect?.value || "",
     member_name: displayNameInput?.value.trim() || "",
-    member_id: memberSelect?.value || "",
+    member_id: clubMode ? "" : memberSelect?.value || "",
     player_id: document.getElementById("registerPlayerId")?.value.trim() || "",
     aliases: document.getElementById("registerAliases")?.value.trim() || "",
     date_of_birth: document.getElementById("registerDateOfBirth")?.value || "",
@@ -203,6 +250,19 @@ document.addEventListener("DOMContentLoaded", () => {
     if (!payload.mobile && !payload.email) {
       setStatus("❌ Provide mobile or email", "error");
       return;
+    }
+
+    if (clubMode && !payload.club_name) {
+      setStatus("❌ Enter your club's name", "error");
+      return;
+    }
+
+    if (clubMode) {
+      const same = knownClubs.find((club) => [club.name, club.short_name].some((name) => normalizeText(name) && normalizeText(name) === normalizeText(payload.club_name)));
+      if (same) {
+        setStatus(`❌ ${same.name} is already registered. Ask its club admin to add you, or register as a player and pick it.`, "error");
+        return;
+      }
     }
 
     if (!payload.primary_club_id && !payload.club_name) {
@@ -257,5 +317,6 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   });
 
+  setUpClubMode();
   loadOptions().then(syncRoleVisibility);
 });

@@ -340,7 +340,13 @@ _EXAMPLES_CACHE: dict[str, Any] = {}
 #    (same scorebook, same handwriting, same player names), then the checked examples of the clubs on this card,
 #    then the general ones. README "How the AI reader learns".
 # ---------------------------------------------------------------------------
-LEARNED_KEEP = 60
+LEARNED_KEEP = 120  # Nov 27 2026: more room now that people teach cards on purpose (🎓 Teach the AI)
+# Nov 27 2026 (Dhruvika: "if there is a new format of scorecard then AI should be trained ... instead of ... code
+# change"): every read also gets ONE learned card of another club - the one whose page looks most like this photo
+# (layout_signature: the printed grid; reliable for clean / printed pages, weak for phone photos of a scorebook, so
+# it only ranks), else the newest taught card - and the TIPS people wrote when teaching (learned_tips), so a new
+# format is learned from the first card someone fixes and teaches.
+LAYOUT_SAME_FORMAT = 0.72
 
 
 def _learned_dir() -> Path:
@@ -370,8 +376,183 @@ def _template_adds_up(template: dict[str, Any]) -> bool:
     return checked > 0
 
 
-def save_learned_example(upload_id: str, photo: Path, template: dict[str, Any], clubs: list[str]) -> bool:
-    """Keep a person-fixed card as an example for the next reads of these clubs. Never raises."""
+def layout_signature(photo: Path | str) -> list[float]:
+    """The printed grid of a scorecard page, as 2 x 48 numbers: how much ruled line there is in each band of columns
+    and rows (scorebooks of one format have their lines in the same places, whoever writes on them). [] if unreadable."""
+    try:
+        from PIL import Image, ImageFilter, ImageOps
+
+        try:
+            from pillow_heif import register_heif_opener
+
+            register_heif_opener()
+        except Exception:
+            pass
+        image = ImageOps.exif_transpose(Image.open(photo)).convert("L")
+        if image.width < image.height:
+            image = image.rotate(90, expand=True)  # pages photographed upright or sideways compare the same way
+        image = ImageOps.autocontrast(image.resize((480, int(480 * image.height / max(1, image.width)) or 1)))
+        edges = image.filter(ImageFilter.FIND_EDGES).point(lambda value: 255 if value > 60 else 0)
+        width, height = edges.size
+        pixels = edges.load()
+        bins = 48
+        cols = [0.0] * bins
+        rows = [0.0] * bins
+        for y in range(0, height, 2):
+            for x in range(0, width, 2):
+                if pixels[x, y]:
+                    cols[min(bins - 1, x * bins // width)] += 1
+                    rows[min(bins - 1, y * bins // height)] += 1
+        total = sum(cols) or 1.0
+        return [round(value / total, 5) for value in cols] + [round(value / total, 5) for value in rows]
+    except Exception as exc:
+        logger.debug("Layout signature not made for %s: %s", photo, exc)
+        return []
+
+
+def layout_similarity(first: list[float] | None, second: list[float] | None) -> float:
+    """0..1: how alike two pages' printed grids are (correlation of the column and row line profiles)."""
+    if not first or not second or len(first) != len(second):
+        return 0.0
+    half = len(first) // 2
+
+    def corr(a: list[float], b: list[float]) -> float:
+        n = len(a)
+        mean_a, mean_b = sum(a) / n, sum(b) / n
+        cov = sum((x - mean_a) * (y - mean_b) for x, y in zip(a, b))
+        var_a = sum((x - mean_a) ** 2 for x in a) ** 0.5
+        var_b = sum((y - mean_b) ** 2 for y in b) ** 0.5
+        return cov / (var_a * var_b) if var_a and var_b else 0.0
+
+    return max(0.0, (corr(first[:half], second[:half]) + corr(first[half:], second[half:])) / 2)
+
+
+def learn_problem(template: dict[str, Any]) -> str:
+    """Why this card can't be an example yet ("" when it can): an example must add up, or it teaches mistakes."""
+    if not isinstance(template, dict) or not template.get("innings"):
+        return "The scorecard has no innings yet."
+    for innings in template.get("innings") or []:
+        if not isinstance(innings, dict):
+            continue
+        total = (innings.get("summary") or {}).get("runs")
+        if total in (None, ""):
+            continue
+        batters = sum(int(row.get("runs") or 0) for row in innings.get("batting") or [] if isinstance(row, dict) and str(row.get("runs") or "").lstrip("-").isdigit())
+        extras = (innings.get("extras") or {}).get("total")
+        team = str(innings.get("batting_team") or f"Innings {innings.get('inning_number') or ''}").strip()
+        if extras in (None, ""):
+            return f"{team}: fill in the extras, so batters' runs + extras = the total ({total})."
+        if not str(total).isdigit() or batters + int(extras or 0) != int(total):
+            return f"{team}: batters' runs ({batters}) + extras ({extras}) = {batters + int(extras or 0)}, but the total is {total}. Fix it, then teach the AI."
+    return "" if _template_adds_up(template) else "Fill in at least one innings total."
+
+
+def correction_lessons(ai_template: dict[str, Any] | None, fixed: dict[str, Any], limit: int = 10) -> list[str]:
+    """What the AI read wrong on this card, in words ("you read Waqas's runs as 11, the card says 110"): sent with the
+    example, so the next read avoids the same mistake on cards written the same way."""
+    if not isinstance(ai_template, dict) or not ai_template.get("innings") or not isinstance(fixed, dict):
+        return []
+
+    def name_of(row: Any) -> str:
+        player = row.get("player") if isinstance(row, dict) else None
+        return str((player.get("name") if isinstance(player, dict) else player) or (row or {}).get("name") or "").strip() if isinstance(row, dict) else ""
+
+    def key(value: str) -> str:
+        return re.sub(r"[^a-z0-9]", "", value.lower())
+
+    lessons: list[str] = []
+    ai_innings = [item for item in ai_template.get("innings") or [] if isinstance(item, dict)]
+    for number, right in enumerate([item for item in fixed.get("innings") or [] if isinstance(item, dict)], start=1):
+        team = str(right.get("batting_team") or f"innings {number}")
+        wrong = next((item for item in ai_innings if key(str(item.get("batting_team") or "")) == key(team) and key(team)), None)
+        if wrong is None and number <= len(ai_innings):
+            wrong = ai_innings[number - 1]
+            if key(str(wrong.get("batting_team") or "")) and key(str(wrong.get("batting_team") or "")) != key(team):
+                lessons.append(f"Innings {number} is {team} batting (the AI read it as {wrong.get('batting_team')}).")
+        if wrong is None:
+            lessons.append(f"The AI missed {team}'s innings: it is on this card.")
+            continue
+        right_total, wrong_total = (right.get("summary") or {}).get("runs"), (wrong.get("summary") or {}).get("runs")
+        if right_total not in (None, "") and str(right_total) != str(wrong_total):
+            lessons.append(f"{team}'s total is {right_total} (the AI read {wrong_total if wrong_total not in (None, '') else 'nothing'}).")
+        right_extras, wrong_extras = (right.get("extras") or {}).get("total"), (wrong.get("extras") or {}).get("total")
+        if right_extras not in (None, "") and str(right_extras) != str(wrong_extras):
+            lessons.append(f"{team}'s extras are {right_extras} (the AI read {wrong_extras if wrong_extras not in (None, '') else 'nothing'}).")
+        wrong_rows = {key(name_of(row)): row for row in wrong.get("batting") or [] if name_of(row)}
+        for row in right.get("batting") or []:
+            name = name_of(row)
+            if not name:
+                continue
+            other = wrong_rows.get(key(name))
+            if other is None:
+                lessons.append(f"{team}: {name} batted (the AI missed this row or misread the name).")
+                continue
+            for field, label in (("runs", "runs"), ("balls", "balls")):
+                if row.get(field) not in (None, "") and str(row.get(field)) != str(other.get(field)):
+                    lessons.append(f"{team}: {name}'s {label} are {row.get(field)} (the AI read {other.get(field) if other.get(field) not in (None, '') else 'nothing'}).")
+        wrong_bowl = {key(name_of(row)): row for row in wrong.get("bowling") or [] if name_of(row)}
+        for row in right.get("bowling") or []:
+            name = name_of(row)
+            other = wrong_bowl.get(key(name)) if name else None
+            if name and other is None:
+                lessons.append(f"Bowling in {team}'s innings: {name} bowled (the AI missed him).")
+            elif name and row.get("wickets") not in (None, "") and str(row.get("wickets")) != str(other.get("wickets")):
+                lessons.append(f"Bowling in {team}'s innings: {name} took {row.get('wickets')} wicket{'' if str(row.get('wickets')) == '1' else 's'} (the AI read {other.get('wickets')}).")
+        if len(lessons) >= limit:
+            break
+    return lessons[:limit]
+
+
+def _learned_files(upload_id: str) -> list[Path]:
+    safe = re.sub(r"[^A-Za-z0-9_-]", "", str(upload_id))[:40] or "card"
+    folder = _learned_dir()
+    return [path for path in (folder / f"{safe}.json", folder / f"{safe}-2.json") if path.is_file()]
+
+
+def learned_example_info(upload_id: str) -> dict[str, Any]:
+    """{"taught": bool, "saved_at", "taught_by", "lessons": [...], "pages": n} for one scorecard."""
+    files = _learned_files(upload_id)
+    if not files:
+        return {"taught": False}
+    try:
+        metas = [json.loads(path.read_text(encoding="utf-8")) for path in files]
+    except Exception:
+        return {"taught": False}
+    return {
+        "taught": True,
+        "saved_at": max(str(meta.get("saved_at") or "") for meta in metas),
+        "taught_by": next((str(meta.get("taught_by") or "") for meta in metas if meta.get("taught_by")), ""),
+        "lessons": [lesson for meta in metas for lesson in meta.get("lessons") or []][:12],
+        "tip": next((str(meta.get("tip") or "") for meta in metas if meta.get("tip")), ""),
+        "pages": len(metas),
+    }
+
+
+def forget_learned_example(upload_id: str) -> bool:
+    removed = False
+    for path in _learned_files(upload_id):
+        path.unlink(missing_ok=True)
+        path.with_suffix(".jpg").unlink(missing_ok=True)
+        removed = True
+    _EXAMPLES_CACHE.pop("learned_stamp", None)
+    return removed
+
+
+def learned_tips(limit: int = 12) -> list[str]:
+    """The tips people wrote when they taught the AI (newest first, no repeats) - sent with every read."""
+    tips: list[str] = []
+    for item in _learned_examples():
+        tip = str(item.get("tip") or "").strip()
+        if tip and tip.lower() not in {existing.lower() for existing in tips}:
+            tips.append(tip)
+        if len(tips) >= limit:
+            break
+    return tips
+
+
+def save_learned_example(upload_id: str, photo: Path, template: dict[str, Any], clubs: list[str], *, lessons: list[str] | None = None, taught_by: str = "", tip: str = "") -> bool:
+    """Keep a person-fixed card as an example for the next reads of these clubs (and of cards in the same scorebook
+    format, Nov 27 2026). Never raises."""
     try:
         if not photo or not Path(photo).is_file() or not isinstance(template, dict) or not _template_adds_up(template):
             return False
@@ -397,6 +578,10 @@ def save_learned_example(upload_id: str, photo: Path, template: dict[str, Any], 
             "saved_at": _dt.datetime.utcnow().isoformat(timespec="seconds") + "Z",
             "source_file": Path(photo).name,
             "answer": answer,
+            "lessons": [str(item) for item in lessons or []][:12],
+            "taught_by": str(taught_by or "")[:80],
+            "tip": " ".join(str(tip or "").split())[:400],
+            "layout": layout_signature(folder / f"{safe}.jpg"),
         }), encoding="utf-8")
         # keep the newest LEARNED_KEEP
         entries = sorted(folder.glob("*.json"), key=lambda item: item.stat().st_mtime, reverse=True)
@@ -431,8 +616,11 @@ def _learned_examples() -> list[dict[str, Any]]:
                     "answer": json.dumps(meta.get("answer") or {}),
                     "clubs": [str(club) for club in meta.get("clubs") or []],
                     "learned": True,
-                    "lessons": ["This card was read by the AI earlier and then FIXED by a person from the photo: this is the right answer. "
-                                "Cards from the same club are written the same way - read the new one like this."],
+                    "layout": list(meta.get("layout") or []),
+                    "tip": str(meta.get("tip") or ""),
+                    "lessons": ([f"Tip from the person who fixed it: {meta.get('tip')}"] if meta.get("tip") else []) + ["This card was read by the AI earlier and then FIXED by a person from the photo: this is the right answer. "
+                                "Cards from the same club, or printed in the same scorebook format, are written the same way - read the new one like this.",
+                                *[str(item) for item in meta.get("lessons") or []][:10]],
                 })
             _EXAMPLES_CACHE.update({"learned_stamp": stamp, "learned_items": items})
         return list(_EXAMPLES_CACHE.get("learned_items") or [])
@@ -470,14 +658,24 @@ def worked_examples(skip_photo: Path | None = None) -> list[dict[str, Any]]:
         other_words |= _name_tokens(name)
     own = Path(skip_photo).name.lower() if skip_photo is not None else ""
     learned = []
+    all_learned = [item for item in _learned_examples() if not (own and own in {item["name"].lower(), item["source_file"].lower()})]
     if club_words:
-        for item in _learned_examples():
-            if own and own in {item["name"].lower(), item["source_file"].lower()}:
-                continue
+        for item in all_learned:
             if _example_clubs(item) & club_words:
                 learned.append(item)
             if len(learned) >= 2:
                 break
+    # Nov 27 2026: plus the closest learned card in the same scorebook format (any club) - a new format is learned
+    # from the first card a person fixes and teaches, no code change
+    others = [item for item in all_learned if item not in learned]
+    if others:
+        pick = others[0]  # the newest taught card
+        page = layout_signature(skip_photo) if skip_photo is not None else []
+        if page:
+            best = max(((layout_similarity(page, item.get("layout")), index) for index, item in enumerate(others)), default=(0.0, 0))
+            if best[0] >= LAYOUT_SAME_FORMAT:
+                pick = others[best[1]]
+        learned.append(pick)
     for item in learned:
         if "data" not in item:
             try:
@@ -570,6 +768,10 @@ def _prompt(roster: list[str] | None, club_name: str) -> str:
     for other_club, names in list((hints.get("other_clubs") or {}).items())[:6]:
         if names:
             extra.append(f"- Players of {other_club} (if that team is on the card): " + ", ".join(list(names)[:60]) + ".")
+    # Nov 27 2026: tips people wrote when they taught the AI with a fixed card (any club - often about a scorebook format)
+    tips = learned_tips()
+    if tips:
+        extra.append("- Tips from people who fixed earlier cards (follow them when this card looks the same): " + " | ".join(tips) + ".")
     if not extra:
         return text
     return text + "\n\nExtra help for this club:\n" + "\n".join(extra)

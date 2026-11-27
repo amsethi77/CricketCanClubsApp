@@ -14,8 +14,9 @@
     <link rel="stylesheet" href="/assets/tailwind.css?v=20261030f" />
     <link rel="stylesheet" href="/assets/styles.css?v=20261111tablealign" />
     <link rel="stylesheet" href="/assets/live.css?v=20261030m" />
-    <link rel="stylesheet" href="/assets/home.css?v=20261030m" />
+    <link rel="stylesheet" href="/assets/home.css?v=20261127a" />
     <link rel="stylesheet" href="/assets/sports-system.css?v=20261030m" />
+    <link rel="stylesheet" href="/assets/report_type.css?v=20261127a" />
   </head>
   <body class="public-live-page home-v2">
     <main class="live-shell home-shell">
@@ -29,13 +30,29 @@
           <p>Live scores, results and fixtures for community cricket clubs.</p>
           <div class="home-hero-actions" id="homeHeroActions">
             <a class="home-btn primary" href="/signin">Sign in</a>
-            <a class="home-btn ghost" href="/register">Register your club</a>
+            <a class="home-btn ghost" href="/register?club=new">Register your club</a>
           </div>
           <a class="home-link home-quick-score" href="/score">Or score a quick match without signing in →</a>
         </div>
         <div id="homeFeature" class="home-feature">
           <div class="home-feature-loading">Loading featured match…</div>
         </div>
+      </section>
+
+      <!-- Nov 27 2026 (Amit): search every club's history - players, clubs, countries, years, tournaments, performances -->
+      <section class="home-section home-records">
+        <form class="home-records-form" action="/records" method="get" role="search">
+          <label for="homeRecordsQuery" class="home-kicker">Cricket records</label>
+          <div class="home-records-row">
+            <input id="homeRecordsQuery" name="q" type="search" placeholder="Search a player, club or team" autocomplete="off" />
+            <button class="home-btn primary" type="submit">🔎 Search</button>
+          </div>
+          <p class="home-records-links">
+            <a href="/records?view=batting">Highest scores</a> · <a href="/records?view=bowling">Best bowling</a> ·
+            <a href="/records?view=players">Most runs</a> · <a href="/records?view=players&amp;sort=wickets">Most wickets</a> ·
+            <a href="/records?view=matches">All matches</a>
+          </p>
+        </form>
       </section>
 
       <!-- Results + upcoming -->
@@ -63,7 +80,7 @@
       </section>
 
     </main>
-    <script src="/assets/public_header.js?v=20261123a"></script>
+    <script src="/assets/public_header.js?v=20261127a"></script>
     <script src="/assets/home.js?v=20261123a"></script>
   </body>
 </html>

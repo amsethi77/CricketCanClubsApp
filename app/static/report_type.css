@@ -1,0 +1,168 @@
+/*
+ * Nov 27 2026 (Dhruvika: "Please fix the font size in all report so that it comes under the mobile screen and if
+ * opened on laptop then should fit according to screen size. Check the font and size, similar we should use" - a
+ * Starlink checkout screenshot: small grey UPPERCASE section labels, ~15px text, bold values on the right, compact rows).
+ * One type scale for every report table (rankings, leaderboards, stats, player and club tables, records, admin
+ * tables): sizes grow smoothly from a phone (390 px) to a laptop (clamp + vw), rows are compact, numbers are bold,
+ * right-aligned and tabular, and a table is as wide as its box - it only scrolls sideways when it really has more
+ * columns than fit (then inside its own box, never the page). Loaded LAST on every page. README "Report text size".
+ */
+:root {
+  --rt-font: "Roboto", "Inter", "Segoe UI", system-ui, -apple-system, sans-serif;
+  --rt-text: clamp(0.84rem, 0.78rem + 0.3vw, 0.95rem);      /* 13.4px on a phone -> 15.2px on a laptop */
+  --rt-strong: clamp(0.88rem, 0.8rem + 0.35vw, 1rem);       /* numbers / values */
+  --rt-label: clamp(0.66rem, 0.63rem + 0.15vw, 0.74rem);    /* 10.6px -> 11.8px column labels */
+  --rt-caption: clamp(0.76rem, 0.72rem + 0.2vw, 0.86rem);
+  --rt-title: clamp(1.1rem, 0.98rem + 0.6vw, 1.45rem);      /* section titles (Top batsmen) */
+  --rt-kicker: clamp(0.68rem, 0.65rem + 0.15vw, 0.76rem);
+  --rt-pad-y: clamp(0.5rem, 0.42rem + 0.35vw, 0.78rem);
+  --rt-pad-x: clamp(0.45rem, 0.3rem + 0.6vw, 1rem);
+  --rt-ink: #111827;
+  --rt-muted: #6b7280;
+  --rt-line: #eceff3;
+}
+
+/* ---------- tables ---------- */
+:is(.custom-table, .review-table, .rc-table, .stats-pro-table, .pm-table, .leaderboard table, .detail-card table, .admin-section table, .acx-shell table) {
+  font-family: var(--rt-font);
+  font-size: var(--rt-text) !important;
+  line-height: 1.35;
+  color: var(--rt-ink);
+}
+
+:is(.custom-table, .review-table, .rc-table, .stats-pro-table, .leaderboard table, .detail-card table, .admin-section table, .acx-shell table) {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+/* the rankings tables fit the phone (they had a 560 px minimum, so Average / Matches were off the screen) */
+.custom-table {
+  min-width: 0 !important;
+}
+
+:is(.custom-table, .review-table, .rc-table, .stats-pro-table, .pm-table, .leaderboard table, .detail-card table, .admin-section table, .acx-shell table) thead th {
+  font-size: var(--rt-label) !important;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--rt-muted);
+  white-space: nowrap;
+}
+
+:is(.custom-table, .review-table, .rc-table, .stats-pro-table, .leaderboard table, .detail-card table, .admin-section table, .acx-shell table) :is(th, td) {
+  padding: var(--rt-pad-y) var(--rt-pad-x) !important;
+  vertical-align: middle;
+}
+
+:is(.custom-table, .review-table, .rc-table, .stats-pro-table, .leaderboard table, .detail-card table, .admin-section table, .acx-shell table) tbody td {
+  border-bottom: 1px solid var(--rt-line);
+}
+
+:is(.custom-table, .review-table, .rc-table, .pm-table, .leaderboard table) caption {
+  padding: var(--rt-pad-y) var(--rt-pad-x) 0.2rem !important;
+  font-size: var(--rt-caption) !important;
+  font-weight: 600;
+  color: var(--rt-muted);
+  text-align: left;
+}
+
+/* column labels of number columns stay labels (small grey), only the numbers below are bold */
+:is(.custom-table, .review-table, .rc-table, .leaderboard table) thead th.numeric-data {
+  font-size: var(--rt-label) !important;
+  font-weight: 600;
+  text-align: right !important;
+}
+
+/* numbers: bold, right-aligned, same width digits (like the prices in the Starlink screen) */
+:is(.custom-table, .review-table, .rc-table, .leaderboard table) :is(td.numeric-data, tbody th.numeric-data, .rc-strong) {
+  font-size: var(--rt-strong) !important;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  text-align: right !important;
+  white-space: nowrap;
+}
+
+:is(.custom-table, .review-table, .rc-table, .pm-table) small {
+  font-size: 0.8em;
+}
+
+/* the rank number: small and neat, not a big red block */
+.rank-badge {
+  min-width: clamp(1.45rem, 1.3rem + 0.5vw, 1.8rem) !important;
+  min-height: clamp(1.45rem, 1.3rem + 0.5vw, 1.8rem) !important;
+  padding: 0 0.3rem !important;
+  border-radius: 7px !important;
+  font-size: clamp(0.72rem, 0.68rem + 0.2vw, 0.82rem) !important;
+}
+
+/* a table with more columns than fit scrolls inside its own box, never the whole page */
+:is(.rankings-table-wrap, .review-table-wrap, .rc-table-wrap, .pm-table-wrap, .leaderboard, .stats-pro-scroll) {
+  max-width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* long names wrap instead of pushing the numbers off the screen */
+.custom-table tbody td:not(.numeric-data) {
+  overflow-wrap: anywhere;
+}
+
+/* short column names on phones ("Avg" for Average) - .rt-long / .rt-short in the header */
+.rt-short {
+  display: none;
+}
+
+@media (max-width: 600px) {
+  .rt-long {
+    display: none;
+  }
+
+  .rt-short {
+    display: inline;
+  }
+}
+
+/* ---------- report headings and stat tiles ---------- */
+:is(.panel, .stack-card) > .panel-head :is(h2, h3),
+.panel-head.compact-head :is(h2, h3) {
+  font-size: var(--rt-title) !important;
+  line-height: 1.2;
+}
+
+:is(.panel, .stack-card) .section-kicker {
+  font-size: var(--rt-kicker) !important;
+  letter-spacing: 0.12em;
+}
+
+:is(.summary-card, .stat-card) > span {
+  font-size: var(--rt-label) !important;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--rt-muted);
+}
+
+:is(.summary-card, .stat-card) > strong {
+  font-size: clamp(1rem, 0.9rem + 0.5vw, 1.3rem) !important;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Rankings: the rank column only as wide as its number */
+.public-rankings-page .custom-table :is(td, th):first-child {
+  width: 1% !important;
+  white-space: nowrap;
+}
+
+/* Page titles of the report pages ("League leaders", "Fixtures", "Scorecards" ...) were forced down to 11-16 px by
+   the shared heading rule; now a clear title that grows with the screen. The home greeting keeps its own size. */
+html body :is(.page-shell, .live-shell, .fixtures-shell, .home-shell, .scorecards-shell) h1:is(.fixtures-title, .template-title, .sports-title),
+html body :is(.page-shell, .live-shell, .fixtures-shell, .scorecards-shell) .panel-head h1:not(.clubs-greeting) {
+  font-size: clamp(1.35rem, 1.1rem + 1.1vw, 1.95rem) !important;
+  line-height: 1.15 !important;
+  letter-spacing: -0.01em !important;
+  font-weight: 700 !important;
+}
+
+/* match history tables: one line per match (the table scrolls sideways in its box instead of 3-line rows) */
+.review-table :is(th, td) {
+  white-space: nowrap;
+}

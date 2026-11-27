@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, viewport-fit=cover" />
+    <script src="/assets/zoom_lock.js?v=20261123a"></script>
+    <title>Cricket records · CricketClubApp</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700;900&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="/assets/tailwind.css" />
+    <link rel="stylesheet" href="/assets/styles.css?v=20261111tablealign" />
+    <link rel="stylesheet" href="/assets/live.css?v=20261030m" />
+    <link rel="stylesheet" href="/assets/sports-system.css?v=20261030m" />
+    <link rel="stylesheet" href="/assets/records.css?v=20261127a" />
+    <link rel="stylesheet" href="/assets/report_type.css?v=20261127a" />
+  </head>
+  <!-- Nov 27 2026 (Amit: "Player search: On the live score page (public). We should add Global historical cricket
+       database. Search records by player, club, country, year, tournament and performance etc"). Public, no sign-in.
+       Data: GET /api/public/records. README "Cricket records search". -->
+  <body class="public-fixtures-page records-page">
+    <main class="page-shell fixtures-shell">
+      <div data-public-header></div>
+      <section class="rc-wrap">
+        <header class="rc-head">
+          <p class="rc-kicker">Cricket records</p>
+          <h1>Search every club's history</h1>
+          <p class="rc-lede">Every published scorecard and scored match of every club on CricketCanClubs. Search by player, club, country, year, tournament and performance.</p>
+        </header>
+        <form id="rcForm" class="rc-form" role="search">
+          <div class="rc-search">
+            <input id="rcQuery" name="q" type="search" placeholder="Player, club or team name" autocomplete="off" aria-label="Search a player, club or team" />
+            <button type="submit" class="rc-btn">🔎 Search</button>
+          </div>
+          <nav class="rc-views" role="tablist" aria-label="What to list">
+            <button type="button" role="tab" data-view="players">👤 Players</button>
+            <button type="button" role="tab" data-view="batting">🏏 Batting innings</button>
+            <button type="button" role="tab" data-view="bowling">🎯 Bowling spells</button>
+            <button type="button" role="tab" data-view="matches">📋 Matches</button>
+          </nav>
+          <div class="rc-filters">
+            <label>Club<select name="club" id="rcClub"><option value="">All clubs</option></select></label>
+            <label>Country<select name="country" id="rcCountry"><option value="">All countries</option></select></label>
+            <label>Year<select name="year" id="rcYear"><option value="">All years</option></select></label>
+            <label>Tournament<select name="league" id="rcLeague"><option value="">All matches</option></select></label>
+            <label data-for="players batting">Runs at least<input name="min_runs" id="rcMinRuns" type="number" min="0" inputmode="numeric" placeholder="e.g. 50" /></label>
+            <label data-for="players bowling">Wickets at least<input name="min_wickets" id="rcMinWickets" type="number" min="0" inputmode="numeric" placeholder="e.g. 5" /></label>
+            <label data-for="players">Sort by<select name="sort" id="rcSort"><option value="">Most runs</option><option value="wickets">Most wickets</option><option value="matches">Most matches</option><option value="average">Best batting average</option></select></label>
+            <label data-for="batting bowling">Order<select name="order" id="rcOrder"><option value="">Best first</option><option value="date">Newest first</option></select></label>
+          </div>
+        </form>
+        <p id="rcCount" class="rc-count" role="status"></p>
+        <div id="rcResults" class="rc-results"><p class="rc-empty">Loading records…</p></div>
+      </section>
+    </main>
+    <script src="/assets/public_header.js?v=20261127a"></script>
+    <script src="/assets/records.js?v=20261127a"></script>
+  </body>
+</html>

@@ -50,7 +50,7 @@ Paths starting `/api/public/` need no sign-in. `/api/admin/...` needs a club adm
 | POST | `/api/viewer-profile` | Update Viewer Profile |
 | POST | `/api/viewer-profile/follow-player` | Follow Player |
 
-### Admin: clubs, people and roles (15)
+### Admin: clubs, people and roles (17)
 
 | Method | Path | What it does |
 | --- | --- | --- |
@@ -68,6 +68,8 @@ Paths starting `/api/public/` need no sign-in. `/api/admin/...` needs a club adm
 | POST | `/api/admin/clubs/{club_id}/members/{member_id}/delete` | Delete Club Member Form |
 | GET | `/api/admin/clubs/{club_id}/people` | Club People |
 | POST | `/api/admin/clubs/{club_id}/people/members/{member_id}/playing-role` | Set Playing Role |
+| GET | `/api/admin/clubs/{club_id}/people/members/{member_id}/profile` | Get Member Profile For Edit |
+| POST | `/api/admin/clubs/{club_id}/people/members/{member_id}/profile` | Save Member Profile For Edit |
 | POST | `/api/admin/clubs/{club_id}/people/{user_id}/club-role` | Set Club Role |
 
 ### Admin: duplicate players (AI name check) (8)
@@ -135,7 +137,7 @@ Paths starting `/api/public/` need no sign-in. `/api/admin/...` needs a club adm
 | GET | `/api/admin/traffic` | Admin Traffic |
 | DELETE | `/api/admin/users/{user_id}` | Site admin: delete a sign-in account (e.g. test accounts before launch). The player record (member) |
 
-### Scorecards: upload, read with AI, edit, publish (20)
+### Scorecards: upload, read with AI, edit, publish (22)
 
 | Method | Path | What it does |
 | --- | --- | --- |
@@ -159,6 +161,8 @@ Paths starting `/api/public/` need no sign-in. `/api/admin/...` needs a club adm
 | POST | `/api/scorecards/{upload_id}/remove-duplicate/{other_id}` | "🗑 Delete the duplicate": the other upload holds the same innings as this one, so it is removed (with its |
 | POST | `/api/scorecards/{upload_id}/report` | "Something's wrong": send the upload to the site admins with a note, and tell the club's players. |
 | POST | `/api/scorecards/{upload_id}/second-photo` | Amit, Nov 2 2026: a scorecard photographed on two pages. When the upload has only one innings, the uploader, |
+| DELETE | `/api/scorecards/{upload_id}/teach-ai` | Take this card out of the AI's training (e.g. it was taught with a mistake). |
+| POST | `/api/scorecards/{upload_id}/teach-ai` | 🎓 Teach the AI with this card (anyone who can edit it). |
 
 ### Scorecards: view (3)
 
@@ -303,22 +307,24 @@ Paths starting `/api/public/` need no sign-in. `/api/admin/...` needs a club adm
 | GET | `/api/subscription/me` | Subscription Me |
 | POST | `/api/subscription/portal` | Subscription Portal |
 
-### Public (no sign-in) (4)
+### Public (no sign-in) (5)
 
 | Method | Path | What it does |
 | --- | --- | --- |
 | GET | `/api/public/config` | Small switches the pages need. subscriptions=False: launch mode, everyone on Pro, Plans hidden. |
 | GET | `/api/public/guest-matches` | Today's guest matches for the public Live page (no codes, no private data). |
+| GET | `/api/public/records` | Search the records: view = players (career totals of the matching innings), batting (single innings), |
 | GET | `/api/public/search` | Navbar search: players, clubs and matches. Public data only (no phone, email or age). |
 | GET | `/api/public/signin-stats` | Public Signin Stats |
 
-### Other (4)
+### Other (5)
 
 | Method | Path | What it does |
 | --- | --- | --- |
 | GET | `/api/cache-status` | Cache Status |
 | GET | `/api/health` | Health |
+| GET | `/api/players/{player_key}/edit-access` | For the player's page: may this signed-in user edit him, and through which club. |
 | GET | `/api/tour` | Tour Status |
 | POST | `/api/tour/seen` | Tour Seen |
 
-176 APIs.
+182 APIs.

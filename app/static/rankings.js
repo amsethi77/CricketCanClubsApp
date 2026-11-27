@@ -40,7 +40,7 @@
     container.innerHTML = `
       <table class="custom-table">
         <caption>${escapeHtml(caption)}</caption>
-        <thead><tr><th scope="col">Rank</th>${columns.map((column) => `<th scope="col">${escapeHtml(column.label)}</th>`).join("")}</tr></thead>
+        <thead><tr><th scope="col"><span class="rt-long">Rank</span><span class="rt-short">#</span></th>${columns.map((column) => `<th scope="col"${column.numeric ? ' class="numeric-data"' : ""}>${column.short ? `<span class="rt-long">${escapeHtml(column.label)}</span><span class="rt-short" title="${escapeHtml(column.label)}">${escapeHtml(column.short)}</span>` : escapeHtml(column.label)}</th>`).join("")}</tr></thead>
         <tbody>${rows.map(line).join("")}${me ? `<tr class="rankings-gap"><td colspan="${columns.length + 1}">…</td></tr>${line(me, rows.length)}` : ""}
         </tbody>
       </table>
@@ -115,23 +115,23 @@
       renderTable(battingEl, `Batting leaders ${season}`, batting, [
         { label: "Player", value: (row) => row.player_name || "Player" },
         { label: "Runs", value: (row) => formatNumber(row.runs), numeric: true },
-        { label: "Average", value: (row) => formatNumber(row.batting_average, 1), numeric: true },
-        { label: "Matches", value: (row) => formatNumber(row.matches), numeric: true },
+        { label: "Average", short: "Avg", value: (row) => formatNumber(row.batting_average, 1), numeric: true },
+        { label: "Matches", short: "Mat", value: (row) => formatNumber(row.matches), numeric: true },
       ], data.batting?.me || null);
       renderTable(bowlingEl, `Bowling leaders ${season}`, bowling, [
         { label: "Player", value: (row) => row.player_name || "Player" },
-        { label: "Wickets", value: (row) => formatNumber(row.wickets), numeric: true },
-        { label: "Wickets / match", value: (row) => formatNumber(row.wickets_per_match, 1), numeric: true },
-        { label: "Matches", value: (row) => formatNumber(row.matches), numeric: true },
+        { label: "Wickets", short: "Wkts", value: (row) => formatNumber(row.wickets), numeric: true },
+        { label: "Wickets / match", short: "W/M", value: (row) => formatNumber(row.wickets_per_match, 1), numeric: true },
+        { label: "Matches", short: "Mat", value: (row) => formatNumber(row.matches), numeric: true },
       ], data.bowling?.me || null);
       renderTable(clubsEl, "Club standings", clubs, [
         { label: "Club", value: (row) => row.club_name || "Club" },
-        { label: "Won", value: (row) => formatNumber(row.matches_won), numeric: true },
-        { label: "Lost", value: (row) => formatNumber(row.matches_lost || 0), numeric: true },
-        { label: "No result", value: (row) => formatNumber(row.matches_nr || 0), numeric: true },
-        { label: "Played", value: (row) => formatNumber(row.matches_played), numeric: true },
+        { label: "Won", short: "W", value: (row) => formatNumber(row.matches_won), numeric: true },
+        { label: "Lost", short: "L", value: (row) => formatNumber(row.matches_lost || 0), numeric: true },
+        { label: "No result", short: "NR", value: (row) => formatNumber(row.matches_nr || 0), numeric: true },
+        { label: "Played", short: "P", value: (row) => formatNumber(row.matches_played), numeric: true },
         // Nov 11 2026: no decided game yet (only one innings uploaded) -> "-" instead of a misleading 0%
-        { label: "Win rate", value: (row) => (Number(row.matches_won || 0) + Number(row.matches_lost || 0) ? `${formatNumber(Number(row.win_rate || 0) * 100)}%` : "-"), numeric: true },
+        { label: "Win rate", short: "Win %", value: (row) => (Number(row.matches_won || 0) + Number(row.matches_lost || 0) ? `${formatNumber(Number(row.win_rate || 0) * 100)}%` : "-"), numeric: true },
       ]);
       renderBattingChart(batting, true);
     } catch (error) {

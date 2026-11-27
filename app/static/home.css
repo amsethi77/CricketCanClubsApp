@@ -920,3 +920,46 @@ html[data-theme="dark"] .home-hero,
 html[data-theme="dark"] .home-hero .home-feature {
   filter: none;
 }
+
+/* Nov 27 2026: Cricket records search on Live */
+.home-records {
+  margin-top: 18px;
+}
+
+.home-records-form {
+  display: grid;
+  gap: 8px;
+}
+
+.home-records-row {
+  display: flex;
+  gap: 8px;
+}
+
+.home-records-row input {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 46px;
+  padding: 10px 14px;
+  border: 1px solid #d6dde8;
+  border-radius: 12px;
+  font: inherit;
+  font-size: 1rem;
+}
+
+.home-records-row .home-btn {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.home-records-links {
+  margin: 0;
+  font-size: 0.9rem;
+  color: #5c6f8a;
+}
+
+.home-records-links a {
+  color: #d61f45;
+  font-weight: 600;
+  text-decoration: none;
+}

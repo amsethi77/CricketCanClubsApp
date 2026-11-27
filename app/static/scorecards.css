@@ -1076,6 +1076,17 @@ body.scorecard-detail-page .sc-header h1.sc-title {
   border-radius: 12px;
 }
 
+.sce-photo-add {
+  margin: 0 0 12px;
+  padding: 12px 14px;
+  border: 1px dashed var(--sc-line);
+  border-radius: 12px;
+}
+
+.sce-photo-add .sc-check-lede:empty {
+  display: none;
+}
+
 .sc-second-btn {
   display: inline-flex;
   align-items: center;
@@ -1235,3 +1246,47 @@ body.scorecard-detail-page .sc-header h1.sc-title {
   color: #333;
 }
 .sc-app .sc-pdf-row { margin: 16px 0 4px; text-align: center; }
+
+/* Nov 27 2026: 🎓 Teach the AI with this card */
+.sc-ai-train {
+  border-style: solid;
+  border-color: #c7d7f5;
+  background: #f6f9ff;
+}
+
+.sc-ai-lessons {
+  margin: 4px 0 8px;
+  font-size: 0.9rem;
+}
+
+.sc-ai-lessons summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.sc-ai-lessons ul {
+  margin: 6px 0 0 18px;
+  padding: 0;
+}
+
+.sc-ai-train [data-ai-train-msg]:empty {
+  display: none;
+}
+
+.sc-ai-tip {
+  display: grid;
+  gap: 4px;
+  margin: 6px 0 8px;
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+
+.sc-ai-tip textarea {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px 10px;
+  border: 1px solid #cfd9e8;
+  border-radius: 10px;
+  font: inherit;
+  font-weight: 400;
+}
